@@ -1,11 +1,12 @@
 """
 MarketPrice model (cache for API prices).
 """
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlmodel import Field, SQLModel
+import sqlalchemy as sa
+from sqlmodel import Column, Field, SQLModel
 
 
 class MarketPrice(SQLModel, table=True):
@@ -17,4 +18,7 @@ class MarketPrice(SQLModel, table=True):
     name: Optional[str] = Field(default=None)
     current_price: Decimal = Field(max_digits=15, decimal_places=4, nullable=False)
     currency: str = Field(default="EUR")
-    last_updated: datetime = Field(default_factory=datetime.now(timezone.utc))
+    last_updated: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+    )

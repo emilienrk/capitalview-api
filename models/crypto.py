@@ -1,10 +1,11 @@
 """
 CryptoAccount and CryptoTransaction models.
 """
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
+import sqlalchemy as sa
 from sqlmodel import Column, Enum, Field, Relationship, SQLModel
 
 from .enums import CryptoTransactionType
@@ -22,7 +23,10 @@ class CryptoAccount(SQLModel, table=True):
     name: str = Field(nullable=False)
     wallet_name: Optional[str] = Field(default=None)
     public_address: Optional[str] = Field(default=None)
-    created_at: datetime = Field(default_factory=datetime.now(timezone.utc))
+    created_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+    )
 
     # Relationships
     user: Optional["User"] = Relationship(back_populates="crypto_accounts")

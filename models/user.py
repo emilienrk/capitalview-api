@@ -26,7 +26,10 @@ class User(SQLModel, table=True):
     email: str = Field(nullable=False, unique=True, index=True)
     password_hash: str = Field(nullable=False)
     birth_date: Optional[date] = Field(default=None)
-    created_at: datetime = Field(default_factory=datetime.now(timezone.utc))
+    created_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+    )
 
     # Relationships
     settings: Optional["UserSettings"] = Relationship(back_populates="user")

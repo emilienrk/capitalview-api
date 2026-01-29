@@ -1,7 +1,7 @@
 """
 BankAccount model (standard bank accounts).
 """
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
@@ -26,10 +26,11 @@ class BankAccount(SQLModel, table=True):
     balance: Decimal = Field(default=Decimal("0"), max_digits=15, decimal_places=2)
     account_type: BankAccountType = Field(sa_column=Column(Enum(BankAccountType), nullable=False))
     updated_at: datetime = Field(
+        default=sa.func.now(),
         sa_column=Column(
-            sa.DateTime,
-            default=datetime.now(timezone.utc),
-            onupdate=datetime.now(timezone.utc),
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            onupdate=sa.func.now(),
             nullable=False,
         )
     )

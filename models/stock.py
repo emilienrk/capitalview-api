@@ -1,10 +1,11 @@
-"""
+"""   
 StockAccount and StockTransaction models.
 """
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
+import sqlalchemy as sa
 from sqlmodel import Column, Enum, Field, Relationship, SQLModel
 
 from .enums import StockAccountType, StockTransactionType
@@ -25,7 +26,10 @@ class StockAccount(SQLModel, table=True):
     account_type: StockAccountType = Field(
         sa_column=Column(Enum(StockAccountType), nullable=False)
     )
-    created_at: datetime = Field(default_factory=datetime.now(timezone.utc))
+    created_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+    )
 
     # Relationships
     user: Optional["User"] = Relationship(back_populates="stock_accounts")
