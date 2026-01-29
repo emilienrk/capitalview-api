@@ -1,10 +1,13 @@
-"""
-Database configuration and engine setup.
-"""
-from sqlmodel import SQLModel, create_engine, Session
+"""Database configuration and engine setup."""
+
 from functools import lru_cache
 
-from .config import get_settings
+from sqlmodel import Session, SQLModel, create_engine
+
+from config import get_settings
+
+# Import all models to register them with SQLModel
+import models  # noqa: F401
 
 
 @lru_cache
@@ -23,7 +26,5 @@ def get_session():
 
 def init_db():
     """Initialize database tables (for development only)."""
-    from .models import *  # noqa: F401, F403 - Import all models to register them
-    
     engine = get_engine()
     SQLModel.metadata.create_all(engine)

@@ -1,7 +1,6 @@
-"""
-Cashflow model (income and expenses).
-"""
-from datetime import date
+"""Cashflow model (income and expenses)."""
+
+import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
@@ -26,7 +25,7 @@ class Cashflow(SQLModel, table=True):
     frequency: Frequency = Field(
         sa_column=Column(Enum(Frequency), nullable=False, default=Frequency.ONCE)
     )
-    date: date = Field(nullable=False)
+    transaction_date: datetime.date = Field(nullable=False)
 
     # Relationships
     user: Optional["User"] = Relationship(back_populates="cashflows")
