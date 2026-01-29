@@ -132,3 +132,134 @@ class PortfolioResponse(BaseModel):
     profit_loss: Optional[Decimal] = None
     profit_loss_percentage: Optional[Decimal] = None
     accounts: list[AccountSummaryResponse]
+
+
+# ============== STOCK ACCOUNT CRUD SCHEMAS ==============
+
+class StockAccountCreate(BaseModel):
+    """Create a stock account."""
+    user_id: int
+    name: str
+    account_type: str  # PEA, CTO, PEA_PME
+    bank_name: Optional[str] = None
+    encrypted_iban: Optional[str] = None
+
+
+class StockAccountUpdate(BaseModel):
+    """Update a stock account."""
+    name: Optional[str] = None
+    bank_name: Optional[str] = None
+    encrypted_iban: Optional[str] = None
+
+
+class StockAccountBasicResponse(BaseModel):
+    """Basic stock account response (without positions)."""
+    id: int
+    user_id: int
+    name: str
+    account_type: str
+    bank_name: Optional[str] = None
+    created_at: datetime
+
+
+# ============== STOCK TRANSACTION CRUD SCHEMAS ==============
+
+class StockTransactionCreate(BaseModel):
+    """Create a stock transaction."""
+    account_id: int
+    ticker: str
+    exchange: Optional[str] = None
+    type: str  # BUY, SELL, DEPOSIT, DIVIDEND
+    amount: Decimal
+    price_per_unit: Decimal
+    fees: Decimal = Decimal("0")
+    executed_at: datetime
+
+
+class StockTransactionUpdate(BaseModel):
+    """Update a stock transaction."""
+    ticker: Optional[str] = None
+    exchange: Optional[str] = None
+    type: Optional[str] = None
+    amount: Optional[Decimal] = None
+    price_per_unit: Optional[Decimal] = None
+    fees: Optional[Decimal] = None
+    executed_at: Optional[datetime] = None
+
+
+class StockTransactionBasicResponse(BaseModel):
+    """Basic stock transaction response."""
+    id: int
+    account_id: int
+    ticker: str
+    exchange: Optional[str] = None
+    type: str
+    amount: Decimal
+    price_per_unit: Decimal
+    fees: Decimal
+    executed_at: datetime
+
+
+# ============== CRYPTO ACCOUNT CRUD SCHEMAS ==============
+
+class CryptoAccountCreate(BaseModel):
+    """Create a crypto account."""
+    user_id: int
+    name: str
+    wallet_name: Optional[str] = None
+    public_address: Optional[str] = None
+
+
+class CryptoAccountUpdate(BaseModel):
+    """Update a crypto account."""
+    name: Optional[str] = None
+    wallet_name: Optional[str] = None
+    public_address: Optional[str] = None
+
+
+class CryptoAccountBasicResponse(BaseModel):
+    """Basic crypto account response (without positions)."""
+    id: int
+    user_id: int
+    name: str
+    wallet_name: Optional[str] = None
+    public_address: Optional[str] = None
+    created_at: datetime
+
+
+# ============== CRYPTO TRANSACTION CRUD SCHEMAS ==============
+
+class CryptoTransactionCreate(BaseModel):
+    """Create a crypto transaction."""
+    account_id: int
+    ticker: str
+    type: str  # BUY, SELL, SWAP, STAKING
+    amount: Decimal
+    price_per_unit: Decimal
+    fees: Decimal = Decimal("0")
+    fees_ticker: Optional[str] = None
+    executed_at: datetime
+
+
+class CryptoTransactionUpdate(BaseModel):
+    """Update a crypto transaction."""
+    ticker: Optional[str] = None
+    type: Optional[str] = None
+    amount: Optional[Decimal] = None
+    price_per_unit: Optional[Decimal] = None
+    fees: Optional[Decimal] = None
+    fees_ticker: Optional[str] = None
+    executed_at: Optional[datetime] = None
+
+
+class CryptoTransactionBasicResponse(BaseModel):
+    """Basic crypto transaction response."""
+    id: int
+    account_id: int
+    ticker: str
+    type: str
+    amount: Decimal
+    price_per_unit: Decimal
+    fees: Decimal
+    fees_ticker: Optional[str] = None
+    executed_at: datetime
