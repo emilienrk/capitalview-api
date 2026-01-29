@@ -1,0 +1,57 @@
+"""
+User and UserSettings models.
+"""
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from typing import TYPE_CHECKING, Optional
+
+from sqlmodel import Field, Relationship, SQLModel
+import sqlalchemy as sa
+from sqlmodel import Column
+
+if TYPE_CHECKING:
+    from .bank import BankAccount
+    from .cashflow import Cashflow
+    from .crypto import CryptoAccount
+    from .note import Note
+    from .stock import StockAccount
+
+
+class User(SQLModel, table=True):
+    """Central user table."""
+    __tablename__ = "users"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    username: str = Field(nullable=False)
+    email: str = Field(nullable=False, unique=True, index=True)
+    password_hash: str = Field(nullable=False)
+    birth_date: Optional[date] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.now(timezone.utc))
+
+    # Relationships
+    settings: Optional["UserSettings"] = Relationship(back_populates="user")
+    bank_accounts: list["BankAccount"] = Relationship(back_populates="user")
+    stock_accounts: list["StockAccount"] = Relationship(back_populates="user")
+    crypto_accounts: list["CryptoAccount"] = Relationship(back_populates="user")
+    cashflows: list["Cashflow"] = Relationship(back_populates="user")
+    notes: list["Note"] = Relationship(back_populates="user")
+
+
+class UserSettings(SQLModel, table=True):
+    """Simulation constants per user (inflation, tax rates)."""
+    __tablename__ = "user_settings"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", unique=True)
+    objectives: Optional[list] = Field(
+        default=None,
+        sa_column=Column(sa.JSON),
+        description='List of objectives: [{"name": str, "percentage": float}]',
+    )
+    flat_tax_rate: Decimal = Field(default=Decimal("0.30"), max_digits=5, decimal_places=4)
+    tax_pea_rate: Decimal = Field(default=Decimal("0.172"), max_digits=5, decimal_places=4)
+    yield_expectation: Decimal = Field(default=Decimal("0.05"), max_digits=5, decimal_places=4)
+    inflation_rate: Decimal = Field(default=Decimal("0.02"), max_digits=5, decimal_places=4)
+
+    # Relationships
+    user: Optional[User] = Relationship(back_populates="settings")
