@@ -1,11 +1,79 @@
 """Schemas for API responses."""
 
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional
 
 from pydantic import BaseModel
 
+
+# ============== BANK SCHEMAS ==============
+
+class BankAccountResponse(BaseModel):
+    """Bank account response."""
+    id: int
+    user_id: int
+    name: str
+    bank_name: Optional[str] = None
+    balance: Decimal
+    account_type: str
+    updated_at: datetime
+
+
+class BankSummaryResponse(BaseModel):
+    """Summary of all bank accounts."""
+    total_balance: Decimal
+    accounts: list[BankAccountResponse]
+
+
+# ============== CASHFLOW SCHEMAS ==============
+
+class CashflowResponse(BaseModel):
+    """Single cashflow response."""
+    id: int
+    user_id: int
+    name: str
+    flow_type: str
+    category: str
+    amount: Decimal
+    frequency: str
+    transaction_date: date
+    
+    # Calculated for monthly projection
+    monthly_amount: Decimal  # Amount normalized to monthly
+
+
+class CashflowCategoryResponse(BaseModel):
+    """Cashflows grouped by category."""
+    category: str
+    total_amount: Decimal
+    monthly_total: Decimal
+    count: int
+    items: list[CashflowResponse]
+
+
+class CashflowSummaryResponse(BaseModel):
+    """Summary of cashflows (inflows or outflows)."""
+    flow_type: str
+    total_amount: Decimal
+    monthly_total: Decimal
+    categories: list[CashflowCategoryResponse]
+
+
+class CashflowBalanceResponse(BaseModel):
+    """Balance between inflows and outflows."""
+    total_inflows: Decimal
+    monthly_inflows: Decimal
+    total_outflows: Decimal
+    monthly_outflows: Decimal
+    net_balance: Decimal
+    monthly_balance: Decimal
+    savings_rate: Optional[Decimal] = None  # (inflows - outflows) / inflows * 100
+    inflows: CashflowSummaryResponse
+    outflows: CashflowSummaryResponse
+
+
+# ============== TRANSACTION SCHEMAS ==============
 
 class TransactionResponse(BaseModel):
     """Base transaction response with calculated fields."""

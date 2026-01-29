@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 from config import get_settings
 from database import get_session, get_engine
 from models import User
-from routes import portfolio_router
+from routes import portfolio_router, bank_router, cashflow_router
 
 
 @asynccontextmanager
@@ -37,6 +37,8 @@ app = FastAPI(
 
 # Routes
 app.include_router(portfolio_router, prefix="/api")
+app.include_router(bank_router, prefix="/api")
+app.include_router(cashflow_router, prefix="/api")
 
 
 @app.get("/")
