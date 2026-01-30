@@ -9,6 +9,24 @@ from pydantic import BaseModel
 
 # ============== BANK SCHEMAS ==============
 
+class BankAccountCreate(BaseModel):
+    """Create a bank account."""
+    user_id: int
+    name: str
+    account_type: str
+    bank_name: Optional[str] = None
+    encrypted_iban: Optional[str] = None
+    balance: Decimal = Decimal("0")
+
+
+class BankAccountUpdate(BaseModel):
+    """Update a bank account."""
+    name: Optional[str] = None
+    bank_name: Optional[str] = None
+    encrypted_iban: Optional[str] = None
+    balance: Optional[Decimal] = None
+
+
 class BankAccountResponse(BaseModel):
     """Bank account response."""
     id: int
@@ -28,6 +46,26 @@ class BankSummaryResponse(BaseModel):
 
 # ============== CASHFLOW SCHEMAS ==============
 
+class CashflowCreate(BaseModel):
+    """Create a cashflow."""
+    user_id: int
+    name: str
+    flow_type: str
+    category: str
+    amount: Decimal
+    frequency: str
+    transaction_date: date
+
+
+class CashflowUpdate(BaseModel):
+    """Update a cashflow."""
+    name: Optional[str] = None
+    category: Optional[str] = None
+    amount: Optional[Decimal] = None
+    frequency: Optional[str] = None
+    transaction_date: Optional[date] = None
+
+
 class CashflowResponse(BaseModel):
     """Single cashflow response."""
     id: int
@@ -38,8 +76,7 @@ class CashflowResponse(BaseModel):
     amount: Decimal
     frequency: str
     transaction_date: date
-    
-    # Calculated for monthly projection
+
     monthly_amount: Decimal  # Amount normalized to monthly
 
 
@@ -98,17 +135,16 @@ class PositionResponse(BaseModel):
     """Aggregated position for a single asset."""
     ticker: str
     name: Optional[str] = None
-    total_amount: Decimal  # Quantité totale
-    average_buy_price: Decimal  # PRU (Prix de Revient Unitaire)
-    total_invested: Decimal  # Montant total investi
-    total_fees: Decimal  # Frais totaux
-    fees_percentage: Decimal  # Frais en %
+    total_amount: Decimal
+    average_buy_price: Decimal
+    total_invested: Decimal
+    total_fees: Decimal
+    fees_percentage: Decimal
     
-    # Current values (from MarketPrice)
-    current_price: Optional[Decimal] = None  # Cours actuel
-    current_value: Optional[Decimal] = None  # Valeur totale actuelle
-    profit_loss: Optional[Decimal] = None  # Plus/moins value en €
-    profit_loss_percentage: Optional[Decimal] = None  # Performance en %
+    current_price: Optional[Decimal] = None
+    current_value: Optional[Decimal] = None
+    profit_loss: Optional[Decimal] = None
+    profit_loss_percentage: Optional[Decimal] = None
 
 
 class AccountSummaryResponse(BaseModel):
@@ -169,7 +205,7 @@ class StockTransactionCreate(BaseModel):
     account_id: int
     ticker: str
     exchange: Optional[str] = None
-    type: str  # BUY, SELL, DEPOSIT, DIVIDEND
+    type: str
     amount: Decimal
     price_per_unit: Decimal
     fees: Decimal = Decimal("0")
@@ -233,7 +269,7 @@ class CryptoTransactionCreate(BaseModel):
     """Create a crypto transaction."""
     account_id: int
     ticker: str
-    type: str  # BUY, SELL, SWAP, STAKING
+    type: str
     amount: Decimal
     price_per_unit: Decimal
     fees: Decimal = Decimal("0")
@@ -263,3 +299,28 @@ class CryptoTransactionBasicResponse(BaseModel):
     fees: Decimal
     fees_ticker: Optional[str] = None
     executed_at: datetime
+
+
+# ============== NOTE CRUD SCHEMAS ==============
+
+class NoteCreate(BaseModel):
+    """Create a note."""
+    user_id: int
+    name: str
+    description: Optional[str] = None
+
+
+class NoteUpdate(BaseModel):
+    """Update a note."""
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class NoteResponse(BaseModel):
+    """Note response."""
+    model_config = {"from_attributes": True}
+    
+    id: int
+    user_id: int
+    name: str
+    description: Optional[str] = None
