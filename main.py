@@ -8,7 +8,14 @@ from sqlmodel import Session, select
 from config import get_settings
 from database import get_session, get_engine
 from models import User
-from routes import bank_router, cashflow_router, stocks_router, crypto_router, users_router
+from routes import (
+    bank_router,
+    cashflow_router,
+    stocks_router,
+    crypto_router,
+    users_router,
+    notes_router,
+)
 
 
 @asynccontextmanager
@@ -41,6 +48,7 @@ app.include_router(cashflow_router, prefix="/api")
 app.include_router(stocks_router, prefix="/api")
 app.include_router(crypto_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
+app.include_router(notes_router, prefix="/api")
 
 
 @app.get("/")
