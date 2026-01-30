@@ -48,7 +48,7 @@ def upgrade() -> None:
     sa.Column('bank_name', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('encrypted_iban', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('balance', sa.Numeric(precision=15, scale=2), nullable=False),
-    sa.Column('account_type', sa.Enum('MAIN_ACCOUNT', 'LIVRET_A', 'LIVRET_DEVE', name='bankaccounttype'), nullable=False),
+    sa.Column('account_type', sa.Enum('CHECKING', 'SAVINGS', 'LIVRET_A', 'LEP', 'LDD', 'PEL', 'CEL', name='bankaccounttype'), nullable=False),
     sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')

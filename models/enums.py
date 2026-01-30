@@ -20,9 +20,13 @@ class Frequency(str, Enum):
 
 class BankAccountType(str, Enum):
     """Type of bank account."""
-    MAIN_ACCOUNT = "MAIN_ACCOUNT"
+    CHECKING = "CHECKING"
+    SAVINGS = "SAVINGS"
     LIVRET_A = "LIVRET_A"
-    LIVRET_DEVE = "LIVRET_DEVE"
+    LEP = "LEP"
+    LDD = "LDD"
+    PEL = "PEL"
+    CEL = "CEL"
 
 class StockAccountType(str, Enum):
     """Type of stock investment account."""
