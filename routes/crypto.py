@@ -60,29 +60,7 @@ def list_crypto_accounts(
     current_user: Annotated[User, Depends(get_current_user)],
     session: Session = Depends(get_session)
 ):
-    """List all crypto accounts for current user (basic info)."""
-    accounts = session.exec(
-        select(CryptoAccount).where(CryptoAccount.user_id == current_user.id)
-    ).all()
-    return [
-        CryptoAccountBasicResponse(
-            id=acc.id,
-            name=acc.name,
-            wallet_name=acc.wallet_name,
-            public_address=acc.public_address,
-            created_at=acc.created_at,
-        )
-        for acc in accounts
-    ]
-
-
-# NOTE: /accounts/me must be defined BEFORE /accounts/{account_id}
-@router.get("/accounts/me", response_model=list[CryptoAccountBasicResponse])
-def get_my_crypto_accounts(
-    current_user: Annotated[User, Depends(get_current_user)],
-    session: Session = Depends(get_session)
-):
-    """Get all crypto accounts for current authenticated user."""
+    """List all crypto accounts for current user."""
     accounts = session.exec(
         select(CryptoAccount).where(CryptoAccount.user_id == current_user.id)
     ).all()

@@ -72,29 +72,7 @@ def list_stock_accounts(
     current_user: Annotated[User, Depends(get_current_user)],
     session: Session = Depends(get_session)
 ):
-    """List all stock accounts (basic info)."""
-    accounts = session.exec(
-        select(StockAccount).where(StockAccount.user_id == current_user.id)
-    ).all()
-    return [
-        StockAccountBasicResponse(
-            id=acc.id,
-            name=acc.name,
-            account_type=acc.account_type.value,
-            bank_name=acc.bank_name,
-            created_at=acc.created_at,
-        )
-        for acc in accounts
-    ]
-
-
-# NOTE: /accounts/me must be defined BEFORE /accounts/{account_id}
-@router.get("/accounts/me", response_model=list[StockAccountBasicResponse])
-def get_my_stock_accounts(
-    current_user: Annotated[User, Depends(get_current_user)],
-    session: Session = Depends(get_session)
-):
-    """Get all stock accounts for current authenticated user."""
+    """List all stock accounts."""
     accounts = session.exec(
         select(StockAccount).where(StockAccount.user_id == current_user.id)
     ).all()

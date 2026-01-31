@@ -18,7 +18,6 @@ from schemas import (
 from services.bank import (
     get_bank_account_response,
     get_user_bank_accounts,
-    get_all_bank_accounts,
 )
 
 router = APIRouter(prefix="/bank", tags=["Bank Accounts"])
@@ -60,7 +59,7 @@ def get_bank_accounts(
     session: Session = Depends(get_session)
 ):
     """Get all bank accounts with total balance for current user."""
-    return get_all_bank_accounts(session)
+    return get_user_bank_accounts(session, current_user.id)
 
 
 @router.get("/accounts/{account_id}", response_model=BankAccountResponse)
@@ -127,12 +126,3 @@ def delete_bank_account(
     session.delete(account)
     session.commit()
     return None
-
-
-@router.get("/me", response_model=BankSummaryResponse)
-def get_my_banks(
-    current_user: Annotated[User, Depends(get_current_user)],
-    session: Session = Depends(get_session)
-):
-    """Get all bank accounts for current authenticated user."""
-    return get_user_bank_accounts(session, current_user.id)

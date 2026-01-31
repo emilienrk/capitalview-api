@@ -77,7 +77,6 @@ def get_all_cashflows(
     return [get_cashflow_response(cf) for cf in cashflows]
 
 
-# NOTE: /me/* routes must be defined BEFORE /{cashflow_id} to avoid FastAPI matching "me" as an integer
 @router.get("/me/inflows", response_model=CashflowSummaryResponse)
 def get_my_inflows(
     current_user: Annotated[User, Depends(get_current_user)],
