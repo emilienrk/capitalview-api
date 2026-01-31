@@ -1,10 +1,13 @@
 """Cashflow routes."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from database import get_session
-from models import Cashflow
+from models import Cashflow, User
+from services.auth import get_current_user
 from models.enums import FlowType, Frequency
 from schemas import (
     CashflowCreate,
@@ -25,7 +28,9 @@ router = APIRouter(prefix="/cashflow", tags=["Cashflows"])
 
 @router.post("", response_model=CashflowResponse, status_code=201)
 def create_cashflow(
-    cashflow_data: CashflowCreate, session: Session = Depends(get_session)
+    cashflow_data: CashflowCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
 ):
     """Create a new cashflow entry."""
     # Validate enums
@@ -46,7 +51,7 @@ def create_cashflow(
         )
     
     new_cashflow = Cashflow(
-        user_id=cashflow_data.user_id,
+        user_id=current_user.id,
         name=cashflow_data.name,
         flow_type=flow_type,
         category=cashflow_data.category,
@@ -61,18 +66,31 @@ def create_cashflow(
 
 
 @router.get("", response_model=list[CashflowResponse])
-def get_all_cashflows(session: Session = Depends(get_session)):
-    """Get all cashflow entries."""
-    cashflows = session.exec(select(Cashflow)).all()
+def get_all_cashflows(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """Get all cashflow entries for current user."""
+    cashflows = session.exec(
+        select(Cashflow).where(Cashflow.user_id == current_user.id)
+    ).all()
     return [get_cashflow_response(cf) for cf in cashflows]
 
 
 @router.get("/{cashflow_id}", response_model=CashflowResponse)
-def get_cashflow(cashflow_id: int, session: Session = Depends(get_session)):
+def get_cashflow(
+    cashflow_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """Get a specific cashflow entry."""
     cashflow = session.get(Cashflow, cashflow_id)
     if not cashflow:
         raise HTTPException(status_code=404, detail="Cashflow not found")
+    
+    if cashflow.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
     return get_cashflow_response(cashflow)
 
 
@@ -80,6 +98,7 @@ def get_cashflow(cashflow_id: int, session: Session = Depends(get_session)):
 def update_cashflow(
     cashflow_id: int,
     cashflow_data: CashflowUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
     session: Session = Depends(get_session),
 ):
     """Update a cashflow entry."""
@@ -87,7 +106,9 @@ def update_cashflow(
     if not cashflow:
         raise HTTPException(status_code=404, detail="Cashflow not found")
     
-    # Update only provided fields
+    if cashflow.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
     if cashflow_data.name is not None:
         cashflow.name = cashflow_data.name
     if cashflow_data.category is not None:
@@ -112,11 +133,18 @@ def update_cashflow(
 
 
 @router.delete("/{cashflow_id}", status_code=204)
-def delete_cashflow(cashflow_id: int, session: Session = Depends(get_session)):
+def delete_cashflow(
+    cashflow_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """Delete a cashflow entry."""
     cashflow = session.get(Cashflow, cashflow_id)
     if not cashflow:
         raise HTTPException(status_code=404, detail="Cashflow not found")
+    
+    if cashflow.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     session.delete(cashflow)
     session.commit()
@@ -125,26 +153,35 @@ def delete_cashflow(cashflow_id: int, session: Session = Depends(get_session)):
 
 # ============== INFLOWS ==============
 
-@router.get("/user/{user_id}/inflows", response_model=CashflowSummaryResponse)
-def get_inflows(user_id: int, session: Session = Depends(get_session)):
-    """Get all income/inflows for a user, grouped by category."""
-    return get_user_inflows(session, user_id)
+@router.get("/me/inflows", response_model=CashflowSummaryResponse)
+def get_my_inflows(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """Get all income/inflows for current authenticated user, grouped by category."""
+    return get_user_inflows(session, current_user.id)
 
 
 # ============== OUTFLOWS ==============
 
-@router.get("/user/{user_id}/outflows", response_model=CashflowSummaryResponse)
-def get_outflows(user_id: int, session: Session = Depends(get_session)):
-    """Get all expenses/outflows for a user, grouped by category."""
-    return get_user_outflows(session, user_id)
+@router.get("/me/outflows", response_model=CashflowSummaryResponse)
+def get_my_outflows(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """Get all expenses/outflows for current authenticated user, grouped by category."""
+    return get_user_outflows(session, current_user.id)
 
 
 # ============== BALANCE ==============
 
-@router.get("/user/{user_id}/balance", response_model=CashflowBalanceResponse)
-def get_balance(user_id: int, session: Session = Depends(get_session)):
+@router.get("/me/balance", response_model=CashflowBalanceResponse)
+def get_my_balance(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """
-    Get complete cashflow balance for a user.
+    Get complete cashflow balance for current authenticated user.
     
     Returns:
         - Total inflows and outflows
@@ -153,4 +190,4 @@ def get_balance(user_id: int, session: Session = Depends(get_session)):
         - Savings rate (% of income saved)
         - Breakdown by category
     """
-    return get_user_cashflow_balance(session, user_id)
+    return get_user_cashflow_balance(session, current_user.id)

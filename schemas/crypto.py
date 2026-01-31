@@ -9,7 +9,6 @@ from pydantic import BaseModel
 
 class CryptoAccountCreate(BaseModel):
     """Create a crypto account."""
-    user_id: int
     name: str
     wallet_name: Optional[str] = None
     public_address: Optional[str] = None
@@ -25,7 +24,6 @@ class CryptoAccountUpdate(BaseModel):
 class CryptoAccountBasicResponse(BaseModel):
     """Basic crypto account response (without positions)."""
     id: int
-    user_id: int
     name: str
     wallet_name: Optional[str] = None
     public_address: Optional[str] = None

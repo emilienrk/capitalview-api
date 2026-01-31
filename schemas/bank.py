@@ -9,7 +9,6 @@ from pydantic import BaseModel
 
 class BankAccountCreate(BaseModel):
     """Create a bank account."""
-    user_id: int
     name: str
     account_type: str
     bank_name: Optional[str] = None
@@ -28,7 +27,6 @@ class BankAccountUpdate(BaseModel):
 class BankAccountResponse(BaseModel):
     """Bank account response."""
     id: int
-    user_id: int
     name: str
     bank_name: Optional[str] = None
     balance: Decimal

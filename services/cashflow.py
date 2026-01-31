@@ -18,7 +18,7 @@ from schemas import (
 def get_monthly_amount(amount: Decimal, frequency: Frequency) -> Decimal:
     """Convert amount to monthly equivalent based on frequency."""
     multipliers = {
-        Frequency.ONCE: Decimal("0"),  # One-time = not monthly
+        Frequency.ONCE: Decimal("0"),
         Frequency.DAILY: Decimal("30"),
         Frequency.WEEKLY: Decimal("4.33"),  # 52 weeks / 12 months
         Frequency.MONTHLY: Decimal("1"),
@@ -31,7 +31,6 @@ def get_cashflow_response(cashflow: Cashflow) -> CashflowResponse:
     """Convert a Cashflow to a response."""
     return CashflowResponse(
         id=cashflow.id,
-        user_id=cashflow.user_id,
         name=cashflow.name,
         flow_type=cashflow.flow_type.value,
         category=cashflow.category,

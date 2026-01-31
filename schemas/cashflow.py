@@ -9,7 +9,6 @@ from pydantic import BaseModel
 
 class CashflowCreate(BaseModel):
     """Create a cashflow."""
-    user_id: int
     name: str
     flow_type: str
     category: str
@@ -30,7 +29,6 @@ class CashflowUpdate(BaseModel):
 class CashflowResponse(BaseModel):
     """Single cashflow response."""
     id: int
-    user_id: int
     name: str
     flow_type: str
     category: str

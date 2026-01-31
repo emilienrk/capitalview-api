@@ -12,7 +12,6 @@ def get_bank_account_response(account: BankAccount) -> BankAccountResponse:
     """Convert a BankAccount to a response."""
     return BankAccountResponse(
         id=account.id,
-        user_id=account.user_id,
         name=account.name,
         bank_name=account.bank_name,
         balance=account.balance,

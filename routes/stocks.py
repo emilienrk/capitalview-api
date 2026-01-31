@@ -1,10 +1,13 @@
 """Stock accounts and transactions CRUD routes."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from database import get_session
-from models import StockAccount, StockTransaction
+from models import StockAccount, StockTransaction, User
+from services.auth import get_current_user
 from models.enums import StockAccountType, StockTransactionType
 from schemas import (
     StockAccountCreate,
@@ -29,9 +32,11 @@ router = APIRouter(prefix="/stocks", tags=["Stocks"])
 @router.post("/accounts", response_model=StockAccountBasicResponse, status_code=201)
 def create_stock_account(
     data: StockAccountCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
     session: Session = Depends(get_session)
 ):
     """Create a new stock account."""
+
     # Validate account_type enum
     try:
         account_type = StockAccountType(data.account_type)
@@ -43,7 +48,7 @@ def create_stock_account(
         )
     
     account = StockAccount(
-        user_id=data.user_id,
+        user_id=current_user.id,
         name=data.name,
         account_type=account_type,
         bank_name=data.bank_name,
@@ -55,7 +60,6 @@ def create_stock_account(
     
     return StockAccountBasicResponse(
         id=account.id,
-        user_id=account.user_id,
         name=account.name,
         account_type=account.account_type.value,
         bank_name=account.bank_name,
@@ -64,13 +68,17 @@ def create_stock_account(
 
 
 @router.get("/accounts", response_model=list[StockAccountBasicResponse])
-def list_stock_accounts(session: Session = Depends(get_session)):
+def list_stock_accounts(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """List all stock accounts (basic info)."""
-    accounts = session.exec(select(StockAccount)).all()
+    accounts = session.exec(
+        select(StockAccount).where(StockAccount.user_id == current_user.id)
+    ).all()
     return [
         StockAccountBasicResponse(
             id=acc.id,
-            user_id=acc.user_id,
             name=acc.name,
             account_type=acc.account_type.value,
             bank_name=acc.bank_name,
@@ -81,11 +89,19 @@ def list_stock_accounts(session: Session = Depends(get_session)):
 
 
 @router.get("/accounts/{account_id}", response_model=AccountSummaryResponse)
-def get_stock_account(account_id: int, session: Session = Depends(get_session)):
+def get_stock_account(
+    account_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """Get a stock account with positions and calculated values."""
     account = session.get(StockAccount, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
     return get_stock_account_summary(session, account)
 
 
@@ -93,12 +109,16 @@ def get_stock_account(account_id: int, session: Session = Depends(get_session)):
 def update_stock_account(
     account_id: int,
     data: StockAccountUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
     session: Session = Depends(get_session)
 ):
     """Update a stock account."""
     account = session.get(StockAccount, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     if data.name is not None:
         account.name = data.name
@@ -113,7 +133,6 @@ def update_stock_account(
     
     return StockAccountBasicResponse(
         id=account.id,
-        user_id=account.user_id,
         name=account.name,
         account_type=account.account_type.value,
         bank_name=account.bank_name,
@@ -122,27 +141,36 @@ def update_stock_account(
 
 
 @router.delete("/accounts/{account_id}", status_code=204)
-def delete_stock_account(account_id: int, session: Session = Depends(get_session)):
+def delete_stock_account(
+    account_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """Delete a stock account and all its transactions."""
     account = session.get(StockAccount, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     session.delete(account)
     session.commit()
     return None
 
 
-@router.get("/accounts/user/{user_id}", response_model=list[StockAccountBasicResponse])
-def get_user_stock_accounts(user_id: int, session: Session = Depends(get_session)):
-    """Get all stock accounts for a user."""
+@router.get("/accounts/me", response_model=list[StockAccountBasicResponse])
+def get_my_stock_accounts(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """Get all stock accounts for current authenticated user."""
     accounts = session.exec(
-        select(StockAccount).where(StockAccount.user_id == user_id)
+        select(StockAccount).where(StockAccount.user_id == current_user.id)
     ).all()
     return [
         StockAccountBasicResponse(
             id=acc.id,
-            user_id=acc.user_id,
             name=acc.name,
             account_type=acc.account_type.value,
             bank_name=acc.bank_name,
@@ -156,6 +184,7 @@ def get_user_stock_accounts(user_id: int, session: Session = Depends(get_session
 @router.post("/transactions", response_model=StockTransactionBasicResponse, status_code=201)
 def create_stock_transaction(
     data: StockTransactionCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
     session: Session = Depends(get_session)
 ):
     """Create a new stock transaction."""
@@ -163,6 +192,9 @@ def create_stock_transaction(
     account = session.get(StockAccount, data.account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     # Validate transaction type enum
     try:
@@ -202,18 +234,39 @@ def create_stock_transaction(
 
 
 @router.get("/transactions", response_model=list[TransactionResponse])
-def list_stock_transactions(session: Session = Depends(get_session)):
-    """List all stock transactions (history)."""
-    transactions = session.exec(select(StockTransaction)).all()
+def list_stock_transactions(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """List all stock transactions for current user (history)."""
+    # Get all accounts for current user
+    user_account_ids = [
+        acc.id for acc in session.exec(
+            select(StockAccount).where(StockAccount.user_id == current_user.id)
+        ).all()
+    ]
+    
+    transactions = session.exec(
+        select(StockTransaction).where(StockTransaction.account_id.in_(user_account_ids))
+    ).all()
     return [calculate_stock_transaction(tx) for tx in transactions]
 
 
 @router.get("/transactions/{transaction_id}", response_model=TransactionResponse)
-def get_stock_transaction(transaction_id: int, session: Session = Depends(get_session)):
+def get_stock_transaction(
+    transaction_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """Get a specific stock transaction."""
     transaction = session.get(StockTransaction, transaction_id)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    account = session.get(StockAccount, transaction.account_id)
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
     return calculate_stock_transaction(transaction)
 
 
@@ -221,12 +274,17 @@ def get_stock_transaction(transaction_id: int, session: Session = Depends(get_se
 def update_stock_transaction(
     transaction_id: int,
     data: StockTransactionUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
     session: Session = Depends(get_session)
 ):
     """Update a stock transaction."""
     transaction = session.get(StockTransaction, transaction_id)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    account = session.get(StockAccount, transaction.account_id)
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     if data.ticker is not None:
         transaction.ticker = data.ticker.upper()
@@ -268,11 +326,19 @@ def update_stock_transaction(
 
 
 @router.delete("/transactions/{transaction_id}", status_code=204)
-def delete_stock_transaction(transaction_id: int, session: Session = Depends(get_session)):
+def delete_stock_transaction(
+    transaction_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """Delete a stock transaction."""
     transaction = session.get(StockTransaction, transaction_id)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    account = session.get(StockAccount, transaction.account_id)
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     session.delete(transaction)
     session.commit()
@@ -280,8 +346,19 @@ def delete_stock_transaction(transaction_id: int, session: Session = Depends(get
 
 
 @router.get("/transactions/account/{account_id}", response_model=list[TransactionResponse])
-def get_account_transactions(account_id: int, session: Session = Depends(get_session)):
+def get_account_transactions(
+    account_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """Get all transactions for a specific account."""
+    account = session.get(StockAccount, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
     transactions = session.exec(
         select(StockTransaction).where(StockTransaction.account_id == account_id)
     ).all()

@@ -7,7 +7,6 @@ from pydantic import BaseModel
 
 class NoteCreate(BaseModel):
     """Create a note."""
-    user_id: int
     name: str
     description: Optional[str] = None
 
@@ -23,6 +22,5 @@ class NoteResponse(BaseModel):
     model_config = {"from_attributes": True}
     
     id: int
-    user_id: int
     name: str
     description: Optional[str] = None

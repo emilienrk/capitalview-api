@@ -1,10 +1,13 @@
 """Crypto accounts and transactions CRUD routes."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from database import get_session
-from models import CryptoAccount, CryptoTransaction
+from models import CryptoAccount, CryptoTransaction, User
+from services.auth import get_current_user
 from models.enums import CryptoTransactionType
 from schemas import (
     CryptoAccountCreate,
@@ -29,11 +32,12 @@ router = APIRouter(prefix="/crypto", tags=["Crypto"])
 @router.post("/accounts", response_model=CryptoAccountBasicResponse, status_code=201)
 def create_crypto_account(
     data: CryptoAccountCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
     session: Session = Depends(get_session)
 ):
     """Create a new crypto account/wallet."""
     account = CryptoAccount(
-        user_id=data.user_id,
+        user_id=current_user.id,
         name=data.name,
         wallet_name=data.wallet_name,
         public_address=data.public_address,
@@ -44,7 +48,6 @@ def create_crypto_account(
     
     return CryptoAccountBasicResponse(
         id=account.id,
-        user_id=account.user_id,
         name=account.name,
         wallet_name=account.wallet_name,
         public_address=account.public_address,
@@ -53,13 +56,17 @@ def create_crypto_account(
 
 
 @router.get("/accounts", response_model=list[CryptoAccountBasicResponse])
-def list_crypto_accounts(session: Session = Depends(get_session)):
-    """List all crypto accounts (basic info)."""
-    accounts = session.exec(select(CryptoAccount)).all()
+def list_crypto_accounts(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """List all crypto accounts for current user (basic info)."""
+    accounts = session.exec(
+        select(CryptoAccount).where(CryptoAccount.user_id == current_user.id)
+    ).all()
     return [
         CryptoAccountBasicResponse(
             id=acc.id,
-            user_id=acc.user_id,
             name=acc.name,
             wallet_name=acc.wallet_name,
             public_address=acc.public_address,
@@ -70,11 +77,19 @@ def list_crypto_accounts(session: Session = Depends(get_session)):
 
 
 @router.get("/accounts/{account_id}", response_model=AccountSummaryResponse)
-def get_crypto_account(account_id: int, session: Session = Depends(get_session)):
+def get_crypto_account(
+    account_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """Get a crypto account with positions and calculated values."""
     account = session.get(CryptoAccount, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
     return get_crypto_account_summary(session, account)
 
 
@@ -82,12 +97,16 @@ def get_crypto_account(account_id: int, session: Session = Depends(get_session))
 def update_crypto_account(
     account_id: int,
     data: CryptoAccountUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
     session: Session = Depends(get_session)
 ):
     """Update a crypto account."""
     account = session.get(CryptoAccount, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     if data.name is not None:
         account.name = data.name
@@ -102,7 +121,6 @@ def update_crypto_account(
     
     return CryptoAccountBasicResponse(
         id=account.id,
-        user_id=account.user_id,
         name=account.name,
         wallet_name=account.wallet_name,
         public_address=account.public_address,
@@ -111,27 +129,36 @@ def update_crypto_account(
 
 
 @router.delete("/accounts/{account_id}", status_code=204)
-def delete_crypto_account(account_id: int, session: Session = Depends(get_session)):
+def delete_crypto_account(
+    account_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """Delete a crypto account and all its transactions."""
     account = session.get(CryptoAccount, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     session.delete(account)
     session.commit()
     return None
 
 
-@router.get("/accounts/user/{user_id}", response_model=list[CryptoAccountBasicResponse])
-def get_user_crypto_accounts(user_id: int, session: Session = Depends(get_session)):
-    """Get all crypto accounts for a user."""
+@router.get("/accounts/me", response_model=list[CryptoAccountBasicResponse])
+def get_my_crypto_accounts(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """Get all crypto accounts for current authenticated user."""
     accounts = session.exec(
-        select(CryptoAccount).where(CryptoAccount.user_id == user_id)
+        select(CryptoAccount).where(CryptoAccount.user_id == current_user.id)
     ).all()
     return [
         CryptoAccountBasicResponse(
             id=acc.id,
-            user_id=acc.user_id,
             name=acc.name,
             wallet_name=acc.wallet_name,
             public_address=acc.public_address,
@@ -146,6 +173,7 @@ def get_user_crypto_accounts(user_id: int, session: Session = Depends(get_sessio
 @router.post("/transactions", response_model=CryptoTransactionBasicResponse, status_code=201)
 def create_crypto_transaction(
     data: CryptoTransactionCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
     session: Session = Depends(get_session)
 ):
     """Create a new crypto transaction."""
@@ -153,6 +181,9 @@ def create_crypto_transaction(
     account = session.get(CryptoAccount, data.account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     # Validate transaction type enum
     try:
@@ -192,18 +223,39 @@ def create_crypto_transaction(
 
 
 @router.get("/transactions", response_model=list[TransactionResponse])
-def list_crypto_transactions(session: Session = Depends(get_session)):
-    """List all crypto transactions (history)."""
-    transactions = session.exec(select(CryptoTransaction)).all()
+def list_crypto_transactions(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """List all crypto transactions for current user (history)."""
+
+    user_account_ids = [
+        acc.id for acc in session.exec(
+            select(CryptoAccount).where(CryptoAccount.user_id == current_user.id)
+        ).all()
+    ]
+    
+    transactions = session.exec(
+        select(CryptoTransaction).where(CryptoTransaction.account_id.in_(user_account_ids))
+    ).all()
     return [calculate_crypto_transaction(tx, session) for tx in transactions]
 
 
 @router.get("/transactions/{transaction_id}", response_model=TransactionResponse)
-def get_crypto_transaction(transaction_id: int, session: Session = Depends(get_session)):
+def get_crypto_transaction(
+    transaction_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """Get a specific crypto transaction."""
     transaction = session.get(CryptoTransaction, transaction_id)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    account = session.get(CryptoAccount, transaction.account_id)
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
     return calculate_crypto_transaction(transaction, session)
 
 
@@ -211,12 +263,17 @@ def get_crypto_transaction(transaction_id: int, session: Session = Depends(get_s
 def update_crypto_transaction(
     transaction_id: int,
     data: CryptoTransactionUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
     session: Session = Depends(get_session)
 ):
     """Update a crypto transaction."""
     transaction = session.get(CryptoTransaction, transaction_id)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    account = session.get(CryptoAccount, transaction.account_id)
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     if data.ticker is not None:
         transaction.ticker = data.ticker.upper()
@@ -258,11 +315,19 @@ def update_crypto_transaction(
 
 
 @router.delete("/transactions/{transaction_id}", status_code=204)
-def delete_crypto_transaction(transaction_id: int, session: Session = Depends(get_session)):
+def delete_crypto_transaction(
+    transaction_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """Delete a crypto transaction."""
     transaction = session.get(CryptoTransaction, transaction_id)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    account = session.get(CryptoAccount, transaction.account_id)
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     session.delete(transaction)
     session.commit()
@@ -270,8 +335,20 @@ def delete_crypto_transaction(transaction_id: int, session: Session = Depends(ge
 
 
 @router.get("/transactions/account/{account_id}", response_model=list[TransactionResponse])
-def get_account_transactions(account_id: int, session: Session = Depends(get_session)):
+def get_account_transactions(
+    account_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """Get all transactions for a specific account."""
+
+    account = session.get(CryptoAccount, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
     transactions = session.exec(
         select(CryptoTransaction).where(CryptoTransaction.account_id == account_id)
     ).all()

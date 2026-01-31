@@ -1,10 +1,13 @@
 """Bank account routes."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from database import get_session
-from models import BankAccount
+from models import BankAccount, User
+from services.auth import get_current_user
 from models.enums import BankAccountType
 from schemas import (
     BankAccountCreate,
@@ -23,7 +26,9 @@ router = APIRouter(prefix="/bank", tags=["Bank Accounts"])
 
 @router.post("/accounts", response_model=BankAccountResponse, status_code=201)
 def create_bank_account(
-    account_data: BankAccountCreate, session: Session = Depends(get_session)
+    account_data: BankAccountCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
 ):
     """Create a new bank account."""
     # Validate account_type enum
@@ -36,7 +41,7 @@ def create_bank_account(
         )
     
     new_account = BankAccount(
-        user_id=account_data.user_id,
+        user_id=current_user.id,
         name=account_data.name,
         bank_name=account_data.bank_name,
         encrypted_iban=account_data.encrypted_iban,
@@ -50,17 +55,28 @@ def create_bank_account(
 
 
 @router.get("/accounts", response_model=BankSummaryResponse)
-def get_bank_accounts(session: Session = Depends(get_session)):
-    """Get all bank accounts with total balance."""
+def get_bank_accounts(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """Get all bank accounts with total balance for current user."""
     return get_all_bank_accounts(session)
 
 
 @router.get("/accounts/{account_id}", response_model=BankAccountResponse)
-def get_bank_account(account_id: int, session: Session = Depends(get_session)):
+def get_bank_account(
+    account_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """Get a specific bank account."""
     account = session.get(BankAccount, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
     return get_bank_account_response(account)
 
 
@@ -68,6 +84,7 @@ def get_bank_account(account_id: int, session: Session = Depends(get_session)):
 def update_bank_account(
     account_id: int,
     account_data: BankAccountUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
     session: Session = Depends(get_session),
 ):
     """Update a bank account."""
@@ -75,7 +92,9 @@ def update_bank_account(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     
-    # Update only provided fields
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
     if account_data.name is not None:
         account.name = account_data.name
     if account_data.bank_name is not None:
@@ -92,18 +111,28 @@ def update_bank_account(
 
 
 @router.delete("/accounts/{account_id}", status_code=204)
-def delete_bank_account(account_id: int, session: Session = Depends(get_session)):
+def delete_bank_account(
+    account_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """Delete a bank account."""
     account = session.get(BankAccount, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     session.delete(account)
     session.commit()
     return None
 
 
-@router.get("/user/{user_id}", response_model=BankSummaryResponse)
-def get_user_banks(user_id: int, session: Session = Depends(get_session)):
-    """Get all bank accounts for a specific user."""
-    return get_user_bank_accounts(session, user_id)
+@router.get("/me", response_model=BankSummaryResponse)
+def get_my_banks(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """Get all bank accounts for current authenticated user."""
+    return get_user_bank_accounts(session, current_user.id)

@@ -9,7 +9,6 @@ from pydantic import BaseModel
 
 class StockAccountCreate(BaseModel):
     """Create a stock account."""
-    user_id: int
     name: str
     account_type: str  # PEA, CTO, PEA_PME
     bank_name: Optional[str] = None
@@ -26,7 +25,6 @@ class StockAccountUpdate(BaseModel):
 class StockAccountBasicResponse(BaseModel):
     """Basic stock account response (without positions)."""
     id: int
-    user_id: int
     name: str
     account_type: str
     bank_name: Optional[str] = None
