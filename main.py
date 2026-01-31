@@ -2,13 +2,18 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sqlmodel import Session, select
 
 from config import get_settings
 from database import get_session, get_engine
 from models import User
 from routes import (
+    auth_router,
     bank_router,
     cashflow_router,
     stocks_router,
@@ -35,14 +40,28 @@ async def lifespan(app: FastAPI):
 
 settings = get_settings()
 
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(
     title=settings.app_name,
     description="Personal wealth management and investment tracking API",
     version="0.1.0",
     lifespan=lifespan,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Routes
+app.include_router(auth_router, prefix="/api")
 app.include_router(bank_router, prefix="/api")
 app.include_router(cashflow_router, prefix="/api")
 app.include_router(stocks_router, prefix="/api")

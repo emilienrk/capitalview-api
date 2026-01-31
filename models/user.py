@@ -25,7 +25,8 @@ class User(SQLModel, table=True):
     username: str = Field(nullable=False)
     email: str = Field(nullable=False, unique=True, index=True)
     password_hash: str = Field(nullable=False)
-    birth_date: Optional[date] = Field(default=None)
+    is_active: bool = Field(default=True, nullable=False)
+    last_login: Optional[datetime] = Field(default=None)
     created_at: datetime = Field(
         default=sa.func.now(),
         sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
@@ -58,3 +59,18 @@ class UserSettings(SQLModel, table=True):
 
     # Relationships
     user: Optional[User] = Relationship(back_populates="settings")
+
+
+class RefreshToken(SQLModel, table=True):
+    """Refresh tokens for JWT authentication."""
+    __tablename__ = "refresh_tokens"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", nullable=False, index=True)
+    token: str = Field(nullable=False, unique=True, index=True)
+    expires_at: datetime = Field(nullable=False)
+    revoked: bool = Field(default=False, nullable=False)
+    created_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+    )

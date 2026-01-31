@@ -9,9 +9,13 @@ psycopg2-binary
 alembic
 
 # Authentication & Security
-python-jose[cryptography]
-passlib[bcrypt]
+pyjwt[crypto]
+bcrypt
 cryptography
+slowapi
+
+# Validation
+email-validator
 
 # Configuration
 python-dotenv
