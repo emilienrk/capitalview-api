@@ -43,6 +43,18 @@ def get_all_notes(
     return [NoteResponse.model_validate(note) for note in notes]
 
 
+@router.get("/me", response_model=list[NoteResponse])
+def get_my_notes(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """Get all notes for current authenticated user."""
+    notes = session.exec(
+        select(Note).where(Note.user_id == current_user.id)
+    ).all()
+    return [NoteResponse.model_validate(note) for note in notes]
+
+
 @router.get("/{note_id}", response_model=NoteResponse)
 def get_note(
     note_id: int,
@@ -58,18 +70,6 @@ def get_note(
         raise HTTPException(status_code=403, detail="Access denied")
     
     return NoteResponse.model_validate(note)
-
-
-@router.get("/me", response_model=list[NoteResponse])
-def get_my_notes(
-    current_user: Annotated[User, Depends(get_current_user)],
-    session: Session = Depends(get_session)
-):
-    """Get all notes for current authenticated user."""
-    notes = session.exec(
-        select(Note).where(Note.user_id == current_user.id)
-    ).all()
-    return [NoteResponse.model_validate(note) for note in notes]
 
 
 @router.put("/{note_id}", response_model=NoteResponse)

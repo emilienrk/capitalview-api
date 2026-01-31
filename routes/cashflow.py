@@ -77,6 +77,43 @@ def get_all_cashflows(
     return [get_cashflow_response(cf) for cf in cashflows]
 
 
+# NOTE: /me/* routes must be defined BEFORE /{cashflow_id} to avoid FastAPI matching "me" as an integer
+@router.get("/me/inflows", response_model=CashflowSummaryResponse)
+def get_my_inflows(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """Get all income/inflows for current authenticated user, grouped by category."""
+    return get_user_inflows(session, current_user.id)
+
+
+@router.get("/me/outflows", response_model=CashflowSummaryResponse)
+def get_my_outflows(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """Get all expenses/outflows for current authenticated user, grouped by category."""
+    return get_user_outflows(session, current_user.id)
+
+
+@router.get("/me/balance", response_model=CashflowBalanceResponse)
+def get_my_balance(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """
+    Get complete cashflow balance for current authenticated user.
+    
+    Returns:
+        - Total inflows and outflows
+        - Monthly equivalents
+        - Net balance
+        - Savings rate (% of income saved)
+        - Breakdown by category
+    """
+    return get_user_cashflow_balance(session, current_user.id)
+
+
 @router.get("/{cashflow_id}", response_model=CashflowResponse)
 def get_cashflow(
     cashflow_id: int,
@@ -149,45 +186,3 @@ def delete_cashflow(
     session.delete(cashflow)
     session.commit()
     return None
-
-
-# ============== INFLOWS ==============
-
-@router.get("/me/inflows", response_model=CashflowSummaryResponse)
-def get_my_inflows(
-    current_user: Annotated[User, Depends(get_current_user)],
-    session: Session = Depends(get_session)
-):
-    """Get all income/inflows for current authenticated user, grouped by category."""
-    return get_user_inflows(session, current_user.id)
-
-
-# ============== OUTFLOWS ==============
-
-@router.get("/me/outflows", response_model=CashflowSummaryResponse)
-def get_my_outflows(
-    current_user: Annotated[User, Depends(get_current_user)],
-    session: Session = Depends(get_session)
-):
-    """Get all expenses/outflows for current authenticated user, grouped by category."""
-    return get_user_outflows(session, current_user.id)
-
-
-# ============== BALANCE ==============
-
-@router.get("/me/balance", response_model=CashflowBalanceResponse)
-def get_my_balance(
-    current_user: Annotated[User, Depends(get_current_user)],
-    session: Session = Depends(get_session)
-):
-    """
-    Get complete cashflow balance for current authenticated user.
-    
-    Returns:
-        - Total inflows and outflows
-        - Monthly equivalents
-        - Net balance
-        - Savings rate (% of income saved)
-        - Breakdown by category
-    """
-    return get_user_cashflow_balance(session, current_user.id)

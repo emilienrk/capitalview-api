@@ -76,6 +76,28 @@ def list_crypto_accounts(
     ]
 
 
+# NOTE: /accounts/me must be defined BEFORE /accounts/{account_id}
+@router.get("/accounts/me", response_model=list[CryptoAccountBasicResponse])
+def get_my_crypto_accounts(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """Get all crypto accounts for current authenticated user."""
+    accounts = session.exec(
+        select(CryptoAccount).where(CryptoAccount.user_id == current_user.id)
+    ).all()
+    return [
+        CryptoAccountBasicResponse(
+            id=acc.id,
+            name=acc.name,
+            wallet_name=acc.wallet_name,
+            public_address=acc.public_address,
+            created_at=acc.created_at,
+        )
+        for acc in accounts
+    ]
+
+
 @router.get("/accounts/{account_id}", response_model=AccountSummaryResponse)
 def get_crypto_account(
     account_id: int,
@@ -145,27 +167,6 @@ def delete_crypto_account(
     session.delete(account)
     session.commit()
     return None
-
-
-@router.get("/accounts/me", response_model=list[CryptoAccountBasicResponse])
-def get_my_crypto_accounts(
-    current_user: Annotated[User, Depends(get_current_user)],
-    session: Session = Depends(get_session)
-):
-    """Get all crypto accounts for current authenticated user."""
-    accounts = session.exec(
-        select(CryptoAccount).where(CryptoAccount.user_id == current_user.id)
-    ).all()
-    return [
-        CryptoAccountBasicResponse(
-            id=acc.id,
-            name=acc.name,
-            wallet_name=acc.wallet_name,
-            public_address=acc.public_address,
-            created_at=acc.created_at,
-        )
-        for acc in accounts
-    ]
 
 
 # ============== TRANSACTIONS ==============
