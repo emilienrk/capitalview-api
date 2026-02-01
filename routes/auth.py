@@ -32,7 +32,16 @@ from services.auth import (
 
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
-limiter = Limiter(key_func=get_remote_address)
+
+
+def rate_limit_key_func(request: Request):
+    """Skip rate limiting for OPTIONS requests."""
+    if request.method == "OPTIONS":
+        return None
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=rate_limit_key_func)
 
 
 @router.post("/register", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)

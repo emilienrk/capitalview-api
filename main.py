@@ -23,6 +23,16 @@ from routes import (
 )
 
 
+def rate_limit_key_func(request: Request):
+    """
+    Key function for rate limiting.
+    Skip rate limiting for OPTIONS requests (CORS preflight).
+    """
+    if request.method == "OPTIONS":
+        return None
+    return get_remote_address(request)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
@@ -40,7 +50,7 @@ async def lifespan(app: FastAPI):
 
 settings = get_settings()
 
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=rate_limit_key_func)
 
 app = FastAPI(
     title=settings.app_name,
@@ -51,16 +61,16 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORS middleware
+CORS_ORIGINS=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Routes
 app.include_router(auth_router, prefix="/api")
 app.include_router(bank_router, prefix="/api")
 app.include_router(cashflow_router, prefix="/api")
