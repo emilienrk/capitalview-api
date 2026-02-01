@@ -18,7 +18,7 @@ from routes import (
     cashflow_router,
     stocks_router,
     crypto_router,
-    users_router,
+    dashboard_router,
     notes_router,
 )
 
@@ -66,7 +66,7 @@ app.include_router(bank_router, prefix="/api")
 app.include_router(cashflow_router, prefix="/api")
 app.include_router(stocks_router, prefix="/api")
 app.include_router(crypto_router, prefix="/api")
-app.include_router(users_router, prefix="/api")
+app.include_router(dashboard_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
 
 

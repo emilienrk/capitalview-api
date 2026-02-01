@@ -1,21 +1,27 @@
-"""User routes - global portfolio view."""
+"""Dashboard routes - Personal portfolio overview."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, Depends
 from sqlmodel import Session
 
 from database import get_session
 from models import User
 from schemas import PortfolioResponse
+from services.auth import get_current_user
 from services.stocks import get_user_stock_summary
 from services.crypto import get_user_crypto_summary
 
-router = APIRouter(prefix="/users", tags=["Users"])
+router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 
-@router.get("/{user_id}/portfolio", response_model=PortfolioResponse)
-def get_user_portfolio(user_id: int, session: Session = Depends(get_session)):
+@router.get("/portfolio", response_model=PortfolioResponse)
+def get_my_portfolio(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
     """
-    Get complete portfolio for a user.
+    Get complete portfolio for authenticated user.
     
     Aggregates all stock and crypto accounts with:
     - Total invested amount
@@ -24,14 +30,9 @@ def get_user_portfolio(user_id: int, session: Session = Depends(get_session)):
     - Profit/Loss
     - Performance percentage
     """
-    # Verify user exists
-    user = session.get(User, user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
     # Get all account summaries
-    stock_accounts = get_user_stock_summary(session, user_id)
-    crypto_accounts = get_user_crypto_summary(session, user_id)
+    stock_accounts = get_user_stock_summary(session, current_user.id)
+    crypto_accounts = get_user_crypto_summary(session, current_user.id)
     
     accounts = stock_accounts + crypto_accounts
     
