@@ -6,6 +6,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from models.enums import CryptoTransactionType
+
 
 class CryptoAccountCreate(BaseModel):
     """Create a crypto account."""
@@ -36,7 +38,7 @@ class CryptoTransactionCreate(BaseModel):
     """Create a crypto transaction."""
     account_id: int
     ticker: str
-    type: str
+    type: CryptoTransactionType
     amount: Decimal
     price_per_unit: Decimal
     fees: Decimal = Decimal("0")
@@ -47,7 +49,7 @@ class CryptoTransactionCreate(BaseModel):
 class CryptoTransactionUpdate(BaseModel):
     """Update a crypto transaction."""
     ticker: Optional[str] = None
-    type: Optional[str] = None
+    type: Optional[CryptoTransactionType] = None
     amount: Optional[Decimal] = None
     price_per_unit: Optional[Decimal] = None
     fees: Optional[Decimal] = None
@@ -60,7 +62,7 @@ class CryptoTransactionBasicResponse(BaseModel):
     id: int
     account_id: int
     ticker: str
-    type: str
+    type: CryptoTransactionType
     amount: Decimal
     price_per_unit: Decimal
     fees: Decimal

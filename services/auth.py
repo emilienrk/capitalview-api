@@ -101,6 +101,9 @@ def authenticate_user(session: Session, email: str, password: str) -> Optional[U
     if not user:
         return None
     
+    if not user.is_active:
+        return None
+    
     if not verify_password(password, user.password_hash):
         return None
     
@@ -277,10 +280,11 @@ def get_current_active_user(
     current_user: Annotated[User, Depends(get_current_user)]
 ) -> User:
     """
-    Get current active user (extension point for user status checks).
-    
-    Currently returns the user as-is, but can be extended to check
-    for disabled/banned users, email verification, etc.
+    Get current active user. Rejects inactive/disabled accounts.
     """
-    # Future: check if user.is_active, user.email_verified, etc.
+    if not current_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is disabled",
+        )
     return current_user

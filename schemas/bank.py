@@ -6,11 +6,13 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from models.enums import BankAccountType
+
 
 class BankAccountCreate(BaseModel):
     """Create a bank account."""
     name: str
-    account_type: str
+    account_type: BankAccountType
     bank_name: Optional[str] = None
     encrypted_iban: Optional[str] = None
     balance: Decimal = Decimal("0")
@@ -30,7 +32,7 @@ class BankAccountResponse(BaseModel):
     name: str
     bank_name: Optional[str] = None
     balance: Decimal
-    account_type: str
+    account_type: BankAccountType
     updated_at: datetime
 
 
