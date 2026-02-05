@@ -69,19 +69,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth_router, prefix="/api")
-app.include_router(bank_router, prefix="/api")
-app.include_router(cashflow_router, prefix="/api")
-app.include_router(stocks_router, prefix="/api")
-app.include_router(crypto_router, prefix="/api")
-app.include_router(dashboard_router, prefix="/api")
-app.include_router(notes_router, prefix="/api")
+app.include_router(auth_router)
+app.include_router(bank_router)
+app.include_router(cashflow_router)
+app.include_router(stocks_router)
+app.include_router(crypto_router)
+app.include_router(dashboard_router)
+app.include_router(notes_router)
 
 
 @app.get("/")
 def root():
     """Health check endpoint."""
     return {"status": "ok", "app": settings.app_name}
+
+
+@app.get("/health")
+def health():
+    """Simple health check for container monitoring."""
+    return {"status": "ok", "app": settings.app_name, "version": "0.1.0"}
 
 
 @app.get("/health/db")
