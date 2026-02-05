@@ -58,20 +58,14 @@ def register(
     - **email**: Valid email address
     - **password**: Password (minimum 8 characters)
     """
-    # Check if email already exists
-    existing_user = session.exec(select(User).where(User.email == payload.email)).first()
+    # Check if email or username already exists
+    existing_user = session.exec(select(User).where(
+        (User.email == payload.email) | (User.username == payload.username)
+    )).first()
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
-    
-    # Check if username already exists
-    existing_username = session.exec(select(User).where(User.username == payload.username)).first()
-    if existing_username:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username already taken"
+            detail="Un compte avec cet email ou ce nom d'utilisateur existe déjà"
         )
     
     # Create user
@@ -114,7 +108,7 @@ def login(
     
     # Create tokens
     access_token = create_access_token(
-        data={"sub": str(user.id), "email": user.email, "username": user.username}
+        data={"sub": str(user.id)}
     )
     refresh_token_str = create_refresh_token()
     
@@ -126,9 +120,10 @@ def login(
         key="refresh_token",
         value=refresh_token_str,
         httponly=True,
-        secure=True if settings.environment == "production" else False,
-        samesite="lax",
-        max_age=settings.refresh_token_expire_days * 86400
+        secure=settings.environment != "development",
+        samesite="strict",
+        max_age=settings.refresh_token_expire_days * 86400,
+        path="/auth",
     )
     
     return TokenResponse(
@@ -185,14 +180,15 @@ def refresh_token(
         key="refresh_token",
         value=new_refresh_token,
         httponly=True,
-        secure=True if settings.environment == "production" else False,
-        samesite="lax",
-        max_age=settings.refresh_token_expire_days * 86400
+        secure=settings.environment != "development",
+        samesite="strict",
+        max_age=settings.refresh_token_expire_days * 86400,
+        path="/auth",
     )
     
     # Create new access token
     access_token = create_access_token(
-        data={"sub": str(user.id), "email": user.email, "username": user.username}
+        data={"sub": str(user.id)}
     )
     
     return TokenResponse(
@@ -215,10 +211,16 @@ def logout(
     """
     count = revoke_user_refresh_tokens(session, current_user.id)
 
-    response.delete_cookie(key="refresh_token")
+    response.delete_cookie(
+        key="refresh_token",
+        httponly=True,
+        secure=get_settings().environment != "development",
+        samesite="strict",
+        path="/auth",
+    )
     
     return MessageResponse(
-        message=f"Logged out successfully. {count} token(s) revoked."
+        message="Logged out successfully"
     )
 
 

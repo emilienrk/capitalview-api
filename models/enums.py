@@ -23,6 +23,7 @@ class BankAccountType(str, Enum):
     CHECKING = "CHECKING"
     SAVINGS = "SAVINGS"
     LIVRET_A = "LIVRET_A"
+    LIVRET_DEVE = "LIVRET_DEVE"
     LEP = "LEP"
     LDD = "LDD"
     PEL = "PEL"

@@ -2,12 +2,13 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from sqlmodel import Session, select
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import get_settings
 from database import get_session, get_engine
@@ -65,9 +66,28 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses."""
+
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        if settings.environment == "production":
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
 
 app.include_router(auth_router)
 app.include_router(bank_router)
@@ -96,5 +116,5 @@ def health_db(session: Session = Depends(get_session)):
     try:
         session.exec(select(1))
         return {"status": "ok", "database": "connected"}
-    except Exception as e:
-        return {"status": "error", "database": str(e)}
+    except Exception:
+        return {"status": "error", "database": "unavailable"}

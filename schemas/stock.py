@@ -6,11 +6,13 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from models.enums import StockAccountType, StockTransactionType
+
 
 class StockAccountCreate(BaseModel):
     """Create a stock account."""
     name: str
-    account_type: str  # PEA, CTO, PEA_PME
+    account_type: StockAccountType
     bank_name: Optional[str] = None
     encrypted_iban: Optional[str] = None
 
@@ -26,7 +28,7 @@ class StockAccountBasicResponse(BaseModel):
     """Basic stock account response (without positions)."""
     id: int
     name: str
-    account_type: str
+    account_type: StockAccountType
     bank_name: Optional[str] = None
     created_at: datetime
 
@@ -36,7 +38,7 @@ class StockTransactionCreate(BaseModel):
     account_id: int
     ticker: str
     exchange: Optional[str] = None
-    type: str
+    type: StockTransactionType
     amount: Decimal
     price_per_unit: Decimal
     fees: Decimal = Decimal("0")
@@ -47,7 +49,7 @@ class StockTransactionUpdate(BaseModel):
     """Update a stock transaction."""
     ticker: Optional[str] = None
     exchange: Optional[str] = None
-    type: Optional[str] = None
+    type: Optional[StockTransactionType] = None
     amount: Optional[Decimal] = None
     price_per_unit: Optional[Decimal] = None
     fees: Optional[Decimal] = None
@@ -60,7 +62,7 @@ class StockTransactionBasicResponse(BaseModel):
     account_id: int
     ticker: str
     exchange: Optional[str] = None
-    type: str
+    type: StockTransactionType
     amount: Decimal
     price_per_unit: Decimal
     fees: Decimal

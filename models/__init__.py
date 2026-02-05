@@ -5,6 +5,7 @@ This module exports all SQLModel models for the application.
 Import models from here to ensure all relationships are properly loaded.
 """
 from .enums import (
+    BankAccountType,
     CryptoTransactionType,
     FlowType,
     Frequency,
@@ -21,6 +22,7 @@ from .note import Note
 
 __all__ = [
     # Enums
+    "BankAccountType",
     "FlowType",
     "Frequency",
     "StockAccountType",
