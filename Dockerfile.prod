@@ -10,9 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Création du venv
+# Create venv
 RUN python -m venv /opt/venv
-# On utilise le pip du venv
+# Use venv pip
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements.txt .
@@ -32,13 +32,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 
-# COPIE DU VENV ENTIER (Plus propre que .local)
+# Copy entire venv
 COPY --from=builder --chown=appuser:appuser /opt/venv /opt/venv
 
-# Copie du code
+# Copy code
 COPY --chown=appuser:appuser . .
 
-# Activation du venv pour l'utilisateur
+# Activate venv for user
 ENV PATH="/opt/venv/bin:$PATH"
 
 USER appuser
