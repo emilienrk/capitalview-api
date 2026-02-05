@@ -126,8 +126,9 @@ def login(
         key="refresh_token",
         value=refresh_token_str,
         httponly=True,
-        secure=True if settings.environment == "production" else False,
-        samesite="lax",
+        secure=settings.environment == "production",
+        samesite="strict",
+        path="/auth",
         max_age=settings.refresh_token_expire_days * 86400
     )
     
@@ -185,8 +186,9 @@ def refresh_token(
         key="refresh_token",
         value=new_refresh_token,
         httponly=True,
-        secure=True if settings.environment == "production" else False,
-        samesite="lax",
+        secure=settings.environment == "production",
+        samesite="strict",
+        path="/auth",
         max_age=settings.refresh_token_expire_days * 86400
     )
     
@@ -213,13 +215,18 @@ def logout(
     
     Requires authentication.
     """
-    count = revoke_user_refresh_tokens(session, current_user.id)
+    settings = get_settings()
+    revoke_user_refresh_tokens(session, current_user.id)
 
-    response.delete_cookie(key="refresh_token")
-    
-    return MessageResponse(
-        message=f"Logged out successfully. {count} token(s) revoked."
+    response.delete_cookie(
+        key="refresh_token",
+        httponly=True,
+        secure=settings.environment == "production",
+        samesite="strict",
+        path="/auth",
     )
+    
+    return MessageResponse(message="Logged out successfully")
 
 
 @router.get("/me", response_model=UserResponse)
