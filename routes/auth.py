@@ -120,9 +120,8 @@ def login(
         key="refresh_token",
         value=refresh_token_str,
         httponly=True,
-        secure=settings.environment != "dev",
-        samesite="strict",
-        path="/auth",
+        secure=settings.environment == "production",
+        samesite="lax",
         max_age=settings.refresh_token_expire_days * 86400
     )
     
@@ -180,10 +179,9 @@ def refresh_token(
         key="refresh_token",
         value=new_refresh_token,
         httponly=True,
-        secure=settings.environment != "dev",
-        samesite="strict",
-        max_age=settings.refresh_token_expire_days * 86400,
-        path="/auth",
+        secure=settings.environment == "production",
+        samesite="lax",
+        max_age=settings.refresh_token_expire_days * 86400
     )
     
     # Create new access token
@@ -215,13 +213,8 @@ def logout(
     response.delete_cookie(
         key="refresh_token",
         httponly=True,
-        secure=get_settings().environment != "dev",
-        samesite="strict",
-        path="/auth",
-    )
-    
-    return MessageResponse(
-        message="Logged out successfully"
+        secure=settings.environment == "production",
+        samesite="lax",
     )
     
     return MessageResponse(message="Logged out successfully")
