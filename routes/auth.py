@@ -49,6 +49,7 @@ limiter = Limiter(key_func=rate_limit_key_func)
 def register(
     request: Request,
     payload: RegisterRequest,
+    response: Response,
     session: Session = Depends(get_session)
 ):
     """
@@ -58,6 +59,8 @@ def register(
     - **email**: Valid email address
     - **password**: Password (minimum 8 characters)
     """
+    settings = get_settings()
+
     # Check if email or username already exists
     existing_user = session.exec(select(User).where(
         (User.email == payload.email) | (User.username == payload.username)
@@ -78,8 +81,37 @@ def register(
     session.add(user)
     session.commit()
     session.refresh(user)
+
+    access_token = create_access_token(
+        data={"sub": str(user.id)}
+    )
+    refresh_token_str = create_refresh_token()
     
-    return MessageResponse(message="User registered successfully")
+    # Store refresh token in database
+    create_refresh_token_db(session, user.id, refresh_token_str)
+    
+    # Clear any existing cookie first (must match all attributes to delete properly)
+    response.delete_cookie(
+        key="refresh_token",
+        path="/",
+        secure=settings.environment == "production",
+        samesite="lax"
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token_str,
+        httponly=True,
+        secure=settings.environment == "production",
+        samesite="lax",
+        max_age=settings.refresh_token_expire_days * 86400,
+        path="/"
+    )
+    
+    return TokenResponse(
+        access_token=access_token,
+        token_type="bearer",
+        expires_in=settings.access_token_expire_minutes * 60
+    )
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -97,7 +129,6 @@ def login(
     """
     settings = get_settings()
     
-    # Authenticate user
     user = authenticate_user(session, payload.email, payload.password)
     if not user:
         raise HTTPException(
@@ -106,23 +137,27 @@ def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Create tokens
     access_token = create_access_token(
         data={"sub": str(user.id)}
     )
     refresh_token_str = create_refresh_token()
     
-    # Store refresh token in database
     create_refresh_token_db(session, user.id, refresh_token_str)
     
-    # Set refresh token as HttpOnly cookie
+    response.delete_cookie(
+        key="refresh_token",
+        path="/",
+        secure=settings.environment == "production",
+        samesite="lax"
+    )
     response.set_cookie(
         key="refresh_token",
         value=refresh_token_str,
         httponly=True,
         secure=settings.environment == "production",
         samesite="lax",
-        max_age=settings.refresh_token_expire_days * 86400
+        max_age=settings.refresh_token_expire_days * 86400,
+        path="/"
     )
     
     return TokenResponse(
@@ -153,7 +188,6 @@ def refresh_token(
     
     settings = get_settings()
     
-    # Verify refresh token
     token_record = verify_refresh_token(session, refresh_token)
     if not token_record:
         raise HTTPException(
@@ -161,7 +195,6 @@ def refresh_token(
             detail="Invalid or expired refresh token"
         )
     
-    # Get user
     user = session.get(User, token_record.user_id)
     if not user:
         raise HTTPException(
@@ -174,17 +207,22 @@ def refresh_token(
     new_refresh_token = create_refresh_token()
     create_refresh_token_db(session, user.id, new_refresh_token)
     
-    # Update cookie with new refresh token
+    response.delete_cookie(
+        key="refresh_token",
+        path="/",
+        secure=settings.environment == "production",
+        samesite="lax"
+    )
     response.set_cookie(
         key="refresh_token",
         value=new_refresh_token,
         httponly=True,
         secure=settings.environment == "production",
         samesite="lax",
-        max_age=settings.refresh_token_expire_days * 86400
+        max_age=settings.refresh_token_expire_days * 86400,
+        path="/"
     )
     
-    # Create new access token
     access_token = create_access_token(
         data={"sub": str(user.id)}
     )
@@ -212,9 +250,9 @@ def logout(
 
     response.delete_cookie(
         key="refresh_token",
-        httponly=True,
+        path="/",
         secure=settings.environment == "production",
-        samesite="lax",
+        samesite="lax"
     )
     
     return MessageResponse(message="Logged out successfully")
