@@ -13,6 +13,8 @@ from schemas import (
     StockAccountCreate,
     StockAccountUpdate,
     StockAccountBasicResponse,
+    StockBulkImportRequest,
+    StockBulkImportResponse,
     StockTransactionCreate,
     StockTransactionUpdate,
     StockTransactionBasicResponse,
@@ -343,3 +345,68 @@ def get_account_transactions(
         select(StockTransaction).where(StockTransaction.account_id == account_id)
     ).all()
     return [calculate_stock_transaction(tx) for tx in transactions]
+
+
+@router.post("/transactions/bulk", response_model=StockBulkImportResponse, status_code=201)
+def bulk_import_stock_transactions(
+    data: StockBulkImportRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """Bulk import multiple stock transactions for a given account."""
+    # Validate account exists and belongs to user
+    account = session.get(StockAccount, data.account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not data.transactions:
+        raise HTTPException(status_code=400, detail="No transactions provided")
+
+    created: list[StockTransaction] = []
+    for tx_data in data.transactions:
+        # Validate transaction type enum
+        try:
+            tx_type = StockTransactionType(tx_data.type)
+        except ValueError:
+            valid_types = [t.value for t in StockTransactionType]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid type '{tx_data.type}' for ticker '{tx_data.ticker}'. Must be one of: {valid_types}"
+            )
+
+        transaction = StockTransaction(
+            account_id=data.account_id,
+            ticker=tx_data.ticker.upper(),
+            exchange=tx_data.exchange,
+            type=tx_type,
+            amount=tx_data.amount,
+            price_per_unit=tx_data.price_per_unit,
+            fees=tx_data.fees,
+            executed_at=tx_data.executed_at,
+        )
+        session.add(transaction)
+        created.append(transaction)
+
+    session.commit()
+    for tx in created:
+        session.refresh(tx)
+
+    return StockBulkImportResponse(
+        imported_count=len(created),
+        transactions=[
+            StockTransactionBasicResponse(
+                id=tx.id,
+                account_id=tx.account_id,
+                ticker=tx.ticker,
+                exchange=tx.exchange,
+                type=tx.type.value,
+                amount=tx.amount,
+                price_per_unit=tx.price_per_unit,
+                fees=tx.fees,
+                executed_at=tx.executed_at,
+            )
+            for tx in created
+        ],
+    )

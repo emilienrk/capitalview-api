@@ -13,6 +13,8 @@ from schemas import (
     CryptoAccountCreate,
     CryptoAccountUpdate,
     CryptoAccountBasicResponse,
+    CryptoBulkImportRequest,
+    CryptoBulkImportResponse,
     CryptoTransactionCreate,
     CryptoTransactionUpdate,
     CryptoTransactionBasicResponse,
@@ -332,3 +334,68 @@ def get_account_transactions(
         select(CryptoTransaction).where(CryptoTransaction.account_id == account_id)
     ).all()
     return [calculate_crypto_transaction(tx, session) for tx in transactions]
+
+
+@router.post("/transactions/bulk", response_model=CryptoBulkImportResponse, status_code=201)
+def bulk_import_crypto_transactions(
+    data: CryptoBulkImportRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """Bulk import multiple crypto transactions for a given account."""
+    # Validate account exists and belongs to user
+    account = session.get(CryptoAccount, data.account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not data.transactions:
+        raise HTTPException(status_code=400, detail="No transactions provided")
+
+    created: list[CryptoTransaction] = []
+    for tx_data in data.transactions:
+        # Validate transaction type enum
+        try:
+            tx_type = CryptoTransactionType(tx_data.type)
+        except ValueError:
+            valid_types = [t.value for t in CryptoTransactionType]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid type '{tx_data.type}' for ticker '{tx_data.ticker}'. Must be one of: {valid_types}"
+            )
+
+        transaction = CryptoTransaction(
+            account_id=data.account_id,
+            ticker=tx_data.ticker.upper(),
+            type=tx_type,
+            amount=tx_data.amount,
+            price_per_unit=tx_data.price_per_unit,
+            fees=tx_data.fees,
+            fees_ticker=tx_data.fees_ticker,
+            executed_at=tx_data.executed_at,
+        )
+        session.add(transaction)
+        created.append(transaction)
+
+    session.commit()
+    for tx in created:
+        session.refresh(tx)
+
+    return CryptoBulkImportResponse(
+        imported_count=len(created),
+        transactions=[
+            CryptoTransactionBasicResponse(
+                id=tx.id,
+                account_id=tx.account_id,
+                ticker=tx.ticker,
+                type=tx.type.value,
+                amount=tx.amount,
+                price_per_unit=tx.price_per_unit,
+                fees=tx.fees,
+                fees_ticker=tx.fees_ticker,
+                executed_at=tx.executed_at,
+            )
+            for tx in created
+        ],
+    )

@@ -56,6 +56,29 @@ class StockTransactionUpdate(BaseModel):
     executed_at: Optional[datetime] = None
 
 
+class StockTransactionBulkCreate(BaseModel):
+    """Create a stock transaction (without account_id, used in bulk import)."""
+    ticker: str
+    exchange: Optional[str] = None
+    type: StockTransactionType
+    amount: Decimal
+    price_per_unit: Decimal
+    fees: Decimal = Decimal("0")
+    executed_at: datetime
+
+
+class StockBulkImportRequest(BaseModel):
+    """Bulk import multiple stock transactions for a given account."""
+    account_id: int
+    transactions: list[StockTransactionBulkCreate]
+
+
+class StockBulkImportResponse(BaseModel):
+    """Response for bulk import of stock transactions."""
+    imported_count: int
+    transactions: list["StockTransactionBasicResponse"]
+
+
 class StockTransactionBasicResponse(BaseModel):
     """Basic stock transaction response."""
     id: int
