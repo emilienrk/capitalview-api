@@ -38,6 +38,28 @@ def create_bank_account(
             status_code=400,
             detail=f"Invalid account_type. Must be one of: {[e.value for e in BankAccountType]}",
         )
+
+    # Check for existing regulated accounts
+    unique_types = {
+        BankAccountType.LIVRET_A,
+        BankAccountType.LIVRET_DEVE,
+        BankAccountType.LEP,
+        BankAccountType.LDD,
+        BankAccountType.PEL,
+        BankAccountType.CEL,
+    }
+
+    if account_type in unique_types:
+        existing = session.exec(
+            select(BankAccount)
+            .where(BankAccount.user_id == current_user.id)
+            .where(BankAccount.account_type == account_type)
+        ).first()
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"You already have a {account_type.value} account."
+            )
     
     new_account = BankAccount(
         user_id=current_user.id,

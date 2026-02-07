@@ -48,6 +48,24 @@ def create_stock_account(
             status_code=400,
             detail=f"Invalid account_type. Must be one of: {valid_types}"
         )
+
+    # Check for existing regulated accounts
+    unique_types = {
+        StockAccountType.PEA,
+        StockAccountType.PEA_PME,
+    }
+
+    if account_type in unique_types:
+        existing = session.exec(
+            select(StockAccount)
+            .where(StockAccount.user_id == current_user.id)
+            .where(StockAccount.account_type == account_type)
+        ).first()
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"You already have a {account_type.value} account."
+            )
     
     account = StockAccount(
         user_id=current_user.id,
