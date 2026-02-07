@@ -147,6 +147,14 @@ def update_cashflow(
     
     if cashflow_data.name is not None:
         cashflow.name = cashflow_data.name
+    if cashflow_data.flow_type is not None:
+        try:
+            cashflow.flow_type = FlowType(cashflow_data.flow_type)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid flow_type. Must be one of: {[e.value for e in FlowType]}",
+            )
     if cashflow_data.category is not None:
         cashflow.category = cashflow_data.category
     if cashflow_data.amount is not None:

@@ -22,6 +22,7 @@ class CashflowCreate(BaseModel):
 class CashflowUpdate(BaseModel):
     """Update a cashflow."""
     name: Optional[str] = None
+    flow_type: Optional[FlowType] = None
     category: Optional[str] = None
     amount: Optional[Decimal] = None
     frequency: Optional[Frequency] = None
