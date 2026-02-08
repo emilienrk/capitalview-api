@@ -1,30 +1,28 @@
 """
 BankAccount model (standard bank accounts).
 """
+from typing import Optional
 from datetime import datetime
-from decimal import Decimal
-from typing import TYPE_CHECKING, Optional
-
+from sqlmodel import SQLModel, Field
 import sqlalchemy as sa
-from sqlmodel import Column, Enum, Field, Relationship, SQLModel
-
-from .enums import BankAccountType
-
-if TYPE_CHECKING:
-    from .user import User
+from sqlalchemy import Column, TEXT
 
 
 class BankAccount(SQLModel, table=True):
-    """Standard bank accounts (Cash, Savings)."""
     __tablename__ = "bank_accounts"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: int = Field(foreign_key="users.id")
-    name: str = Field(nullable=False)
-    bank_name: Optional[str] = Field(default=None)
-    encrypted_iban: Optional[str] = Field(default=None)
-    balance: Decimal = Field(default=Decimal("0"), max_digits=15, decimal_places=2)
-    account_type: BankAccountType = Field(sa_column=Column(Enum(BankAccountType), nullable=False))
+    user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    name_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    institution_name_enc: Optional[str] = Field(sa_column=Column(TEXT))
+    identifier_enc: Optional[str] = Field(sa_column=Column(TEXT)) # Renamed from iban_enc
+    balance_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    account_type_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+
+    created_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+    )
     updated_at: datetime = Field(
         default=sa.func.now(),
         sa_column=Column(
@@ -34,6 +32,3 @@ class BankAccount(SQLModel, table=True):
             nullable=False,
         )
     )
-
-    # Relationships
-    user: Optional["User"] = Relationship(back_populates="bank_accounts")
