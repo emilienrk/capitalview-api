@@ -2,6 +2,7 @@
 
 from datetime import date
 from typing import Annotated
+import uuid
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from slowapi import Limiter
@@ -11,7 +12,7 @@ from sqlmodel import Session, select
 from config import get_settings
 from database import get_session
 from models.user import User
-from schemas.auth import (
+from dtos.auth import (
     LoginRequest,
     MessageResponse,
     RegisterRequest,
@@ -73,6 +74,7 @@ def register(
     
     # Create user
     user = User(
+        uuid=uuid.uuid7(),
         username=payload.username,
         email=payload.email,
         password_hash=hash_password(payload.password)

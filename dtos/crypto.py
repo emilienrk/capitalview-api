@@ -12,14 +12,14 @@ from models.enums import CryptoTransactionType
 class CryptoAccountCreate(BaseModel):
     """Create a crypto account."""
     name: str
-    wallet_name: Optional[str] = None
+    platform: Optional[str] = None
     public_address: Optional[str] = None
 
 
 class CryptoAccountUpdate(BaseModel):
     """Update a crypto account."""
     name: Optional[str] = None
-    wallet_name: Optional[str] = None
+    platform: Optional[str] = None
     public_address: Optional[str] = None
 
 
@@ -27,9 +27,10 @@ class CryptoAccountBasicResponse(BaseModel):
     """Basic crypto account response (without positions)."""
     id: int
     name: str
-    wallet_name: Optional[str] = None
+    platform: Optional[str] = None
     public_address: Optional[str] = None
     created_at: datetime
+    updated_at: datetime
 
 
 # ============== CRYPTO TRANSACTION CRUD SCHEMAS ==============
@@ -44,6 +45,8 @@ class CryptoTransactionCreate(BaseModel):
     fees: Decimal = Decimal("0")
     fees_ticker: Optional[str] = None
     executed_at: datetime
+    tx_hash: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class CryptoTransactionUpdate(BaseModel):
@@ -55,6 +58,8 @@ class CryptoTransactionUpdate(BaseModel):
     fees: Optional[Decimal] = None
     fees_ticker: Optional[str] = None
     executed_at: Optional[datetime] = None
+    tx_hash: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class CryptoTransactionBulkCreate(BaseModel):
@@ -66,6 +71,8 @@ class CryptoTransactionBulkCreate(BaseModel):
     fees: Decimal = Decimal("0")
     fees_ticker: Optional[str] = None
     executed_at: datetime
+    tx_hash: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class CryptoBulkImportRequest(BaseModel):
@@ -91,3 +98,5 @@ class CryptoTransactionBasicResponse(BaseModel):
     fees: Decimal
     fees_ticker: Optional[str] = None
     executed_at: datetime
+    tx_hash: Optional[str] = None
+    notes: Optional[str] = None

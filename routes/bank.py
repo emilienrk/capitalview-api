@@ -9,7 +9,7 @@ from database import get_session
 from models import BankAccount, User
 from services.auth import get_current_user
 from models.enums import BankAccountType
-from schemas import (
+from dtos import (
     BankAccountCreate,
     BankAccountUpdate,
     BankAccountResponse,

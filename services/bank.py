@@ -5,7 +5,7 @@ from decimal import Decimal
 from sqlmodel import Session, select
 
 from models import BankAccount
-from schemas import BankAccountResponse, BankSummaryResponse
+from dtos import BankAccountResponse, BankSummaryResponse
 
 
 def get_bank_account_response(account: BankAccount) -> BankAccountResponse:
@@ -23,7 +23,7 @@ def get_bank_account_response(account: BankAccount) -> BankAccountResponse:
 def get_user_bank_accounts(session: Session, user_id: int) -> BankSummaryResponse:
     """Get all bank accounts for a user with total balance."""
     accounts = session.exec(
-        select(BankAccount).where(BankAccount.user_id == user_id)
+        select(BankAccount).where(BankAccount.user_hash == hash_index(id))
     ).all()
     
     account_responses = [get_bank_account_response(acc) for acc in accounts]

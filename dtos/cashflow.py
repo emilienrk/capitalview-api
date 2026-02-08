@@ -1,6 +1,6 @@
 """Cashflow schemas."""
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -38,6 +38,8 @@ class CashflowResponse(BaseModel):
     amount: Decimal
     frequency: Frequency
     transaction_date: date
+    created_at: datetime
+    updated_at: datetime
 
     monthly_amount: Decimal  # Amount normalized to monthly
 

@@ -9,7 +9,7 @@ from database import get_session
 from models import CryptoAccount, CryptoTransaction, User
 from services.auth import get_current_user
 from models.enums import CryptoTransactionType
-from schemas import (
+from dtos import (
     CryptoAccountCreate,
     CryptoAccountUpdate,
     CryptoAccountBasicResponse,

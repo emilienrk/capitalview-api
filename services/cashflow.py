@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 
 from models import Cashflow
 from models.enums import FlowType, Frequency
-from schemas import (
+from dtos import (
     CashflowResponse,
     CashflowCategoryResponse,
     CashflowSummaryResponse,

@@ -7,7 +7,7 @@ from sqlmodel import Session
 
 from database import get_session
 from models import User
-from schemas import PortfolioResponse
+from dtos import PortfolioResponse
 from services.auth import get_current_user
 from services.stocks import get_user_stock_summary
 from services.crypto import get_user_crypto_summary

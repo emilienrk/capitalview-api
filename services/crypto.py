@@ -5,7 +5,7 @@ from decimal import Decimal
 from sqlmodel import Session, select
 
 from models import CryptoAccount, CryptoTransaction
-from schemas import (
+from dtos import (
     TransactionResponse,
     PositionResponse,
     AccountSummaryResponse,
@@ -111,6 +111,8 @@ def get_crypto_account_summary(session: Session, account: CryptoAccount) -> Acco
     transactions = session.exec(
         select(CryptoTransaction).where(CryptoTransaction.account_id == account.id)
     ).all()
+
+    
     
     positions = aggregate_crypto_positions(transactions, session)
     

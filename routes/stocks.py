@@ -9,7 +9,7 @@ from database import get_session
 from models import StockAccount, StockTransaction, User
 from services.auth import get_current_user
 from models.enums import StockAccountType, StockTransactionType
-from schemas import (
+from dtos import (
     StockAccountCreate,
     StockAccountUpdate,
     StockAccountBasicResponse,

@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 from database import get_session
 from models import Note, User
 from services.auth import get_current_user
-from schemas import NoteCreate, NoteUpdate, NoteResponse
+from dtos import NoteCreate, NoteUpdate, NoteResponse
 
 router = APIRouter(prefix="/notes", tags=["Notes"])
 

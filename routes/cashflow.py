@@ -9,7 +9,7 @@ from database import get_session
 from models import Cashflow, User
 from services.auth import get_current_user
 from models.enums import FlowType, Frequency
-from schemas import (
+from dtos import (
     CashflowCreate,
     CashflowUpdate,
     CashflowResponse,
