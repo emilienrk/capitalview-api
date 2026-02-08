@@ -2,7 +2,7 @@
 User and UserSettings models.
 """
 from typing import Optional
-from sqlmodel import SQLModel, Field
+from sqlmodel import SQLModel, Field, Relationship
 from sqlalchemy import Column, TEXT
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -55,7 +55,7 @@ class RefreshToken(SQLModel, table=True):
     __tablename__ = "refresh_tokens"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    user_uuid_bidx: str = Field(index=True) 
+    user_uuid: str = Field(foreign_key="users.uuid", index=True, nullable=False)
     token: str = Field(nullable=False, unique=True, index=True)
     expires_at: datetime = Field(nullable=False)
     revoked: bool = Field(default=False, nullable=False)

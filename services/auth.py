@@ -2,16 +2,42 @@
 
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Annotated, Optional
 
 import jwt
+import nacl.pwhash
+import nacl.exceptions
 from jwt import InvalidTokenError
+from fastapi import Depends, HTTPException, status, Header, Cookie
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlmodel import Session, select
 
 from config import get_settings
+from database import get_session
 from models.user import RefreshToken, User
 
 
+# ============== PASSWORD UTILS ==============
+
+def verify_password(plain_password: str, password_hash: str) -> bool:
+    """
+    Verify a password against an Argon2id hash.
+    
+    Args:
+        plain_password: Plain text password
+        password_hash: PHC formatted hash string
+        
+    Returns:
+        True if matches, False otherwise
+    """
+    try:
+        nacl.pwhash.verify(password_hash.encode('utf-8'), plain_password.encode('utf-8'))
+        return True
+    except nacl.exceptions.InvalidkeyError:
+        return False
+
+
+# ============== JWT UTILS ==============
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """
@@ -101,7 +127,7 @@ def authenticate_user(session: Session, email: str, password: str) -> Optional[U
 
 def create_refresh_token_db(
     session: Session,
-    user_id: int,
+    user_uuid: str,
     token: str,
     expires_delta: Optional[timedelta] = None
 ) -> RefreshToken:
@@ -110,7 +136,7 @@ def create_refresh_token_db(
     
     Args:
         session: Database session
-        user_id: User ID
+        user_uuid: User UUID
         token: Refresh token string
         expires_delta: Optional expiration time delta
         
@@ -125,7 +151,7 @@ def create_refresh_token_db(
         expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
     
     refresh_token = RefreshToken(
-        user_id=user_id,
+        user_uuid=user_uuid,
         token=token,
         expires_at=expires_at
     )
@@ -159,20 +185,20 @@ def verify_refresh_token(session: Session, token: str) -> Optional[RefreshToken]
     return token_record
 
 
-def revoke_user_refresh_tokens(session: Session, user_id: int) -> int:
+def revoke_user_refresh_tokens(session: Session, user_uuid: str) -> int:
     """
     Revoke all refresh tokens for a user.
     
     Args:
         session: Database session
-        user_id: User ID
+        user_uuid: User UUID
         
     Returns:
         Number of tokens revoked
     """
     tokens = session.exec(
         select(RefreshToken).where(
-            RefreshToken.user_id == user_id,
+            RefreshToken.user_uuid == user_uuid,
             RefreshToken.revoked == False  # noqa: E712
         )
     ).all()
@@ -211,12 +237,6 @@ def revoke_refresh_token(session: Session, token: str) -> bool:
 
 # ============== FASTAPI DEPENDENCIES ==============
 
-from typing import Annotated
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from database import get_session
-
-
 security = HTTPBearer()
 
 
@@ -249,16 +269,16 @@ def get_current_user(
     try:
         # Decode JWT token
         payload = decode_access_token(credentials.credentials)
-        user_id: str = payload.get("sub")
+        user_uuid: str = payload.get("sub")
         
-        if user_id is None:
+        if user_uuid is None:
             raise credentials_exception
             
     except InvalidTokenError:
         raise credentials_exception
     
-    # Get user from database
-    user = session.get(User, int(user_id))
+    # Get user from database (by UUID string)
+    user = session.get(User, user_uuid)
     if user is None:
         raise credentials_exception
     
@@ -277,3 +297,19 @@ def get_current_active_user(
             detail="Account is disabled",
         )
     return current_user
+
+
+def get_master_key(
+    master_key_cookie: Annotated[str | None, Cookie(alias="master_key")] = None,
+    x_master_key: Annotated[str | None, Header(alias="X-Master-Key")] = None
+) -> str:
+    """
+    Get the Master Key from Cookie or Header.
+    """
+    key = master_key_cookie or x_master_key
+    if not key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Master Key missing. Please log in again."
+        )
+    return key
