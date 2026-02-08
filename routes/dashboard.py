@@ -3,14 +3,15 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from database import get_session
-from models import User
+from models import User, StockAccount, CryptoAccount
 from dtos import PortfolioResponse
-from services.auth import get_current_user
-from services.stocks import get_user_stock_summary
-from services.crypto import get_user_crypto_summary
+from services.auth import get_current_user, get_master_key
+from services.encryption import hash_index
+from services.stock_transaction import get_stock_account_summary
+from services.crypto_transaction import get_crypto_account_summary
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -18,6 +19,7 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 @router.get("/portfolio", response_model=PortfolioResponse)
 def get_my_portfolio(
     current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
 ):
     """
@@ -30,18 +32,42 @@ def get_my_portfolio(
     - Profit/Loss
     - Performance percentage
     """
-    # Get all account summaries
-    stock_accounts = get_user_stock_summary(session, current_user.id)
-    crypto_accounts = get_user_crypto_summary(session, current_user.id)
+    user_bidx = hash_index(current_user.uuid, master_key)
     
-    accounts = stock_accounts + crypto_accounts
+    # 1. Fetch Stock Accounts (Models)
+    stock_models = session.exec(
+        select(StockAccount).where(StockAccount.user_uuid_bidx == user_bidx)
+    ).all()
     
-    # Aggregate totals
+    # 2. Fetch Crypto Accounts (Models)
+    crypto_models = session.exec(
+        select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
+    ).all()
+    
+    # 3. Compute Summaries
+    accounts = []
+    
+    for acc in stock_models:
+        summary = get_stock_account_summary(session, acc, master_key)
+        accounts.append(summary)
+        
+    for acc in crypto_models:
+        summary = get_crypto_account_summary(session, acc, master_key)
+        accounts.append(summary)
+    
+    # 4. Aggregate Totals
     total_invested = sum(a.total_invested for a in accounts)
     total_fees = sum(a.total_fees for a in accounts)
     current_value = sum(a.current_value for a in accounts if a.current_value)
-    profit_loss = current_value - total_invested if current_value else None
-    profit_loss_pct = (profit_loss / total_invested * 100) if profit_loss and total_invested > 0 else None
+    
+    profit_loss = None
+    profit_loss_pct = None
+    
+    # Only calculate global P/L if we have current values
+    if current_value > 0 or total_invested > 0:
+        profit_loss = current_value - total_invested
+        if total_invested > 0:
+            profit_loss_pct = (profit_loss / total_invested * 100)
     
     return PortfolioResponse(
         total_invested=round(total_invested, 2),

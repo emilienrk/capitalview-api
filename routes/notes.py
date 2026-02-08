@@ -3,104 +3,88 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from database import get_session
-from models import Note, User
-from services.auth import get_current_user
+from models import User, Note
+from services.auth import get_current_user, get_master_key
 from dtos import NoteCreate, NoteUpdate, NoteResponse
+from services.note import (
+    create_note,
+    update_note,
+    delete_note,
+    get_note,
+    get_user_notes
+)
 
 router = APIRouter(prefix="/notes", tags=["Notes"])
 
 
 @router.post("", response_model=NoteResponse, status_code=201)
-def create_note(
+def create_entry(
     note_data: NoteCreate,
     current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
 ):
     """Create a new note."""
-    new_note = Note(
-        user_id=current_user.id,
-        name=note_data.name,
-        description=note_data.description,
-    )
-    session.add(new_note)
-    session.commit()
-    session.refresh(new_note)
-    return NoteResponse.model_validate(new_note)
+    return create_note(session, note_data, current_user.uuid, master_key)
 
 
 @router.get("", response_model=list[NoteResponse])
-def get_all_notes(
+def get_all(
     current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
 ):
     """Get all notes for current user."""
-    notes = session.exec(
-        select(Note).where(Note.user_id == current_user.id)
-    ).all()
-    return [NoteResponse.model_validate(note) for note in notes]
+    return get_user_notes(session, current_user.uuid, master_key)
 
 
 @router.get("/{note_id}", response_model=NoteResponse)
-def get_note(
+def get_entry(
     note_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
 ):
     """Get a specific note."""
-    note = session.get(Note, note_id)
+    note = get_note(session, note_id, current_user.uuid, master_key)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
-    
-    if note.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    return NoteResponse.model_validate(note)
+    return note
 
 
 @router.put("/{note_id}", response_model=NoteResponse)
-def update_note(
+def update_entry(
     note_id: int,
     note_data: NoteUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
 ):
     """Update a note."""
-    note = session.get(Note, note_id)
-    if not note:
+    # Verify ownership
+    existing = get_note(session, note_id, current_user.uuid, master_key)
+    if not existing:
         raise HTTPException(status_code=404, detail="Note not found")
     
-    if note.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    # Update only provided fields
-    if note_data.name is not None:
-        note.name = note_data.name
-    if note_data.description is not None:
-        note.description = note_data.description
-    
-    session.add(note)
-    session.commit()
-    session.refresh(note)
-    return NoteResponse.model_validate(note)
+    note_model = session.get(Note, note_id)
+    return update_note(session, note_model, note_data, master_key)
 
 
 @router.delete("/{note_id}", status_code=204)
-def delete_note(
+def delete_entry(
     note_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
 ):
     """Delete a note."""
-    note = session.get(Note, note_id)
-    if not note:
+    # Verify ownership
+    existing = get_note(session, note_id, current_user.uuid, master_key)
+    if not existing:
         raise HTTPException(status_code=404, detail="Note not found")
-    
-    if note.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    session.delete(note)
-    session.commit()
+        
+    delete_note(session, note_id)
     return None
