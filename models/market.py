@@ -12,6 +12,7 @@ from sqlmodel import Column, Field, SQLModel
 class MarketPrice(SQLModel, table=True):
     """Cache for API prices (Asset Price)."""
     __tablename__ = "market_prices"
+    __table_args__ = {"extend_existing": True}
 
     id: Optional[int] = Field(default=None, primary_key=True)
     symbol: str = Field(unique=True, index=True)

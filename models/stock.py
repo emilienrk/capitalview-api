@@ -12,6 +12,7 @@ import uuid
 class StockAccount(SQLModel, table=True):
     """Investment accounts (PEA, CTO)."""
     __tablename__ = "stock_accounts"
+    __table_args__ = {"extend_existing": True}
 
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
@@ -37,6 +38,7 @@ class StockAccount(SQLModel, table=True):
 class StockTransaction(SQLModel, table=True):
     """History of buy/sell for stocks."""
     __tablename__ = "stock_transactions"
+    __table_args__ = {"extend_existing": True}
 
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     account_id_bidx: str = Field(sa_column=Column(TEXT, nullable=False)) # No FK, overkill privacy

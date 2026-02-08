@@ -25,8 +25,13 @@ def get_market_price(session: Session, symbol: str) -> Optional[Decimal]:
 
     now = datetime.now(timezone.utc)
 
-    if cached and cached.last_updated > (now - CACHE_DURATION):
-        return cached.current_price
+    if cached:
+        last_updated = cached.last_updated
+        if last_updated.tzinfo is None:
+            last_updated = last_updated.replace(tzinfo=timezone.utc)
+            
+        if last_updated > (now - CACHE_DURATION):
+            return cached.current_price
 
     # 2. Fetch from Manager (which handles providers)
     data = market_data_manager.get_info(symbol)
@@ -65,8 +70,13 @@ def get_market_info(session: Session, symbol: str) -> Tuple[Optional[str], Optio
 
     now = datetime.now(timezone.utc)
 
-    if cached and cached.last_updated > (now - CACHE_DURATION):
-        return cached.name, cached.current_price
+    if cached:
+        last_updated = cached.last_updated
+        if last_updated.tzinfo is None:
+            last_updated = last_updated.replace(tzinfo=timezone.utc)
+            
+        if last_updated > (now - CACHE_DURATION):
+            return cached.name, cached.current_price
 
     data = market_data_manager.get_info(symbol)
     if not data:
