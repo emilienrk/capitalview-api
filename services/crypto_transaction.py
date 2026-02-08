@@ -48,21 +48,15 @@ def _decrypt_transaction(tx: CryptoTransaction, master_key: str, session: Sessio
         if fees_price:
             fees_in_eur = fees * fees_price
         else:
-            # Fallback if price not found, assume 0 or keep as is? 
-            # Ideally we need historical price, but get_market_price gives current.
-            # For now, let's keep it simple.
             pass
 
     # Calculate totals
     total_cost = (amount * price)
-    # If BUY, cost is amount * price + fees (if fees in EUR)
-    # Crypto logic can be complex. keeping it aligned with original logic.
-    
     total_cost_with_fees = total_cost + fees_in_eur
     fees_pct = (fees_in_eur / total_cost_with_fees * 100) if total_cost_with_fees > 0 else Decimal("0")
 
     return TransactionResponse(
-        id=tx.id,
+        id=tx.uuid,
         ticker=ticker,
         type=type_str,
         amount=amount,
@@ -80,7 +74,7 @@ def create_crypto_transaction(
     master_key: str
 ) -> TransactionResponse:
     """Create a new encrypted crypto transaction."""
-    account_bidx = hash_index(str(data.account_id), master_key)
+    account_bidx = hash_index(data.account_id, master_key)
     
     ticker_enc = encrypt_data(data.ticker.upper(), master_key)
     type_enc = encrypt_data(data.type.value, master_key)
@@ -123,11 +117,11 @@ def create_crypto_transaction(
 
 def get_crypto_transaction(
     session: Session,
-    transaction_id: int,
+    transaction_uuid: str,
     master_key: str
 ) -> Optional[TransactionResponse]:
     """Get a single transaction by ID."""
-    transaction = session.get(CryptoTransaction, transaction_id)
+    transaction = session.get(CryptoTransaction, transaction_uuid)
     if not transaction:
         return None
     return _decrypt_transaction(transaction, master_key, session)
@@ -176,10 +170,10 @@ def update_crypto_transaction(
 
 def delete_crypto_transaction(
     session: Session,
-    transaction_id: int
+    transaction_uuid: str
 ) -> bool:
     """Delete a transaction."""
-    transaction = session.get(CryptoTransaction, transaction_id)
+    transaction = session.get(CryptoTransaction, transaction_uuid)
     if not transaction:
         return False
         
@@ -190,11 +184,11 @@ def delete_crypto_transaction(
 
 def get_account_transactions(
     session: Session,
-    account_id: int,
+    account_uuid: str,
     master_key: str
 ) -> List[TransactionResponse]:
     """Get all transactions for a specific account."""
-    account_bidx = hash_index(str(account_id), master_key)
+    account_bidx = hash_index(account_uuid, master_key)
     
     transactions = session.exec(
         select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == account_bidx)
@@ -211,49 +205,62 @@ def get_crypto_account_summary(
     """Get summary for a crypto account with positions."""
     acc_resp = _map_account_to_response(account, master_key)
     
-    transactions = get_account_transactions(session, account.id, master_key)
+    # 1. Get and Sort Transactions
+    transactions = get_account_transactions(session, account.uuid, master_key)
+    transactions.sort(key=lambda x: x.executed_at)
     
     positions_map: dict[str, dict] = {}
     
+    # 2. Process Transactions (PRU Calculation)
     for tx in transactions:
-        # tx is already a TransactionResponse (decrypted)
         ticker = tx.ticker
         if ticker not in positions_map:
             positions_map[ticker] = {
                 "ticker": ticker,
                 "total_amount": Decimal("0"),
-                "total_cost": Decimal("0"),
+                "total_cost": Decimal("0"), # Weighted Cost Basis
                 "total_fees": Decimal("0"),
             }
         
-        # We need the original raw values for aggregation, but tx is already converted?
-        # TransactionResponse.fees is already in EUR.
-        # TransactionResponse.total_cost is in EUR.
-        # BUT for PositionResponse, we need to know the 'type' to add/subtract amount.
+        pos = positions_map[ticker]
         
-        if tx.type in ("BUY", "STAKING", "SWAP"): # Simplified logic
-             # Note: SWAP is tricky, usually OUT one coin, IN another. 
-             # Here we assume single-sided or handled by caller.
-             # CapitalView simplified: BUY adds, SELL subtracts.
-             positions_map[ticker]["total_amount"] += tx.amount
-             # cost basis...
-             # We can approximate cost basis from tx.total_cost (which includes fees)
-             # or tx.amount * tx.price_per_unit
-             positions_map[ticker]["total_cost"] += (tx.amount * tx.price_per_unit)
+        # BUY Logic
+        if tx.type in ("BUY", "STAKING", "SWAP"):
+            # Cost Basis Increase = (Amount * Price) + Fees
+            # Note: tx.fees is already in EUR in the response object
+            cost_increase = (tx.amount * tx.price_per_unit) + tx.fees
+            pos["total_amount"] += tx.amount
+            pos["total_cost"] += cost_increase
+            
+        # SELL Logic
         else: # SELL
-             positions_map[ticker]["total_amount"] -= tx.amount
-             positions_map[ticker]["total_cost"] -= (tx.amount * tx.price_per_unit)
+            if pos["total_amount"] > 0:
+                # Reduce Cost Proportinally (Weighted Average)
+                fraction = tx.amount / pos["total_amount"]
+                if fraction > 1: fraction = Decimal("1")
+                
+                cost_removed = pos["total_cost"] * fraction
+                
+                pos["total_amount"] -= tx.amount
+                pos["total_cost"] -= cost_removed
+                
+                if pos["total_amount"] < 0: pos["total_amount"] = Decimal("0")
+                if pos["total_cost"] < 0: pos["total_cost"] = Decimal("0")
         
-        positions_map[ticker]["total_fees"] += tx.fees # Fees in EUR
+        pos["total_fees"] += tx.fees
 
+    # 3. Finalize Positions
     positions = []
     for ticker, data in positions_map.items():
         if data["total_amount"] <= 0:
             continue
             
-        total_invested = data["total_cost"] + data["total_fees"]
-        avg_price = data["total_cost"] / data["total_amount"] if data["total_amount"] > 0 else Decimal("0")
-        fees_pct = (data["total_fees"] / total_invested * 100) if total_invested > 0 else Decimal("0")
+        total_invested = data["total_cost"]
+        avg_price = total_invested / data["total_amount"] if data["total_amount"] > 0 else Decimal("0")
+        
+        fees_pct = Decimal("0")
+        if total_invested > 0:
+             fees_pct = (data["total_fees"] / total_invested * 100)
         
         name, current_price = get_market_info(session, ticker)
         

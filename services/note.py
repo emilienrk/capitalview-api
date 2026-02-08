@@ -14,7 +14,7 @@ def _map_note_to_response(note: Note, master_key: str) -> NoteResponse:
     description = decrypt_data(note.description_enc, master_key)
     
     return NoteResponse(
-        id=note.id,
+        id=note.uuid,
         name=name,
         description=description,
         created_at=note.created_at,
@@ -69,10 +69,10 @@ def update_note(
 
 def delete_note(
     session: Session,
-    note_id: int
+    note_uuid: str
 ) -> bool:
     """Delete a note."""
-    note = session.get(Note, note_id)
+    note = session.get(Note, note_uuid)
     if not note:
         return False
         
@@ -83,12 +83,12 @@ def delete_note(
 
 def get_note(
     session: Session,
-    note_id: int,
+    note_uuid: str,
     user_uuid: str,
     master_key: str
 ) -> Optional[NoteResponse]:
     """Get a single note."""
-    note = session.get(Note, note_id)
+    note = session.get(Note, note_uuid)
     if not note:
         return None
         

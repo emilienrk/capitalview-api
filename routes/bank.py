@@ -33,11 +33,7 @@ def create_account(
     session: Session = Depends(get_session)
 ):
     """Create a new bank account."""
-    # Validation logic (e.g. unique regulated accounts) is complicated with encryption 
-    # because we can't easily query "type" without decrypting everything.
-    # For now, we trust the user or implement a check by fetching all accounts and checking in memory.
-    
-    # Simple check for duplicates in memory
+    # Check for duplicates in memory
     user_accounts = get_user_bank_accounts(session, current_user.uuid, master_key)
     
     unique_types = {
@@ -67,7 +63,7 @@ def get_accounts(
 
 @router.get("/accounts/{account_id}", response_model=BankAccountResponse)
 def get_account(
-    account_id: int,
+    account_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -81,24 +77,19 @@ def get_account(
 
 @router.put("/accounts/{account_id}", response_model=BankAccountResponse)
 def update_account(
-    account_id: int,
+    account_id: str,
     account_data: BankAccountUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
     """Update a bank account."""
-    # Fetch model to update (we need the model instance for the service)
-    # The service update_bank_account expects a Model, not ID.
-    # Let's verify ownership first.
     from models import BankAccount
     account = session.get(BankAccount, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     
-    # Verify ownership (blind index check is done inside service if we passed ID, 
-    # but here we pass object. Ideally service should handle retrieval too or we check here)
-    # Let's use the getter to verify ownership efficiently
+    # Verify ownership
     existing = get_bank_account(session, account_id, current_user.uuid, master_key)
     if not existing:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -108,7 +99,7 @@ def update_account(
 
 @router.delete("/accounts/{account_id}", status_code=204)
 def delete_account(
-    account_id: int,
+    account_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -119,31 +110,7 @@ def delete_account(
     if not existing:
         raise HTTPException(status_code=404, detail="Account not found")
     
-    # We don't check for 403 specifically here because get_bank_account returns None for both 404 and 403 cases (filtered by user)
-    
     from models import BankAccount
-    # Service delete expects session and ID? 
-    # Let's check service signature: delete_bank_account(session, account_id)
-    # Wait, service delete doesn't check owner if we just pass ID.
-    # But we checked existence above which validates owner.
-    
-    # However, to be safe, we should ensure we are deleting what we checked.
-    # Since we don't have FKs, it's fine.
-    
-    # Wait, the service delete_bank_account might not exist or needs checking.
-    # I implemented it in services/bank.py? Let me double check...
-    # I didn't implement delete_bank_account in services/bank.py explicitly in the last turn!
-    # I implemented create, update, get_user, get_one.
-    # I missed delete!
-    
-    # I will add it here temporarily or assume I added it. 
-    # Checking my memory... I verified services. Bank service had:
-    # create, update, get_user, get_one. 
-    # I missed delete logic there. 
-    
-    # I'll implement deletion logic here directly for now since it's simple (no cascades for bank accounts usually, unless history?)
-    # Bank accounts don't have transaction history in this app version (only balance).
-    
     account_to_delete = session.get(BankAccount, account_id)
     session.delete(account_to_delete)
     session.commit()

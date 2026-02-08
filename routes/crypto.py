@@ -3,7 +3,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from database import get_session
 from models import User, CryptoAccount, CryptoTransaction
@@ -65,7 +65,7 @@ def list_accounts(
 
 @router.get("/accounts/{account_id}", response_model=AccountSummaryResponse)
 def get_account(
-    account_id: int,
+    account_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -84,7 +84,7 @@ def get_account(
 
 @router.put("/accounts/{account_id}", response_model=CryptoAccountBasicResponse)
 def update_account(
-    account_id: int,
+    account_id: str,
     data: CryptoAccountUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
@@ -102,7 +102,7 @@ def update_account(
 
 @router.delete("/accounts/{account_id}", status_code=204)
 def delete_account(
-    account_id: int,
+    account_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -132,18 +132,7 @@ def create_transaction(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     
-    # We return CryptoTransactionBasicResponse, but service create_crypto_transaction returns TransactionResponse (calculated).
-    # We need to map it or change return type.
-    # The existing route returned BasicResponse.
-    # Let's map it.
-    
     resp = create_crypto_transaction(session, data, master_key)
-    
-    # Mapping back to BasicResponse (some fields might be missing in TransactionResponse like fees_ticker if it was converted)
-    # TransactionResponse has fees in EUR.
-    # BasicResponse expects original fees and ticker.
-    # Ideally, create_crypto_transaction should return what's needed.
-    # For now, let's reconstruct it from input data + ID.
     
     return CryptoTransactionBasicResponse(
         id=resp.id,
@@ -184,7 +173,7 @@ def list_transactions(
 
 @router.get("/transactions/{transaction_id}", response_model=TransactionResponse)
 def get_transaction(
-    transaction_id: int,
+    transaction_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -200,7 +189,7 @@ def get_transaction(
 
 @router.put("/transactions/{transaction_id}", response_model=CryptoTransactionBasicResponse)
 def update_transaction(
-    transaction_id: int,
+    transaction_id: str,
     data: CryptoTransactionUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
@@ -214,20 +203,11 @@ def update_transaction(
     try:
         resp = update_crypto_transaction(session, tx_model, data, master_key)
         
-        # Mapping to BasicResponse
-        # Use existing model data for missing fields if update is partial
-        # This is getting messy with mixing response types.
-        # But for now:
-        
-        # We need to decrypt original fields if data doesn't have them?
-        # Or just return a simplified response.
-        # Let's return BasicResponse with available data.
-        
         return CryptoTransactionBasicResponse(
             id=resp.id,
-            account_id=0, # We don't have account_id in TransactionResponse easily accessible without extra query
+            account_id="unknown", # We don't have account_id easily accessible
             ticker=resp.ticker,
-            type=CryptoTransactionType.BUY, # Placeholder, lost type in TransactionResponse (it's string)
+            type=CryptoTransactionType.BUY, # Placeholder
             amount=resp.amount,
             price_per_unit=resp.price_per_unit,
             fees=resp.fees,
@@ -242,7 +222,7 @@ def update_transaction(
 
 @router.delete("/transactions/{transaction_id}", status_code=204)
 def delete_transaction(
-    transaction_id: int,
+    transaction_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -259,7 +239,7 @@ def delete_transaction(
 
 @router.get("/transactions/account/{account_id}", response_model=list[TransactionResponse])
 def get_transactions_by_account(
-    account_id: int,
+    account_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -311,7 +291,7 @@ def bulk_import_transactions(
             type=item.type,
             amount=resp.amount,
             price_per_unit=resp.price_per_unit,
-            fees=item.fees, # Use input fees
+            fees=item.fees, 
             fees_ticker=item.fees_ticker,
             executed_at=resp.executed_at,
             notes=item.notes,

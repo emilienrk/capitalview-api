@@ -27,7 +27,7 @@ def _map_account_to_response(account: StockAccount, master_key: str) -> StockAcc
         ident = decrypt_data(account.identifier_enc, master_key)
 
     return StockAccountBasicResponse(
-        id=account.id,
+        id=account.uuid,
         name=name,
         account_type=StockAccountType(type_str),
         institution_name=inst_name,
@@ -89,12 +89,12 @@ def get_user_stock_accounts(
 
 def get_stock_account(
     session: Session,
-    account_id: int,
+    account_uuid: str,
     user_uuid: str,
     master_key: str
 ) -> Optional[StockAccountBasicResponse]:
     """Get a single stock account if it belongs to the user."""
-    account = session.get(StockAccount, account_id)
+    account = session.get(StockAccount, account_uuid)
     if not account:
         return None
         
@@ -130,27 +130,18 @@ def update_stock_account(
 
 def delete_stock_account(
     session: Session,
-    account_id: int,
+    account_uuid: str,
     master_key: str
 ) -> bool:
     """
     Delete a stock account and all its transactions.
-    
-    Args:
-        session: Database session
-        account_id: Account ID to delete
-        master_key: Used to calculate blind index for deleting transactions
-    
-    Returns:
-        True if deleted, False if not found (though usually caller checks existence)
     """
-    account = session.get(StockAccount, account_id)
+    account = session.get(StockAccount, account_uuid)
     if not account:
         return False
 
-    # Manual cascade delete for transactions (Overkill privacy mode: no FK)
-    # We must find transactions by account_id_bidx
-    account_bidx = hash_index(str(account_id), master_key)
+    # Cascade delete for transactions
+    account_bidx = hash_index(account_uuid, master_key)
     
     transactions = session.exec(
         select(StockTransaction).where(StockTransaction.account_id_bidx == account_bidx)

@@ -31,7 +31,7 @@ class CashflowUpdate(BaseModel):
 
 class CashflowResponse(BaseModel):
     """Single cashflow response."""
-    id: int
+    id: str
     name: str
     flow_type: FlowType
     category: str

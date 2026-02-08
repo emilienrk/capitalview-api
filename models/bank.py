@@ -6,12 +6,13 @@ from datetime import datetime
 from sqlmodel import SQLModel, Field
 import sqlalchemy as sa
 from sqlalchemy import Column, TEXT
+import uuid
 
 
 class BankAccount(SQLModel, table=True):
     __tablename__ = "bank_accounts"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
     name_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     institution_name_enc: Optional[str] = Field(sa_column=Column(TEXT))

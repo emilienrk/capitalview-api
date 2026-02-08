@@ -47,7 +47,7 @@ def _map_cashflow_to_response(cashflow: Cashflow, master_key: str) -> CashflowRe
     transaction_date = date.fromisoformat(date_str)
 
     return CashflowResponse(
-        id=cashflow.id,
+        id=cashflow.uuid,
         name=name,
         flow_type=flow_type.value,
         category=category,
@@ -127,10 +127,10 @@ def update_cashflow(
 
 def delete_cashflow(
     session: Session,
-    cashflow_id: int
+    cashflow_uuid: str
 ) -> bool:
     """Delete a cashflow."""
-    cashflow = session.get(Cashflow, cashflow_id)
+    cashflow = session.get(Cashflow, cashflow_uuid)
     if not cashflow:
         return False
         
@@ -141,12 +141,12 @@ def delete_cashflow(
 
 def get_cashflow(
     session: Session,
-    cashflow_id: int,
+    cashflow_uuid: str,
     user_uuid: str,
     master_key: str
 ) -> Optional[CashflowResponse]:
     """Get a single cashflow."""
-    cashflow = session.get(Cashflow, cashflow_id)
+    cashflow = session.get(Cashflow, cashflow_uuid)
     if not cashflow:
         return None
         
@@ -216,6 +216,24 @@ def get_cashflows_by_type(
         monthly_total=monthly_total,
         categories=categories,
     )
+
+
+def get_user_inflows(
+    session: Session, 
+    user_uuid: str, 
+    master_key: str
+) -> CashflowSummaryResponse:
+    """Get all income for a user."""
+    return get_cashflows_by_type(session, user_uuid, master_key, FlowType.INFLOW)
+
+
+def get_user_outflows(
+    session: Session, 
+    user_uuid: str, 
+    master_key: str
+) -> CashflowSummaryResponse:
+    """Get all expenses for a user."""
+    return get_cashflows_by_type(session, user_uuid, master_key, FlowType.OUTFLOW)
 
 
 def get_user_cashflow_balance(

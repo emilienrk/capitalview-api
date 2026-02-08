@@ -28,7 +28,7 @@ class BankAccountUpdate(BaseModel):
 
 class BankAccountResponse(BaseModel):
     """Bank account response."""
-    id: int
+    id: str
     name: str
     institution_name: Optional[str] = None
     balance: Decimal

@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 class TransactionResponse(BaseModel):
     """Base transaction response with calculated fields."""
-    id: int
+    id: str
     ticker: str
     type: str
     amount: Decimal
@@ -44,7 +44,7 @@ class PositionResponse(BaseModel):
 
 class AccountSummaryResponse(BaseModel):
     """Summary of an account with all positions."""
-    account_id: int
+    account_id: str
     account_name: str
     account_type: str
     total_invested: Decimal

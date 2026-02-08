@@ -26,7 +26,7 @@ class StockAccountUpdate(BaseModel):
 
 class StockAccountBasicResponse(BaseModel):
     """Basic stock account response (without positions)."""
-    id: int
+    id: str
     name: str
     account_type: StockAccountType
     institution_name: Optional[str] = None
@@ -37,7 +37,7 @@ class StockAccountBasicResponse(BaseModel):
 
 class StockTransactionCreate(BaseModel):
     """Create a stock transaction."""
-    account_id: int
+    account_id: str
     ticker: str
     exchange: Optional[str] = None
     type: StockTransactionType
@@ -74,7 +74,7 @@ class StockTransactionBulkCreate(BaseModel):
 
 class StockBulkImportRequest(BaseModel):
     """Bulk import multiple stock transactions for a given account."""
-    account_id: int
+    account_id: str
     transactions: list[StockTransactionBulkCreate]
 
 
@@ -86,8 +86,8 @@ class StockBulkImportResponse(BaseModel):
 
 class StockTransactionBasicResponse(BaseModel):
     """Basic stock transaction response."""
-    id: int
-    account_id: int
+    id: str
+    account_id: str
     ticker: str
     exchange: Optional[str] = None
     type: StockTransactionType

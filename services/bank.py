@@ -25,7 +25,7 @@ def _map_to_response(account: BankAccount, master_key: str) -> BankAccountRespon
         identifier = decrypt_data(account.identifier_enc, master_key)
 
     return BankAccountResponse(
-        id=account.id,
+        id=account.uuid,
         name=name,
         balance=Decimal(balance_str),
         account_type=BankAccountType(type_str),
@@ -99,6 +99,20 @@ def update_bank_account(
     return _map_to_response(account, master_key)
 
 
+def delete_bank_account(
+    session: Session,
+    account_uuid: str
+) -> bool:
+    """Delete a bank account."""
+    account = session.get(BankAccount, account_uuid)
+    if not account:
+        return False
+        
+    session.delete(account)
+    session.commit()
+    return True
+
+
 def get_user_bank_accounts(
     session: Session, 
     user_uuid: str, 
@@ -122,12 +136,12 @@ def get_user_bank_accounts(
 
 def get_bank_account(
     session: Session,
-    account_id: int,
+    account_uuid: str,
     user_uuid: str,
     master_key: str
 ) -> Optional[BankAccountResponse]:
     """Get a single bank account if it belongs to the user."""
-    account = session.get(BankAccount, account_id)
+    account = session.get(BankAccount, account_uuid)
     if not account:
         return None
         

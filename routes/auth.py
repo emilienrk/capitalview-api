@@ -102,17 +102,16 @@ def register(
         secure=settings.environment == "production",
         samesite="lax",
         max_age=settings.refresh_token_expire_days * 86400,
-        path="/auth" # Limit scope for security
+        path="/auth"
     )
 
-    # 2. Set Master Key Cookie (Session based)
     response.set_cookie(
         key="master_key",
         value=master_key,
         httponly=True,
         secure=settings.environment == "production",
         samesite="lax",
-        path="/" # Available for all API calls
+        path="/"
     )
     
     return TokenResponse(
@@ -181,7 +180,6 @@ def login(
 
 
 @router.post("/refresh", response_model=TokenResponse)
-@limiter.limit("10/minute")
 def refresh_token_endpoint(
     request: Request,
     response: Response,

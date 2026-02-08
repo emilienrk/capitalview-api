@@ -22,7 +22,7 @@ class NoteResponse(BaseModel):
     """Note response."""
     model_config = {"from_attributes": True}
     
-    id: int
+    id: str
     name: str
     description: Optional[str] = None
     created_at: datetime

@@ -78,7 +78,7 @@ def list_accounts(
 
 @router.get("/accounts/{account_id}", response_model=AccountSummaryResponse)
 def get_account(
-    account_id: int,
+    account_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -97,7 +97,7 @@ def get_account(
 
 @router.put("/accounts/{account_id}", response_model=StockAccountBasicResponse)
 def update_account(
-    account_id: int,
+    account_id: str,
     data: StockAccountUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
@@ -115,7 +115,7 @@ def update_account(
 
 @router.delete("/accounts/{account_id}", status_code=204)
 def delete_account(
-    account_id: int,
+    account_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -172,7 +172,7 @@ def list_transactions(
 
 @router.get("/transactions/{transaction_id}", response_model=TransactionResponse)
 def get_transaction(
-    transaction_id: int,
+    transaction_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -183,34 +183,12 @@ def get_transaction(
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
     
-    # Verify account ownership via transaction's account_id?
-    # get_stock_transaction doesn't return account_id directly in the Response?
-    # Wait, TransactionResponse HAS account_id? No, it doesn't.
-    # We need to fetch the model to check account_id or trust the blind index check?
-    # Blind index check is done on the account_id_bidx.
-    # To check if USER owns this transaction, we need to find the account it belongs to.
-    
-    # Helper check:
-    tx_model = session.get(StockTransaction, transaction_id)
-    # We can't see clear account_id from tx_model.
-    # But we can try to verify if the account it belongs to belongs to user.
-    # This is tricky without FK.
-    # "Overkill" mode makes this hard.
-    
-    # Workaround: We have to iterate user accounts and see if one matches the blind index.
-    # This is expensive.
-    
-    # Better: Assume if we can decrypt it with master_key (which we did), it belongs to user?
-    # NO. Master key is per user. If we use User A's key to decrypt User B's data, it yields garbage/error.
-    # So if `get_stock_transaction` succeeds (no padding error), it effectively belongs to the user.
-    # Because encrypted data is bound to the key.
-    
     return transaction
 
 
 @router.put("/transactions/{transaction_id}", response_model=TransactionResponse)
 def update_transaction(
-    transaction_id: int,
+    transaction_id: str,
     data: StockTransactionUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
@@ -230,7 +208,7 @@ def update_transaction(
 
 @router.delete("/transactions/{transaction_id}", status_code=204)
 def delete_transaction(
-    transaction_id: int,
+    transaction_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -247,7 +225,7 @@ def delete_transaction(
 
 @router.get("/transactions/account/{account_id}", response_model=list[TransactionResponse])
 def get_transactions_by_account(
-    account_id: int,
+    account_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -276,9 +254,6 @@ def bulk_import_transactions(
 
     created_responses = []
     
-    # We convert BulkCreate items to regular Create items (internally they are similar)
-    # But create_stock_transaction takes StockTransactionCreate which has account_id.
-    
     for item in data.transactions:
         # Create full create DTO
         create_dto = StockTransactionCreate(
@@ -295,26 +270,18 @@ def bulk_import_transactions(
         
         resp = create_stock_transaction(session, create_dto, master_key)
         
-        # Convert TransactionResponse (full) to StockTransactionBasicResponse (for bulk response)
-        # Or just return list of TransactionResponse? The schema says StockTransactionBasicResponse.
-        # Let's map it.
-        
         basic = StockTransactionBasicResponse(
             id=resp.id,
             account_id=data.account_id,
             ticker=resp.ticker,
-            exchange=item.exchange, # Not in TransactionResponse... wait.
-            type=resp.type, # This is string now
+            exchange=item.exchange,
+            type=resp.type,
             amount=resp.amount,
             price_per_unit=resp.price_per_unit,
             fees=resp.fees,
             executed_at=resp.executed_at,
-            notes=None # TransactionResponse doesn't have notes? It should.
+            notes=None 
         )
-        # Note: DTO mismatch. TransactionResponse has calculated fields but maybe missing exchange/notes?
-        # Let's check DTO definitions in next step if needed. 
-        # For now, I'll do best effort mapping.
-        
         created_responses.append(basic)
 
     return StockBulkImportResponse(

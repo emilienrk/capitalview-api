@@ -3,7 +3,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from database import get_session
 from models import User, Note
@@ -43,7 +43,7 @@ def get_all(
 
 @router.get("/{note_id}", response_model=NoteResponse)
 def get_entry(
-    note_id: int,
+    note_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -57,7 +57,7 @@ def get_entry(
 
 @router.put("/{note_id}", response_model=NoteResponse)
 def update_entry(
-    note_id: int,
+    note_id: str,
     note_data: NoteUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
@@ -75,7 +75,7 @@ def update_entry(
 
 @router.delete("/{note_id}", status_code=204)
 def delete_entry(
-    note_id: int,
+    note_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)

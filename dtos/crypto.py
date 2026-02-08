@@ -25,7 +25,7 @@ class CryptoAccountUpdate(BaseModel):
 
 class CryptoAccountBasicResponse(BaseModel):
     """Basic crypto account response (without positions)."""
-    id: int
+    id: str
     name: str
     platform: Optional[str] = None
     public_address: Optional[str] = None
@@ -37,7 +37,7 @@ class CryptoAccountBasicResponse(BaseModel):
 
 class CryptoTransactionCreate(BaseModel):
     """Create a crypto transaction."""
-    account_id: int
+    account_id: str
     ticker: str
     type: CryptoTransactionType
     amount: Decimal
@@ -77,7 +77,7 @@ class CryptoTransactionBulkCreate(BaseModel):
 
 class CryptoBulkImportRequest(BaseModel):
     """Bulk import multiple crypto transactions for a given account."""
-    account_id: int
+    account_id: str
     transactions: list[CryptoTransactionBulkCreate]
 
 
@@ -89,8 +89,8 @@ class CryptoBulkImportResponse(BaseModel):
 
 class CryptoTransactionBasicResponse(BaseModel):
     """Basic crypto transaction response."""
-    id: int
-    account_id: int
+    id: str
+    account_id: str
     ticker: str
     type: CryptoTransactionType
     amount: Decimal

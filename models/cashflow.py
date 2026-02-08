@@ -5,13 +5,14 @@ from datetime import datetime
 from sqlmodel import SQLModel, Field
 import sqlalchemy as sa
 from sqlalchemy import Column, TEXT
+import uuid
 
 
 class Cashflow(SQLModel, table=True):
     """Merged Income and Expenses table."""
     __tablename__ = "cashflows"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
     name_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     flow_type_enc: str = Field(sa_column=Column(TEXT, nullable=False))

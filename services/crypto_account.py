@@ -26,7 +26,7 @@ def _map_account_to_response(account: CryptoAccount, master_key: str) -> CryptoA
         address = decrypt_data(account.public_address_enc, master_key)
 
     return CryptoAccountBasicResponse(
-        id=account.id,
+        id=account.uuid,
         name=name,
         platform=platform,
         public_address=address,
@@ -85,12 +85,12 @@ def get_user_crypto_accounts(
 
 def get_crypto_account(
     session: Session,
-    account_id: int,
+    account_uuid: str,
     user_uuid: str,
     master_key: str
 ) -> Optional[CryptoAccountBasicResponse]:
     """Get a single crypto account if it belongs to the user."""
-    account = session.get(CryptoAccount, account_id)
+    account = session.get(CryptoAccount, account_uuid)
     if not account:
         return None
         
@@ -126,26 +126,18 @@ def update_crypto_account(
 
 def delete_crypto_account(
     session: Session,
-    account_id: int,
+    account_uuid: str,
     master_key: str
 ) -> bool:
     """
     Delete a crypto account and all its transactions.
-    
-    Args:
-        session: Database session
-        account_id: Account ID to delete
-        master_key: Used to calculate blind index for deleting transactions
-    
-    Returns:
-        True if deleted, False if not found
     """
-    account = session.get(CryptoAccount, account_id)
+    account = session.get(CryptoAccount, account_uuid)
     if not account:
         return False
 
-    # Manual cascade delete for transactions
-    account_bidx = hash_index(str(account_id), master_key)
+    # Cascade delete for transactions
+    account_bidx = hash_index(account_uuid, master_key)
     
     transactions = session.exec(
         select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == account_bidx)
