@@ -26,6 +26,7 @@ dependencies = [
     "yfinance>=0.2.36",
     "pytest>=9.0.2",
     "pytest-cov>=7.0.0",
+    "httpx>=0.25.0",
 ]
 
 [build-system]
