@@ -12,6 +12,7 @@ import sqlalchemy as sa
 class User(SQLModel, table=True):
     """Central user table."""
     __tablename__ = "users"
+    __table_args__ = {"extend_existing": True}
 
     uuid: str = Field(default=None, primary_key=True)
     auth_salt: str = Field(sa_column=Column(TEXT, nullable=False))
@@ -38,6 +39,7 @@ class User(SQLModel, table=True):
 class UserSettings(SQLModel, table=True):
     """Simulation constants per user (inflation, tax rates)."""
     __tablename__ = "user_settings"
+    __table_args__ = {"extend_existing": True}
 
     id: Optional[int] = Field(default=None, primary_key=True)
     user_uuid_bidx: str = Field(index=True) 
@@ -53,6 +55,7 @@ class UserSettings(SQLModel, table=True):
 class RefreshToken(SQLModel, table=True):
     """Refresh tokens for JWT authentication."""
     __tablename__ = "refresh_tokens"
+    __table_args__ = {"extend_existing": True}
 
     id: Optional[int] = Field(default=None, primary_key=True)
     user_uuid: str = Field(foreign_key="users.uuid", index=True, nullable=False)

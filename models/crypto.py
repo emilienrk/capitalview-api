@@ -12,6 +12,7 @@ import uuid
 class CryptoAccount(SQLModel, table=True):
     """Crypto wallets and exchanges."""
     __tablename__ = "crypto_accounts"
+    __table_args__ = {"extend_existing": True}
 
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
@@ -37,6 +38,7 @@ class CryptoAccount(SQLModel, table=True):
 class CryptoTransaction(SQLModel, table=True):
     """History of buy/sell for crypto."""
     __tablename__ = "crypto_transactions"
+    __table_args__ = {"extend_existing": True}
 
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     account_id_bidx: str = Field(sa_column=Column(TEXT, nullable=False))

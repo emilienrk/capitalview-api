@@ -11,6 +11,7 @@ import uuid
 class Cashflow(SQLModel, table=True):
     """Merged Income and Expenses table."""
     __tablename__ = "cashflows"
+    __table_args__ = {"extend_existing": True}
 
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
