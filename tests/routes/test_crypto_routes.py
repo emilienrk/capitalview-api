@@ -44,18 +44,18 @@ def test_crypto_account_and_transaction(session, master_key):
 
     tx = {
         "account_id": account_id,
-        "ticker": "BTC",
+        "symbol": "BTC",
         "type": "BUY",
         "amount": "0.1",
         "price_per_unit": "30000",
         "fees": "1",
-        "fees_ticker": "EUR",
+        "fees_symbol": "EUR",
         "executed_at": "2023-01-01T12:00:00",
     }
     r = client.post("/crypto/transactions", json=tx)
     assert r.status_code == 201
     created = r.json()
-    assert created["ticker"] == "BTC"
+    assert created["symbol"] == "BTC"
 
 
 @patch("services.crypto_transaction.get_market_info")
@@ -71,12 +71,12 @@ def test_crypto_summary(mock_price, mock_market, session, master_key):
 
     tx = {
         "account_id": account_id,
-        "ticker": "BTC",
+        "symbol": "BTC",
         "type": "BUY",
         "amount": "1",
         "price_per_unit": "30000",
         "fees": "10",
-        "fees_ticker": "EUR",
+        "fees_symbol": "EUR",
         "executed_at": "2023-01-01T12:00:00",
     }
     client.post("/crypto/transactions", json=tx)
@@ -84,7 +84,7 @@ def test_crypto_summary(mock_price, mock_market, session, master_key):
     r = client.get(f"/crypto/accounts/{account_id}")
     assert r.status_code == 200
     summary = r.json()
-    pos = next(p for p in summary["positions"] if p["ticker"] == "BTC")
+    pos = next(p for p in summary["positions"] if p["symbol"] == "BTC")
     assert Decimal(str(pos["total_amount"])) == Decimal("1")
     assert Decimal(str(pos["current_price"])) == Decimal("40000")
 
@@ -97,12 +97,12 @@ def test_crypto_transactions_crud_and_bulk(session, master_key):
 
     tx = {
         "account_id": account_id,
-        "ticker": "ETH",
+        "symbol": "ETH",
         "type": "BUY",
         "amount": "2",
         "price_per_unit": "2000",
         "fees": "0.01",
-        "fees_ticker": "ETH",
+        "fees_symbol": "ETH",
         "executed_at": "2023-01-02T12:00:00",
     }
     r1 = client.post("/crypto/transactions", json=tx)
@@ -117,7 +117,7 @@ def test_crypto_transactions_crud_and_bulk(session, master_key):
     rget = client.get(f"/crypto/transactions/{tx_id}")
     assert rget.status_code == 200
 
-    rupd = client.put(f"/crypto/transactions/{tx_id}", json={"ticker": "ETHX", "amount": "1"})
+    rupd = client.put(f"/crypto/transactions/{tx_id}", json={"symbol": "ETHX", "amount": "1"})
     assert rupd.status_code == 200
 
     rdel = client.delete(f"/crypto/transactions/{tx_id}")
@@ -126,8 +126,8 @@ def test_crypto_transactions_crud_and_bulk(session, master_key):
     bulk = {
         "account_id": account_id,
         "transactions": [
-            {"ticker": "BTC", "type": "BUY", "amount": "0.1", "price_per_unit": "30000", "fees": "1", "fees_ticker": "EUR", "executed_at": "2023-01-01T00:00:00"},
-            {"ticker": "ETH", "type": "BUY", "amount": "5", "price_per_unit": "2000", "fees": "0", "fees_ticker": None, "executed_at": "2023-01-01T00:00:00"}
+            {"symbol": "BTC", "type": "BUY", "amount": "0.1", "price_per_unit": "30000", "fees": "1", "fees_symbol": "EUR", "executed_at": "2023-01-01T00:00:00"},
+            {"symbol": "ETH", "type": "BUY", "amount": "5", "price_per_unit": "2000", "fees": "0", "fees_symbol": None, "executed_at": "2023-01-01T00:00:00"}
         ]
     }
     rbulk = client.post("/crypto/transactions/bulk", json=bulk)

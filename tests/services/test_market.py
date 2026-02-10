@@ -1,11 +1,12 @@
 import pytest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, ANY
 from sqlmodel import Session, select
 
 from services.market import get_market_price, get_market_info, CACHE_DURATION
 from models.market import MarketPrice
+from models.enums import AssetType
 
 @pytest.fixture
 def mock_market_manager():
@@ -37,7 +38,7 @@ def test_get_market_price_no_cache(session: Session, mock_market_manager):
     mock_market_manager.get_info.return_value = mock_data
     result = get_market_price(session, symbol)
     assert result == Decimal("3000.0")
-    mock_market_manager.get_info.assert_called_once_with(symbol)
+    mock_market_manager.get_info.assert_called_once_with(symbol, AssetType.STOCK)
     cached = session.exec(select(MarketPrice).where(MarketPrice.symbol == symbol)).first()
     assert cached is not None
     assert cached.current_price == Decimal("3000.0")
@@ -61,7 +62,7 @@ def test_get_market_price_expired_cache(session: Session, mock_market_manager):
     mock_market_manager.get_info.return_value = {"name": "Solana", "price": new_price, "currency": "USD"}
     result = get_market_price(session, symbol)
     assert result == new_price
-    mock_market_manager.get_info.assert_called_once_with(symbol)
+    mock_market_manager.get_info.assert_called_once_with(symbol, AssetType.STOCK)
     session.refresh(entry)
     assert entry.current_price == new_price
     updated_at = entry.last_updated

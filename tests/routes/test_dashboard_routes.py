@@ -40,7 +40,7 @@ def test_dashboard_portfolio(mock_crypto, mock_stock, session, master_key):
 
     client.post("/stocks/transactions", json={
         "account_id": acc_id,
-        "ticker": "AAPL",
+        "symbol": "AAPL",
         "type": "BUY",
         "amount": "1",
         "price_per_unit": "100",
@@ -54,12 +54,12 @@ def test_dashboard_portfolio(mock_crypto, mock_stock, session, master_key):
 
     client.post("/crypto/transactions", json={
         "account_id": cacc_id,
-        "ticker": "BTC",
+        "symbol": "BTC",
         "type": "BUY",
         "amount": "1",
         "price_per_unit": "30000",
         "fees": "10",
-        "fees_ticker": "EUR",
+        "fees_symbol": "EUR",
         "executed_at": "2023-01-01T12:00:00"
     }, headers=headers)
 

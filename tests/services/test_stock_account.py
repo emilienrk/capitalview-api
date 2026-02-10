@@ -95,7 +95,7 @@ def test_delete_stock_account(session: Session, master_key: str):
     from datetime import datetime
     tx_data = StockTransactionCreate(
         account_id=acc_tx.id,
-        ticker="TEST",
+        symbol="TEST",
         type=StockTransactionType.BUY,
         amount=Decimal(1),
         price_per_unit=Decimal(1),

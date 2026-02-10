@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
 
 
 class RegisterRequest(BaseModel):
@@ -51,14 +51,13 @@ class TokenResponse(BaseModel):
 
 class UserResponse(BaseModel):
     """User information response."""
+    model_config = ConfigDict(from_attributes=True)
+    
     username: str
     email: str
     is_active: bool
     last_login: Optional[datetime] = None
     created_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class MessageResponse(BaseModel):

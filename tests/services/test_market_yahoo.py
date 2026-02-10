@@ -11,10 +11,10 @@ def provider():
     return YahooProvider()
 
 def test_yahoo_get_info_success_fast_info(provider):
-    mock_ticker = MagicMock()
-    mock_ticker.fast_info.last_price = 150.0
-    mock_ticker.info = {"shortName": "Apple Inc.", "currency": "USD"}
-    yf.Ticker.return_value = mock_ticker
+    mock_symbol = MagicMock()
+    mock_symbol.fast_info.last_price = 150.0
+    mock_symbol.info = {"shortName": "Apple Inc.", "currency": "USD"}
+    yf.Ticker.return_value = mock_symbol
     result = provider.get_info("AAPL")
     assert result is not None
     assert result["price"] == Decimal("150.0")
@@ -22,38 +22,38 @@ def test_yahoo_get_info_success_fast_info(provider):
     assert result["currency"] == "USD"
 
 def test_yahoo_get_info_fallback_regular_market_price(provider):
-    mock_ticker = MagicMock()
-    mock_ticker.fast_info = None
-    mock_ticker.info = {"regularMarketPrice": 200.5, "longName": "Microsoft Corp", "currency": "EUR"}
-    yf.Ticker.return_value = mock_ticker
+    mock_symbol = MagicMock()
+    mock_symbol.fast_info = None
+    mock_symbol.info = {"regularMarketPrice": 200.5, "longName": "Microsoft Corp", "currency": "EUR"}
+    yf.Ticker.return_value = mock_symbol
     result = provider.get_info("MSFT")
     assert result["price"] == Decimal("200.5")
     assert result["name"] == "Microsoft Corp"
     assert result["currency"] == "EUR"
 
 def test_yahoo_get_info_fallback_current_price(provider):
-    mock_ticker = MagicMock()
-    mock_ticker.fast_info = MagicMock()
-    del mock_ticker.fast_info.last_price
-    mock_ticker.info = {"currentPrice": 300.0, "shortName": "NVDA"}
-    yf.Ticker.return_value = mock_ticker
+    mock_symbol = MagicMock()
+    mock_symbol.fast_info = MagicMock()
+    del mock_symbol.fast_info.last_price
+    mock_symbol.info = {"currentPrice": 300.0, "shortName": "NVDA"}
+    yf.Ticker.return_value = mock_symbol
     result = provider.get_info("NVDA")
     assert result["price"] == Decimal("300.0")
     assert result["name"] == "NVDA"
 
 def test_yahoo_get_info_fallback_symbol_name(provider):
-    mock_ticker = MagicMock()
-    mock_ticker.fast_info = None
-    mock_ticker.info = {"currentPrice": 10.0}
-    yf.Ticker.return_value = mock_ticker
+    mock_symbol = MagicMock()
+    mock_symbol.fast_info = None
+    mock_symbol.info = {"currentPrice": 10.0}
+    yf.Ticker.return_value = mock_symbol
     result = provider.get_info("UNKNOWN")
     assert result["name"] == "UNKNOWN"
 
 def test_yahoo_get_info_missing_price(provider):
-    mock_ticker = MagicMock()
-    mock_ticker.fast_info = None
-    mock_ticker.info = {"shortName": "No Price Co"}
-    yf.Ticker.return_value = mock_ticker
+    mock_symbol = MagicMock()
+    mock_symbol.fast_info = None
+    mock_symbol.info = {"shortName": "No Price Co"}
+    yf.Ticker.return_value = mock_symbol
     result = provider.get_info("NOPRICE")
     assert result is None
 
@@ -63,16 +63,16 @@ def test_yahoo_get_info_exception(provider):
     assert result is None
     yf.Ticker.side_effect = None
 
-def test_yahoo_get_price(provider):
-    mock_ticker = MagicMock()
-    mock_ticker.fast_info.last_price = 100.0
-    mock_ticker.info = {}
-    yf.Ticker.return_value = mock_ticker
-    price = provider.get_price("TEST")
+def test_yahoo_get_stock(provider):
+    mock_symbol = MagicMock()
+    mock_symbol.fast_info.last_price = 100.0
+    mock_symbol.info = {}
+    yf.Ticker.return_value = mock_symbol
+    price = provider.get_stock("TEST")
     assert price == Decimal("100.0")
 
-def test_yahoo_get_price_none(provider):
+def test_yahoo_get_stock_none(provider):
     yf.Ticker.side_effect = Exception("Fail")
-    price = provider.get_price("FAIL")
+    price = provider.get_stock("FAIL")
     assert price is None
     yf.Ticker.side_effect = None

@@ -54,7 +54,7 @@ def test_create_account_and_transaction(session, master_key):
 
     tx_payload = {
         "account_id": account_id,
-        "ticker": "AAPL",
+        "symbol": "AAPL",
         "exchange": "NASDAQ",
         "type": "BUY",
         "amount": "2.5",
@@ -67,12 +67,12 @@ def test_create_account_and_transaction(session, master_key):
     resp_tx = client.post("/stocks/transactions", json=tx_payload)
     assert resp_tx.status_code == 201
     tx = resp_tx.json()
-    assert tx["ticker"] == "AAPL"
+    assert tx["symbol"] == "AAPL"
 
     resp_get = client.get(f"/stocks/transactions/{tx['id']}")
     assert resp_get.status_code == 200
     got = resp_get.json()
-    assert got["ticker"] == "AAPL"
+    assert got["symbol"] == "AAPL"
 
 
 @patch("services.stock_transaction.get_market_info")
@@ -87,7 +87,7 @@ def test_account_summary_with_market(mock_market, session, master_key):
 
     tx_payload = {
         "account_id": account_id,
-        "ticker": "AAPL",
+        "symbol": "AAPL",
         "type": "BUY",
         "amount": "1",
         "price_per_unit": "100",
@@ -101,7 +101,7 @@ def test_account_summary_with_market(mock_market, session, master_key):
     assert r2.status_code == 200
     summary = r2.json()
     assert summary["account_name"] in ("Sum Account", "Sum Account")
-    pos = next(p for p in summary["positions"] if p["ticker"] == "AAPL")
+    pos = next(p for p in summary["positions"] if p["symbol"] == "AAPL")
     assert Decimal(str(pos["total_amount"])) == Decimal("1")
     assert Decimal(str(pos["current_price"])) == Decimal("200")
 
@@ -127,7 +127,7 @@ def test_stocks_additional_routes(session, master_key):
     assert rupd.status_code == 200
     assert rupd.json()["name"] == "CTO Updated"
 
-    tx = {"account_id": acc_id, "ticker": "XYZ", "type": "BUY", "amount": "2", "price_per_unit": "10", "fees": "0", "executed_at": "2023-01-01T00:00:00"}
+    tx = {"account_id": acc_id, "symbol": "XYZ", "type": "BUY", "amount": "2", "price_per_unit": "10", "fees": "0", "executed_at": "2023-01-01T00:00:00"}
     rtx = client.post("/stocks/transactions", json=tx)
     assert rtx.status_code == 201
     txid = rtx.json()["id"]
@@ -139,7 +139,7 @@ def test_stocks_additional_routes(session, master_key):
     rbyacc = client.get(f"/stocks/transactions/account/{acc_id}")
     assert rbyacc.status_code == 200
 
-    bulk = {"account_id": acc_id, "transactions": [{"ticker": "A", "type": "BUY", "amount": "1", "price_per_unit": "1", "fees": "0", "executed_at": "2023-01-01T00:00:00"}]}
+    bulk = {"account_id": acc_id, "transactions": [{"symbol": "A", "type": "BUY", "amount": "1", "price_per_unit": "1", "fees": "0", "executed_at": "2023-01-01T00:00:00"}]}
     rbulk = client.post("/stocks/transactions/bulk", json=bulk)
     assert rbulk.status_code == 201
     assert rbulk.json()["imported_count"] == 1
