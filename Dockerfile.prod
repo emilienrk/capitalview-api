@@ -1,7 +1,7 @@
 # ===================================
 # Stage 1: Build dependencies
 # ===================================
-FROM python:3.11-slim AS builder
+FROM python:3.14-slim AS builder
 
 WORKDIR /app
 
@@ -10,9 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Create venv
 RUN python -m venv /opt/venv
-# Use venv pip
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY pyproject.toml .
@@ -21,7 +19,7 @@ RUN pip install --no-cache-dir -e .
 # ===================================
 # Stage 2: Runtime
 # ===================================
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
@@ -32,13 +30,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 
-# Copy entire venv
 COPY --from=builder --chown=appuser:appuser /opt/venv /opt/venv
 
-# Copy code
 COPY --chown=appuser:appuser . .
 
-# Activate venv for user
 ENV PATH="/opt/venv/bin:$PATH"
 
 USER appuser
