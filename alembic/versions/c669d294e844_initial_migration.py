@@ -118,6 +118,7 @@ def upgrade() -> None:
     sa.Column('uuid', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('account_id_bidx', sa.TEXT(), nullable=False),
     sa.Column('symbol_enc', sa.TEXT(), nullable=False),
+    sa.Column('isin_enc', sa.TEXT(), nullable=True),
     sa.Column('exchange_enc', sa.TEXT(), nullable=True),
     sa.Column('type_enc', sa.TEXT(), nullable=False),
     sa.Column('amount_enc', sa.TEXT(), nullable=False),

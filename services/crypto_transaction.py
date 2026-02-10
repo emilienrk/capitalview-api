@@ -45,7 +45,7 @@ def _decrypt_transaction(tx: CryptoTransaction, master_key: str, session: Sessio
     actual_fees_symbol = fees_symbol or symbol
     
     if actual_fees_symbol != "EUR":
-        fees_price = get_market_price(session, actual_fees_symbol)
+        fees_price = get_market_price(session, actual_fees_symbol, AssetType.CRYPTO)
         if fees_price:
             fees_in_eur = fees * fees_price
         else:

@@ -34,17 +34,14 @@ def get_my_portfolio(
     """
     user_bidx = hash_index(current_user.uuid, master_key)
     
-    # 1. Fetch Stock Accounts (Models)
     stock_models = session.exec(
         select(StockAccount).where(StockAccount.user_uuid_bidx == user_bidx)
     ).all()
     
-    # 2. Fetch Crypto Accounts (Models)
     crypto_models = session.exec(
         select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
     ).all()
     
-    # 3. Compute Summaries
     accounts = []
     
     for acc in stock_models:
@@ -55,7 +52,6 @@ def get_my_portfolio(
         summary = get_crypto_account_summary(session, acc, master_key)
         accounts.append(summary)
     
-    # 4. Aggregate Totals
     total_invested = sum(a.total_invested for a in accounts)
     total_fees = sum(a.total_fees for a in accounts)
     current_value = sum(a.current_value for a in accounts if a.current_value)
@@ -63,7 +59,6 @@ def get_my_portfolio(
     profit_loss = None
     profit_loss_pct = None
     
-    # Only calculate global P/L if we have current values
     if current_value > 0 or total_invested > 0:
         profit_loss = current_value - total_invested
         if total_invested > 0:

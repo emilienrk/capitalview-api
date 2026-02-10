@@ -7,6 +7,7 @@ from typing import List, Optional
 from sqlmodel import Session, select
 
 from models import StockAccount, StockTransaction
+from models.enums import AssetType
 from dtos import (
     StockTransactionCreate,
     StockTransactionUpdate,
@@ -64,6 +65,7 @@ def create_stock_transaction(
     fees_enc = encrypt_data(str(data.fees), master_key)
     exec_at_enc = encrypt_data(data.executed_at.isoformat(), master_key)
     exchange_enc = encrypt_data(data.exchange or "", master_key)
+    isin_enc = encrypt_data(data.isin or "", master_key) if data.isin else None
 
     notes_enc = None
     if data.notes:
@@ -72,6 +74,7 @@ def create_stock_transaction(
     transaction = StockTransaction(
         account_id_bidx=account_bidx,
         symbol_enc=symbol_enc,
+        isin_enc=isin_enc,
         exchange_enc=exchange_enc,
         type_enc=type_enc,
         amount_enc=amount_enc,
@@ -109,6 +112,8 @@ def update_stock_transaction(
     """Update an existing stock transaction (only provided fields)."""
     if data.symbol is not None:
         transaction.symbol_enc = encrypt_data(data.symbol.upper(), master_key)
+    if data.isin is not None:
+        transaction.isin_enc = encrypt_data(data.isin, master_key) if data.isin else None
     if data.exchange is not None:
         transaction.exchange_enc = encrypt_data(data.exchange, master_key)
     if data.type is not None:
@@ -207,7 +212,7 @@ def get_stock_account_summary(
         avg_price = total_invested / data["total_amount"] if data["total_amount"] > 0 else Decimal("0")
         fees_pct = (data["total_fees"] / total_invested * 100) if total_invested > 0 else Decimal("0")
 
-        name, current_price = get_market_info(session, symbol)
+        name, current_price = get_market_info(session, symbol, AssetType.STOCK)
 
         current_value = None
         profit_loss = None

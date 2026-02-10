@@ -16,8 +16,8 @@ class StockAccount(SQLModel, table=True):
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
     name_enc: str = Field(sa_column=Column(TEXT, nullable=False))
-    institution_name_enc: Optional[str] = Field(sa_column=Column(TEXT)) # Made optional
-    identifier_enc: Optional[str] = Field(sa_column=Column(TEXT)) # Made optional
+    institution_name_enc: Optional[str] = Field(sa_column=Column(TEXT))
+    identifier_enc: Optional[str] = Field(sa_column=Column(TEXT))
     account_type_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     
     created_at: datetime = Field(
@@ -39,9 +39,10 @@ class StockTransaction(SQLModel, table=True):
     __tablename__ = "stock_transactions"
 
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    account_id_bidx: str = Field(sa_column=Column(TEXT, nullable=False)) # No FK, overkill privacy
+    account_id_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
     symbol_enc: str = Field(sa_column=Column(TEXT, nullable=False))
-    exchange_enc: Optional[str] = Field(sa_column=Column(TEXT)) # Made optional
+    isin_enc: Optional[str] = Field(sa_column=Column(TEXT))
+    exchange_enc: Optional[str] = Field(sa_column=Column(TEXT))
     type_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     amount_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     price_per_unit_enc: str = Field(sa_column=Column(TEXT, nullable=False))

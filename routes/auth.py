@@ -206,7 +206,6 @@ def refresh_token_endpoint(
             detail="Invalid or expired refresh token"
         )
     
-    # Use user_uuid directly
     user = session.get(User, token_record.user_uuid)
     if not user:
         raise HTTPException(
@@ -214,7 +213,6 @@ def refresh_token_endpoint(
             detail="User not found"
         )
     
-    # Rotate refresh token
     revoke_refresh_token(session, refresh_token)
     new_refresh_token = create_refresh_token()
     create_refresh_token_db(session, user.uuid, new_refresh_token)

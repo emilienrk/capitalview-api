@@ -16,7 +16,7 @@ class BankAccount(SQLModel, table=True):
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
     name_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     institution_name_enc: Optional[str] = Field(sa_column=Column(TEXT))
-    identifier_enc: Optional[str] = Field(sa_column=Column(TEXT)) # Renamed from iban_enc
+    identifier_enc: Optional[str] = Field(sa_column=Column(TEXT))
     balance_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     account_type_enc: str = Field(sa_column=Column(TEXT, nullable=False))
 

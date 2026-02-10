@@ -39,6 +39,7 @@ class StockTransactionCreate(BaseModel):
     """Create a stock transaction."""
     account_id: str
     symbol: str
+    isin: Optional[str] = None
     exchange: Optional[str] = None
     type: StockTransactionType
     amount: Decimal
@@ -51,6 +52,7 @@ class StockTransactionCreate(BaseModel):
 class StockTransactionUpdate(BaseModel):
     """Update a stock transaction."""
     symbol: Optional[str] = None
+    isin: Optional[str] = None
     exchange: Optional[str] = None
     type: Optional[StockTransactionType] = None
     amount: Optional[Decimal] = None

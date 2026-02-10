@@ -53,7 +53,6 @@ def create_account(
     session: Session = Depends(get_session)
 ):
     """Create a new stock account."""
-    # Check for duplicates in memory
     user_accounts = get_user_stock_accounts(session, current_user.uuid, master_key)
     
     unique_types = {"PEA", "PEA_PME"}
@@ -87,12 +86,10 @@ def get_account(
     session: Session = Depends(get_session)
 ):
     """Get a stock account with positions and calculated values."""
-    # Verify ownership
     account_basic = get_stock_account(session, account_id, current_user.uuid, master_key)
     if not account_basic:
         raise HTTPException(status_code=404, detail="Account not found")
         
-    # We need the model for the summary service
     account_model = session.get(StockAccount, account_id)
     
     return get_stock_account_summary(session, account_model, master_key)
@@ -107,7 +104,6 @@ def update_account(
     session: Session = Depends(get_session)
 ):
     """Update a stock account."""
-    # Verify ownership
     existing = get_stock_account(session, account_id, current_user.uuid, master_key)
     if not existing:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -124,7 +120,6 @@ def delete_account(
     session: Session = Depends(get_session)
 ):
     """Delete a stock account and all its transactions."""
-    # Verify ownership
     existing = get_stock_account(session, account_id, current_user.uuid, master_key)
     if not existing:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -143,7 +138,6 @@ def create_transaction(
     session: Session = Depends(get_session)
 ):
     """Create a new stock transaction."""
-    # Verify account ownership
     account = get_stock_account(session, data.account_id, current_user.uuid, master_key)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found or access denied")
@@ -158,16 +152,13 @@ def list_transactions(
     session: Session = Depends(get_session)
 ):
     """List all stock transactions for current user (history)."""
-    # 1. Get all user accounts
     accounts = get_user_stock_accounts(session, current_user.uuid, master_key)
     
-    # 2. Get transactions for each account
     all_transactions = []
     for acc in accounts:
         txs = get_account_transactions(session, acc.id, master_key)
         all_transactions.extend(txs)
         
-    # Sort by date desc
     all_transactions.sort(key=lambda x: x.executed_at, reverse=True)
     
     return all_transactions
@@ -181,7 +172,6 @@ def get_transaction(
     session: Session = Depends(get_session)
 ):
     """Get a specific stock transaction."""
-    # Fetch transaction (decrypted)
     transaction = get_stock_transaction(session, transaction_id, master_key)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
@@ -198,7 +188,6 @@ def update_transaction(
     session: Session = Depends(get_session)
 ):
     """Update a stock transaction."""
-    # Verify ownership implicitly via decryption success + existence
     tx_model = session.get(StockTransaction, transaction_id)
     if not tx_model:
         raise HTTPException(status_code=404, detail="Transaction not found")
@@ -217,7 +206,6 @@ def delete_transaction(
     session: Session = Depends(get_session)
 ):
     """Delete a stock transaction."""
-    # Implicit ownership check
     tx = get_stock_transaction(session, transaction_id, master_key)
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
@@ -234,7 +222,6 @@ def get_transactions_by_account(
     session: Session = Depends(get_session)
 ):
     """Get all transactions for a specific account."""
-    # Verify account ownership
     account = get_stock_account(session, account_id, current_user.uuid, master_key)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -250,7 +237,6 @@ def bulk_import_transactions(
     session: Session = Depends(get_session)
 ):
     """Bulk import multiple stock transactions."""
-    # Verify account
     account = get_stock_account(session, data.account_id, current_user.uuid, master_key)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -258,7 +244,6 @@ def bulk_import_transactions(
     created_responses = []
     
     for item in data.transactions:
-        # Create full create DTO
         create_dto = StockTransactionCreate(
             account_id=data.account_id,
             symbol=item.symbol,

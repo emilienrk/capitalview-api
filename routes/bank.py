@@ -33,7 +33,6 @@ def create_account(
     session: Session = Depends(get_session)
 ):
     """Create a new bank account."""
-    # Check for duplicates in memory
     user_accounts = get_user_bank_accounts(session, current_user.uuid, master_key)
     
     unique_types = {
@@ -89,7 +88,6 @@ def update_account(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     
-    # Verify ownership
     existing = get_bank_account(session, account_id, current_user.uuid, master_key)
     if not existing:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -105,7 +103,6 @@ def delete_account(
     session: Session = Depends(get_session)
 ):
     """Delete a bank account."""
-    # Verify ownership first
     existing = get_bank_account(session, account_id, current_user.uuid, master_key)
     if not existing:
         raise HTTPException(status_code=404, detail="Account not found")

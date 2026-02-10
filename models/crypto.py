@@ -17,7 +17,7 @@ class CryptoAccount(SQLModel, table=True):
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
     name_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     platform_enc: Optional[str] = Field(sa_column=Column(TEXT)) # Renamed from wallet_name, made optional
-    public_address_enc: Optional[str] = Field(sa_column=Column(TEXT)) # Made optional
+    public_address_enc: Optional[str] = Field(sa_column=Column(TEXT))
     
     created_at: datetime = Field(
         default=sa.func.now(),

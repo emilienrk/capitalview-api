@@ -103,7 +103,6 @@ def update_entry(
     session: Session = Depends(get_session),
 ):
     """Update a cashflow entry."""
-    # Verify ownership
     existing = get_cashflow(session, cashflow_id, current_user.uuid, master_key)
     if not existing:
         raise HTTPException(status_code=404, detail="Cashflow not found")
@@ -120,7 +119,6 @@ def delete_entry(
     session: Session = Depends(get_session)
 ):
     """Delete a cashflow entry."""
-    # Verify ownership
     existing = get_cashflow(session, cashflow_id, current_user.uuid, master_key)
     if not existing:
         raise HTTPException(status_code=404, detail="Cashflow not found")

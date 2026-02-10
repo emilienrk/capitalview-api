@@ -74,12 +74,10 @@ def get_account(
     session: Session = Depends(get_session)
 ):
     """Get a crypto account with positions and calculated values."""
-    # Verify ownership
     account_basic = get_crypto_account(session, account_id, current_user.uuid, master_key)
     if not account_basic:
         raise HTTPException(status_code=404, detail="Account not found")
         
-    # We need the model for the summary service
     account_model = session.get(CryptoAccount, account_id)
     
     return get_crypto_account_summary(session, account_model, master_key)
@@ -94,7 +92,6 @@ def update_account(
     session: Session = Depends(get_session)
 ):
     """Update a crypto account."""
-    # Verify ownership
     existing = get_crypto_account(session, account_id, current_user.uuid, master_key)
     if not existing:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -111,7 +108,6 @@ def delete_account(
     session: Session = Depends(get_session)
 ):
     """Delete a crypto account and all its transactions."""
-    # Verify ownership
     existing = get_crypto_account(session, account_id, current_user.uuid, master_key)
     if not existing:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -130,7 +126,6 @@ def create_transaction(
     session: Session = Depends(get_session)
 ):
     """Create a new crypto transaction."""
-    # Verify account ownership
     account = get_crypto_account(session, data.account_id, current_user.uuid, master_key)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -144,7 +139,7 @@ def create_transaction(
         type=data.type,
         amount=resp.amount,
         price_per_unit=resp.price_per_unit,
-        fees=data.fees, # Original fees
+        fees=data.fees,
         fees_symbol=data.fees_symbol,
         executed_at=resp.executed_at,
         notes=data.notes,
@@ -159,16 +154,13 @@ def list_transactions(
     session: Session = Depends(get_session)
 ):
     """List all crypto transactions for current user (history)."""
-    # 1. Get all user accounts
     accounts = get_user_crypto_accounts(session, current_user.uuid, master_key)
     
-    # 2. Get transactions for each account
     all_transactions = []
     for acc in accounts:
         txs = get_account_transactions(session, acc.id, master_key)
         all_transactions.extend(txs)
         
-    # Sort by date desc
     all_transactions.sort(key=lambda x: x.executed_at, reverse=True)
     
     return all_transactions
@@ -186,7 +178,6 @@ def get_transaction(
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
         
-    # Implicit ownership check via decryption success
     return transaction
 
 
@@ -208,9 +199,9 @@ def update_transaction(
         
         return CryptoTransactionBasicResponse(
             id=resp.id,
-            account_id="unknown", # We don't have account_id easily accessible
+            account_id="unknown",
             symbol=resp.symbol,
-            type=CryptoTransactionType.BUY, # Placeholder
+            type=CryptoTransactionType.BUY,
             amount=resp.amount,
             price_per_unit=resp.price_per_unit,
             fees=resp.fees,
@@ -231,7 +222,6 @@ def delete_transaction(
     session: Session = Depends(get_session)
 ):
     """Delete a crypto transaction."""
-    # Implicit ownership check
     tx = get_crypto_transaction(session, transaction_id, master_key)
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
@@ -248,7 +238,6 @@ def get_transactions_by_account(
     session: Session = Depends(get_session)
 ):
     """Get all transactions for a specific account."""
-    # Verify account
     account = get_crypto_account(session, account_id, current_user.uuid, master_key)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -264,7 +253,6 @@ def bulk_import_transactions(
     session: Session = Depends(get_session)
 ):
     """Bulk import multiple crypto transactions."""
-    # Verify account
     account = get_crypto_account(session, data.account_id, current_user.uuid, master_key)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")

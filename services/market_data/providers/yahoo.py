@@ -22,17 +22,17 @@ class YahooProvider(MarketDataProvider):
             return None
             
         try:
-            symbol = yf.symbol(symbol)
+            ticker = yf.Ticker(symbol)
             
-            if hasattr(symbol, "fast_info"):
+            if hasattr(ticker, "fast_info"):
                 try:
-                    last_price = symbol.fast_info.last_price
+                    last_price = ticker.fast_info.last_price
                     if last_price and last_price > 0:
                         return Decimal(str(last_price))
                 except (AttributeError, TypeError, ValueError):
                     pass
             
-            data = symbol.info
+            data = ticker.info
             if data:
                 price = data.get("currentPrice") or data.get("regularMarketPrice") or data.get("ask")
                 if price and price > 0:
@@ -47,8 +47,8 @@ class YahooProvider(MarketDataProvider):
             return None
             
         try:
-            symbol = yf.symbol(symbol)
-            info = symbol.info
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
             
             if not info:
                 return None
@@ -56,9 +56,9 @@ class YahooProvider(MarketDataProvider):
             price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("ask")
             
             if not price or price <= 0:
-                if hasattr(symbol, "fast_info"):
+                if hasattr(ticker, "fast_info"):
                     try:
-                        price = symbol.fast_info.last_price
+                        price = ticker.fast_info.last_price
                         if not price or price <= 0:
                             return None
                     except (AttributeError, TypeError):
@@ -129,31 +129,31 @@ class YahooProvider(MarketDataProvider):
         
         results = {}
         try:
-            symbols = yf.symbols(" ".join(valid_symbols))
+            tickers = yf.Tickers(" ".join(valid_symbols))
             
-            for symbol in valid_symbols:
+            for sym in valid_symbols:
                 try:
-                    if symbol not in symbols.symbols:
+                    if sym not in tickers.tickers:
                         continue
                         
-                    symbol = symbols.symbols[symbol]
+                    ticker = tickers.tickers[sym]
                     price = None
                     currency = "EUR"
-                    name = symbol
+                    name = sym
                     full_info = {}
 
-                    if hasattr(symbol, "fast_info"):
+                    if hasattr(ticker, "fast_info"):
                         try:
-                            last_price = symbol.fast_info.last_price
+                            last_price = ticker.fast_info.last_price
                             if last_price and last_price > 0:
                                 price = last_price
-                                currency = getattr(symbol.fast_info, "currency", "EUR")
+                                currency = getattr(ticker.fast_info, "currency", "EUR")
                         except (AttributeError, TypeError, ValueError):
                             pass
                     
                     if not price:
                         try:
-                            full_info = symbol.info
+                            full_info = ticker.info
                             if full_info:
                                 price = full_info.get("currentPrice") or full_info.get("regularMarketPrice") or full_info.get("ask")
                         except Exception:
@@ -162,7 +162,7 @@ class YahooProvider(MarketDataProvider):
                     if not price or price <= 0:
                         continue
 
-                    results[symbol] = {
+                    results[sym] = {
                         "price": Decimal(str(price)),
                         "name": full_info.get("shortName") or full_info.get("longName") or name,
                         "currency": full_info.get("currency") or currency

@@ -41,7 +41,7 @@ class UserSettings(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     user_uuid_bidx: str = Field(index=True) 
-    objectives_enc: Optional[str] = Field(sa_column=Column(TEXT)) # Changed to encrypted
+    objectives_enc: Optional[str] = Field(sa_column=Column(TEXT))
     theme: str = Field(default="system", nullable=False)
     dashboard_layout_enc: Optional[str] = Field(sa_column=Column(TEXT))
     flat_tax_rate: Decimal = Field(default=Decimal("0.30"), max_digits=5, decimal_places=4)

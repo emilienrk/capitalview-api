@@ -64,7 +64,6 @@ def update_entry(
     session: Session = Depends(get_session)
 ):
     """Update a note."""
-    # Verify ownership
     existing = get_note(session, note_id, current_user.uuid, master_key)
     if not existing:
         raise HTTPException(status_code=404, detail="Note not found")
@@ -81,7 +80,6 @@ def delete_entry(
     session: Session = Depends(get_session)
 ):
     """Delete a note."""
-    # Verify ownership
     existing = get_note(session, note_id, current_user.uuid, master_key)
     if not existing:
         raise HTTPException(status_code=404, detail="Note not found")
