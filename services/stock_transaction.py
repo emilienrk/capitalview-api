@@ -21,7 +21,7 @@ from services.stock_account import _map_account_to_response
 
 def _decrypt_transaction(tx: StockTransaction, master_key: str) -> TransactionResponse:
     """Decrypt a StockTransaction and return a response with calculated totals."""
-    ticker = decrypt_data(tx.ticker_enc, master_key)
+    symbol = decrypt_data(tx.symbol_enc, master_key)
     type_str = decrypt_data(tx.type_enc, master_key)
     amount = Decimal(decrypt_data(tx.amount_enc, master_key))
     price = Decimal(decrypt_data(tx.price_per_unit_enc, master_key))
@@ -38,7 +38,7 @@ def _decrypt_transaction(tx: StockTransaction, master_key: str) -> TransactionRe
 
     return TransactionResponse(
         id=tx.uuid,
-        ticker=ticker,
+        symbol=symbol,
         type=type_str,
         amount=amount,
         price_per_unit=price,
@@ -57,7 +57,7 @@ def create_stock_transaction(
     """Create a new encrypted stock transaction."""
     account_bidx = hash_index(data.account_id, master_key)
 
-    ticker_enc = encrypt_data(data.ticker.upper(), master_key)
+    symbol_enc = encrypt_data(data.symbol.upper(), master_key)
     type_enc = encrypt_data(data.type.value, master_key)
     amount_enc = encrypt_data(str(data.amount), master_key)
     price_enc = encrypt_data(str(data.price_per_unit), master_key)
@@ -71,7 +71,7 @@ def create_stock_transaction(
 
     transaction = StockTransaction(
         account_id_bidx=account_bidx,
-        ticker_enc=ticker_enc,
+        symbol_enc=symbol_enc,
         exchange_enc=exchange_enc,
         type_enc=type_enc,
         amount_enc=amount_enc,
@@ -107,8 +107,8 @@ def update_stock_transaction(
     master_key: str,
 ) -> TransactionResponse:
     """Update an existing stock transaction (only provided fields)."""
-    if data.ticker is not None:
-        transaction.ticker_enc = encrypt_data(data.ticker.upper(), master_key)
+    if data.symbol is not None:
+        transaction.symbol_enc = encrypt_data(data.symbol.upper(), master_key)
     if data.exchange is not None:
         transaction.exchange_enc = encrypt_data(data.exchange, master_key)
     if data.type is not None:
@@ -172,16 +172,16 @@ def get_stock_account_summary(
 
     # Build positions via weighted-average cost (PRU)
     for tx in transactions:
-        ticker = tx.ticker
-        if ticker not in positions_map:
-            positions_map[ticker] = {
-                "ticker": ticker,
+        symbol = tx.symbol
+        if symbol not in positions_map:
+            positions_map[symbol] = {
+                "symbol": symbol,
                 "total_amount": Decimal("0"),
                 "total_cost": Decimal("0"),
                 "total_fees": Decimal("0"),
             }
 
-        pos = positions_map[ticker]
+        pos = positions_map[symbol]
 
         if tx.type in ("BUY", "DIVIDEND", "DEPOSIT"):
             pos["total_amount"] += tx.amount
@@ -199,7 +199,7 @@ def get_stock_account_summary(
 
     # Finalize each position with market data
     positions: list[PositionResponse] = []
-    for ticker, data in positions_map.items():
+    for symbol, data in positions_map.items():
         if data["total_amount"] <= 0:
             continue
 
@@ -207,7 +207,7 @@ def get_stock_account_summary(
         avg_price = total_invested / data["total_amount"] if data["total_amount"] > 0 else Decimal("0")
         fees_pct = (data["total_fees"] / total_invested * 100) if total_invested > 0 else Decimal("0")
 
-        name, current_price = get_market_info(session, ticker)
+        name, current_price = get_market_info(session, symbol)
 
         current_value = None
         profit_loss = None
@@ -219,7 +219,7 @@ def get_stock_account_summary(
             profit_loss_pct = (profit_loss / total_invested * 100) if total_invested > 0 else Decimal("0")
 
         positions.append(PositionResponse(
-            ticker=ticker,
+            symbol=symbol,
             name=name,
             total_amount=data["total_amount"],
             average_buy_price=round(avg_price, 4),

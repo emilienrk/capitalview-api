@@ -39,6 +39,17 @@ class Settings:
         self.debug: bool = os.getenv("DEBUG", "false").lower() == "true" and env != "production"
         self.app_name: str = os.getenv("APP_NAME", "CapitalView API")
 
+        # ── Market Data ───────────────────────────────────────
+        self.yahoo_user_agent: str = os.getenv(
+            "YAHOO_USER_AGENT", 
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+        )
+        self.yahoo_api_url: str = os.getenv("YF_API_URL", "https://query1.finance.yahoo.com/v1/finance/search")
+        self.market_data_timeout: int = int(os.getenv("MARKET_DATA_TIMEOUT", "10"))
+        
+        self.cmc_api_url: str = os.getenv("CMC_API_URL", "https://pro-api.coinmarketcap.com")
+        self.cmc_api_key: str = os.getenv("CMC_API_KEY", "")
+
 
 @lru_cache()
 def get_settings() -> Settings:

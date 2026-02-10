@@ -37,6 +37,8 @@ from .stock import (
     StockTransactionBulkCreate,
     StockTransactionCreate,
     StockTransactionUpdate,
+    AssetSearchResult,
+    AssetInfoResponse,
 )
 
 # Crypto schemas
@@ -88,6 +90,8 @@ __all__ = [
     "StockTransactionBulkCreate",
     "StockTransactionCreate",
     "StockTransactionUpdate",
+    "AssetSearchResult",
+    "AssetInfoResponse",
     # Crypto
     "CryptoAccountBasicResponse",
     "CryptoAccountCreate",

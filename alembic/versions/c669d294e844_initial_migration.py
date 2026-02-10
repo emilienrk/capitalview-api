@@ -62,12 +62,12 @@ def upgrade() -> None:
     op.create_table('crypto_transactions',
     sa.Column('uuid', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('account_id_bidx', sa.TEXT(), nullable=False),
-    sa.Column('ticker_enc', sa.TEXT(), nullable=False),
+    sa.Column('symbol_enc', sa.TEXT(), nullable=False),
     sa.Column('type_enc', sa.TEXT(), nullable=False),
     sa.Column('amount_enc', sa.TEXT(), nullable=False),
     sa.Column('price_per_unit_enc', sa.TEXT(), nullable=False),
     sa.Column('fees_enc', sa.TEXT(), nullable=False),
-    sa.Column('fees_ticker_enc', sa.TEXT(), nullable=True),
+    sa.Column('fees_symbol_enc', sa.TEXT(), nullable=True),
     sa.Column('executed_at_enc', sa.TEXT(), nullable=False),
     sa.Column('tx_hash_enc', sa.TEXT(), nullable=True),
     sa.Column('notes_enc', sa.TEXT(), nullable=True),
@@ -79,13 +79,19 @@ def upgrade() -> None:
     op.create_table('market_prices',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('symbol', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('exchange', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('isin', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('name', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('sector', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('current_price', sa.Numeric(precision=15, scale=4), nullable=False),
     sa.Column('currency', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('last_updated', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_market_prices_symbol'), 'market_prices', ['symbol'], unique=True)
+    op.create_index(op.f('ix_market_prices_symbol'), 'market_prices', ['symbol'], unique=False)
+    op.create_index(op.f('ix_market_prices_exchange'), 'market_prices', ['exchange'], unique=False)
+    op.create_index(op.f('ix_market_prices_isin'), 'market_prices', ['isin'], unique=False)
+    op.create_unique_constraint('unique_symbol_exchange', 'market_prices', ['symbol', 'exchange'])
     op.create_table('notes',
     sa.Column('uuid', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('user_uuid_bidx', sa.TEXT(), nullable=False),
@@ -111,7 +117,7 @@ def upgrade() -> None:
     op.create_table('stock_transactions',
     sa.Column('uuid', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('account_id_bidx', sa.TEXT(), nullable=False),
-    sa.Column('ticker_enc', sa.TEXT(), nullable=False),
+    sa.Column('symbol_enc', sa.TEXT(), nullable=False),
     sa.Column('exchange_enc', sa.TEXT(), nullable=True),
     sa.Column('type_enc', sa.TEXT(), nullable=False),
     sa.Column('amount_enc', sa.TEXT(), nullable=False),
@@ -180,6 +186,9 @@ def downgrade() -> None:
     op.drop_table('stock_accounts')
     op.drop_index(op.f('ix_notes_user_uuid_bidx'), table_name='notes')
     op.drop_table('notes')
+    op.drop_constraint('unique_symbol_exchange', 'market_prices', type_='unique')
+    op.drop_index(op.f('ix_market_prices_isin'), table_name='market_prices')
+    op.drop_index(op.f('ix_market_prices_exchange'), table_name='market_prices')
     op.drop_index(op.f('ix_market_prices_symbol'), table_name='market_prices')
     op.drop_table('market_prices')
     op.drop_index(op.f('ix_crypto_transactions_account_id_bidx'), table_name='crypto_transactions')

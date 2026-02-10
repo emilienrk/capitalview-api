@@ -14,11 +14,18 @@ class MarketPrice(SQLModel, table=True):
     __tablename__ = "market_prices"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    symbol: str = Field(unique=True, index=True)
+    symbol: str = Field(index=True)
+    exchange: Optional[str] = Field(default=None)
+    isin: Optional[str] = Field(default=None)
     name: Optional[str] = Field(default=None)
-    current_price: Decimal = Field(max_digits=15, decimal_places=4, nullable=False)
+    sector: Optional[str] = Field(default=None)
+    current_price: Decimal = Field(max_digits=20, decimal_places=8, nullable=False)
     currency: str = Field(default="EUR")
     last_updated: datetime = Field(
-        default=sa.func.now(),
-        sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+        sa_column=Column(
+            sa.DateTime(timezone=True), 
+            server_default=sa.func.now(), 
+            onupdate=sa.func.now(),
+            nullable=False
+        )
     )

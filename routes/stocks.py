@@ -8,7 +8,7 @@ from sqlmodel import Session
 from database import get_session
 from models import User, StockAccount, StockTransaction
 from services.auth import get_current_user, get_master_key
-from models.enums import StockAccountType, StockTransactionType
+from models.enums import StockAccountType, StockTransactionType, AssetType
 from dtos import (
     StockAccountCreate,
     StockAccountUpdate,
@@ -20,6 +20,8 @@ from dtos import (
     StockTransactionBasicResponse,
     AccountSummaryResponse,
     TransactionResponse,
+    AssetSearchResult,
+    AssetInfoResponse,
 )
 from services.stock_account import (
     create_stock_account,
@@ -36,6 +38,7 @@ from services.stock_transaction import (
     delete_stock_transaction,
     get_stock_account_summary
 )
+from services.market_data.manager import market_data_manager
 
 router = APIRouter(prefix="/stocks", tags=["Stocks"])
 
@@ -258,7 +261,7 @@ def bulk_import_transactions(
         # Create full create DTO
         create_dto = StockTransactionCreate(
             account_id=data.account_id,
-            ticker=item.ticker,
+            symbol=item.symbol,
             exchange=item.exchange,
             type=item.type,
             amount=item.amount,
@@ -273,7 +276,7 @@ def bulk_import_transactions(
         basic = StockTransactionBasicResponse(
             id=resp.id,
             account_id=data.account_id,
-            ticker=resp.ticker,
+            symbol=resp.symbol,
             exchange=item.exchange,
             type=resp.type,
             amount=resp.amount,
@@ -288,3 +291,50 @@ def bulk_import_transactions(
         imported_count=len(created_responses),
         transactions=created_responses
     )
+
+
+@router.get("/market/search", response_model=list[AssetSearchResult])
+def search_assets(
+    q: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Search for assets (stocks, ETFs, etc.) by name or symbol."""
+    if not q:
+        return []
+    results = market_data_manager.search(q, AssetType.STOCK)
+
+    return [
+        AssetSearchResult(
+            symbol=r["symbol"],
+            name=r.get("name"),
+            exchange=r.get("exchange"),
+            type=r.get("type"),
+            currency=r.get("currency")
+        ) for r in results
+    ]
+
+
+@router.post("/market/info", response_model=list[AssetInfoResponse])
+def get_assets_info(
+    symbols: list[str],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Get live data for multiple assets."""
+    if not symbols:
+        return []
+
+    data = market_data_manager.get_bulk_info(symbols, AssetType.STOCK)
+
+    response = []
+    for symbol, info in data.items():
+        response.append(AssetInfoResponse(
+            symbol=symbol,
+            name=info.get("name"),
+            price=info.get("price"),
+            currency=info.get("currency"),
+            exchange=info.get("exchange"),
+            type=None
+        ))
+    return response
+
+    

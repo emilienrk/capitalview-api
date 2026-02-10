@@ -38,12 +38,12 @@ class CryptoAccountBasicResponse(BaseModel):
 class CryptoTransactionCreate(BaseModel):
     """Create a crypto transaction."""
     account_id: str
-    ticker: str
+    symbol: str
     type: CryptoTransactionType
     amount: Decimal
     price_per_unit: Decimal
     fees: Decimal = Decimal("0")
-    fees_ticker: Optional[str] = None
+    fees_symbol: Optional[str] = None
     executed_at: datetime
     tx_hash: Optional[str] = None
     notes: Optional[str] = None
@@ -51,12 +51,12 @@ class CryptoTransactionCreate(BaseModel):
 
 class CryptoTransactionUpdate(BaseModel):
     """Update a crypto transaction."""
-    ticker: Optional[str] = None
+    symbol: Optional[str] = None
     type: Optional[CryptoTransactionType] = None
     amount: Optional[Decimal] = None
     price_per_unit: Optional[Decimal] = None
     fees: Optional[Decimal] = None
-    fees_ticker: Optional[str] = None
+    fees_symbol: Optional[str] = None
     executed_at: Optional[datetime] = None
     tx_hash: Optional[str] = None
     notes: Optional[str] = None
@@ -64,12 +64,12 @@ class CryptoTransactionUpdate(BaseModel):
 
 class CryptoTransactionBulkCreate(BaseModel):
     """Create a crypto transaction (without account_id, used in bulk import)."""
-    ticker: str
+    symbol: str
     type: CryptoTransactionType
     amount: Decimal
     price_per_unit: Decimal
     fees: Decimal = Decimal("0")
-    fees_ticker: Optional[str] = None
+    fees_symbol: Optional[str] = None
     executed_at: datetime
     tx_hash: Optional[str] = None
     notes: Optional[str] = None
@@ -91,12 +91,12 @@ class CryptoTransactionBasicResponse(BaseModel):
     """Basic crypto transaction response."""
     id: str
     account_id: str
-    ticker: str
+    symbol: str
     type: CryptoTransactionType
     amount: Decimal
     price_per_unit: Decimal
     fees: Decimal
-    fees_ticker: Optional[str] = None
+    fees_symbol: Optional[str] = None
     executed_at: datetime
     tx_hash: Optional[str] = None
     notes: Optional[str] = None

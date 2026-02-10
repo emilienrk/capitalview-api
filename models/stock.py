@@ -40,7 +40,7 @@ class StockTransaction(SQLModel, table=True):
 
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     account_id_bidx: str = Field(sa_column=Column(TEXT, nullable=False)) # No FK, overkill privacy
-    ticker_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    symbol_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     exchange_enc: Optional[str] = Field(sa_column=Column(TEXT)) # Made optional
     type_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     amount_enc: str = Field(sa_column=Column(TEXT, nullable=False))

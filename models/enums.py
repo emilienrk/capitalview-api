@@ -4,6 +4,12 @@ Enumerations for the CapitalView database models.
 from enum import Enum
 
 
+class AssetType(str, Enum):
+    """Type of asset for market data."""
+    STOCK = "STOCK"
+    CRYPTO = "CRYPTO"
+
+
 class FlowType(str, Enum):
     """Type of cashflow."""
     INFLOW = "INFLOW"

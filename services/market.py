@@ -7,18 +7,17 @@ from typing import Optional, Tuple
 from sqlmodel import Session, select
 
 from models.market import MarketPrice
+from models.enums import AssetType
 from services.market_data import market_data_manager
 
-# Cache validity duration
 CACHE_DURATION = timedelta(hours=1)
 
 
-def get_market_price(session: Session, symbol: str) -> Optional[Decimal]:
+def get_market_price(session: Session, symbol: str, asset_type: AssetType = AssetType.STOCK) -> Optional[Decimal]:
     """
     Get current market price for a symbol.
     Uses DB cache if recent, otherwise fetches via MarketDataManager.
     """
-    # 1. Check Cache
     cached = session.exec(
         select(MarketPrice).where(MarketPrice.symbol == symbol)
     ).first()
@@ -28,12 +27,10 @@ def get_market_price(session: Session, symbol: str) -> Optional[Decimal]:
     if cached and cached.last_updated > (now - CACHE_DURATION):
         return cached.current_price
 
-    # 2. Fetch from Manager (which handles providers)
-    data = market_data_manager.get_info(symbol)
+    data = market_data_manager.get_info(symbol, asset_type)
     if not data:
         return cached.current_price if cached else None
 
-    # 3. Update/Create Cache
     if cached:
         cached.current_price = data["price"]
         cached.name = data["name"]
@@ -55,7 +52,7 @@ def get_market_price(session: Session, symbol: str) -> Optional[Decimal]:
     return data["price"]
 
 
-def get_market_info(session: Session, symbol: str) -> Tuple[Optional[str], Optional[Decimal]]:
+def get_market_info(session: Session, symbol: str, asset_type: AssetType = AssetType.STOCK) -> Tuple[Optional[str], Optional[Decimal]]:
     """
     Get (Name, Price) tuple for a symbol.
     """
@@ -68,7 +65,7 @@ def get_market_info(session: Session, symbol: str) -> Tuple[Optional[str], Optio
     if cached and cached.last_updated > (now - CACHE_DURATION):
         return cached.name, cached.current_price
 
-    data = market_data_manager.get_info(symbol)
+    data = market_data_manager.get_info(symbol, asset_type)
     if not data:
         if cached:
             return cached.name, cached.current_price

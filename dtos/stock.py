@@ -38,7 +38,7 @@ class StockAccountBasicResponse(BaseModel):
 class StockTransactionCreate(BaseModel):
     """Create a stock transaction."""
     account_id: str
-    ticker: str
+    symbol: str
     exchange: Optional[str] = None
     type: StockTransactionType
     amount: Decimal
@@ -50,7 +50,7 @@ class StockTransactionCreate(BaseModel):
 
 class StockTransactionUpdate(BaseModel):
     """Update a stock transaction."""
-    ticker: Optional[str] = None
+    symbol: Optional[str] = None
     exchange: Optional[str] = None
     type: Optional[StockTransactionType] = None
     amount: Optional[Decimal] = None
@@ -62,7 +62,7 @@ class StockTransactionUpdate(BaseModel):
 
 class StockTransactionBulkCreate(BaseModel):
     """Create a stock transaction (without account_id, used in bulk import)."""
-    ticker: str
+    symbol: str
     exchange: Optional[str] = None
     type: StockTransactionType
     amount: Decimal
@@ -88,7 +88,7 @@ class StockTransactionBasicResponse(BaseModel):
     """Basic stock transaction response."""
     id: str
     account_id: str
-    ticker: str
+    symbol: str
     exchange: Optional[str] = None
     type: StockTransactionType
     amount: Decimal
@@ -96,3 +96,23 @@ class StockTransactionBasicResponse(BaseModel):
     fees: Decimal
     executed_at: datetime
     notes: Optional[str] = None
+
+
+class AssetSearchResult(BaseModel):
+    """Result of an asset search."""
+    symbol: str
+    name: Optional[str] = None
+    exchange: Optional[str] = None
+    type: Optional[str] = None
+    currency: Optional[str] = None
+
+
+class AssetInfoResponse(BaseModel):
+    """Detailed info for an asset."""
+    symbol: str
+    name: Optional[str] = None
+    price: Optional[Decimal] = None
+    currency: Optional[str] = None
+    exchange: Optional[str] = None
+    type: Optional[str] = None
+    change_percent: Optional[float] = None  # 24h or daily change

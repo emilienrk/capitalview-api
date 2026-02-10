@@ -1,45 +1,175 @@
 from decimal import Decimal
-from typing import Optional, Dict
+from typing import Optional, Dict, List
+
+from models.enums import AssetType
+import requests
 import yfinance as yf
+
+from config import get_settings
 from .base import MarketDataProvider
 
-class YahooProvider(MarketDataProvider):
-    """Yahoo Finance provider implementation."""
 
-    def get_price(self, symbol: str) -> Optional[Decimal]:
-        data = self.get_info(symbol)
-        return data["price"] if data else None
+class YahooProvider(MarketDataProvider):
+    def __init__(self):
+        self.settings = get_settings()
+        self.search_url = self.settings.yahoo_api_url
+
+    def type_assets(self) -> List[AssetType]:
+        return [AssetType.STOCK]
+
+    def get_stock(self, symbol: str) -> Optional[Decimal]:
+        if not symbol or not symbol.strip():
+            return None
+            
+        try:
+            symbol = yf.symbol(symbol)
+            
+            if hasattr(symbol, "fast_info"):
+                try:
+                    last_price = symbol.fast_info.last_price
+                    if last_price and last_price > 0:
+                        return Decimal(str(last_price))
+                except (AttributeError, TypeError, ValueError):
+                    pass
+            
+            data = symbol.info
+            if data:
+                price = data.get("currentPrice") or data.get("regularMarketPrice") or data.get("ask")
+                if price and price > 0:
+                    return Decimal(str(price))
+            
+            return None
+        except Exception:
+            return None
 
     def get_info(self, symbol: str) -> Optional[Dict]:
-        try:
-            ticker = yf.Ticker(symbol)
-            # Try fast_info first
-            info = ticker.fast_info
+        if not symbol or not symbol.strip():
+            return None
             
-            if not info or not hasattr(info, 'last_price'):
-                 # Fallback to full info
-                 data = ticker.info
-                 current_price = data.get('currentPrice') or data.get('regularMarketPrice') or data.get('ask')
-                 name = data.get('shortName') or data.get('longName') or symbol
-                 currency = data.get('currency', 'EUR')
-            else:
-                 current_price = info.last_price
-                 # Attempt to get extra details from full info only if needed, 
-                 # or use defaults/metadata if accessible.
-                 # For simplicity and robustness, we often need full info for Name/Currency initially.
-                 # Optimization: access ticker.info lazy property
-                 data = ticker.info
-                 name = data.get('shortName') or data.get('longName') or symbol
-                 currency = data.get('currency', 'EUR')
-
-            if current_price is None:
+        try:
+            symbol = yf.symbol(symbol)
+            info = symbol.info
+            
+            if not info:
                 return None
+            
+            price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("ask")
+            
+            if not price or price <= 0:
+                if hasattr(symbol, "fast_info"):
+                    try:
+                        price = symbol.fast_info.last_price
+                        if not price or price <= 0:
+                            return None
+                    except (AttributeError, TypeError):
+                        return None
+                else:
+                    return None
 
             return {
-                "price": Decimal(str(current_price)),
-                "name": name,
-                "currency": currency
+                "name": info.get("shortName") or info.get("longName") or symbol,
+                "currency": info.get("currency", "EUR"),
+                "price": Decimal(str(price)),
+                "symbol": symbol
             }
-        except Exception as e:
-            print(f"[YahooProvider] Error fetching {symbol}: {e}")
+        except Exception:
             return None
+
+    def search(self, query: str) -> List[Dict]:
+        if not query or not query.strip():
+            return []
+            
+        try:
+            params = {
+                "q": query.strip(),
+                "quotesCount": 15,
+                "newsCount": 0,
+                "enableFuzzyQuery": False,
+                "quotesQueryId": "tss_match_phrase_query"
+            }
+            headers = {"User-Agent": self.settings.yahoo_user_agent}
+            
+            response = requests.get(
+                self.search_url, 
+                params=params, 
+                headers=headers, 
+                timeout=self.settings.market_data_timeout
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            results = []
+            if "quotes" in data and isinstance(data["quotes"], list):
+                for quote in data["quotes"]:
+                    if not isinstance(quote, dict) or not quote.get("isYahooFinance", True):
+                        continue
+                    
+                    symbol = quote.get("symbol")
+                    if not symbol:
+                        continue
+                        
+                    results.append({
+                        "symbol": symbol,
+                        "name": quote.get("shortname") or quote.get("longname") or symbol,
+                        "exchange": quote.get("exchange"),
+                        "type": quote.get("quoteType"),
+                        "currency": None
+                    })
+            return results
+        except Exception:
+            return []
+
+    def get_bulk_info(self, symbols: List[str]) -> Dict[str, Dict]:
+        if not symbols:
+            return {}
+        
+        valid_symbols = [s.strip() for s in symbols if s and s.strip()]
+        if not valid_symbols:
+            return {}
+        
+        results = {}
+        try:
+            symbols = yf.symbols(" ".join(valid_symbols))
+            
+            for symbol in valid_symbols:
+                try:
+                    if symbol not in symbols.symbols:
+                        continue
+                        
+                    symbol = symbols.symbols[symbol]
+                    price = None
+                    currency = "EUR"
+                    name = symbol
+                    full_info = {}
+
+                    if hasattr(symbol, "fast_info"):
+                        try:
+                            last_price = symbol.fast_info.last_price
+                            if last_price and last_price > 0:
+                                price = last_price
+                                currency = getattr(symbol.fast_info, "currency", "EUR")
+                        except (AttributeError, TypeError, ValueError):
+                            pass
+                    
+                    if not price:
+                        try:
+                            full_info = symbol.info
+                            if full_info:
+                                price = full_info.get("currentPrice") or full_info.get("regularMarketPrice") or full_info.get("ask")
+                        except Exception:
+                            pass
+                    
+                    if not price or price <= 0:
+                        continue
+
+                    results[symbol] = {
+                        "price": Decimal(str(price)),
+                        "name": full_info.get("shortName") or full_info.get("longName") or name,
+                        "currency": full_info.get("currency") or currency
+                    }
+                except Exception:
+                    continue
+            
+            return results
+        except Exception:
+            return {}
