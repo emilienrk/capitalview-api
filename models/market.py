@@ -15,7 +15,7 @@ class MarketPrice(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    isin: str = Field(index=True, default=None)
+    isin: str = Field(index=True, unique=True, default=None)
     symbol: Optional[str] = Field(index=True)
     exchange: Optional[str] = Field(default=None)
     name: Optional[str] = Field(default=None)

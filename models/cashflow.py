@@ -14,7 +14,7 @@ class Cashflow(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
     name_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     flow_type_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     category_enc: str = Field(sa_column=Column(TEXT, nullable=False))

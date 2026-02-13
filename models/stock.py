@@ -15,7 +15,7 @@ class StockAccount(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
     name_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     institution_name_enc: Optional[str] = Field(sa_column=Column(TEXT))
     identifier_enc: Optional[str] = Field(sa_column=Column(TEXT))
@@ -41,8 +41,8 @@ class StockTransaction(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    account_id_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
-    isin_enc: Optional[str] = Field(sa_column=Column(TEXT))
+    account_id_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
+    isin_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     type_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     amount_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     price_per_unit_enc: str = Field(sa_column=Column(TEXT, nullable=False))

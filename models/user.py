@@ -16,7 +16,7 @@ class User(SQLModel, table=True):
 
     uuid: str = Field(default=None, primary_key=True)
     auth_salt: str = Field(sa_column=Column(TEXT, nullable=False))
-    username: str = Field(nullable=False)
+    username: str = Field(nullable=False, unique=True, index=True)
     email: str = Field(nullable=False, unique=True, index=True)
     password_hash: str = Field(nullable=False)
     is_active: bool = Field(default=True, nullable=False)
@@ -42,7 +42,7 @@ class UserSettings(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    user_uuid_bidx: str = Field(index=True) 
+    user_uuid_bidx: str = Field(index=True, unique=True) 
     objectives_enc: Optional[str] = Field(sa_column=Column(TEXT))
     theme: str = Field(default="system", nullable=False)
     dashboard_layout_enc: Optional[str] = Field(sa_column=Column(TEXT))
@@ -51,6 +51,20 @@ class UserSettings(SQLModel, table=True):
     yield_expectation: Decimal = Field(default=Decimal("0.05"), max_digits=5, decimal_places=4)
     inflation_rate: Decimal = Field(default=Decimal("0.02"), max_digits=5, decimal_places=4)
 
+    created_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+    )
+    updated_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            onupdate=sa.func.now(),
+            nullable=False,
+        )
+    )
+
 
 class RefreshToken(SQLModel, table=True):
     """Refresh tokens for JWT authentication."""
@@ -58,7 +72,14 @@ class RefreshToken(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    user_uuid: str = Field(foreign_key="users.uuid", index=True, nullable=False)
+    user_uuid: str = Field(
+        sa_column=Column(
+            sa.String,
+            sa.ForeignKey("users.uuid", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
     token: str = Field(nullable=False, unique=True, index=True)
     expires_at: datetime = Field(nullable=False)
     revoked: bool = Field(default=False, nullable=False)
