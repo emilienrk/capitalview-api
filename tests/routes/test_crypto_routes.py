@@ -58,8 +58,8 @@ def test_crypto_account_and_transaction(session, master_key):
     assert created["symbol"] == "BTC"
 
 
-@patch("services.crypto_transaction.get_market_info")
-@patch("services.crypto_transaction.get_market_price")
+@patch("services.crypto_transaction.get_crypto_info")
+@patch("services.crypto_transaction.get_crypto_price")
 def test_crypto_summary(mock_price, mock_market, session, master_key):
     mock_market.return_value = ("Bitcoin", Decimal("40000"))
     mock_price.return_value = Decimal("40000")
@@ -133,3 +133,50 @@ def test_crypto_transactions_crud_and_bulk(session, master_key):
     rbulk = client.post("/crypto/transactions/bulk", json=bulk)
     assert rbulk.status_code == 201
     assert rbulk.json()["imported_count"] == 2
+
+
+def test_create_crypto_transaction_negative_validation(session, master_key):
+    client = TestClient(app)
+    
+    # Create account
+    resp = client.post("/crypto/accounts", json={"name": "Test Wallet"})
+    account_id = resp.json()["id"]
+
+    # Negative amount
+    tx_neg_amount = {
+        "account_id": account_id,
+        "symbol": "BTC",
+        "type": "BUY",
+        "amount": -0.1,
+        "price_per_unit": 30000,
+        "fees": 1,
+        "executed_at": "2023-01-01T12:00:00"
+    }
+    r = client.post("/crypto/transactions", json=tx_neg_amount)
+    assert r.status_code == 422
+
+    # Negative price
+    tx_neg_price = {
+        "account_id": account_id,
+        "symbol": "BTC",
+        "type": "BUY",
+        "amount": 0.1,
+        "price_per_unit": -30000,
+        "fees": 1,
+        "executed_at": "2023-01-01T12:00:00"
+    }
+    r = client.post("/crypto/transactions", json=tx_neg_price)
+    assert r.status_code == 422
+
+    # Negative fees
+    tx_neg_fees = {
+        "account_id": account_id,
+        "symbol": "BTC",
+        "type": "BUY",
+        "amount": 0.1,
+        "price_per_unit": 30000,
+        "fees": -10,
+        "executed_at": "2023-01-01T12:00:00"
+    }
+    r = client.post("/crypto/transactions", json=tx_neg_fees)
+    assert r.status_code == 422

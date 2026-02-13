@@ -15,9 +15,9 @@ class MarketPrice(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    symbol: str = Field(index=True)
+    isin: str = Field(index=True, default=None)
+    symbol: Optional[str] = Field(index=True)
     exchange: Optional[str] = Field(default=None)
-    isin: Optional[str] = Field(default=None)
     name: Optional[str] = Field(default=None)
     sector: Optional[str] = Field(default=None)
     current_price: Decimal = Field(max_digits=20, decimal_places=8, nullable=False)

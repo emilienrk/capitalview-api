@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from models.enums import CryptoTransactionType
 
@@ -39,10 +39,11 @@ class CryptoTransactionCreate(BaseModel):
     """Create a crypto transaction."""
     account_id: str
     symbol: str
+    name: Optional[str] = None
     type: CryptoTransactionType
-    amount: Decimal
-    price_per_unit: Decimal
-    fees: Decimal = Decimal("0")
+    amount: Decimal = Field(gt=0)
+    price_per_unit: Decimal = Field(ge=0)
+    fees: Decimal = Field(default=Decimal("0"), ge=0)
     fees_symbol: Optional[str] = None
     executed_at: datetime
     tx_hash: Optional[str] = None
@@ -52,10 +53,11 @@ class CryptoTransactionCreate(BaseModel):
 class CryptoTransactionUpdate(BaseModel):
     """Update a crypto transaction."""
     symbol: Optional[str] = None
+    name: Optional[str] = None
     type: Optional[CryptoTransactionType] = None
-    amount: Optional[Decimal] = None
-    price_per_unit: Optional[Decimal] = None
-    fees: Optional[Decimal] = None
+    amount: Optional[Decimal] = Field(None, gt=0)
+    price_per_unit: Optional[Decimal] = Field(None, ge=0)
+    fees: Optional[Decimal] = Field(None, ge=0)
     fees_symbol: Optional[str] = None
     executed_at: Optional[datetime] = None
     tx_hash: Optional[str] = None
@@ -66,9 +68,9 @@ class CryptoTransactionBulkCreate(BaseModel):
     """Create a crypto transaction (without account_id, used in bulk import)."""
     symbol: str
     type: CryptoTransactionType
-    amount: Decimal
-    price_per_unit: Decimal
-    fees: Decimal = Decimal("0")
+    amount: Decimal = Field(gt=0)
+    price_per_unit: Decimal = Field(ge=0)
+    fees: Decimal = Field(default=Decimal("0"), ge=0)
     fees_symbol: Optional[str] = None
     executed_at: datetime
     tx_hash: Optional[str] = None

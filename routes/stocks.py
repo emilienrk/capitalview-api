@@ -142,7 +142,10 @@ def create_transaction(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found or access denied")
     
-    return create_stock_transaction(session, data, master_key)
+    try:
+        return create_stock_transaction(session, data, master_key)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/transactions", response_model=list[TransactionResponse])
@@ -247,6 +250,8 @@ def bulk_import_transactions(
         create_dto = StockTransactionCreate(
             account_id=data.account_id,
             symbol=item.symbol,
+            isin=item.isin,
+            name=item.name,
             exchange=item.exchange,
             type=item.type,
             amount=item.amount,
@@ -256,21 +261,26 @@ def bulk_import_transactions(
             notes=item.notes
         )
         
-        resp = create_stock_transaction(session, create_dto, master_key)
-        
-        basic = StockTransactionBasicResponse(
-            id=resp.id,
-            account_id=data.account_id,
-            symbol=resp.symbol,
-            exchange=item.exchange,
-            type=resp.type,
-            amount=resp.amount,
-            price_per_unit=resp.price_per_unit,
-            fees=resp.fees,
-            executed_at=resp.executed_at,
-            notes=None 
-        )
-        created_responses.append(basic)
+        try:
+            resp = create_stock_transaction(session, create_dto, master_key)
+            
+            basic = StockTransactionBasicResponse(
+                id=resp.id,
+                account_id=data.account_id,
+                symbol=resp.symbol,
+                isin=resp.isin,
+                name=resp.name,
+                exchange=resp.exchange,
+                type=resp.type,
+                amount=resp.amount,
+                price_per_unit=resp.price_per_unit,
+                fees=resp.fees,
+                executed_at=resp.executed_at,
+                notes=None 
+            )
+            created_responses.append(basic)
+        except ValueError:
+            continue
 
     return StockBulkImportResponse(
         imported_count=len(created_responses),
@@ -291,6 +301,7 @@ def search_assets(
     return [
         AssetSearchResult(
             symbol=r["symbol"],
+            isin=r.get("isin"),
             name=r.get("name"),
             exchange=r.get("exchange"),
             type=r.get("type"),
@@ -314,6 +325,7 @@ def get_assets_info(
     for symbol, info in data.items():
         response.append(AssetInfoResponse(
             symbol=symbol,
+            isin=info.get("isin"),
             name=info.get("name"),
             price=info.get("price"),
             currency=info.get("currency"),
@@ -321,5 +333,3 @@ def get_assets_info(
             type=None
         ))
     return response
-
-    

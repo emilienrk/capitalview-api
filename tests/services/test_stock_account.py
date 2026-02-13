@@ -96,6 +96,7 @@ def test_delete_stock_account(session: Session, master_key: str):
     tx_data = StockTransactionCreate(
         account_id=acc_tx.id,
         symbol="TEST",
+        isin="US0000000000",
         type=StockTransactionType.BUY,
         amount=Decimal(1),
         price_per_unit=Decimal(1),

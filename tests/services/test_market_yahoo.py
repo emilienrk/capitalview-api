@@ -63,16 +63,3 @@ def test_yahoo_get_info_exception(provider):
     assert result is None
     yf.Ticker.side_effect = None
 
-def test_yahoo_get_stock(provider):
-    mock_symbol = MagicMock()
-    mock_symbol.fast_info.last_price = 100.0
-    mock_symbol.info = {}
-    yf.Ticker.return_value = mock_symbol
-    price = provider.get_stock("TEST")
-    assert price == Decimal("100.0")
-
-def test_yahoo_get_stock_none(provider):
-    yf.Ticker.side_effect = Exception("Fail")
-    price = provider.get_stock("FAIL")
-    assert price is None
-    yf.Ticker.side_effect = None

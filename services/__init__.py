@@ -1,6 +1,11 @@
 """Services module."""
 
-from .market import get_market_price, get_market_info
+from .market import (
+    get_stock_price,
+    get_crypto_price,
+    get_stock_info,
+    get_crypto_info
+)
 from .stock_account import (
     create_stock_account,
     get_stock_account,
@@ -56,8 +61,12 @@ from .note import (
 )
 
 __all__ = [
-    "get_market_price",
-    "get_market_info",
+    # Market
+    "get_stock_price",
+    "get_crypto_price",
+    "get_stock_info",
+    "get_crypto_info",
+    
     
     # Stock Account
     "create_stock_account",

@@ -21,20 +21,6 @@ class MarketDataProvider(ABC):
         pass
 
     @abstractmethod
-    def get_stock(self, symbol: str) -> Optional[Decimal]:
-        """
-        Fetch the current price for a single symbol.
-        
-        Args:
-            symbol: The symbol symbol (e.g., 'AAPL', 'BTC-USD').
-            
-        Returns:
-            Decimal: The current price.
-            None: If the symbol is not found or data is unavailable.
-        """
-        pass
-
-    @abstractmethod
     def get_info(self, symbol: str) -> Optional[dict]:
         """
         Fetch detailed information for a symbol.

@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from models.enums import StockAccountType, StockTransactionType
 
@@ -40,11 +40,12 @@ class StockTransactionCreate(BaseModel):
     account_id: str
     symbol: str
     isin: Optional[str] = None
+    name: Optional[str] = None
     exchange: Optional[str] = None
     type: StockTransactionType
-    amount: Decimal
-    price_per_unit: Decimal
-    fees: Decimal = Decimal("0")
+    amount: Decimal = Field(gt=0)
+    price_per_unit: Decimal = Field(ge=0)
+    fees: Decimal = Field(default=Decimal("0"), ge=0)
     executed_at: datetime
     notes: Optional[str] = None
 
@@ -53,11 +54,12 @@ class StockTransactionUpdate(BaseModel):
     """Update a stock transaction."""
     symbol: Optional[str] = None
     isin: Optional[str] = None
+    name: Optional[str] = None
     exchange: Optional[str] = None
     type: Optional[StockTransactionType] = None
-    amount: Optional[Decimal] = None
-    price_per_unit: Optional[Decimal] = None
-    fees: Optional[Decimal] = None
+    amount: Optional[Decimal] = Field(None, gt=0)
+    price_per_unit: Optional[Decimal] = Field(None, ge=0)
+    fees: Optional[Decimal] = Field(None, ge=0)
     executed_at: Optional[datetime] = None
     notes: Optional[str] = None
 
@@ -65,11 +67,13 @@ class StockTransactionUpdate(BaseModel):
 class StockTransactionBulkCreate(BaseModel):
     """Create a stock transaction (without account_id, used in bulk import)."""
     symbol: str
+    isin: Optional[str] = None
+    name: Optional[str] = None
     exchange: Optional[str] = None
     type: StockTransactionType
-    amount: Decimal
-    price_per_unit: Decimal
-    fees: Decimal = Decimal("0")
+    amount: Decimal = Field(gt=0)
+    price_per_unit: Decimal = Field(ge=0)
+    fees: Decimal = Field(default=Decimal("0"), ge=0)
     executed_at: datetime
     notes: Optional[str] = None
 
@@ -90,7 +94,9 @@ class StockTransactionBasicResponse(BaseModel):
     """Basic stock transaction response."""
     id: str
     account_id: str
-    symbol: str
+    symbol: Optional[str] = None
+    isin: Optional[str] = None
+    name: Optional[str] = None
     exchange: Optional[str] = None
     type: StockTransactionType
     amount: Decimal
@@ -103,6 +109,7 @@ class StockTransactionBasicResponse(BaseModel):
 class AssetSearchResult(BaseModel):
     """Result of an asset search."""
     symbol: str
+    isin: Optional[str] = None
     name: Optional[str] = None
     exchange: Optional[str] = None
     type: Optional[str] = None
@@ -112,6 +119,7 @@ class AssetSearchResult(BaseModel):
 class AssetInfoResponse(BaseModel):
     """Detailed info for an asset."""
     symbol: str
+    isin: Optional[str] = None
     name: Optional[str] = None
     price: Optional[Decimal] = None
     currency: Optional[str] = None

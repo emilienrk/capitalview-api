@@ -13,90 +13,85 @@ from services.market_data import market_data_manager
 CACHE_DURATION = timedelta(hours=1)
 
 
-def get_market_price(session: Session, symbol: str, asset_type: AssetType = AssetType.STOCK) -> Optional[Decimal]:
-    """
-    Get current market price for a symbol.
-    Uses DB cache if recent, otherwise fetches via MarketDataManager.
-    """
-    cached = session.exec(
-        select(MarketPrice).where(MarketPrice.symbol == symbol)
-    ).first()
+def _update_cache(session: Session, entry: MarketPrice, asset_type: AssetType) -> Optional[dict]:
+    """Internal helper to update a MarketPrice entry from external API."""
+    if not entry.symbol:
+        return None
+        
+    data = market_data_manager.get_info(entry.symbol, asset_type)
+    if data:
+        now = datetime.now(timezone.utc)
+        entry.current_price = data["price"]
+        entry.name = data["name"]
+        entry.currency = data["currency"]
+        if "exchange" in data:
+            entry.exchange = data["exchange"]
+        entry.last_updated = now
+        session.add(entry)
+        session.commit()
+        return data
+    return None
+
+
+def get_stock_price(session: Session, isin: str) -> Optional[Decimal]:
+    """Get current market price for a Stock (lookup by ISIN)."""
+    return _get_market_price_internal(session, isin, AssetType.STOCK)
+
+
+def get_crypto_price(session: Session, symbol: str) -> Optional[Decimal]:
+    """Get current market price for a Crypto (lookup by Symbol)."""
+    return _get_market_price_internal(session, symbol, AssetType.CRYPTO)
+
+
+def _get_market_price_internal(session: Session, lookup_key: str, asset_type: AssetType) -> Optional[Decimal]:
+    """Shared logic for fetching price."""
+    cached = session.exec(select(MarketPrice).where(MarketPrice.isin == lookup_key)).first()
+
+    if not cached:
+        return None
 
     now = datetime.now(timezone.utc)
+    last_updated = cached.last_updated
+    if last_updated.tzinfo is None:
+        last_updated = last_updated.replace(tzinfo=timezone.utc)
 
-    if cached:
-        last_updated = cached.last_updated
-        if last_updated.tzinfo is None:
-            last_updated = last_updated.replace(tzinfo=timezone.utc)
-            
-        if last_updated > (now - CACHE_DURATION):
-            return cached.current_price
+    if last_updated > (now - CACHE_DURATION):
+        return cached.current_price
 
-    data = market_data_manager.get_info(symbol, asset_type)
-    if not data:
-        return cached.current_price if cached else None
+    data = _update_cache(session, cached, asset_type)
+    if data:
+        return data["price"]
 
-    if cached:
-        cached.current_price = data["price"]
-        cached.name = data["name"]
-        cached.currency = data["currency"]
-        cached.last_updated = now
-        session.add(cached)
-    else:
-        new_entry = MarketPrice(
-            symbol=symbol,
-            name=data["name"],
-            current_price=data["price"],
-            currency=data["currency"],
-            last_updated=now
-        )
-        session.add(new_entry)
-    
-    session.commit()
-    
-    return data["price"]
+    return cached.current_price
 
 
-def get_market_info(session: Session, symbol: str, asset_type: AssetType = AssetType.STOCK) -> Tuple[Optional[str], Optional[Decimal]]:
-    """
-    Get (Name, Price) tuple for a symbol.
-    """
-    cached = session.exec(
-        select(MarketPrice).where(MarketPrice.symbol == symbol)
-    ).first()
+def get_stock_info(session: Session, isin: str) -> Tuple[Optional[str], Optional[Decimal]]:
+    """Get (Name, Price) for a Stock."""
+    return _get_market_info_internal(session, isin, AssetType.STOCK)
 
-    now = datetime.now(timezone.utc)
 
-    if cached:
-        last_updated = cached.last_updated
-        if last_updated.tzinfo is None:
-            last_updated = last_updated.replace(tzinfo=timezone.utc)
-            
-        if last_updated > (now - CACHE_DURATION):
-            return cached.name, cached.current_price
+def get_crypto_info(session: Session, symbol: str) -> Tuple[Optional[str], Optional[Decimal]]:
+    """Get (Name, Price) for a Crypto."""
+    return _get_market_info_internal(session, symbol, AssetType.CRYPTO)
 
-    data = market_data_manager.get_info(symbol, asset_type)
-    if not data:
-        if cached:
-            return cached.name, cached.current_price
+
+def _get_market_info_internal(session: Session, lookup_key: str, asset_type: AssetType) -> Tuple[Optional[str], Optional[Decimal]]:
+    """Shared logic for fetching info."""
+    cached = session.exec(select(MarketPrice).where(MarketPrice.isin == lookup_key)).first()
+
+    if not cached:
         return None, None
 
-    if cached:
-        cached.current_price = data["price"]
-        cached.name = data["name"]
-        cached.currency = data["currency"]
-        cached.last_updated = now
-        session.add(cached)
-    else:
-        new_entry = MarketPrice(
-            symbol=symbol,
-            name=data["name"],
-            current_price=data["price"],
-            currency=data["currency"],
-            last_updated=now
-        )
-        session.add(new_entry)
-    
-    session.commit()
-    
-    return data["name"], data["price"]
+    now = datetime.now(timezone.utc)
+    last_updated = cached.last_updated
+    if last_updated.tzinfo is None:
+        last_updated = last_updated.replace(tzinfo=timezone.utc)
+
+    if last_updated > (now - CACHE_DURATION):
+        return cached.name, cached.current_price
+
+    data = _update_cache(session, cached, asset_type)
+    if data:
+        return data["name"], data["price"]
+
+    return cached.name, cached.current_price

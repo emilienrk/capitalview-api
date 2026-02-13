@@ -7,10 +7,14 @@ from typing import Optional
 from pydantic import BaseModel
 
 
+
 class TransactionResponse(BaseModel):
     """Base transaction response with calculated fields."""
     id: str
-    symbol: str
+    name: Optional[str] = None
+    symbol: Optional[str] = None
+    isin: Optional[str] = None
+    exchange: Optional[str] = None
     type: str
     amount: Decimal
     price_per_unit: Decimal
@@ -30,6 +34,8 @@ class PositionResponse(BaseModel):
     """Aggregated position for a single asset."""
     symbol: str
     name: Optional[str] = None
+    isin: Optional[str] = None
+    exchange: Optional[str] = None
     total_amount: Decimal
     average_buy_price: Decimal
     total_invested: Decimal

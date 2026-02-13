@@ -1,5 +1,6 @@
 from decimal import Decimal
 from typing import Optional, Dict, List
+from datetime import datetime, timedelta
 
 from models.enums import AssetType
 import requests
@@ -13,12 +14,12 @@ class CoinMarketCapProvider(MarketDataProvider):
         self.settings = get_settings()
         self.api_url = self.settings.cmc_api_url
         self.api_key = self.settings.cmc_api_key
+        
+        self._map_cache: List[Dict] = []
+        self._map_cache_expiry: Optional[datetime] = None
 
     def type_assets(self) -> List[AssetType]:
         return [AssetType.CRYPTO]
-
-    def get_stock(self, symbol: str) -> Optional[Decimal]:
-        return None
 
     def get_info(self, symbol: str) -> Optional[Dict]:
         if not symbol or not symbol.strip() or not self.api_key:
@@ -58,12 +59,20 @@ class CoinMarketCapProvider(MarketDataProvider):
                     }
             
             return None
-        except Exception:
+        except requests.RequestException:
+            return None
+        except Exception as e:
+            print(f"CMC get_info error: {e}")
             return None
 
-    def search(self, query: str) -> List[Dict]:
-        if not query or not query.strip() or not self.api_key:
+    def _get_map(self) -> List[Dict]:
+        """Fetch and cache the crypto map (top 2000 by rank)."""
+        if not self.api_key:
             return []
+            
+        now = datetime.now()
+        if self._map_cache and self._map_cache_expiry and now < self._map_cache_expiry:
+            return self._map_cache
             
         try:
             headers = {
@@ -72,8 +81,8 @@ class CoinMarketCapProvider(MarketDataProvider):
             }
             
             params = {
-                "symbol": query.upper(),
-                "limit": 15
+                "limit": 2000,
+                "sort": "cmc_rank"
             }
             
             response = requests.get(
@@ -85,23 +94,43 @@ class CoinMarketCapProvider(MarketDataProvider):
             response.raise_for_status()
             data = response.json()
             
-            results = []
+            new_cache = []
             if "data" in data:
                 for item in data["data"]:
-                    if query.lower() in item.get("symbol", "").lower() or query.lower() in item.get("name", "").lower():
-                        results.append({
-                            "symbol": item.get("symbol"),
-                            "name": item.get("name"),
-                            "exchange": None,
-                            "type": "CRYPTO",
-                            "currency": None
-                        })
-                        if len(results) >= 15:
-                            break
+                    new_cache.append({
+                        "symbol": item.get("symbol"),
+                        "name": item.get("name"),
+                        "rank": item.get("rank"),
+                        "exchange": None,
+                        "type": "CRYPTO",
+                        "currency": None
+                    })
             
-            return results
-        except Exception:
+            self._map_cache = new_cache
+            self._map_cache_expiry = now + timedelta(hours=24)
+            return self._map_cache
+            
+        except Exception as e:
+            print(f"Error fetching CMC map (Parsing): {e}")
+            return self._map_cache
+
+    def search(self, query: str) -> List[Dict]:
+        if not query or not query.strip():
             return []
+            
+        all_coins = self._get_map()
+        
+        query_lower = query.lower()
+        results = []
+        
+        for coin in all_coins:
+            if query_lower in coin["symbol"].lower() or query_lower in coin["name"].lower():
+                results.append(coin)
+                
+            if len(results) >= 20:
+                break
+                
+        return results
 
     def get_bulk_info(self, symbols: List[str]) -> Dict[str, Dict]:
         if not symbols or not self.api_key:

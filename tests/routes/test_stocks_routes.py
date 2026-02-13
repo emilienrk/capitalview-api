@@ -55,6 +55,7 @@ def test_create_account_and_transaction(session, master_key):
     tx_payload = {
         "account_id": account_id,
         "symbol": "AAPL",
+        "isin": "US0378331005",
         "exchange": "NASDAQ",
         "type": "BUY",
         "amount": "2.5",
@@ -75,7 +76,7 @@ def test_create_account_and_transaction(session, master_key):
     assert got["symbol"] == "AAPL"
 
 
-@patch("services.stock_transaction.get_market_info")
+@patch("services.stock_transaction.get_stock_info")
 def test_account_summary_with_market(mock_market, session, master_key):
     mock_market.return_value = ("Apple Inc.", Decimal("200"))
     client = TestClient(app)
@@ -88,6 +89,7 @@ def test_account_summary_with_market(mock_market, session, master_key):
     tx_payload = {
         "account_id": account_id,
         "symbol": "AAPL",
+        "isin": "US0378331005",
         "type": "BUY",
         "amount": "1",
         "price_per_unit": "100",
@@ -127,7 +129,7 @@ def test_stocks_additional_routes(session, master_key):
     assert rupd.status_code == 200
     assert rupd.json()["name"] == "CTO Updated"
 
-    tx = {"account_id": acc_id, "symbol": "XYZ", "type": "BUY", "amount": "2", "price_per_unit": "10", "fees": "0", "executed_at": "2023-01-01T00:00:00"}
+    tx = {"account_id": acc_id, "symbol": "XYZ", "isin": "ISIN_XYZ", "type": "BUY", "amount": "2", "price_per_unit": "10", "fees": "0", "executed_at": "2023-01-01T00:00:00"}
     rtx = client.post("/stocks/transactions", json=tx)
     assert rtx.status_code == 201
     txid = rtx.json()["id"]
@@ -139,10 +141,57 @@ def test_stocks_additional_routes(session, master_key):
     rbyacc = client.get(f"/stocks/transactions/account/{acc_id}")
     assert rbyacc.status_code == 200
 
-    bulk = {"account_id": acc_id, "transactions": [{"symbol": "A", "type": "BUY", "amount": "1", "price_per_unit": "1", "fees": "0", "executed_at": "2023-01-01T00:00:00"}]}
+    bulk = {"account_id": acc_id, "transactions": [{"symbol": "A", "isin": "ISIN_A", "type": "BUY", "amount": "1", "price_per_unit": "1", "fees": "0", "executed_at": "2023-01-01T00:00:00"}]}
     rbulk = client.post("/stocks/transactions/bulk", json=bulk)
     assert rbulk.status_code == 201
     assert rbulk.json()["imported_count"] == 1
 
     rdel = client.delete(f"/stocks/accounts/{acc_id}")
     assert rdel.status_code == 204
+
+
+def test_create_stock_transaction_negative_validation(session, master_key):
+    client = TestClient(app)
+    
+    # Create account first
+    resp = client.post("/stocks/accounts", json={"name": "Test Acc", "account_type": "CTO"})
+    account_id = resp.json()["id"]
+
+    # Negative amount
+    tx_neg_amount = {
+        "account_id": account_id,
+        "symbol": "AAPL",
+        "type": "BUY",
+        "amount": -1,
+        "price_per_unit": 100,
+        "fees": 0,
+        "executed_at": "2023-01-01T12:00:00"
+    }
+    r = client.post("/stocks/transactions", json=tx_neg_amount)
+    assert r.status_code == 422
+
+    # Negative price
+    tx_neg_price = {
+        "account_id": account_id,
+        "symbol": "AAPL",
+        "type": "BUY",
+        "amount": 1,
+        "price_per_unit": -100,
+        "fees": 0,
+        "executed_at": "2023-01-01T12:00:00"
+    }
+    r = client.post("/stocks/transactions", json=tx_neg_price)
+    assert r.status_code == 422
+
+    # Negative fees
+    tx_neg_fees = {
+        "account_id": account_id,
+        "symbol": "AAPL",
+        "type": "BUY",
+        "amount": 1,
+        "price_per_unit": 100,
+        "fees": -5,
+        "executed_at": "2023-01-01T12:00:00"
+    }
+    r = client.post("/stocks/transactions", json=tx_neg_fees)
+    assert r.status_code == 422

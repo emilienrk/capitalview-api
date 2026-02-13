@@ -19,8 +19,8 @@ def _override_deps(session, master_key):
     app.dependency_overrides.clear()
 
 
-@patch("services.stock_transaction.get_market_info")
-@patch("services.crypto_transaction.get_market_info")
+@patch("services.stock_transaction.get_stock_info")
+@patch("services.crypto_transaction.get_crypto_info")
 def test_dashboard_portfolio(mock_crypto, mock_stock, session, master_key):
     mock_stock.return_value = ("Apple Inc.", Decimal("200"))
     mock_crypto.return_value = ("Bitcoin", Decimal("40000"))
@@ -41,6 +41,7 @@ def test_dashboard_portfolio(mock_crypto, mock_stock, session, master_key):
     client.post("/stocks/transactions", json={
         "account_id": acc_id,
         "symbol": "AAPL",
+        "isin": "US0378331005",
         "type": "BUY",
         "amount": "1",
         "price_per_unit": "100",

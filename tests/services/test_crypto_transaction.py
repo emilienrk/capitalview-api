@@ -135,14 +135,18 @@ def test_get_account_transactions(session: Session, master_key: str):
     assert txs[0].symbol == "A"
 
 
-@patch("services.crypto_transaction.get_market_info")
-@patch("services.crypto_transaction.get_market_price")
-def test_get_crypto_account_summary(mock_price, mock_market, session: Session, master_key: str):
-    mock_market.side_effect = lambda s, symbol, asset_type: {
+@patch("services.crypto_transaction.get_crypto_info")
+@patch("services.crypto_transaction.get_crypto_price")
+def test_get_crypto_account_summary(mock_price, mock_info, session: Session, master_key: str):
+    # Mock get_crypto_info(session, symbol) -> (name, price)
+    mock_info.side_effect = lambda s, symbol: {
         "BTC": ("Bitcoin", Decimal("40000.0")),
         "ETH": ("Ethereum", Decimal("3000.0")),
     }.get(symbol, ("Unknown", Decimal("0")))
-    mock_price.side_effect = lambda s, symbol, asset_type: Decimal("3000.0") if symbol == "ETH" else Decimal("1.0")
+    
+    # Mock get_crypto_price(session, symbol) -> price
+    mock_price.side_effect = lambda s, symbol: Decimal("3000.0") if symbol == "ETH" else Decimal("1.0")
+    
     account = CryptoAccount(uuid="acc_main_crypto", user_uuid_bidx=hash_index("user_1", master_key), name_enc=encrypt_data("My Wallet", master_key))
     session.add(account)
     session.commit()
@@ -161,10 +165,12 @@ def test_get_crypto_account_summary(mock_price, mock_market, session: Session, m
     assert pos_btc.total_invested == Decimal("15005")
     assert pos_btc.current_value == Decimal("20000")
     assert pos_btc.profit_loss == Decimal("4995")
+    
     pos_eth = next(p for p in summary.positions if p.symbol == "ETH")
     assert pos_eth.total_amount == Decimal("10")
-    assert pos_eth.total_invested == Decimal("20030")
+    assert pos_eth.total_invested == Decimal("20020")
     assert pos_eth.current_value == Decimal("30000")
+    
     create_crypto_transaction(session, CryptoTransactionCreate(
         account_id="acc_main_crypto", symbol="ETH", type=CryptoTransactionType.SELL, amount=Decimal("15"), price_per_unit=Decimal("3000"), fees=Decimal("0"), executed_at=datetime(2023, 1, 4)
     ), master_key)
@@ -173,7 +179,7 @@ def test_get_crypto_account_summary(mock_price, mock_market, session: Session, m
     assert pos_eth_safety is None
 
 
-@patch("services.crypto_transaction.get_market_price")
+@patch("services.crypto_transaction.get_crypto_price")
 def test_get_crypto_transaction_fees_price_missing(mock_price, session: Session, master_key: str):
     mock_price.return_value = None
     data = CryptoTransactionCreate(
