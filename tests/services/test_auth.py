@@ -155,13 +155,33 @@ def test_get_current_active_user():
 
 
 def test_get_master_key():
-    assert get_master_key(master_key_cookie="key1") == "key1"
-    assert get_master_key(x_master_key="key2") == "key2"
-    assert get_master_key(master_key_cookie="key1", x_master_key="key2") == "key1"
-    assert get_master_key(master_key_cookie=None, x_master_key="key2") == "key2"
+    import base64
+    valid_key = base64.b64encode(b"0" * 32).decode("utf-8")
+
+    # Cookie takes priority over header
+    assert get_master_key(master_key_cookie=valid_key) == valid_key
+    assert get_master_key(x_master_key=valid_key) == valid_key
+    assert get_master_key(master_key_cookie=valid_key, x_master_key="other") == valid_key
+    assert get_master_key(master_key_cookie=None, x_master_key=valid_key) == valid_key
+
+    # Missing key
     with pytest.raises(HTTPException) as exc:
         get_master_key(None, None)
     assert exc.value.status_code == 400
+    assert "Master Key missing" in exc.value.detail
+
+    # Invalid base64
+    with pytest.raises(HTTPException) as exc:
+        get_master_key(master_key_cookie="not-valid-base64!!!")
+    assert exc.value.status_code == 400
+    assert "Invalid Master Key format" in exc.value.detail
+
+    # Valid base64 but wrong length (16 bytes instead of 32)
+    short_key = base64.b64encode(b"0" * 16).decode("utf-8")
+    with pytest.raises(HTTPException) as exc:
+        get_master_key(master_key_cookie=short_key)
+    assert exc.value.status_code == 400
+    assert "Invalid Master Key format" in exc.value.detail
 
 
 def test_create_refresh_token_db_custom_expiry(session: Session):

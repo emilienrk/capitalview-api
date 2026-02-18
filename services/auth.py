@@ -1,5 +1,6 @@
 """Authentication service for JWT and password management."""
 
+import base64
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Optional
@@ -304,7 +305,20 @@ def get_master_key(
     x_master_key: Annotated[str | None, Header(alias="X-Master-Key")] = None
 ) -> str:
     """
-    Get the Master Key from Cookie or Header.
+    FastAPI dependency: extract the Master Key from request.
+
+    Supports two transport modes (cookie takes priority):
+      1. **Cookie** ``master_key`` – set automatically by the browser after login.
+         Best for the web frontend (HttpOnly, Secure).
+      2. **Header** ``X-Master-Key`` – for automation clients (n8n, Postman, scripts)
+         that cannot rely on browser cookies.
+
+    The master_key value is a Base64-encoded 32-byte key derived from the
+    user's password via Argon2id + HKDF at login time.
+
+    Raises:
+        HTTPException 400: if neither cookie nor header is present.
+        HTTPException 400: if the value is not valid Base64.
     """
     key = master_key_cookie or x_master_key
     if not key:
@@ -312,4 +326,16 @@ def get_master_key(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Master Key missing. Please log in again."
         )
+
+    # Basic Base64 format validation
+    try:
+        decoded = base64.b64decode(key, validate=True)
+        if len(decoded) != 32:
+            raise ValueError("Invalid key length")
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Master Key format. Expected Base64-encoded 32-byte key."
+        )
+
     return key

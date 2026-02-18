@@ -4,7 +4,7 @@ import uuid
 from datetime import timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response, status
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlmodel import Session, select
@@ -51,7 +51,8 @@ def register(
     request: Request,
     payload: RegisterRequest,
     response: Response,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    x_return_master_key: Annotated[str | None, Header(alias="X-Return-Master-Key")] = None
 ):
     """
     Register a new user.
@@ -59,6 +60,13 @@ def register(
     - **username**: Username (3-50 characters)
     - **email**: Valid email address
     - **password**: Password (minimum 8 characters)
+    
+    **Security - Master Key in Response:**
+    By default, the master_key is only set as an HttpOnly cookie (secure for browsers).
+    To also receive it in JSON response (for server-side automation like n8n), add header:
+    `X-Return-Master-Key: true`
+    
+    Note: Do not use this header from the web frontend — rely on the HttpOnly cookie instead.
     """
     settings = get_settings()
 
@@ -114,10 +122,14 @@ def register(
         path="/"
     )
     
+    # Only return master_key in JSON if explicitly requested (opt-in for security)
+    return_key_in_json = x_return_master_key and x_return_master_key.lower() in ("true", "1", "yes")
+    
     return TokenResponse(
         access_token=access_token,
         token_type="bearer",
-        expires_in=settings.access_token_expire_minutes * 60
+        expires_in=settings.access_token_expire_minutes * 60,
+        master_key=master_key if return_key_in_json else None
     )
 
 
@@ -127,12 +139,20 @@ def login(
     request: Request,
     payload: LoginRequest,
     response: Response,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    x_return_master_key: Annotated[str | None, Header(alias="X-Return-Master-Key")] = None
 ):
     """
     Login with email and password.
     
     Returns access token (15 min). Refresh token & Master Key stored in HttpOnly cookies.
+    
+    **Security - Master Key in Response:**
+    By default, the master_key is only set as an HttpOnly cookie (secure for browsers).
+    To also receive it in JSON response (for server-side automation like n8n), add header:
+    `X-Return-Master-Key: true`
+    
+    Note: Do not use this header from the web frontend — rely on the HttpOnly cookie instead.
     """
     settings = get_settings()
     
@@ -172,10 +192,14 @@ def login(
         path="/"
     )
     
+    # Only return master_key in JSON if explicitly requested (opt-in for security)
+    return_key_in_json = x_return_master_key and x_return_master_key.lower() in ("true", "1", "yes")
+    
     return TokenResponse(
         access_token=access_token,
         token_type="bearer",
-        expires_in=settings.access_token_expire_minutes * 60
+        expires_in=settings.access_token_expire_minutes * 60,
+        master_key=master_key if return_key_in_json else None
     )
 
 

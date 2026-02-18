@@ -43,10 +43,21 @@ class LoginRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    """JWT token response."""
+    """JWT token response.
+
+    Returned by ``/auth/login`` and ``/auth/register``.
+    The ``master_key`` field is only present on login/register (not on refresh)
+    so that automation clients (n8n, scripts) can capture it and pass it back
+    via the ``X-Master-Key`` header on subsequent requests.
+    """
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+    master_key: Optional[str] = Field(
+        default=None,
+        description="Base64-encoded Master Key for data encryption. "
+                    "Only returned on login/register. Use via X-Master-Key header for automation."
+    )
 
 
 class UserResponse(BaseModel):
