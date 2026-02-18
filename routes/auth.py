@@ -119,6 +119,7 @@ def register(
         httponly=True,
         secure=settings.environment == "production",
         samesite="lax",
+        max_age=settings.refresh_token_expire_days * 86400,
         path="/"
     )
     
@@ -189,6 +190,7 @@ def login(
         httponly=True,
         secure=settings.environment == "production",
         samesite="lax",
+        max_age=settings.refresh_token_expire_days * 86400,
         path="/"
     )
     
