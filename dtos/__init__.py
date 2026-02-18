@@ -61,6 +61,12 @@ from .note import (
     NoteUpdate,
 )
 
+# Settings schemas
+from .settings import (
+    UserSettingsUpdate,
+    UserSettingsResponse,
+)
+
 
 __all__ = [
     # Bank
@@ -106,5 +112,8 @@ __all__ = [
     "NoteCreate",
     "NoteResponse",
     "NoteUpdate",
+    # Settings
+    "UserSettingsUpdate",
+    "UserSettingsResponse",
 ]
 

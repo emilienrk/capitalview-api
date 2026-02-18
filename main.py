@@ -21,6 +21,7 @@ from routes import (
     crypto_router,
     dashboard_router,
     notes_router,
+    settings_router,
 )
 
 
@@ -96,6 +97,7 @@ app.include_router(stocks_router)
 app.include_router(crypto_router)
 app.include_router(dashboard_router)
 app.include_router(notes_router)
+app.include_router(settings_router)
 
 
 @app.get("/")
