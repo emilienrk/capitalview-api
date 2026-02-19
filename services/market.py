@@ -33,6 +33,67 @@ def _update_cache(session: Session, entry: MarketPrice, asset_type: AssetType) -
     return None
 
 
+def _create_market_price_entry(
+    session: Session, lookup_key: str, asset_type: AssetType
+) -> Optional[MarketPrice]:
+    """
+    Auto-create a MarketPrice entry when it doesn't exist in the DB.
+
+    For stocks: search by ISIN to find the symbol, then fetch info.
+    For crypto: fetch info directly using the symbol.
+    """
+    market_info = None
+
+    if asset_type == AssetType.STOCK:
+        # Search by ISIN to discover the symbol, then fetch live info
+        results = market_data_manager.search(lookup_key, AssetType.STOCK)
+        if results:
+            res = results[0]
+            symbol = res.get("symbol")
+            if symbol:
+                market_info = market_data_manager.get_info(symbol, AssetType.STOCK)
+                if not market_info:
+                    # Fallback: use search result metadata
+                    market_info = {
+                        "name": res.get("name"),
+                        "symbol": symbol,
+                        "currency": res.get("currency", "EUR"),
+                        "price": Decimal("0"),
+                        "exchange": res.get("exchange"),
+                    }
+    elif asset_type == AssetType.CRYPTO:
+        # Fetch info directly using the symbol
+        market_info = market_data_manager.get_info(lookup_key, AssetType.CRYPTO)
+        if not market_info:
+            # Fallback search by symbol name
+            results = market_data_manager.search(lookup_key, AssetType.CRYPTO)
+            if results:
+                res = results[0]
+                market_info = market_data_manager.get_info(res.get("symbol", lookup_key), AssetType.CRYPTO)
+
+    if not market_info:
+        return None
+
+    now = datetime.now(timezone.utc)
+    price = market_info.get("price") or Decimal("0")
+    # If we got a valid price, set last_updated to now; otherwise force stale
+    last_updated = now if price > 0 else datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+    mp = MarketPrice(
+        isin=lookup_key,
+        symbol=market_info.get("symbol") or lookup_key,
+        name=market_info.get("name"),
+        exchange=market_info.get("exchange"),
+        current_price=price,
+        currency=market_info.get("currency", "EUR" if asset_type == AssetType.STOCK else "USD"),
+        last_updated=last_updated,
+    )
+    session.add(mp)
+    session.commit()
+    session.refresh(mp)
+    return mp
+
+
 def get_stock_price(session: Session, isin: str) -> Optional[Decimal]:
     """Get current market price for a Stock (lookup by ISIN)."""
     return _get_market_price_internal(session, isin, AssetType.STOCK)
@@ -44,11 +105,14 @@ def get_crypto_price(session: Session, symbol: str) -> Optional[Decimal]:
 
 
 def _get_market_price_internal(session: Session, lookup_key: str, asset_type: AssetType) -> Optional[Decimal]:
-    """Shared logic for fetching price."""
+    """Shared logic for fetching price. Auto-creates missing entries."""
     cached = session.exec(select(MarketPrice).where(MarketPrice.isin == lookup_key)).first()
 
     if not cached:
-        return None
+        # Entry doesn't exist — search and create it automatically
+        cached = _create_market_price_entry(session, lookup_key, asset_type)
+        if not cached:
+            return None
 
     now = datetime.now(timezone.utc)
     last_updated = cached.last_updated
@@ -76,11 +140,14 @@ def get_crypto_info(session: Session, symbol: str) -> Tuple[Optional[str], Optio
 
 
 def _get_market_info_internal(session: Session, lookup_key: str, asset_type: AssetType) -> Tuple[Optional[str], Optional[Decimal]]:
-    """Shared logic for fetching info."""
+    """Shared logic for fetching info. Auto-creates missing entries."""
     cached = session.exec(select(MarketPrice).where(MarketPrice.isin == lookup_key)).first()
 
     if not cached:
-        return None, None
+        # Entry doesn't exist — search and create it automatically
+        cached = _create_market_price_entry(session, lookup_key, asset_type)
+        if not cached:
+            return None, None
 
     now = datetime.now(timezone.utc)
     last_updated = cached.last_updated

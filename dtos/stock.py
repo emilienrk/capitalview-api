@@ -38,7 +38,7 @@ class StockAccountBasicResponse(BaseModel):
 class StockTransactionCreate(BaseModel):
     """Create a stock transaction."""
     account_id: str
-    symbol: str
+    symbol: Optional[str] = None
     isin: Optional[str] = None
     name: Optional[str] = None
     exchange: Optional[str] = None
@@ -65,11 +65,10 @@ class StockTransactionUpdate(BaseModel):
 
 
 class StockTransactionBulkCreate(BaseModel):
-    """Create a stock transaction (without account_id, used in bulk import)."""
-    symbol: str
-    isin: Optional[str] = None
-    name: Optional[str] = None
-    exchange: Optional[str] = None
+    """Create a stock transaction (without account_id, used in bulk import).
+    Only DB-stored fields: isin, type, amount, price_per_unit, fees, executed_at, notes.
+    symbol/name/exchange are resolved automatically via market_prices API."""
+    isin: str
     type: StockTransactionType
     amount: Decimal = Field(gt=0)
     price_per_unit: Decimal = Field(ge=0)

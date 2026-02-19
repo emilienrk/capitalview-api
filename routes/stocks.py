@@ -249,10 +249,10 @@ def bulk_import_transactions(
     for item in data.transactions:
         create_dto = StockTransactionCreate(
             account_id=data.account_id,
-            symbol=item.symbol,
+            symbol=None,
             isin=item.isin,
-            name=item.name,
-            exchange=item.exchange,
+            name=None,
+            exchange=None,
             type=item.type,
             amount=item.amount,
             price_per_unit=item.price_per_unit,

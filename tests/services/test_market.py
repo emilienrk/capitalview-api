@@ -53,12 +53,47 @@ def test_get_crypto_price_cache_hit(session: Session, mock_market_manager):
     assert result == price
     mock_market_manager.get_info.assert_not_called()
 
-def test_get_stock_price_no_cache(session: Session, mock_market_manager):
-    """Test fetching price when no cache exists (returns None as we need ISIN in DB first)."""
+def test_get_stock_price_no_cache_no_search_results(session: Session, mock_market_manager):
+    """Test fetching price when no cache exists and search returns nothing."""
     isin = "US9999999999"
+    mock_market_manager.search.return_value = []
     result = get_stock_price(session, isin)
     assert result is None
-    mock_market_manager.get_info.assert_not_called()
+    mock_market_manager.search.assert_called_once_with(isin, AssetType.STOCK)
+
+
+def test_get_stock_price_no_cache_auto_creates(session: Session, mock_market_manager):
+    """Test auto-creation of MarketPrice entry when cache doesn't exist but search succeeds."""
+    isin = "US9999999999"
+    mock_market_manager.search.return_value = [
+        {"symbol": "AAPL", "name": "Apple Inc.", "exchange": "NMS", "currency": "USD"}
+    ]
+    mock_market_manager.get_info.return_value = {
+        "name": "Apple Inc.", "price": Decimal("150.0"), "currency": "USD",
+        "symbol": "AAPL", "exchange": "NMS"
+    }
+    result = get_stock_price(session, isin)
+    assert result == Decimal("150.0")
+    # Verify entry was created in DB
+    entry = session.exec(select(MarketPrice).where(MarketPrice.isin == isin)).first()
+    assert entry is not None
+    assert entry.symbol == "AAPL"
+    assert entry.name == "Apple Inc."
+
+
+def test_get_crypto_price_no_cache_auto_creates(session: Session, mock_market_manager):
+    """Test auto-creation of MarketPrice entry for crypto when cache doesn't exist."""
+    symbol = "SOL"
+    mock_market_manager.get_info.return_value = {
+        "name": "Solana", "price": Decimal("100.0"), "currency": "USD",
+        "symbol": "SOL"
+    }
+    result = get_crypto_price(session, symbol)
+    assert result == Decimal("100.0")
+    entry = session.exec(select(MarketPrice).where(MarketPrice.isin == symbol)).first()
+    assert entry is not None
+    assert entry.symbol == "SOL"
+    assert entry.name == "Solana"
 
 def test_get_stock_price_expired_cache(session: Session, mock_market_manager):
     """Test refreshing price when cache is expired."""
@@ -144,6 +179,7 @@ def test_get_stock_info_cache_hit(session: Session, mock_market_manager):
 
 def test_get_stock_info_fetch_fail_no_cache(session: Session, mock_market_manager):
     isin = "US_MISSING"
+    mock_market_manager.search.return_value = []
     mock_market_manager.get_info.return_value = None
     n, p = get_stock_info(session, isin)
     assert n is None
