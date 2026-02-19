@@ -29,7 +29,7 @@ def test_create_crypto_transaction(session: Session, master_key: str):
         executed_at=datetime(2023, 1, 1, 12, 0, 0),
         notes="First buy",
         tx_hash="0x123",
-        fees_symbol="EUR"
+        fees_symbol="USD"
     )
     resp = create_crypto_transaction(session, data, master_key)
     assert resp.symbol == "BTC"
@@ -151,13 +151,13 @@ def test_get_crypto_account_summary(mock_price, mock_info, session: Session, mas
     session.add(account)
     session.commit()
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_main_crypto", symbol="BTC", type=CryptoTransactionType.BUY, amount=Decimal("1"), price_per_unit=Decimal("30000"), fees=Decimal("10"), fees_symbol="EUR", executed_at=datetime(2023, 1, 1)
+        account_id="acc_main_crypto", symbol="BTC", type=CryptoTransactionType.BUY, amount=Decimal("1"), price_per_unit=Decimal("30000"), fees=Decimal("10"), fees_symbol="USD", executed_at=datetime(2023, 1, 1)
     ), master_key)
     create_crypto_transaction(session, CryptoTransactionCreate(
         account_id="acc_main_crypto", symbol="ETH", type=CryptoTransactionType.BUY, amount=Decimal("10"), price_per_unit=Decimal("2000"), fees=Decimal("0.01"), fees_symbol="ETH", executed_at=datetime(2023, 1, 2)
     ), master_key)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_main_crypto", symbol="BTC", type=CryptoTransactionType.SELL, amount=Decimal("0.5"), price_per_unit=Decimal("35000"), fees=Decimal("10"), fees_symbol="EUR", executed_at=datetime(2023, 1, 3)
+        account_id="acc_main_crypto", symbol="BTC", type=CryptoTransactionType.SELL, amount=Decimal("0.5"), price_per_unit=Decimal("35000"), fees=Decimal("10"), fees_symbol="USD", executed_at=datetime(2023, 1, 3)
     ), master_key)
     summary = get_crypto_account_summary(session, account, master_key)
     pos_btc = next(p for p in summary.positions if p.symbol == "BTC")

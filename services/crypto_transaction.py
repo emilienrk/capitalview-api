@@ -38,20 +38,18 @@ def _decrypt_transaction(tx: CryptoTransaction, master_key: str, session: Sessio
     else:
         fees_symbol = symbol
     
-    fees_in_eur = fees
+    fees_in_usd = fees
     actual_fees_symbol = fees_symbol or symbol
     
-    if actual_fees_symbol != "EUR":
+    if actual_fees_symbol != "USD":
         fees_price = get_crypto_price(session, actual_fees_symbol)
         if fees_price:
-            fees_in_eur = fees * fees_price
-        else:
-             if actual_fees_symbol == "EUR":
-                 fees_in_eur = fees
+            fees_in_usd = fees * fees_price
+        # else: keep fees_in_usd at raw value (best effort)
 
     total_cost = (amount * price)
-    total_cost_with_fees = total_cost + fees_in_eur
-    fees_pct = (fees_in_eur / total_cost_with_fees * 100) if total_cost_with_fees > 0 else Decimal("0")
+    total_cost_with_fees = total_cost + fees_in_usd
+    fees_pct = (fees_in_usd / total_cost_with_fees * 100) if total_cost_with_fees > 0 else Decimal("0")
 
     return TransactionResponse(
         id=tx.uuid,
@@ -60,8 +58,9 @@ def _decrypt_transaction(tx: CryptoTransaction, master_key: str, session: Sessio
         type=type_str,
         amount=amount,
         price_per_unit=price,
-        fees=fees_in_eur,
+        fees=fees_in_usd,
         executed_at=executed_at,
+        currency="USD",
         total_cost=total_cost_with_fees,
         fees_percentage=round(fees_pct, 2),
     )
@@ -88,14 +87,14 @@ def create_crypto_transaction(
                 symbol=data.symbol.upper(),
                 name=data.name,
                 current_price=Decimal("0"),
-                currency="EUR",
+                currency="USD",
                 last_updated=datetime(2000, 1, 1, tzinfo=timezone.utc)
             )
             session.add(market_price)
 
     account_bidx = hash_index(data.account_id, master_key)
     
-    if data.fees and data.fees > 0 and data.fees_symbol and data.fees_symbol != "EUR":
+    if data.fees and data.fees > 0 and data.fees_symbol and data.fees_symbol != "USD":
         fees_rate = Decimal("0")
         
         if data.fees_symbol == data.symbol:
@@ -108,7 +107,7 @@ def create_crypto_transaction(
         
         if fees_rate > 0:
             data.fees = data.fees * fees_rate
-            data.fees_symbol = "EUR"
+            data.fees_symbol = "USD"
 
     symbol_enc = encrypt_data(data.symbol.upper(), master_key)
     type_enc = encrypt_data(data.type.value, master_key)
@@ -168,7 +167,7 @@ def update_crypto_transaction(
     master_key: str
 ) -> TransactionResponse:
     """Update an existing crypto transaction."""
-    if data.fees is not None and data.fees > 0 and data.fees_symbol and data.fees_symbol != "EUR":
+    if data.fees is not None and data.fees > 0 and data.fees_symbol and data.fees_symbol != "USD":
         fees_rate = Decimal("0")
         target_symbol = data.symbol if data.symbol else None
         
@@ -181,7 +180,7 @@ def update_crypto_transaction(
         
         if fees_rate > 0:
             data.fees = data.fees * fees_rate
-            data.fees_symbol = "EUR"
+            data.fees_symbol = "USD"
 
     if data.name and data.symbol:
         market_price = session.exec(
@@ -198,7 +197,7 @@ def update_crypto_transaction(
                 symbol=data.symbol.upper(),
                 name=data.name,
                 current_price=Decimal("0"),
-                currency="EUR",
+                currency="USD",
                 last_updated=datetime(2000, 1, 1, tzinfo=timezone.utc)
             )
             session.add(market_price)
@@ -369,6 +368,7 @@ def get_crypto_account_summary(
             total_invested=round(total_invested, 2),
             total_fees=round(data["total_fees"], 2),
             fees_percentage=round(fees_pct, 2),
+            currency="USD",
             current_price=current_price,
             current_value=round(current_value, 2) if current_value else None,
             profit_loss=round(profit_loss, 2) if profit_loss else None,
@@ -393,6 +393,7 @@ def get_crypto_account_summary(
         account_type="CRYPTO",
         total_invested=round(total_invested_acc, 2),
         total_fees=round(total_fees_acc, 2),
+        currency="USD",
         current_value=round(current_value_acc, 2) if current_value_acc else None,
         profit_loss=round(profit_loss_acc, 2) if profit_loss_acc else None,
         profit_loss_percentage=round(profit_loss_pct_acc, 2) if profit_loss_pct_acc else None,

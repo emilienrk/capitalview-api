@@ -49,7 +49,7 @@ def test_crypto_account_and_transaction(session, master_key):
         "amount": "0.1",
         "price_per_unit": "30000",
         "fees": "1",
-        "fees_symbol": "EUR",
+        "fees_symbol": "USD",
         "executed_at": "2023-01-01T12:00:00",
     }
     r = client.post("/crypto/transactions", json=tx)
@@ -76,7 +76,7 @@ def test_crypto_summary(mock_price, mock_market, session, master_key):
         "amount": "1",
         "price_per_unit": "30000",
         "fees": "10",
-        "fees_symbol": "EUR",
+        "fees_symbol": "USD",
         "executed_at": "2023-01-01T12:00:00",
     }
     client.post("/crypto/transactions", json=tx)
@@ -126,7 +126,7 @@ def test_crypto_transactions_crud_and_bulk(session, master_key):
     bulk = {
         "account_id": account_id,
         "transactions": [
-            {"symbol": "BTC", "type": "BUY", "amount": "0.1", "price_per_unit": "30000", "fees": "1", "fees_symbol": "EUR", "executed_at": "2023-01-01T00:00:00"},
+            {"symbol": "BTC", "type": "BUY", "amount": "0.1", "price_per_unit": "30000", "fees": "1", "fees_symbol": "USD", "executed_at": "2023-01-01T00:00:00"},
             {"symbol": "ETH", "type": "BUY", "amount": "5", "price_per_unit": "2000", "fees": "0", "fees_symbol": None, "executed_at": "2023-01-01T00:00:00"}
         ]
     }

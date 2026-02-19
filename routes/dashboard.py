@@ -1,5 +1,6 @@
 """Dashboard routes - Personal portfolio overview."""
 
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -10,10 +11,26 @@ from models import User, StockAccount, CryptoAccount
 from dtos import PortfolioResponse
 from services.auth import get_current_user, get_master_key
 from services.encryption import hash_index
+from services.exchange_rate import get_exchange_rate, convert_account_to_eur
 from services.stock_transaction import get_stock_account_summary
 from services.crypto_transaction import get_crypto_account_summary
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+
+
+@router.get("/exchange-rate")
+def get_rate(
+    current_user: Annotated[User, Depends(get_current_user)],
+    from_currency: str = "USD",
+    to_currency: str = "EUR",
+) -> dict:
+    """Return a cached exchange rate (e.g. USD→EUR) for frontend use."""
+    rate = get_exchange_rate(from_currency, to_currency)
+    return {
+        "from": from_currency,
+        "to": to_currency,
+        "rate": float(rate),
+    }
 
 
 @router.get("/portfolio", response_model=PortfolioResponse)
@@ -47,10 +64,13 @@ def get_my_portfolio(
     for acc in stock_models:
         summary = get_stock_account_summary(session, acc, master_key)
         accounts.append(summary)
-        
+    
+    # Convert crypto accounts from USD to EUR for portfolio aggregation
+    usd_eur_rate = get_exchange_rate("USD", "EUR")
     for acc in crypto_models:
         summary = get_crypto_account_summary(session, acc, master_key)
-        accounts.append(summary)
+        summary_eur = convert_account_to_eur(summary, usd_eur_rate)
+        accounts.append(summary_eur)
     
     total_invested = sum(a.total_invested for a in accounts)
     total_fees = sum(a.total_fees for a in accounts)

@@ -21,7 +21,7 @@ class MarketPrice(SQLModel, table=True):
     name: Optional[str] = Field(default=None)
     sector: Optional[str] = Field(default=None)
     current_price: Decimal = Field(max_digits=20, decimal_places=8, nullable=False)
-    currency: str = Field(default="EUR")
+    currency: str = Field(default="USD")
     last_updated: datetime = Field(
         sa_column=Column(
             sa.DateTime(timezone=True), 

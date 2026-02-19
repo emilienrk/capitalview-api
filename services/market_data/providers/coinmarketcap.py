@@ -33,7 +33,7 @@ class CoinMarketCapProvider(MarketDataProvider):
             
             params = {
                 "symbol": symbol.upper(),
-                "convert": "EUR"
+                "convert": "USD"
             }
             
             response = requests.get(
@@ -47,13 +47,13 @@ class CoinMarketCapProvider(MarketDataProvider):
             
             if "data" in data and symbol.upper() in data["data"]:
                 crypto_data = data["data"][symbol.upper()][0]
-                quote = crypto_data.get("quote", {}).get("EUR", {})
+                quote = crypto_data.get("quote", {}).get("USD", {})
                 price = quote.get("price")
                 
                 if price and price > 0:
                     return {
                         "name": crypto_data.get("name"),
-                        "currency": "EUR",
+                        "currency": "USD",
                         "price": Decimal(str(price)),
                         "symbol": symbol.upper()
                     }
@@ -149,7 +149,7 @@ class CoinMarketCapProvider(MarketDataProvider):
             
             params = {
                 "symbol": ",".join(valid_symbols),
-                "convert": "EUR"
+                "convert": "USD"
             }
             
             response = requests.get(
@@ -165,14 +165,14 @@ class CoinMarketCapProvider(MarketDataProvider):
                 for symbol in valid_symbols:
                     if symbol in data["data"]:
                         crypto_data = data["data"][symbol][0]
-                        quote = crypto_data.get("quote", {}).get("EUR", {})
+                        quote = crypto_data.get("quote", {}).get("USD", {})
                         price = quote.get("price")
                         
                         if price and price > 0:
                             results[symbol] = {
                                 "price": Decimal(str(price)),
                                 "name": crypto_data.get("name"),
-                                "currency": "EUR"
+                                "currency": "USD"
                             }
             
             return results
