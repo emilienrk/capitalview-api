@@ -8,13 +8,14 @@ from sqlmodel import Session, select
 from database import get_session
 from models import User, Note
 from services.auth import get_current_user, get_master_key
-from dtos import NoteCreate, NoteUpdate, NoteResponse
+from dtos import NoteCreate, NoteUpdate, NoteReorder, NoteResponse
 from services.note import (
     create_note,
     update_note,
     delete_note,
     get_note,
-    get_user_notes
+    get_user_notes,
+    reorder_notes,
 )
 
 router = APIRouter(prefix="/notes", tags=["Notes"])
@@ -39,6 +40,17 @@ def get_all(
 ):
     """Get all notes for current user."""
     return get_user_notes(session, current_user.uuid, master_key)
+
+
+@router.put("/reorder", response_model=list[NoteResponse])
+def reorder(
+    data: NoteReorder,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Reorder notes by providing an ordered list of note IDs."""
+    return reorder_notes(session, data.note_ids, current_user.uuid, master_key)
 
 
 @router.get("/{note_id}", response_model=NoteResponse)

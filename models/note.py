@@ -17,6 +17,7 @@ class Note(SQLModel, table=True):
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
     name_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     description_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    position: int = Field(default=0, sa_column=Column(sa.Integer, nullable=False, server_default="0"))
 
     created_at: datetime = Field(
         default=sa.func.now(),

@@ -17,6 +17,7 @@ def _map_note_to_response(note: Note, master_key: str) -> NoteResponse:
         id=note.uuid,
         name=name,
         description=description,
+        position=note.position,
         created_at=note.created_at,
         updated_at=note.updated_at,
     )
@@ -31,6 +32,12 @@ def create_note(
     """Create a new encrypted note."""
     user_bidx = hash_index(user_uuid, master_key)
     
+    # Set position to max + 1 for ordering
+    existing = session.exec(
+        select(Note).where(Note.user_uuid_bidx == user_bidx)
+    ).all()
+    max_pos = max((n.position for n in existing), default=-1)
+    
     name_enc = encrypt_data(data.name, master_key)
     desc_enc = encrypt_data(data.description or "", master_key)
     
@@ -38,6 +45,7 @@ def create_note(
         user_uuid_bidx=user_bidx,
         name_enc=name_enc,
         description_enc=desc_enc,
+        position=max_pos + 1,
     )
     
     session.add(note)
@@ -104,11 +112,34 @@ def get_user_notes(
     user_uuid: str, 
     master_key: str
 ) -> List[NoteResponse]:
-    """Get all notes for a user."""
+    """Get all notes for a user, ordered by position."""
     user_bidx = hash_index(user_uuid, master_key)
     
     notes = session.exec(
-        select(Note).where(Note.user_uuid_bidx == user_bidx)
+        select(Note).where(Note.user_uuid_bidx == user_bidx).order_by(Note.position)
     ).all()
     
     return [_map_note_to_response(n, master_key) for n in notes]
+
+
+def reorder_notes(
+    session: Session,
+    note_ids: List[str],
+    user_uuid: str,
+    master_key: str,
+) -> List[NoteResponse]:
+    """Reorder notes by updating position based on provided order."""
+    user_bidx = hash_index(user_uuid, master_key)
+
+    notes = session.exec(
+        select(Note).where(Note.user_uuid_bidx == user_bidx)
+    ).all()
+    note_map = {n.uuid: n for n in notes}
+
+    for idx, nid in enumerate(note_ids):
+        if nid in note_map:
+            note_map[nid].position = idx
+            session.add(note_map[nid])
+
+    session.commit()
+    return get_user_notes(session, user_uuid, master_key)

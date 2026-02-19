@@ -57,6 +57,7 @@ from .crypto import (
 # Note schemas
 from .note import (
     NoteCreate,
+    NoteReorder,
     NoteResponse,
     NoteUpdate,
 )
@@ -110,6 +111,7 @@ __all__ = [
     "CryptoTransactionUpdate",
     # Note
     "NoteCreate",
+    "NoteReorder",
     "NoteResponse",
     "NoteUpdate",
     # Settings
