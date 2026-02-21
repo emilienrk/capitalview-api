@@ -22,6 +22,7 @@ from routes import (
     dashboard_router,
     notes_router,
     settings_router,
+    asset_router,
 )
 
 
@@ -98,6 +99,7 @@ app.include_router(crypto_router)
 app.include_router(dashboard_router)
 app.include_router(notes_router)
 app.include_router(settings_router)
+app.include_router(asset_router)
 
 
 @app.get("/")

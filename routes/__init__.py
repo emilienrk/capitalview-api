@@ -8,6 +8,7 @@ from .crypto import router as crypto_router
 from .dashboard import router as dashboard_router
 from .notes import router as notes_router
 from .settings import router as settings_router
+from .asset import router as asset_router
 
 __all__ = [
     "auth_router",
@@ -18,4 +19,5 @@ __all__ = [
     "dashboard_router",
     "notes_router",
     "settings_router",
+    "asset_router",
 ]

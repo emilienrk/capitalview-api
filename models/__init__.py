@@ -19,6 +19,7 @@ from .stock import StockAccount, StockTransaction
 from .crypto import CryptoAccount, CryptoTransaction
 from .market import MarketPrice
 from .note import Note
+from .asset import Asset, AssetValuation
 
 __all__ = [
     # Enums
@@ -39,4 +40,6 @@ __all__ = [
     "CryptoTransaction",
     "MarketPrice",
     "Note",
+    "Asset",
+    "AssetValuation",
 ]

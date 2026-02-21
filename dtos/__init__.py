@@ -68,6 +68,17 @@ from .settings import (
     UserSettingsResponse,
 )
 
+# Asset schemas
+from .asset import (
+    AssetCreate,
+    AssetUpdate,
+    AssetResponse,
+    AssetValuationCreate,
+    AssetValuationResponse,
+    AssetCategorySummary,
+    AssetSummaryResponse,
+)
+
 
 __all__ = [
     # Bank
@@ -117,5 +128,13 @@ __all__ = [
     # Settings
     "UserSettingsUpdate",
     "UserSettingsResponse",
+    # Asset
+    "AssetCreate",
+    "AssetUpdate",
+    "AssetResponse",
+    "AssetValuationCreate",
+    "AssetValuationResponse",
+    "AssetCategorySummary",
+    "AssetSummaryResponse",
 ]
 
