@@ -80,6 +80,13 @@ from .asset import (
     AssetSummaryResponse,
 )
 
+# Dashboard statistics
+from .dashboard import (
+    DashboardStatisticsResponse,
+    InvestmentDistribution,
+    WealthBreakdown,
+)
+
 
 __all__ = [
     # Bank
@@ -138,5 +145,9 @@ __all__ = [
     "AssetValuationResponse",
     "AssetCategorySummary",
     "AssetSummaryResponse",
+    # Dashboard statistics
+    "DashboardStatisticsResponse",
+    "InvestmentDistribution",
+    "WealthBreakdown",
 ]
 

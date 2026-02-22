@@ -9,11 +9,14 @@ from sqlmodel import Session, select
 from database import get_session
 from models import User, StockAccount, CryptoAccount
 from dtos import PortfolioResponse
+from dtos.dashboard import DashboardStatisticsResponse, InvestmentDistribution, WealthBreakdown
 from services.auth import get_current_user, get_master_key
 from services.encryption import hash_index
 from services.exchange_rate import get_exchange_rate, convert_account_to_eur
 from services.stock_transaction import get_stock_account_summary
 from services.crypto_transaction import get_crypto_account_summary
+from services.bank import get_user_bank_accounts
+from services.asset import get_user_assets
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -91,4 +94,98 @@ def get_my_portfolio(
         profit_loss=round(profit_loss, 2) if profit_loss else None,
         profit_loss_percentage=round(profit_loss_pct, 2) if profit_loss_pct else None,
         accounts=accounts
+    )
+
+
+@router.get("/statistics", response_model=DashboardStatisticsResponse)
+def get_dashboard_statistics(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """
+    Compute aggregated dashboard statistics:
+    - Stock vs Crypto distribution (invested & current value)
+    - Cash / Investments / Assets wealth breakdown
+    """
+    user_bidx = hash_index(current_user.uuid, master_key)
+
+    # ── Stock accounts ──────────────────────────────────────
+    stock_models = session.exec(
+        select(StockAccount).where(StockAccount.user_uuid_bidx == user_bidx)
+    ).all()
+
+    stock_invested = Decimal(0)
+    stock_current_value = Decimal(0)
+    for acc in stock_models:
+        summary = get_stock_account_summary(session, acc, master_key)
+        stock_invested += summary.total_invested
+        if summary.current_value:
+            stock_current_value += summary.current_value
+
+    # ── Crypto accounts (converted to EUR) ──────────────────
+    crypto_models = session.exec(
+        select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
+    ).all()
+
+    usd_eur_rate = get_exchange_rate("USD", "EUR")
+    crypto_invested = Decimal(0)
+    crypto_current_value = Decimal(0)
+    for acc in crypto_models:
+        summary = get_crypto_account_summary(session, acc, master_key)
+        summary_eur = convert_account_to_eur(summary, usd_eur_rate)
+        crypto_invested += summary_eur.total_invested
+        if summary_eur.current_value:
+            crypto_current_value += summary_eur.current_value
+
+    # ── Investment distribution percentages ─────────────────
+    total_investment_value = stock_current_value + crypto_current_value
+    stock_pct = None
+    crypto_pct = None
+    if total_investment_value > 0:
+        stock_pct = round(stock_current_value / total_investment_value * 100, 2)
+        crypto_pct = round(crypto_current_value / total_investment_value * 100, 2)
+
+    distribution = InvestmentDistribution(
+        stock_invested=round(stock_invested, 2),
+        stock_current_value=round(stock_current_value, 2),
+        stock_percentage=stock_pct,
+        crypto_invested=round(crypto_invested, 2),
+        crypto_current_value=round(crypto_current_value, 2),
+        crypto_percentage=crypto_pct,
+    )
+
+    # ── Cash (bank balances) ────────────────────────────────
+    bank_summary = get_user_bank_accounts(session, current_user.uuid, master_key)
+    cash_total = bank_summary.total_balance
+
+    # ── Assets (personal possessions, unsold) ───────────────
+    asset_summary = get_user_assets(session, current_user.uuid, master_key)
+    assets_total = asset_summary.total_estimated_value
+
+    # ── Total wealth ────────────────────────────────────────
+    investments_total = total_investment_value
+    total_wealth = cash_total + investments_total + assets_total
+
+    cash_pct = None
+    inv_pct = None
+    assets_pct = None
+    if total_wealth > 0:
+        cash_pct = round(cash_total / total_wealth * 100, 2)
+        inv_pct = round(investments_total / total_wealth * 100, 2)
+        assets_pct = round(assets_total / total_wealth * 100, 2)
+
+    wealth = WealthBreakdown(
+        cash=round(cash_total, 2),
+        cash_percentage=cash_pct,
+        investments=round(investments_total, 2),
+        investments_percentage=inv_pct,
+        assets=round(assets_total, 2),
+        assets_percentage=assets_pct,
+        total_wealth=round(total_wealth, 2),
+    )
+
+    return DashboardStatisticsResponse(
+        distribution=distribution,
+        wealth=wealth,
     )
