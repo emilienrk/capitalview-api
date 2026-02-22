@@ -10,6 +10,7 @@ from models.asset import Asset, AssetValuation
 from dtos.asset import (
     AssetCreate,
     AssetUpdate,
+    AssetSell,
     AssetResponse,
     AssetValuationCreate,
     AssetValuationResponse,
@@ -39,12 +40,19 @@ def _map_asset_to_response(asset: Asset, master_key: str) -> AssetResponse:
     if asset.acquisition_date_enc:
         acquisition_date = decrypt_data(asset.acquisition_date_enc, master_key)
 
+    # Sold fields
+    sold_price: Optional[Decimal] = None
+    if asset.sold_price_enc:
+        sold_price = Decimal(decrypt_data(asset.sold_price_enc, master_key))
+
+    sold_at: Optional[str] = None
+    if asset.sold_at_enc:
+        sold_at = decrypt_data(asset.sold_at_enc, master_key)
+
     # Compute profit/loss
     profit_loss: Optional[Decimal] = None
-    profit_loss_pct: Optional[float] = None
     if purchase_price is not None and purchase_price > 0:
         profit_loss = estimated_value - purchase_price
-        profit_loss_pct = float(profit_loss / purchase_price * 100)
 
     return AssetResponse(
         id=asset.uuid,
@@ -56,7 +64,8 @@ def _map_asset_to_response(asset: Asset, master_key: str) -> AssetResponse:
         currency=asset.currency,
         acquisition_date=acquisition_date,
         profit_loss=profit_loss,
-        profit_loss_percentage=profit_loss_pct,
+        sold_price=sold_price,
+        sold_at=sold_at,
         created_at=asset.created_at,
         updated_at=asset.updated_at,
     )
@@ -89,20 +98,26 @@ def create_asset(
     user_uuid: str,
     master_key: str,
 ) -> AssetResponse:
-    """Create a new encrypted asset."""
+    """Create a new encrypted asset. Auto-fills missing price from the other."""
     user_bidx = hash_index(user_uuid, master_key)
+
+    # If only purchase_price is provided, use it as estimated_value too
+    purchase_price = data.purchase_price
+    estimated_value = data.estimated_value
+    if purchase_price is not None and estimated_value is None:
+        estimated_value = purchase_price
 
     name_enc = encrypt_data(data.name, master_key)
     category_enc = encrypt_data(data.category, master_key)
-    estimated_value_enc = encrypt_data(str(data.estimated_value), master_key)
+    estimated_value_enc = encrypt_data(str(estimated_value), master_key)
 
     description_enc = None
     if data.description:
         description_enc = encrypt_data(data.description, master_key)
 
     purchase_price_enc = None
-    if data.purchase_price is not None:
-        purchase_price_enc = encrypt_data(str(data.purchase_price), master_key)
+    if purchase_price is not None:
+        purchase_price_enc = encrypt_data(str(purchase_price), master_key)
 
     acquisition_date_enc = None
     if data.acquisition_date:
@@ -182,19 +197,50 @@ def delete_asset(
     return True
 
 
+def sell_asset(
+    session: Session,
+    asset_uuid: str,
+    data: AssetSell,
+    master_key: str,
+) -> AssetResponse:
+    """Mark an asset as sold with price and date."""
+    asset = session.get(Asset, asset_uuid)
+    if not asset:
+        raise ValueError("Asset not found")
+
+    asset.sold_price_enc = encrypt_data(str(data.sold_price), master_key)
+    asset.sold_at_enc = encrypt_data(data.sold_at, master_key)
+
+    # Update estimated value to sold price
+    asset.estimated_value_enc = encrypt_data(str(data.sold_price), master_key)
+
+    session.add(asset)
+    session.commit()
+    session.refresh(asset)
+
+    return _map_asset_to_response(asset, master_key)
+
+
 def get_user_assets(
     session: Session,
     user_uuid: str,
     master_key: str,
+    include_sold: bool = False,
 ) -> AssetSummaryResponse:
-    """Get all assets for a user with summary."""
+    """Get all assets for a user with summary. Exclude sold by default."""
     user_bidx = hash_index(user_uuid, master_key)
 
     assets = session.exec(
         select(Asset).where(Asset.user_uuid_bidx == user_bidx)
     ).all()
 
-    responses = [_map_asset_to_response(a, master_key) for a in assets]
+    all_responses = [_map_asset_to_response(a, master_key) for a in assets]
+
+    # Filter out sold assets unless explicitly requested
+    if not include_sold:
+        responses = [a for a in all_responses if a.sold_at is None]
+    else:
+        responses = all_responses
 
     total_estimated = sum(a.estimated_value for a in responses)
     total_purchase = sum(a.purchase_price for a in responses if a.purchase_price is not None)

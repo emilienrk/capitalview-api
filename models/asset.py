@@ -24,6 +24,8 @@ class Asset(SQLModel, table=True):
     estimated_value_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     currency: str = Field(default="EUR", sa_column=Column(TEXT, nullable=False, server_default="EUR"))
     acquisition_date_enc: Optional[str] = Field(sa_column=Column(TEXT))
+    sold_price_enc: Optional[str] = Field(default=None, sa_column=Column(TEXT))
+    sold_at_enc: Optional[str] = Field(default=None, sa_column=Column(TEXT))
 
     created_at: datetime = Field(
         default=sa.func.now(),

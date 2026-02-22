@@ -11,6 +11,7 @@ from services.auth import get_current_user, get_master_key
 from dtos.asset import (
     AssetCreate,
     AssetUpdate,
+    AssetSell,
     AssetResponse,
     AssetSummaryResponse,
     AssetValuationCreate,
@@ -22,6 +23,7 @@ from services.asset import (
     get_user_assets,
     update_asset,
     delete_asset as service_delete_asset,
+    sell_asset as service_sell_asset,
     create_valuation,
     get_asset_valuations,
     delete_valuation as service_delete_valuation,
@@ -99,6 +101,22 @@ def delete(
 
     service_delete_asset(session, asset_id)
     return None
+
+
+@router.post("/{asset_id}/sell", response_model=AssetResponse)
+def sell(
+    asset_id: str,
+    data: AssetSell,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Mark a personal asset as sold."""
+    existing = get_asset(session, asset_id, current_user.uuid, master_key)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    return service_sell_asset(session, asset_id, data, master_key)
 
 
 # ============== VALUATION HISTORY ==============

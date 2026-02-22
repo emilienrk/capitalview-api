@@ -56,6 +56,23 @@ def test_create_asset(session, master_key):
     assert data["id"]
 
 
+def test_create_asset_auto_fill(session, master_key):
+    """Providing only purchase_price should auto-fill estimated_value."""
+    client = TestClient(app)
+    r = client.post("/assets", json={"name": "Car", "category": "Véhicule", "purchase_price": 15000})
+    assert r.status_code == 201
+    data = r.json()
+    assert float(data["purchase_price"]) == 15000
+    assert float(data["estimated_value"]) == 15000
+
+
+def test_create_asset_no_price_fails(session, master_key):
+    """At least one price is required."""
+    client = TestClient(app)
+    r = client.post("/assets", json={"name": "Nothing", "category": "Autre"})
+    assert r.status_code == 422
+
+
 def test_list_assets(session, master_key):
     client = TestClient(app)
     client.post("/assets", json={"name": "Item 1", "category": "Gaming", "estimated_value": 100})
@@ -121,6 +138,48 @@ def test_delete_asset_not_found(session, master_key):
     assert r.status_code == 404
 
 
+# ──────────────────────── Sell ────────────────────────────
+
+def test_sell_asset(session, master_key):
+    client = TestClient(app)
+    created = client.post("/assets", json={
+        "name": "Sold Skin",
+        "category": "Gaming",
+        "estimated_value": 200,
+        "purchase_price": 100,
+    }).json()
+    asset_id = created["id"]
+
+    r = client.post(f"/assets/{asset_id}/sell", json={
+        "sold_price": 250,
+        "sold_at": "2025-06-15",
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert float(data["sold_price"]) == 250
+    assert data["sold_at"] == "2025-06-15"
+    assert float(data["estimated_value"]) == 250
+
+
+def test_sell_asset_hidden_from_list(session, master_key):
+    client = TestClient(app)
+    client.post("/assets", json={"name": "Active", "category": "Autre", "estimated_value": 100})
+    sold = client.post("/assets", json={"name": "To Sell", "category": "Autre", "estimated_value": 200}).json()
+
+    client.post(f"/assets/{sold['id']}/sell", json={"sold_price": 220, "sold_at": "2025-01-01"})
+
+    r = client.get("/assets")
+    data = r.json()
+    assert data["asset_count"] == 1
+    assert data["assets"][0]["name"] == "Active"
+
+
+def test_sell_asset_not_found(session, master_key):
+    client = TestClient(app)
+    r = client.post("/assets/nonexistent/sell", json={"sold_price": 100, "sold_at": "2025-01-01"})
+    assert r.status_code == 404
+
+
 # ──────────────────────── Profit/Loss ─────────────────────
 
 def test_profit_loss_calculation(session, master_key):
@@ -133,10 +192,10 @@ def test_profit_loss_calculation(session, master_key):
     }).json()
 
     assert float(created["profit_loss"]) == 100
-    assert float(created["profit_loss_percentage"]) == 100.0
 
 
-def test_no_purchase_price_no_pl(session, master_key):
+def test_no_profit_loss_percentage_field(session, master_key):
+    """profit_loss_percentage should no longer be in the response."""
     client = TestClient(app)
     created = client.post("/assets", json={
         "name": "Gift",
@@ -144,8 +203,7 @@ def test_no_purchase_price_no_pl(session, master_key):
         "estimated_value": 500,
     }).json()
 
-    assert created["profit_loss"] is None
-    assert created["profit_loss_percentage"] is None
+    assert "profit_loss_percentage" not in created
 
 
 # ──────────────────────── Valuations ──────────────────────

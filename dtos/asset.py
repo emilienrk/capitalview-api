@@ -4,20 +4,26 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ============== ASSET CRUD ==============
 
 class AssetCreate(BaseModel):
-    """Create a personal asset."""
+    """Create a personal asset. At least one of purchase_price or estimated_value must be provided."""
     name: str
     description: Optional[str] = None
     category: str
     purchase_price: Optional[Decimal] = None
-    estimated_value: Decimal = Field(ge=0)
+    estimated_value: Optional[Decimal] = None
     currency: str = "EUR"
     acquisition_date: Optional[str] = None
+
+    @model_validator(mode="after")
+    def at_least_one_price(self) -> "AssetCreate":
+        if self.purchase_price is None and self.estimated_value is None:
+            raise ValueError("Au moins un prix (achat ou estimé) est requis")
+        return self
 
 
 class AssetUpdate(BaseModel):
@@ -31,6 +37,12 @@ class AssetUpdate(BaseModel):
     acquisition_date: Optional[str] = None
 
 
+class AssetSell(BaseModel):
+    """Mark an asset as sold."""
+    sold_price: Decimal = Field(ge=0)
+    sold_at: str  # ISO date string
+
+
 class AssetResponse(BaseModel):
     """Personal asset response."""
     id: str
@@ -42,7 +54,8 @@ class AssetResponse(BaseModel):
     currency: str
     acquisition_date: Optional[str] = None
     profit_loss: Optional[Decimal] = None
-    profit_loss_percentage: Optional[float] = None
+    sold_price: Optional[Decimal] = None
+    sold_at: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

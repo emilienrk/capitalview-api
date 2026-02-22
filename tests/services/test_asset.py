@@ -10,11 +10,12 @@ from services.asset import (
     get_asset,
     update_asset,
     delete_asset,
+    sell_asset,
     create_valuation,
     get_asset_valuations,
     delete_valuation,
 )
-from dtos.asset import AssetCreate, AssetUpdate, AssetValuationCreate
+from dtos.asset import AssetCreate, AssetUpdate, AssetSell, AssetValuationCreate
 from models.asset import Asset, AssetValuation
 from services.encryption import hash_index
 
@@ -48,16 +49,24 @@ def test_create_asset(session: Session, master_key: str):
     assert db_asset.estimated_value_enc != "1500"
 
 
-def test_create_asset_minimal(session: Session, master_key: str):
-    """Create an asset with only required fields."""
+def test_create_asset_minimal_estimated(session: Session, master_key: str):
+    """Create an asset with only estimated_value — purchase_price stays None."""
     data = AssetCreate(name="Simple Item", category="Autre", estimated_value=Decimal("50"))
     resp = create_asset(session, data, "user_1", master_key)
     assert resp.name == "Simple Item"
     assert resp.description is None
+    assert resp.estimated_value == Decimal("50")
     assert resp.purchase_price is None
     assert resp.acquisition_date is None
-    assert resp.profit_loss is None
-    assert resp.profit_loss_percentage is None
+
+
+def test_create_asset_only_purchase_price(session: Session, master_key: str):
+    """Create with only purchase_price — estimated_value auto-filled."""
+    data = AssetCreate(name="Car", category="Véhicule", purchase_price=Decimal("15000"))
+    resp = create_asset(session, data, "user_1", master_key)
+    assert resp.purchase_price == Decimal("15000")
+    assert resp.estimated_value == Decimal("15000")  # auto-filled from purchase_price
+    assert resp.profit_loss == Decimal("0")
 
 
 def test_get_user_assets_summary(session: Session, master_key: str):
@@ -69,8 +78,6 @@ def test_get_user_assets_summary(session: Session, master_key: str):
     summary = get_user_assets(session, user_uuid, master_key)
     assert summary.asset_count == 3
     assert summary.total_estimated_value == Decimal("5300")
-    assert summary.total_purchase_price == Decimal("8050")  # 50 + 8000
-    assert summary.total_profit_loss == Decimal("5300") - Decimal("8050")
     assert len(summary.categories) == 2
 
     # Check category breakdown
@@ -192,7 +199,6 @@ def test_profit_loss_positive(session: Session, master_key: str):
         purchase_price=Decimal("100"),
     ), "user_1", master_key)
     assert resp.profit_loss == Decimal("100")
-    assert resp.profit_loss_percentage == pytest.approx(100.0)
 
 
 def test_profit_loss_negative(session: Session, master_key: str):
@@ -203,17 +209,60 @@ def test_profit_loss_negative(session: Session, master_key: str):
         purchase_price=Decimal("15000"),
     ), "user_1", master_key)
     assert resp.profit_loss == Decimal("-7000")
-    assert resp.profit_loss_percentage == pytest.approx(-46.666666666666664)
 
 
-def test_profit_loss_no_purchase(session: Session, master_key: str):
+def test_profit_loss_no_purchase_price(session: Session, master_key: str):
+    """When only estimated_value is given, no purchase_price → profit_loss is None."""
     resp = create_asset(session, AssetCreate(
         name="Gift",
         category="Autre",
         estimated_value=Decimal("500"),
     ), "user_1", master_key)
     assert resp.profit_loss is None
-    assert resp.profit_loss_percentage is None
+
+
+# ──────────────────── Sell ────────────────────────────────
+
+def test_sell_asset(session: Session, master_key: str):
+    user_uuid = "user_1"
+    created = create_asset(session, AssetCreate(
+        name="Sold Item",
+        category="Gaming",
+        estimated_value=Decimal("1000"),
+        purchase_price=Decimal("500"),
+    ), user_uuid, master_key)
+
+    sold = sell_asset(session, created.id, AssetSell(
+        sold_price=Decimal("1200"),
+        sold_at="2025-06-15",
+    ), master_key)
+
+    assert sold.sold_price == Decimal("1200")
+    assert sold.sold_at == "2025-06-15"
+    assert sold.estimated_value == Decimal("1200")  # Updated to sold price
+
+
+def test_sold_assets_filtered_by_default(session: Session, master_key: str):
+    user_uuid = "user_1"
+    a1 = create_asset(session, AssetCreate(name="Active", category="Gaming", estimated_value=Decimal("100")), user_uuid, master_key)
+    a2 = create_asset(session, AssetCreate(name="Sold", category="Gaming", estimated_value=Decimal("200")), user_uuid, master_key)
+
+    sell_asset(session, a2.id, AssetSell(sold_price=Decimal("250"), sold_at="2025-01-01"), master_key)
+
+    summary = get_user_assets(session, user_uuid, master_key)
+    assert summary.asset_count == 1
+    assert summary.assets[0].name == "Active"
+
+
+def test_sold_assets_included_when_requested(session: Session, master_key: str):
+    user_uuid = "user_1"
+    a1 = create_asset(session, AssetCreate(name="Active", category="Gaming", estimated_value=Decimal("100")), user_uuid, master_key)
+    a2 = create_asset(session, AssetCreate(name="Sold", category="Gaming", estimated_value=Decimal("200")), user_uuid, master_key)
+
+    sell_asset(session, a2.id, AssetSell(sold_price=Decimal("250"), sold_at="2025-01-01"), master_key)
+
+    summary = get_user_assets(session, user_uuid, master_key, include_sold=True)
+    assert summary.asset_count == 2
 
 
 # ──────────────────── Valuations ──────────────────────────

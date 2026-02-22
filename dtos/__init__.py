@@ -72,6 +72,7 @@ from .settings import (
 from .asset import (
     AssetCreate,
     AssetUpdate,
+    AssetSell,
     AssetResponse,
     AssetValuationCreate,
     AssetValuationResponse,
@@ -131,6 +132,7 @@ __all__ = [
     # Asset
     "AssetCreate",
     "AssetUpdate",
+    "AssetSell",
     "AssetResponse",
     "AssetValuationCreate",
     "AssetValuationResponse",
