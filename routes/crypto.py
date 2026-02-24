@@ -15,6 +15,7 @@ from dtos import (
     CryptoAccountBasicResponse,
     CryptoBulkImportRequest,
     CryptoBulkImportResponse,
+    CryptoCompositeTransactionCreate,
     CryptoTransactionCreate,
     CryptoTransactionUpdate,
     CryptoTransactionBasicResponse,
@@ -31,6 +32,7 @@ from services.crypto_account import (
     delete_crypto_account
 )
 from services.crypto_transaction import (
+    create_composite_crypto_transaction,
     create_crypto_transaction,
     get_crypto_transaction,
     get_account_transactions,
@@ -125,13 +127,13 @@ def create_transaction(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
 ):
-    """Create a new crypto transaction."""
+    """Create a single atomic crypto transaction."""
     account = get_crypto_account(session, data.account_id, current_user.uuid, master_key)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    
+
     resp = create_crypto_transaction(session, data, master_key)
-    
+
     return CryptoTransactionBasicResponse(
         id=resp.id,
         account_id=data.account_id,
@@ -139,12 +141,50 @@ def create_transaction(
         type=data.type,
         amount=resp.amount,
         price_per_unit=resp.price_per_unit,
-        fees=data.fees,
-        fees_symbol=data.fees_symbol,
         executed_at=resp.executed_at,
         notes=data.notes,
-        tx_hash=data.tx_hash
+        tx_hash=data.tx_hash,
     )
+
+
+@router.post("/transactions/composite", response_model=list[CryptoTransactionBasicResponse], status_code=201)
+def create_composite_transaction(
+    data: CryptoCompositeTransactionCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session)
+):
+    """
+    Create 1-3 atomic transactions from a single user form submission.
+
+    This endpoint accepts the composite DTO (primary asset + optional quote leg
+    + optional crypto fee leg) and decomposes it server-side into atomic rows
+    that all share the same group_uuid.
+
+    Use this endpoint from the frontend "Add transaction" modal.
+    Use POST /transactions for direct atomic inserts (CSV import, etc.).
+    """
+    account = get_crypto_account(session, data.account_id, current_user.uuid, master_key)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    created = create_composite_crypto_transaction(session, data, master_key)
+
+    return [
+        CryptoTransactionBasicResponse(
+            id=tx.id,
+            account_id=data.account_id,
+            group_uuid=tx.group_uuid,
+            symbol=tx.symbol,
+            type=CryptoTransactionType(tx.type),
+            amount=tx.amount,
+            price_per_unit=tx.price_per_unit,
+            executed_at=tx.executed_at,
+            notes=tx.notes if hasattr(tx, "notes") else None,
+            tx_hash=None,
+        )
+        for tx in created
+    ]
 
 
 @router.get("/transactions", response_model=list[TransactionResponse])
@@ -196,19 +236,17 @@ def update_transaction(
         
     try:
         resp = update_crypto_transaction(session, tx_model, data, master_key)
-        
+
         return CryptoTransactionBasicResponse(
             id=resp.id,
-            account_id="unknown",
+            account_id="unknown",  # account_id not stored on tx; caller knows it
             symbol=resp.symbol,
-            type=CryptoTransactionType.BUY,
+            type=CryptoTransactionType(resp.type),
             amount=resp.amount,
             price_per_unit=resp.price_per_unit,
-            fees=resp.fees,
-            fees_symbol=None,
             executed_at=resp.executed_at,
             notes=None,
-            tx_hash=None
+            tx_hash=None,
         )
     except Exception:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -266,15 +304,13 @@ def bulk_import_transactions(
             type=item.type,
             amount=item.amount,
             price_per_unit=item.price_per_unit,
-            fees=item.fees,
-            fees_symbol=item.fees_symbol,
             executed_at=item.executed_at,
             notes=item.notes,
-            tx_hash=item.tx_hash
+            tx_hash=item.tx_hash,
         )
-        
+
         resp = create_crypto_transaction(session, create_dto, master_key)
-        
+
         basic = CryptoTransactionBasicResponse(
             id=resp.id,
             account_id=data.account_id,
@@ -282,11 +318,9 @@ def bulk_import_transactions(
             type=item.type,
             amount=resp.amount,
             price_per_unit=resp.price_per_unit,
-            fees=item.fees, 
-            fees_symbol=item.fees_symbol,
             executed_at=resp.executed_at,
             notes=item.notes,
-            tx_hash=item.tx_hash
+            tx_hash=item.tx_hash,
         )
         created_responses.append(basic)
 

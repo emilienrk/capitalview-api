@@ -51,8 +51,25 @@ class StockTransactionType(str, Enum):
 
 
 class CryptoTransactionType(str, Enum):
-    """Type of crypto transaction."""
-    BUY = "BUY"
-    SELL = "SELL"
-    SWAP = "SWAP"
-    STAKING = "STAKING"
+    """Type of crypto transaction (atomic ledger model).
+
+    Atomic types
+    ------------
+    BUY          — Primary positive leg: asset acquired (cost basis in EUR).
+    SPEND        — Negative leg: asset ceded in a trade or payment.
+    FEE          — On-chain / exchange fee deducted in crypto.
+    REWARD       — Staking / airdrop income; cost basis = 0.
+    FIAT_DEPOSIT — Direct EUR entry (wire transfer, exchange deposit).
+    FIAT_ANCHOR  — Virtual EUR cost anchor for a crypto deposit group; never
+                   counted in balance — only used to carry PRU cost in a group.
+    TRANSFER     — Neutral outbound to own wallet (no tax event).
+    EXIT         — Taxable outbound (cash-out, payment, donation).
+    """
+    BUY          = "BUY"
+    SPEND        = "SPEND"
+    FEE          = "FEE"
+    REWARD       = "REWARD"
+    FIAT_DEPOSIT = "FIAT_DEPOSIT"
+    FIAT_ANCHOR  = "FIAT_ANCHOR"
+    TRANSFER     = "TRANSFER"
+    EXIT         = "EXIT"

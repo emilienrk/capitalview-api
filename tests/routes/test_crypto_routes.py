@@ -48,20 +48,20 @@ def test_crypto_account_and_transaction(session, master_key):
         "type": "BUY",
         "amount": "0.1",
         "price_per_unit": "30000",
-        "fees": "1",
-        "fees_symbol": "USD",
         "executed_at": "2023-01-01T12:00:00",
     }
     r = client.post("/crypto/transactions", json=tx)
     assert r.status_code == 201
     created = r.json()
     assert created["symbol"] == "BTC"
+    assert "fees" not in created
+    assert "fees_symbol" not in created
 
 
 @patch("services.crypto_transaction.get_crypto_info")
 @patch("services.crypto_transaction.get_crypto_price")
-def test_crypto_summary(mock_price, mock_market, session, master_key):
-    mock_market.return_value = ("Bitcoin", Decimal("40000"))
+def test_crypto_summary(mock_price, mock_info):
+    mock_info.return_value = ("Bitcoin", Decimal("40000"))
     mock_price.return_value = Decimal("40000")
 
     client = TestClient(app)
@@ -75,8 +75,6 @@ def test_crypto_summary(mock_price, mock_market, session, master_key):
         "type": "BUY",
         "amount": "1",
         "price_per_unit": "30000",
-        "fees": "10",
-        "fees_symbol": "USD",
         "executed_at": "2023-01-01T12:00:00",
     }
     client.post("/crypto/transactions", json=tx)
@@ -101,8 +99,6 @@ def test_crypto_transactions_crud_and_bulk(session, master_key):
         "type": "BUY",
         "amount": "2",
         "price_per_unit": "2000",
-        "fees": "0.01",
-        "fees_symbol": "ETH",
         "executed_at": "2023-01-02T12:00:00",
     }
     r1 = client.post("/crypto/transactions", json=tx)
@@ -126,8 +122,8 @@ def test_crypto_transactions_crud_and_bulk(session, master_key):
     bulk = {
         "account_id": account_id,
         "transactions": [
-            {"symbol": "BTC", "type": "BUY", "amount": "0.1", "price_per_unit": "30000", "fees": "1", "fees_symbol": "USD", "executed_at": "2023-01-01T00:00:00"},
-            {"symbol": "ETH", "type": "BUY", "amount": "5", "price_per_unit": "2000", "fees": "0", "fees_symbol": None, "executed_at": "2023-01-01T00:00:00"}
+            {"symbol": "BTC", "type": "BUY", "amount": "0.1", "price_per_unit": "30000", "executed_at": "2023-01-01T00:00:00"},
+            {"symbol": "ETH", "type": "BUY", "amount": "5", "price_per_unit": "2000", "executed_at": "2023-01-01T00:00:00"}
         ]
     }
     rbulk = client.post("/crypto/transactions/bulk", json=bulk)
@@ -149,7 +145,6 @@ def test_create_crypto_transaction_negative_validation(session, master_key):
         "type": "BUY",
         "amount": -0.1,
         "price_per_unit": 30000,
-        "fees": 1,
         "executed_at": "2023-01-01T12:00:00"
     }
     r = client.post("/crypto/transactions", json=tx_neg_amount)
@@ -162,21 +157,62 @@ def test_create_crypto_transaction_negative_validation(session, master_key):
         "type": "BUY",
         "amount": 0.1,
         "price_per_unit": -30000,
-        "fees": 1,
         "executed_at": "2023-01-01T12:00:00"
     }
     r = client.post("/crypto/transactions", json=tx_neg_price)
     assert r.status_code == 422
 
-    # Negative fees
-    tx_neg_fees = {
+
+def test_composite_transaction_eur(session, master_key):
+    """Buying BTC with EUR via composite endpoint returns 2 rows: BUY BTC + SPEND EUR."""
+    client = TestClient(app)
+    resp = client.post("/crypto/accounts", json={"name": "Composite Wallet"})
+    assert resp.status_code == 201
+    account_id = resp.json()["id"]
+
+    payload = {
         "account_id": account_id,
         "symbol": "BTC",
         "type": "BUY",
-        "amount": 0.1,
-        "price_per_unit": 30000,
-        "fees": -10,
-        "executed_at": "2023-01-01T12:00:00"
+        "amount": "0.1",
+        "eur_amount": "3000",
+        "executed_at": "2023-06-01T10:00:00",
+        "quote_symbol": "EUR",
+        "quote_amount": "3000",
     }
-    r = client.post("/crypto/transactions", json=tx_neg_fees)
-    assert r.status_code == 422
+    r = client.post("/crypto/transactions/composite", json=payload)
+    assert r.status_code == 201
+    rows = r.json()
+    assert isinstance(rows, list)
+    assert len(rows) == 2  # BUY BTC + SPEND EUR
+    types = {row["type"] for row in rows}
+    assert types == {"BUY", "SPEND"}
+    assert all(row["group_uuid"] is not None for row in rows)
+    assert len({row["group_uuid"] for row in rows}) == 1
+
+
+def test_composite_transaction_crypto_quote(session, master_key):
+    """Swapping USDC for BTC via composite endpoint returns 3 rows.
+    FIAT_ANCHOR carries the EUR value."""
+    client = TestClient(app)
+    resp = client.post("/crypto/accounts", json={"name": "Swap Wallet"})
+    account_id = resp.json()["id"]
+
+    payload = {
+        "account_id": account_id,
+        "symbol": "BTC",
+        "type": "BUY",
+        "amount": "0.1",
+        "eur_amount": "2760",
+        "executed_at": "2023-06-02T10:00:00",
+        "quote_symbol": "USDC",
+        "quote_amount": "3000",
+    }
+    r = client.post("/crypto/transactions/composite", json=payload)
+    assert r.status_code == 201
+    rows = r.json()
+    assert len(rows) == 3  # BUY + SPEND + FIAT_ANCHOR
+    types = {row["type"] for row in rows}
+    assert types == {"BUY", "SPEND", "FIAT_ANCHOR"}
+    # All rows share the same group_uuid
+    assert len({row["group_uuid"] for row in rows}) == 1

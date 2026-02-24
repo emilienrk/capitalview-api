@@ -48,6 +48,7 @@ from .crypto import (
     CryptoAccountUpdate,
     CryptoBulkImportRequest,
     CryptoBulkImportResponse,
+    CryptoCompositeTransactionCreate,
     CryptoTransactionBasicResponse,
     CryptoTransactionBulkCreate,
     CryptoTransactionCreate,

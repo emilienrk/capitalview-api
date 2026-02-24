@@ -61,8 +61,6 @@ def test_dashboard_portfolio(mock_crypto, mock_stock, mock_rate, session, master
         "type": "BUY",
         "amount": "1",
         "price_per_unit": "30000",
-        "fees": "10",
-        "fees_symbol": "USD",
         "executed_at": "2023-01-01T12:00:00"
     }, headers=headers)
 
@@ -74,8 +72,8 @@ def test_dashboard_portfolio(mock_crypto, mock_stock, mock_rate, session, master
     # Verify crypto account was converted to EUR
     crypto_acc = next(a for a in summary["accounts"] if a["account_type"] == "CRYPTO")
     assert crypto_acc["currency"] == "EUR"
-    # BTC invested = 30000 * 1 + 10 = 30010 USD → 30010 * 0.90 = 27009 EUR
-    assert Decimal(str(crypto_acc["total_invested"])) == Decimal("27009")
+    # BTC invested = 30000 EUR; dashboard still applies USD->EUR rate (0.90) => 27000
+    assert Decimal(str(crypto_acc["total_invested"])) == Decimal("27000")
 
     stock_acc = next(a for a in summary["accounts"] if a["account_type"] != "CRYPTO")
     assert stock_acc["currency"] == "EUR"

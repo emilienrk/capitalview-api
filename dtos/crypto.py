@@ -1,8 +1,6 @@
-"""Crypto account and transaction schemas."""
-
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -10,21 +8,18 @@ from models.enums import CryptoTransactionType
 
 
 class CryptoAccountCreate(BaseModel):
-    """Create a crypto account."""
     name: str
     platform: Optional[str] = None
     public_address: Optional[str] = None
 
 
 class CryptoAccountUpdate(BaseModel):
-    """Update a crypto account."""
     name: Optional[str] = None
     platform: Optional[str] = None
     public_address: Optional[str] = None
 
 
 class CryptoAccountBasicResponse(BaseModel):
-    """Basic crypto account response (without positions)."""
     id: str
     name: str
     platform: Optional[str] = None
@@ -33,72 +28,105 @@ class CryptoAccountBasicResponse(BaseModel):
     updated_at: datetime
 
 
-# ============== CRYPTO TRANSACTION CRUD SCHEMAS ==============
-
 class CryptoTransactionCreate(BaseModel):
-    """Create a crypto transaction."""
+    """
+    Atomic operation. Composite actions share group_uuid.
+    price_per_unit is always EUR. REWARD price=0. FIAT_ANCHOR price=1.
+    """
     account_id: str
     symbol: str
     name: Optional[str] = None
     type: CryptoTransactionType
     amount: Decimal = Field(gt=0)
     price_per_unit: Decimal = Field(ge=0)
-    fees: Decimal = Field(default=Decimal("0"), ge=0)
-    fees_symbol: Optional[str] = None
     executed_at: datetime
     tx_hash: Optional[str] = None
     notes: Optional[str] = None
 
 
 class CryptoTransactionUpdate(BaseModel):
-    """Update a crypto transaction."""
     symbol: Optional[str] = None
     name: Optional[str] = None
     type: Optional[CryptoTransactionType] = None
     amount: Optional[Decimal] = Field(None, gt=0)
     price_per_unit: Optional[Decimal] = Field(None, ge=0)
-    fees: Optional[Decimal] = Field(None, ge=0)
-    fees_symbol: Optional[str] = None
     executed_at: Optional[datetime] = None
     tx_hash: Optional[str] = None
     notes: Optional[str] = None
 
 
 class CryptoTransactionBulkCreate(BaseModel):
-    """Create a crypto transaction (without account_id, used in bulk import)."""
     symbol: str
     type: CryptoTransactionType
     amount: Decimal = Field(gt=0)
     price_per_unit: Decimal = Field(ge=0)
-    fees: Decimal = Field(default=Decimal("0"), ge=0)
-    fees_symbol: Optional[str] = None
     executed_at: datetime
     tx_hash: Optional[str] = None
     notes: Optional[str] = None
 
 
 class CryptoBulkImportRequest(BaseModel):
-    """Bulk import multiple crypto transactions for a given account."""
     account_id: str
     transactions: list[CryptoTransactionBulkCreate]
 
 
 class CryptoBulkImportResponse(BaseModel):
-    """Response for bulk import of crypto transactions."""
     imported_count: int
     transactions: list["CryptoTransactionBasicResponse"]
 
 
 class CryptoTransactionBasicResponse(BaseModel):
-    """Basic crypto transaction response."""
     id: str
     account_id: str
+    group_uuid: Optional[str] = None
     symbol: str
     type: CryptoTransactionType
     amount: Decimal
     price_per_unit: Decimal
-    fees: Decimal
-    fees_symbol: Optional[str] = None
+    executed_at: datetime
+    tx_hash: Optional[str] = None
+    notes: Optional[str] = None
+
+
+FIAT_SYMBOLS: frozenset[str] = frozenset(
+    {"EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "CNY", "NZD", "SEK", "NOK", "DKK"}
+)
+
+
+class CryptoCompositeTransactionCreate(BaseModel):
+    """
+    Composite transaction DTO — decomposed server-side into atomic rows.
+
+    EUR anchor
+    ----------
+    The user provides `eur_amount` = total trade value in EUR.
+    All atomic EUR prices are computed by the service:
+      - Crypto rows (BUY, SPEND, FEE): price_per_unit = 0 in DB.
+      - Fiat rows (FIAT_ANCHOR, FIAT_DEPOSIT, EXIT): price_per_unit ≥ 1.
+      - FIAT_ANCHOR.amount = eur_amount (+ fee if not included).
+
+    Fee model (fee_included)
+    ------------------------
+    • True: fee is informational. FEE row price = 0.
+    • False: fee inflates total cost. FIAT_ANCHOR carries base + fee.
+    """
+    account_id: str
+    type: Literal["BUY", "REWARD", "FIAT_DEPOSIT", "FIAT_WITHDRAW", "CRYPTO_DEPOSIT", "TRANSFER", "EXIT", "GAS_FEE", "NON_TAXABLE_EXIT"]
+    symbol: str
+    name: Optional[str] = None
+    amount: Decimal = Field(gt=0)
+
+    quote_symbol: Optional[str] = None
+    quote_amount: Optional[Decimal] = Field(default=None, ge=0)
+
+    eur_amount: Optional[Decimal] = Field(default=None, ge=0)
+
+    fee_included: bool = True
+    fee_percentage: Optional[Decimal] = Field(default=None, ge=0)
+    fee_eur: Optional[Decimal] = Field(default=None, ge=0)
+    fee_symbol: Optional[str] = None
+    fee_amount: Optional[Decimal] = Field(default=None, ge=0)
+
     executed_at: datetime
     tx_hash: Optional[str] = None
     notes: Optional[str] = None

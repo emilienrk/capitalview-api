@@ -20,11 +20,11 @@ class TransactionResponse(BaseModel):
     price_per_unit: Decimal
     fees: Decimal
     executed_at: datetime
-    currency: str = "EUR"  # Currency of monetary values (EUR for stocks, USD for crypto)
+    currency: str = "EUR"
     
-    # Calculated fields
-    total_cost: Decimal  # amount * price_per_unit + fees
-    fees_percentage: Decimal  # fees / total_cost * 100
+    total_cost: Decimal
+    fees_percentage: Decimal
+    group_uuid: Optional[str] = None
     current_price: Optional[Decimal] = None
     current_value: Optional[Decimal] = None
     profit_loss: Optional[Decimal] = None
@@ -42,7 +42,7 @@ class PositionResponse(BaseModel):
     total_invested: Decimal
     total_fees: Decimal
     fees_percentage: Decimal
-    currency: str = "EUR"  # Currency of monetary values
+    currency: str = "EUR"
     
     current_price: Optional[Decimal] = None
     current_value: Optional[Decimal] = None
@@ -57,7 +57,7 @@ class AccountSummaryResponse(BaseModel):
     account_type: str
     total_invested: Decimal
     total_fees: Decimal
-    currency: str = "EUR"  # Currency of monetary values
+    currency: str = "EUR"
     current_value: Optional[Decimal] = None
     profit_loss: Optional[Decimal] = None
     profit_loss_percentage: Optional[Decimal] = None
