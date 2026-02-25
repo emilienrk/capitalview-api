@@ -93,6 +93,25 @@ FIAT_SYMBOLS: frozenset[str] = frozenset(
 )
 
 
+class CrossAccountTransferCreate(BaseModel):
+    """
+    Cross-account crypto transfer.
+    Creates a TRANSFER outbound row in the source account and a BUY (price=0)
+    inbound row in the destination account, linked by a shared group_uuid.
+    Optional fee row (in crypto) is added to the source account.
+    """
+    from_account_id: str
+    to_account_id: str
+    symbol: str
+    name: Optional[str] = None
+    amount: Decimal = Field(gt=0)
+    fee_symbol: Optional[str] = None
+    fee_amount: Optional[Decimal] = Field(default=None, ge=0)
+    executed_at: datetime
+    tx_hash: Optional[str] = None
+    notes: Optional[str] = None
+
+
 class CryptoCompositeTransactionCreate(BaseModel):
     """
     Composite transaction DTO — decomposed server-side into atomic rows.

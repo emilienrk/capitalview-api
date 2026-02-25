@@ -23,16 +23,21 @@ from dtos import (
     TransactionResponse,
     AssetSearchResult,
     AssetInfoResponse,
+    CrossAccountTransferCreate,
 )
 from services.crypto_account import (
     create_crypto_account,
     get_crypto_account,
+    get_or_create_default_account,
     get_user_crypto_accounts,
     update_crypto_account,
-    delete_crypto_account
+    delete_crypto_account,
 )
+from services.settings import get_or_create_settings
+from services.encryption import hash_index
 from services.crypto_transaction import (
     create_composite_crypto_transaction,
+    create_cross_account_transfer,
     create_crypto_transaction,
     get_crypto_transaction,
     get_account_transactions,
@@ -55,6 +60,18 @@ def create_account(
     session: Session = Depends(get_session)
 ):
     """Create a new crypto account/wallet."""
+    settings = get_or_create_settings(session, current_user.uuid, master_key)
+    if settings.crypto_module_enabled and settings.crypto_mode == "SINGLE":
+        # In SINGLE mode only one account is allowed
+        user_bidx = hash_index(current_user.uuid, master_key)
+        existing = session.exec(
+            select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
+        ).first()
+        if existing:
+            raise HTTPException(
+                status_code=403,
+                detail="En mode portefeuille unique, un seul compte est autorisé.",
+            )
     return create_crypto_account(session, data, current_user.uuid, master_key)
 
 
@@ -66,6 +83,20 @@ def list_accounts(
 ):
     """List all crypto accounts for current user."""
     return get_user_crypto_accounts(session, current_user.uuid, master_key)
+
+
+@router.get("/accounts/default", response_model=AccountSummaryResponse)
+def get_default_account(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session)
+):
+    """
+    Get (or transparently create) the single default account for SINGLE-mode users.
+    Returns the full account summary with positions and calculated values.
+    """
+    account_model = get_or_create_default_account(session, current_user.uuid, master_key)
+    return get_crypto_account_summary(session, account_model, master_key)
 
 
 @router.get("/accounts/{account_id}", response_model=AccountSummaryResponse)
@@ -182,6 +213,40 @@ def create_composite_transaction(
             executed_at=tx.executed_at,
             notes=tx.notes if hasattr(tx, "notes") else None,
             tx_hash=None,
+        )
+        for tx in created
+    ]
+
+
+@router.post("/transactions/cross-account-transfer", response_model=list[CryptoTransactionBasicResponse], status_code=201)
+def create_cross_account_transfer_route(
+    data: CrossAccountTransferCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """
+    Transfer crypto between two accounts owned by the same user.
+    Creates a TRANSFER row in the source and a BUY (price=0) row in the
+    destination, plus an optional FEE row in the source.
+    """
+    try:
+        created = create_cross_account_transfer(session, data, current_user.uuid, master_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return [
+        CryptoTransactionBasicResponse(
+            id=tx.id,
+            account_id=data.from_account_id,
+            group_uuid=tx.group_uuid,
+            symbol=tx.symbol,
+            type=CryptoTransactionType(tx.type),
+            amount=tx.amount,
+            price_per_unit=tx.price_per_unit,
+            executed_at=tx.executed_at,
+            notes=None,
+            tx_hash=data.tx_hash,
         )
         for tx in created
     ]

@@ -50,6 +50,8 @@ class UserSettings(SQLModel, table=True):
     tax_pea_rate: Decimal = Field(default=Decimal("0.172"), max_digits=5, decimal_places=4)
     yield_expectation: Decimal = Field(default=Decimal("0.05"), max_digits=5, decimal_places=4)
     inflation_rate: Decimal = Field(default=Decimal("0.02"), max_digits=5, decimal_places=4)
+    crypto_module_enabled: bool = Field(default=False, nullable=False)
+    crypto_mode: str = Field(default="SINGLE", nullable=False)
 
     created_at: datetime = Field(
         default=sa.func.now(),

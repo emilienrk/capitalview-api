@@ -53,6 +53,7 @@ from .crypto import (
     CryptoTransactionBulkCreate,
     CryptoTransactionCreate,
     CryptoTransactionUpdate,
+    CrossAccountTransferCreate,
 )
 
 # Note schemas

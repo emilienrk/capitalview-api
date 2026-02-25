@@ -13,6 +13,8 @@ class UserSettingsUpdate(BaseModel):
     tax_pea_rate: Optional[float] = Field(None, ge=0, le=1)
     yield_expectation: Optional[float] = Field(None, ge=0, le=1)
     inflation_rate: Optional[float] = Field(None, ge=0, le=1)
+    crypto_module_enabled: Optional[bool] = None
+    crypto_mode: Optional[str] = None
 
 
 class UserSettingsResponse(BaseModel):
@@ -25,5 +27,7 @@ class UserSettingsResponse(BaseModel):
     tax_pea_rate: float = 0.172
     yield_expectation: float = 0.05
     inflation_rate: float = 0.02
+    crypto_module_enabled: bool = False
+    crypto_mode: str = "SINGLE"
     created_at: datetime
     updated_at: datetime

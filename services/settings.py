@@ -24,6 +24,8 @@ def _map_settings_to_response(settings: UserSettings, master_key: str) -> UserSe
         tax_pea_rate=float(settings.tax_pea_rate),
         yield_expectation=float(settings.yield_expectation),
         inflation_rate=float(settings.inflation_rate),
+        crypto_module_enabled=settings.crypto_module_enabled,
+        crypto_mode=settings.crypto_mode,
         created_at=settings.created_at,
         updated_at=settings.updated_at,
     )
@@ -84,6 +86,13 @@ def update_settings(
 
     if data.inflation_rate is not None:
         settings.inflation_rate = Decimal(str(data.inflation_rate))
+
+    if data.crypto_module_enabled is not None:
+        settings.crypto_module_enabled = data.crypto_module_enabled
+
+    if data.crypto_mode is not None:
+        if data.crypto_mode in ("SINGLE", "MULTI"):
+            settings.crypto_mode = data.crypto_mode
 
     session.add(settings)
     session.commit()

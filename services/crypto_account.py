@@ -68,6 +68,37 @@ def create_crypto_account(
     return _map_account_to_response(account, master_key)
 
 
+def get_or_create_default_account(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+) -> "CryptoAccount":
+    """
+    Get the existing single account for a SINGLE-mode user,
+    or transparently create one if none exists yet.
+    Returns the raw CryptoAccount model (not the DTO) so the caller
+    can pass it to get_crypto_account_summary.
+    """
+    user_bidx = hash_index(user_uuid, master_key)
+
+    existing = session.exec(
+        select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
+    ).first()
+
+    if existing:
+        return existing
+
+    # Auto-create a transparent default account
+    account = CryptoAccount(
+        user_uuid_bidx=user_bidx,
+        name_enc=encrypt_data("Mon Portefeuille", master_key),
+    )
+    session.add(account)
+    session.commit()
+    session.refresh(account)
+    return account
+
+
 def get_user_crypto_accounts(
     session: Session, 
     user_uuid: str, 
