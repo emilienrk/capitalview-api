@@ -26,6 +26,7 @@ def _map_settings_to_response(settings: UserSettings, master_key: str) -> UserSe
         inflation_rate=float(settings.inflation_rate),
         crypto_module_enabled=settings.crypto_module_enabled,
         crypto_mode=settings.crypto_mode,
+        usd_eur_rate=float(settings.usd_eur_rate) if settings.usd_eur_rate is not None else None,
         created_at=settings.created_at,
         updated_at=settings.updated_at,
     )
@@ -93,6 +94,12 @@ def update_settings(
     if data.crypto_mode is not None:
         if data.crypto_mode in ("SINGLE", "MULTI"):
             settings.crypto_mode = data.crypto_mode
+
+    if "usd_eur_rate" in data.model_fields_set:
+        if data.usd_eur_rate is not None:
+            settings.usd_eur_rate = Decimal(str(data.usd_eur_rate))
+        else:
+            settings.usd_eur_rate = None
 
     session.add(settings)
     session.commit()

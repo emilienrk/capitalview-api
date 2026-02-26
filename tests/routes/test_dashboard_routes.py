@@ -19,7 +19,7 @@ def _override_deps(session, master_key):
     app.dependency_overrides.clear()
 
 
-@patch("routes.dashboard.get_exchange_rate")
+@patch("routes.dashboard.get_effective_usd_eur_rate")
 @patch("services.stock_transaction.get_stock_info")
 @patch("services.crypto_transaction.get_crypto_info")
 def test_dashboard_portfolio(mock_crypto, mock_stock, mock_rate, session, master_key):
@@ -55,13 +55,25 @@ def test_dashboard_portfolio(mock_crypto, mock_stock, mock_rate, session, master
     assert cacc.status_code == 201
     cacc_id = cacc.json()["id"]
 
-    client.post("/crypto/transactions", json={
+    # First wire in the EUR that will be used to buy BTC, so that total_invested
+    # reflects actual external capital (new correct behaviour).
+    client.post("/crypto/transactions/composite", json={
+        "account_id": cacc_id,
+        "symbol": "EUR",
+        "type": "FIAT_DEPOSIT",
+        "amount": "30000",
+        "executed_at": "2023-01-01T11:00:00",
+    }, headers=headers)
+
+    client.post("/crypto/transactions/composite", json={
         "account_id": cacc_id,
         "symbol": "BTC",
         "type": "BUY",
         "amount": "1",
-        "price_per_unit": "30000",
-        "executed_at": "2023-01-01T12:00:00"
+        "eur_amount": "30000",
+        "quote_symbol": "EUR",
+        "quote_amount": "30000",
+        "executed_at": "2023-01-01T12:00:00",
     }, headers=headers)
 
     r2 = client.get("/dashboard/portfolio", headers=headers)
@@ -72,19 +84,19 @@ def test_dashboard_portfolio(mock_crypto, mock_stock, mock_rate, session, master
     # Verify crypto account was converted to EUR
     crypto_acc = next(a for a in summary["accounts"] if a["account_type"] == "CRYPTO")
     assert crypto_acc["currency"] == "EUR"
-    # BTC invested = 30000 EUR; dashboard still applies USD->EUR rate (0.90) => 27000
-    assert Decimal(str(crypto_acc["total_invested"])) == Decimal("27000")
+    # BTC invested = 30000 EUR (cost basis is in EUR; only market prices are converted)
+    assert Decimal(str(crypto_acc["total_invested"])) == Decimal("30000")
 
     stock_acc = next(a for a in summary["accounts"] if a["account_type"] != "CRYPTO")
     assert stock_acc["currency"] == "EUR"
     # Stock invested stays in EUR = 100
     assert Decimal(str(stock_acc["total_invested"])) == Decimal("100")
 
-    # Verify the exchange rate was called for USD→EUR
-    mock_rate.assert_called_with("USD", "EUR")
+    # Verify the exchange rate helper was called
+    mock_rate.assert_called()
 
 
-@patch("routes.dashboard.get_exchange_rate")
+@patch("routes.dashboard.get_effective_usd_eur_rate")
 @patch("routes.dashboard.get_user_bank_accounts")
 @patch("routes.dashboard.get_user_assets")
 @patch("services.stock_transaction.get_stock_info")
@@ -132,19 +144,26 @@ def test_dashboard_statistics(
         "executed_at": "2024-01-01T12:00:00"
     }, headers=headers)
 
-    # Create crypto account + transaction
+    # Create crypto account + transaction (composite endpoint required for correct P/L model)
     cacc = client.post("/crypto/accounts", json={"name": "Stat Crypto"}, headers=headers)
     assert cacc.status_code == 201
     cacc_id = cacc.json()["id"]
-    client.post("/crypto/transactions", json={
+    client.post("/crypto/transactions/composite", json={
+        "account_id": cacc_id,
+        "symbol": "EUR",
+        "type": "FIAT_DEPOSIT",
+        "amount": "20000",
+        "executed_at": "2024-01-01T11:00:00",
+    }, headers=headers)
+    client.post("/crypto/transactions/composite", json={
         "account_id": cacc_id,
         "symbol": "BTC",
         "type": "BUY",
         "amount": "0.5",
-        "price_per_unit": "40000",
-        "fees": "5",
-        "fees_symbol": "USD",
-        "executed_at": "2024-01-01T12:00:00"
+        "eur_amount": "20000",
+        "quote_symbol": "EUR",
+        "quote_amount": "20000",
+        "executed_at": "2024-01-01T12:00:00",
     }, headers=headers)
 
     r2 = client.get("/dashboard/statistics", headers=headers)

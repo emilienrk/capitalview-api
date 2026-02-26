@@ -52,6 +52,13 @@ class UserSettings(SQLModel, table=True):
     inflation_rate: Decimal = Field(default=Decimal("0.02"), max_digits=5, decimal_places=4)
     crypto_module_enabled: bool = Field(default=False, nullable=False)
     crypto_mode: str = Field(default="SINGLE", nullable=False)
+    # Manual USD→EUR rate override (None = use auto-fetched rate)
+    usd_eur_rate: Optional[Decimal] = Field(
+        default=None,
+        max_digits=10,
+        decimal_places=6,
+        sa_column=Column(sa.Numeric(10, 6), nullable=True),
+    )
 
     created_at: datetime = Field(
         default=sa.func.now(),

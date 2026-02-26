@@ -15,6 +15,12 @@ from dtos import AccountSummaryResponse, PositionResponse
 
 logger = logging.getLogger(__name__)
 
+# Fiat symbols whose prices are already expressed in EUR (hardcoded to 1.0 in
+# get_crypto_account_summary) — they must NOT be multiplied by the USD/EUR rate.
+_FIAT_SYMBOLS: frozenset[str] = frozenset(
+    {"EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "CNY", "NZD", "SEK", "NOK", "DKK"}
+)
+
 # ── In-memory cache ────────────────────────────────────────────
 _cache: dict[str, dict] = {}
 CACHE_TTL = timedelta(hours=1)
@@ -140,3 +146,96 @@ def convert_account_to_eur(
         "profit_loss": round(account.profit_loss * rate, 2) if account.profit_loss else None,
         "positions": positions_eur,
     })
+
+
+def get_effective_usd_eur_rate(user_rate: Optional[float]) -> Decimal:
+    """Return the USD→EUR rate to use.
+
+    Priority:
+      1. User-configured manual rate (stored in settings.usd_eur_rate).
+      2. Live rate fetched from yfinance (cached 1 h).
+      3. Hard-coded fallback if both fail.
+    """
+    if user_rate is not None:
+        return Decimal(str(user_rate))
+    return get_exchange_rate("USD", "EUR")
+
+
+def convert_crypto_prices_to_eur(
+    account: AccountSummaryResponse, rate: Decimal
+) -> AccountSummaryResponse:
+    """Convert only the *market-price-derived* fields of a crypto account to EUR.
+
+    ``total_invested`` and ``average_buy_price`` are already in EUR (they are
+    computed from FIAT_ANCHOR / fiat-SPEND rows entered by the user in EUR) and
+    must **not** be multiplied by the USD/EUR rate.
+
+    Only the following fields need conversion:
+      - ``current_price``  (USD → EUR)
+      - ``current_value``  (USD → EUR, recomputed as amount × new_price)
+      - ``profit_loss``    (recomputed as current_value_EUR − total_invested_EUR)
+      - ``profit_loss_percentage`` (recomputed)
+
+    Fiat symbols (EUR, USD, …) already have ``current_price = 1`` (EUR) and are
+    left untouched.
+    """
+    converted_positions: list[PositionResponse] = []
+    for pos in account.positions:
+        if pos.symbol in _FIAT_SYMBOLS:
+            # Price already expressed in EUR (hardcoded to 1 EUR inside
+            # get_crypto_account_summary) — skip conversion.
+            converted_positions.append(pos)
+            continue
+
+        new_price = round(pos.current_price * rate, 6) if pos.current_price is not None else None
+        new_value = (
+            round(pos.total_amount * new_price, 2)
+            if new_price is not None
+            else None
+        )
+        profit_loss = (
+            round(new_value - pos.total_invested, 2)
+            if new_value is not None
+            else None
+        )
+        profit_loss_pct = (
+            round(profit_loss / pos.total_invested * 100, 2)
+            if profit_loss is not None and pos.total_invested > 0
+            else None
+        )
+        converted_positions.append(
+            pos.model_copy(
+                update={
+                    "current_price": new_price,
+                    "current_value": new_value,
+                    "profit_loss": profit_loss,
+                    "profit_loss_percentage": profit_loss_pct,
+                }
+            )
+        )
+
+    new_current_value_list = [
+        p.current_value for p in converted_positions if p.current_value is not None
+    ]
+    new_current_value = sum(new_current_value_list) if new_current_value_list else None
+
+    acc_profit_loss = (
+        round(new_current_value - account.total_invested, 2)
+        if new_current_value is not None
+        else None
+    )
+    acc_profit_loss_pct = (
+        round(acc_profit_loss / account.total_invested * 100, 2)
+        if acc_profit_loss is not None and account.total_invested > 0
+        else None
+    )
+
+    return account.model_copy(
+        update={
+            "currency": "EUR",
+            "current_value": round(new_current_value, 2) if new_current_value is not None else None,
+            "profit_loss": acc_profit_loss,
+            "profit_loss_percentage": acc_profit_loss_pct,
+            "positions": converted_positions,
+        }
+    )

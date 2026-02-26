@@ -71,10 +71,10 @@ def test_login_refresh_and_logout(session):
     assert data_optin["master_key"] is not None  # Returned when requested
 
     cookies = r2.cookies
-    if "refresh_token" in cookies:
-        r3 = client.post("/auth/refresh")
-        assert r3.status_code == 200
-        assert "access_token" in r3.json()
+    assert "refresh_token" in cookies, "Login must set a refresh_token cookie"
+    r3 = client.post("/auth/refresh")
+    assert r3.status_code == 200
+    assert "access_token" in r3.json()
 
     token = data["access_token"]
     r4 = client.post("/auth/logout", headers={"Authorization": f"Bearer {token}"})

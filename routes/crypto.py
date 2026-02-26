@@ -35,6 +35,7 @@ from services.crypto_account import (
 )
 from services.settings import get_or_create_settings
 from services.encryption import hash_index
+from services.exchange_rate import get_effective_usd_eur_rate, convert_crypto_prices_to_eur
 from services.crypto_transaction import (
     create_composite_crypto_transaction,
     create_cross_account_transfer,
@@ -95,8 +96,13 @@ def get_default_account(
     Get (or transparently create) the single default account for SINGLE-mode users.
     Returns the full account summary with positions and calculated values.
     """
+    settings = get_or_create_settings(session, current_user.uuid, master_key)
+    rate = get_effective_usd_eur_rate(
+        float(settings.usd_eur_rate) if settings.usd_eur_rate is not None else None
+    )
     account_model = get_or_create_default_account(session, current_user.uuid, master_key)
-    return get_crypto_account_summary(session, account_model, master_key)
+    summary = get_crypto_account_summary(session, account_model, master_key)
+    return convert_crypto_prices_to_eur(summary, rate)
 
 
 @router.get("/accounts/{account_id}", response_model=AccountSummaryResponse)
@@ -110,10 +116,14 @@ def get_account(
     account_basic = get_crypto_account(session, account_id, current_user.uuid, master_key)
     if not account_basic:
         raise HTTPException(status_code=404, detail="Account not found")
-        
+
     account_model = session.get(CryptoAccount, account_id)
-    
-    return get_crypto_account_summary(session, account_model, master_key)
+    settings = get_or_create_settings(session, current_user.uuid, master_key)
+    rate = get_effective_usd_eur_rate(
+        float(settings.usd_eur_rate) if settings.usd_eur_rate is not None else None
+    )
+    summary = get_crypto_account_summary(session, account_model, master_key)
+    return convert_crypto_prices_to_eur(summary, rate)
 
 
 @router.put("/accounts/{account_id}", response_model=CryptoAccountBasicResponse)

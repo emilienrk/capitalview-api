@@ -15,6 +15,7 @@ class UserSettingsUpdate(BaseModel):
     inflation_rate: Optional[float] = Field(None, ge=0, le=1)
     crypto_module_enabled: Optional[bool] = None
     crypto_mode: Optional[str] = None
+    usd_eur_rate: Optional[float] = Field(None, gt=0, le=10)
 
 
 class UserSettingsResponse(BaseModel):
@@ -29,5 +30,6 @@ class UserSettingsResponse(BaseModel):
     inflation_rate: float = 0.02
     crypto_module_enabled: bool = False
     crypto_mode: str = "SINGLE"
+    usd_eur_rate: Optional[float] = None
     created_at: datetime
     updated_at: datetime

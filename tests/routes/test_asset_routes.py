@@ -159,6 +159,7 @@ def test_sell_asset(session, master_key):
     assert float(data["sold_price"]) == 250
     assert data["sold_at"] == "2025-06-15"
     assert float(data["estimated_value"]) == 250
+    assert float(data["profit_loss"]) == 150
 
 
 def test_sell_asset_hidden_from_list(session, master_key):

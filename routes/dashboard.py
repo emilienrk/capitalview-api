@@ -12,7 +12,8 @@ from dtos import PortfolioResponse
 from dtos.dashboard import DashboardStatisticsResponse, InvestmentDistribution, WealthBreakdown
 from services.auth import get_current_user, get_master_key
 from services.encryption import hash_index
-from services.exchange_rate import get_exchange_rate, convert_account_to_eur
+from services.exchange_rate import get_exchange_rate, get_effective_usd_eur_rate, convert_crypto_prices_to_eur
+from services.settings import get_or_create_settings
 from services.stock_transaction import get_stock_account_summary
 from services.crypto_transaction import get_crypto_account_summary
 from services.bank import get_user_bank_accounts
@@ -69,10 +70,13 @@ def get_my_portfolio(
         accounts.append(summary)
     
     # Convert crypto accounts from USD to EUR for portfolio aggregation
-    usd_eur_rate = get_exchange_rate("USD", "EUR")
+    settings = get_or_create_settings(session, current_user.uuid, master_key)
+    usd_eur_rate = get_effective_usd_eur_rate(
+        float(settings.usd_eur_rate) if settings.usd_eur_rate is not None else None
+    )
     for acc in crypto_models:
         summary = get_crypto_account_summary(session, acc, master_key)
-        summary_eur = convert_account_to_eur(summary, usd_eur_rate)
+        summary_eur = convert_crypto_prices_to_eur(summary, usd_eur_rate)
         accounts.append(summary_eur)
     
     total_invested = sum(a.total_invested for a in accounts)
@@ -128,12 +132,15 @@ def get_dashboard_statistics(
         select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
     ).all()
 
-    usd_eur_rate = get_exchange_rate("USD", "EUR")
+    settings = get_or_create_settings(session, current_user.uuid, master_key)
+    usd_eur_rate = get_effective_usd_eur_rate(
+        float(settings.usd_eur_rate) if settings.usd_eur_rate is not None else None
+    )
     crypto_invested = Decimal(0)
     crypto_current_value = Decimal(0)
     for acc in crypto_models:
         summary = get_crypto_account_summary(session, acc, master_key)
-        summary_eur = convert_account_to_eur(summary, usd_eur_rate)
+        summary_eur = convert_crypto_prices_to_eur(summary, usd_eur_rate)
         crypto_invested += summary_eur.total_invested
         if summary_eur.current_value:
             crypto_current_value += summary_eur.current_value
