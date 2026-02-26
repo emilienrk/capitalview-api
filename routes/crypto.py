@@ -24,7 +24,12 @@ from dtos import (
     AssetSearchResult,
     AssetInfoResponse,
     CrossAccountTransferCreate,
+    BinanceImportPreviewRequest,
+    BinanceImportPreviewResponse,
+    BinanceImportConfirmRequest,
+    BinanceImportConfirmResponse,
 )
+from services.imports.binance import generate_preview, execute_import
 from services.crypto_account import (
     create_crypto_account,
     get_crypto_account,
@@ -448,3 +453,48 @@ def get_assets_info(
             type=None
         ))
     return response
+
+
+# ============== BINANCE IMPORT ==============
+
+@router.post("/import/binance/preview", response_model=BinanceImportPreviewResponse)
+def preview_binance_import(
+    data: BinanceImportPreviewRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """
+    Parse a Binance CSV and return a preview of grouped transactions.
+
+    Groups sharing the same UTC second receive a common group.
+    Groups that need a manual EUR anchor are flagged with
+    ``needs_eur_input = true``.
+    """
+    return generate_preview(data.csv_content)
+
+
+@router.post("/import/binance/confirm", response_model=BinanceImportConfirmResponse, status_code=201)
+def confirm_binance_import(
+    data: BinanceImportConfirmRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """
+    Create all transactions from a validated Binance import preview.
+
+    The frontend sends back the preview groups (possibly with
+    ``eur_amount`` filled in) and the target ``account_id``.
+    """
+    account = get_crypto_account(session, data.account_id, current_user.uuid, master_key)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    # Validate: every group that needs EUR must have eur_amount
+    for g in data.groups:
+        if g.needs_eur_input and (g.eur_amount is None or g.eur_amount < 0):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Le groupe #{g.group_index + 1} nécessite un montant EUR.",
+            )
+
+    return execute_import(session, data.account_id, data.groups, master_key)

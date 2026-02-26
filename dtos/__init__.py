@@ -54,6 +54,12 @@ from .crypto import (
     CryptoTransactionCreate,
     CryptoTransactionUpdate,
     CrossAccountTransferCreate,
+    BinanceImportRowPreview,
+    BinanceImportGroupPreview,
+    BinanceImportPreviewRequest,
+    BinanceImportPreviewResponse,
+    BinanceImportConfirmRequest,
+    BinanceImportConfirmResponse,
 )
 
 # Note schemas
@@ -130,6 +136,13 @@ __all__ = [
     "CryptoTransactionBulkCreate",
     "CryptoTransactionCreate",
     "CryptoTransactionUpdate",
+    # Binance import
+    "BinanceImportRowPreview",
+    "BinanceImportGroupPreview",
+    "BinanceImportPreviewRequest",
+    "BinanceImportPreviewResponse",
+    "BinanceImportConfirmRequest",
+    "BinanceImportConfirmResponse",
     # Note
     "NoteCreate",
     "NoteReorder",

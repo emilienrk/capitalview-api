@@ -149,3 +149,50 @@ class CryptoCompositeTransactionCreate(BaseModel):
     executed_at: datetime
     tx_hash: Optional[str] = None
     notes: Optional[str] = None
+
+
+# ── Binance Import DTOs ──────────────────────────────────────
+
+class BinanceImportRowPreview(BaseModel):
+    """One CSV row mapped to an atomic transaction."""
+    operation: str
+    coin: str
+    change: float
+    mapped_type: str
+    mapped_symbol: str
+    mapped_amount: float
+    mapped_price: float
+
+
+class BinanceImportGroupPreview(BaseModel):
+    """One group (same timestamp) of CSV rows."""
+    group_index: int
+    timestamp: str
+    rows: list[BinanceImportRowPreview]
+    summary: str
+    has_eur: bool
+    auto_eur_amount: Optional[float] = None
+    needs_eur_input: bool
+    hint_usdc_amount: Optional[float] = None
+    eur_amount: Optional[float] = None
+
+
+class BinanceImportPreviewRequest(BaseModel):
+    csv_content: str
+
+
+class BinanceImportPreviewResponse(BaseModel):
+    total_groups: int
+    total_rows: int
+    groups_needing_eur: int
+    groups: list[BinanceImportGroupPreview]
+
+
+class BinanceImportConfirmRequest(BaseModel):
+    account_id: str
+    groups: list[BinanceImportGroupPreview]
+
+
+class BinanceImportConfirmResponse(BaseModel):
+    imported_count: int
+    groups_count: int
