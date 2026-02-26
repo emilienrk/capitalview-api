@@ -4,7 +4,7 @@ Binance CSV import — parser, mapper, and executor.
 Supports the standard Binance export format:
   User_ID, UTC_Time, Account, Operation, Coin, Change, Remark
 
-Grouping rule: rows sharing the exact same UTC second belong to one
+Grouping rule: rows within a 6-second window belong to one
 group and receive a shared ``group_uuid``.
 
 Supported operations:
@@ -15,7 +15,6 @@ Supported operations:
 
 import csv
 import io
-from collections import defaultdict
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
@@ -217,18 +216,21 @@ def generate_preview(csv_content: str) -> BinanceImportPreviewResponse:
             groups=[],
         )
 
-    # Group by timestamp (truncated to the second)
-    buckets: dict[datetime, list[_BinanceRow]] = defaultdict(list)
-    for r in rows:
-        buckets[r.utc_time.replace(microsecond=0)].append(r)
-
-    sorted_ts = sorted(buckets.keys())
+    # Group by proximity (within 6 seconds)
+    sorted_rows = sorted(rows, key=lambda r: r.utc_time)
+    buckets: list[list[_BinanceRow]] = []
+    for r in sorted_rows:
+        t = r.utc_time.replace(microsecond=0)
+        if buckets and (t - buckets[-1][0].utc_time.replace(microsecond=0)).total_seconds() <= 6:
+            buckets[-1].append(r)
+        else:
+            buckets.append([r])
 
     groups: list[BinanceImportGroupPreview] = []
     needing_eur = 0
 
-    for idx, ts in enumerate(sorted_ts):
-        group_rows = buckets[ts]
+    for idx, group_rows in enumerate(buckets):
+        ts = group_rows[0].utc_time.replace(microsecond=0)
 
         # Map every row
         mapped: list[BinanceImportRowPreview] = []
@@ -266,6 +268,10 @@ def generate_preview(csv_content: str) -> BinanceImportPreviewResponse:
                 CryptoTransactionType.SPEND,
             ) and symbol != "EUR":
                 has_trade = True
+
+        # Sort mapped rows: BUY first, then SPEND, then FEE, then others
+        _TYPE_ORDER = {"BUY": 0, "FIAT_DEPOSIT": 1, "REWARD": 1, "SPEND": 2, "EXIT": 3, "FEE": 4, "FIAT_ANCHOR": 5, "TRANSFER": 6}
+        mapped.sort(key=lambda m: _TYPE_ORDER.get(m.mapped_type, 99))
 
         # Determine EUR anchor status
         is_reward_only = all(r.operation == "Crypto Box" for r in group_rows)

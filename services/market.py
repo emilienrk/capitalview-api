@@ -89,7 +89,15 @@ def _create_market_price_entry(
         last_updated=last_updated,
     )
     session.add(mp)
-    session.commit()
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        # Another request likely inserted the same entry concurrently
+        existing = session.exec(select(MarketPrice).where(MarketPrice.isin == lookup_key)).first()
+        if existing:
+            return existing
+        return None
     session.refresh(mp)
     return mp
 
