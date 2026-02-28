@@ -130,13 +130,11 @@ def test_get_account_transactions(session: Session, master_key: str):
 
 
 @patch("services.crypto_transaction.get_crypto_info")
-@patch("services.crypto_transaction.get_crypto_price")
-def test_get_crypto_account_summary(mock_price, mock_info, session: Session, master_key: str):
+def test_get_crypto_account_summary(mock_info, session: Session, master_key: str):
     mock_info.side_effect = lambda s, symbol: {
         "BTC": ("Bitcoin", Decimal("40000.0")),
         "ETH": ("Ethereum", Decimal("3000.0")),
     }.get(symbol, ("Unknown", Decimal("0")))
-    mock_price.side_effect = lambda s, symbol: Decimal("3000.0") if symbol == "ETH" else Decimal("1.0")
 
     account = CryptoAccount(uuid="acc_main_crypto", user_uuid_bidx=hash_index("user_1", master_key), name_enc=encrypt_data("My Wallet", master_key))
     session.add(account)
@@ -913,8 +911,7 @@ def test_bulk_create_with_group_uuid_pru(session: Session, master_key: str):
     )
 
     with patch("services.crypto_transaction.get_crypto_info", return_value=("Bitcoin", Decimal("40000"))):
-        with patch("services.crypto_transaction.get_crypto_price", return_value=Decimal("40000")):
-            summary = get_crypto_account_summary(session, account, master_key)
+        summary = get_crypto_account_summary(session, account, master_key)
 
     btc = next(p for p in summary.positions if p.symbol == "BTC")
     assert btc.total_amount == Decimal("0.1")

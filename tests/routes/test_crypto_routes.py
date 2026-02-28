@@ -60,13 +60,10 @@ def test_crypto_account_and_transaction(session, master_key):
 
 @patch("routes.crypto.get_effective_usd_eur_rate", return_value=Decimal("1"))
 @patch("services.crypto_transaction.get_crypto_info")
-@patch("services.crypto_transaction.get_crypto_price")
-def test_crypto_summary(mock_get_price, mock_get_info, _mock_rate, session, master_key):
-    # Decorators are applied bottom-up → mock_get_price = get_crypto_price,
-    #                                     mock_get_info  = get_crypto_info,
+def test_crypto_summary(mock_get_info, _mock_rate, session, master_key):
+    # Decorators are applied bottom-up → mock_get_info  = get_crypto_info,
     #                                     _mock_rate     = get_effective_usd_eur_rate
     mock_get_info.return_value = ("Bitcoin", Decimal("40000"))
-    mock_get_price.return_value = Decimal("40000")
 
     client = TestClient(app)
     resp = client.post("/crypto/accounts", json={"name": "Summary Wallet"})
@@ -225,14 +222,12 @@ def test_create_crypto_transaction_negative_validation(session, master_key):
 
 @patch("routes.crypto.get_effective_usd_eur_rate", return_value=Decimal("1"))
 @patch("services.crypto_transaction.get_crypto_info")
-@patch("services.crypto_transaction.get_crypto_price")
-def test_bulk_composite_import_eur_buy(mock_price, mock_info, _mock_rate, session, master_key):
+def test_bulk_composite_import_eur_buy(mock_info, _mock_rate, session, master_key):
     """
     Bulk-composite: import one BUY BTC for EUR from CSV.
     Creates BUY BTC + SPEND EUR → 2 atomic rows, PRU = 3000/0.1 = 30 000.
     """
     mock_info.return_value = ("Bitcoin", Decimal("35000"))
-    mock_price.return_value = Decimal("35000")
 
     client = TestClient(app)
     acc = client.post("/crypto/accounts", json={"name": "CSV Wallet"}).json()
@@ -267,15 +262,13 @@ def test_bulk_composite_import_eur_buy(mock_price, mock_info, _mock_rate, sessio
 
 @patch("routes.crypto.get_effective_usd_eur_rate", return_value=Decimal("1"))
 @patch("services.crypto_transaction.get_crypto_info")
-@patch("services.crypto_transaction.get_crypto_price")
-def test_bulk_composite_import_crypto_swap_with_eur_anchor(mock_price, mock_info, _mock_rate, session, master_key):
+def test_bulk_composite_import_crypto_swap_with_eur_anchor(mock_info, _mock_rate, session, master_key):
     """
     Bulk-composite: swap USDC→BTC with eur_amount.
     Creates BUY BTC + SPEND USDC + FIAT_ANCHOR → 3 atomic rows.
     PRU = 2760/0.1 = 27 600.
     """
     mock_info.return_value = ("Bitcoin", Decimal("35000"))
-    mock_price.return_value = Decimal("35000")
 
     client = TestClient(app)
     acc = client.post("/crypto/accounts", json={"name": "CSV Swap Wallet"}).json()
@@ -309,8 +302,7 @@ def test_bulk_composite_import_crypto_swap_with_eur_anchor(mock_price, mock_info
 
 @patch("routes.crypto.get_effective_usd_eur_rate", return_value=Decimal("1"))
 @patch("services.crypto_transaction.get_crypto_info")
-@patch("services.crypto_transaction.get_crypto_price")
-def test_bulk_composite_import_reward_and_crypto_deposit(mock_price, mock_info, _mock_rate, session, master_key):
+def test_bulk_composite_import_reward_and_crypto_deposit(mock_info, _mock_rate, session, master_key):
     """
     Bulk-composite: REWARD (cost=0) + CRYPTO_DEPOSIT with eur_amount.
     - REWARD → 1 row, total_invested = 0
@@ -320,7 +312,6 @@ def test_bulk_composite_import_reward_and_crypto_deposit(mock_price, mock_info, 
         "ETH": ("Ethereum", Decimal("3000")),
         "BTC": ("Bitcoin", Decimal("35000")),
     }.get(symbol, ("?", Decimal("0")))
-    mock_price.side_effect = lambda s, symbol: Decimal("3000") if symbol == "ETH" else Decimal("35000")
 
     client = TestClient(app)
     acc = client.post("/crypto/accounts", json={"name": "CSV Multi Wallet"}).json()
@@ -477,8 +468,7 @@ def test_composite_transaction_crypto_quote(session, master_key):
 
 @patch("routes.crypto.get_effective_usd_eur_rate", return_value=Decimal("1"))
 @patch("services.crypto_transaction.get_crypto_info")
-@patch("services.crypto_transaction.get_crypto_price")
-def test_account_pl_eur_cash_not_profit(mock_get_price, mock_get_info, _mock_rate, session, master_key):
+def test_account_pl_eur_cash_not_profit(mock_get_info, _mock_rate, session, master_key):
     """
     Core regression: the EUR cash sitting in an exchange account must NOT be
     counted as profit.
@@ -496,7 +486,6 @@ def test_account_pl_eur_cash_not_profit(mock_get_price, mock_get_info, _mock_rat
     profit_loss     = -1 000  (not +2 000 from EUR cash)
     """
     mock_get_info.return_value = ("Bitcoin", Decimal("7000"))
-    mock_get_price.return_value = Decimal("7000")
 
     client = TestClient(app)
     acc = client.post("/crypto/accounts", json={"name": "PL Test Wallet"}).json()
@@ -540,8 +529,7 @@ def test_account_pl_eur_cash_not_profit(mock_get_price, mock_get_info, _mock_rat
 
 @patch("routes.crypto.get_effective_usd_eur_rate", return_value=Decimal("1"))
 @patch("services.crypto_transaction.get_crypto_info")
-@patch("services.crypto_transaction.get_crypto_price")
-def test_account_pl_exit_does_not_inflate_invested(mock_get_price, mock_get_info, _mock_rate, session, master_key):
+def test_account_pl_exit_does_not_inflate_invested(mock_get_info, _mock_rate, session, master_key):
     """
     Selling crypto for EUR (EXIT) moves value back to EUR cash but must NOT
     inflate total_invested (the EUR received is NOT a new bank wire).
@@ -556,7 +544,6 @@ def test_account_pl_exit_does_not_inflate_invested(mock_get_price, mock_get_info
     profit_loss = 9 000 - 10 000 = -1 000
     """
     mock_get_info.return_value = ("Bitcoin", Decimal("7000"))
-    mock_get_price.return_value = Decimal("7000")
 
     client = TestClient(app)
     acc = client.post("/crypto/accounts", json={"name": "EXIT PL Wallet"}).json()

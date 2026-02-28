@@ -560,14 +560,12 @@ class TestPRUAfterImport:
         return account
 
     @patch("services.crypto_transaction.get_crypto_info")
-    @patch("services.crypto_transaction.get_crypto_price")
-    def test_buy_with_eur_pru(self, mock_price, mock_info, session: Session, master_key: str):
+    def test_buy_with_eur_pru(self, mock_info, session: Session, master_key: str):
         """
         Buy 0.1 BTC for 3000 EUR → SPEND EUR (price=1) is the cost anchor.
-        Expected PRU = 3000 / 0.1 = 30 000 EUR.
+        PRU should be 30 000.
         """
         mock_info.return_value = ("Bitcoin", Decimal("35000"))
-        mock_price.return_value = Decimal("35000")
         account = self._make_account(session, master_key)
 
         group = BinanceImportGroupPreview(
@@ -597,14 +595,12 @@ class TestPRUAfterImport:
         assert btc.average_buy_price == Decimal("30000.0000")
 
     @patch("services.crypto_transaction.get_crypto_info")
-    @patch("services.crypto_transaction.get_crypto_price")
-    def test_crypto_swap_with_anchor_pru(self, mock_price, mock_info, session: Session, master_key: str):
+    def test_crypto_swap_with_anchor_pru(self, mock_info, session: Session, master_key: str):
         """
         Swap USDC→BTC with FIAT_ANCHOR 2760 EUR.
-        Expected PRU = 2760 / 0.1 = 27 600 EUR.
+        PRU = 2760 / 0.1 = 27600.
         """
         mock_info.return_value = ("Bitcoin", Decimal("35000"))
-        mock_price.return_value = Decimal("35000")
         account = self._make_account(session, master_key, "acc_pru2")
 
         group = BinanceImportGroupPreview(
@@ -635,11 +631,9 @@ class TestPRUAfterImport:
         assert btc.average_buy_price == Decimal("27600.0000")
 
     @patch("services.crypto_transaction.get_crypto_info")
-    @patch("services.crypto_transaction.get_crypto_price")
-    def test_reward_has_zero_cost_basis(self, mock_price, mock_info, session: Session, master_key: str):
+    def test_reward_has_zero_cost_basis(self, mock_info, session: Session, master_key: str):
         """Staking reward: REWARD rows have price=0 → total_invested=0."""
         mock_info.return_value = ("Ethereum", Decimal("3000"))
-        mock_price.return_value = Decimal("3000")
         account = self._make_account(session, master_key, "acc_pru3")
 
         group = BinanceImportGroupPreview(
@@ -664,15 +658,13 @@ class TestPRUAfterImport:
         assert eth.total_invested == Decimal("0.00")
 
     @patch("services.crypto_transaction.get_crypto_info")
-    @patch("services.crypto_transaction.get_crypto_price")
-    def test_sell_reduces_position_and_cost_basis(self, mock_price, mock_info, session: Session, master_key: str):
+    def test_sell_reduces_position_and_cost_basis(self, mock_info, session: Session, master_key: str):
         """
         Buy 1 BTC for 30000 EUR, then sell 0.5 BTC for 17500 EUR.
         After sell: total_amount=0.5, total_invested=15000 (50% of 30000).
         EUR should NOT create a BTC-like position.
         """
         mock_info.return_value = ("Bitcoin", Decimal("35000"))
-        mock_price.return_value = Decimal("35000")
         account = self._make_account(session, master_key, "acc_pru4")
 
         buy_group = BinanceImportGroupPreview(
@@ -712,8 +704,7 @@ class TestPRUAfterImport:
         assert btc.total_invested == Decimal("15000.00")
 
     @patch("services.crypto_transaction.get_crypto_info")
-    @patch("services.crypto_transaction.get_crypto_price")
-    def test_net_external_deposits_eur_buy(self, mock_price, mock_info, session: Session, master_key: str):
+    def test_net_external_deposits_eur_buy(self, mock_info, session: Session, master_key: str):
         """
         Buy BTC with EUR: SPEND EUR is inside a crypto-buy group →
         net_external_deposits should NOT double-count the EUR as a withdrawal.
@@ -721,7 +712,6 @@ class TestPRUAfterImport:
         since euros entered via the exchange directly as a buy, not a wire).
         """
         mock_info.return_value = ("Bitcoin", Decimal("35000"))
-        mock_price.return_value = Decimal("35000")
         account = self._make_account(session, master_key, "acc_pru5")
 
         group = BinanceImportGroupPreview(
@@ -747,14 +737,12 @@ class TestPRUAfterImport:
         assert summary.total_invested == Decimal("0.00")
 
     @patch("services.crypto_transaction.get_crypto_info")
-    @patch("services.crypto_transaction.get_crypto_price")
-    def test_fiat_deposit_counts_as_external(self, mock_price, mock_info, session: Session, master_key: str):
+    def test_fiat_deposit_counts_as_external(self, mock_info, session: Session, master_key: str):
         """
         Standalone EUR Deposit (wire transfer): FIAT_DEPOSIT EUR NOT in a
-        crypto-spend group → counted in net_external_deposits.
+        trade group. Total invested = amount.
         """
         mock_info.return_value = ("Bitcoin", Decimal("35000"))
-        mock_price.return_value = Decimal("35000")
         account = self._make_account(session, master_key, "acc_pru6")
 
         group = BinanceImportGroupPreview(
