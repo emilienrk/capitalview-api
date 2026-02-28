@@ -58,7 +58,7 @@ limiter = Limiter(key_func=rate_limit_key_func)
 app = FastAPI(
     title=settings.app_name,
     description="Personal wealth management and investment tracking API",
-    version="0.1.0",
+    version="1.0.0",
     lifespan=lifespan,
 )
 app.state.limiter = limiter
@@ -111,7 +111,7 @@ def root():
 @app.get("/health")
 def health():
     """Simple health check for container monitoring."""
-    return {"status": "ok", "app": settings.app_name, "version": "0.1.0"}
+    return {"status": "ok", "app": settings.app_name, "version": "1.0.0"}
 
 
 @app.get("/health/db")

@@ -1,6 +1,6 @@
 [project]
 name = "capitalview-backend"
-version = "0.1.0"
+version = "1.0.0"
 description = "Personal wealth management and investment tracking application - Backend API"
 authors = [
     {name = "Emilien", email = "user@example.com"}
