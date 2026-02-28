@@ -15,7 +15,7 @@ class Asset(SQLModel, table=True):
     __tablename__ = "assets"
     __table_args__ = {"extend_existing": True}
 
-    uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), sa_column=Column(TEXT, primary_key=True))
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
     name_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     description_enc: Optional[str] = Field(sa_column=Column(TEXT))
@@ -47,7 +47,7 @@ class AssetValuation(SQLModel, table=True):
     __tablename__ = "asset_valuations"
     __table_args__ = {"extend_existing": True}
 
-    uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), sa_column=Column(TEXT, primary_key=True))
     asset_uuid: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
     estimated_value_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     note_enc: Optional[str] = Field(sa_column=Column(TEXT))

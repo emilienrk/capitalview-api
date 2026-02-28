@@ -157,7 +157,7 @@ def get_default_account(
         float(settings.usd_eur_rate) if settings.usd_eur_rate is not None else None
     )
     account_model = get_or_create_default_account(session, current_user.uuid, master_key)
-    summary = get_crypto_account_summary(session, account_model, master_key)
+    summary = get_crypto_account_summary(session, account_model, master_key, settings.crypto_show_negative_positions)
     return convert_crypto_prices_to_eur(summary, rate)
 
 
@@ -178,7 +178,7 @@ def get_account(
     rate = get_effective_usd_eur_rate(
         float(settings.usd_eur_rate) if settings.usd_eur_rate is not None else None
     )
-    summary = get_crypto_account_summary(session, account_model, master_key)
+    summary = get_crypto_account_summary(session, account_model, master_key, settings.crypto_show_negative_positions)
     return convert_crypto_prices_to_eur(summary, rate)
 
 

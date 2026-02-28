@@ -75,7 +75,7 @@ def get_my_portfolio(
         float(settings.usd_eur_rate) if settings.usd_eur_rate is not None else None
     )
     for acc in crypto_models:
-        summary = get_crypto_account_summary(session, acc, master_key)
+        summary = get_crypto_account_summary(session, acc, master_key, settings.crypto_show_negative_positions)
         summary_eur = convert_crypto_prices_to_eur(summary, usd_eur_rate)
         accounts.append(summary_eur)
     
@@ -139,7 +139,7 @@ def get_dashboard_statistics(
     crypto_invested = Decimal(0)
     crypto_current_value = Decimal(0)
     for acc in crypto_models:
-        summary = get_crypto_account_summary(session, acc, master_key)
+        summary = get_crypto_account_summary(session, acc, master_key, settings.crypto_show_negative_positions)
         summary_eur = convert_crypto_prices_to_eur(summary, usd_eur_rate)
         crypto_invested += summary_eur.total_invested
         if summary_eur.current_value:

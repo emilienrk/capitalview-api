@@ -617,6 +617,7 @@ def get_crypto_account_summary(
     session: Session,
     account: CryptoAccount,
     master_key: str,
+    show_negative_positions: bool = False,
 ) -> AccountSummaryResponse:
     acc_resp = _map_account_to_response(account, master_key)
 
@@ -696,7 +697,9 @@ def get_crypto_account_summary(
 
     positions = []
     for symbol, data in positions_map.items():
-        if data["total_amount"] <= Decimal("0"):
+        if data["total_amount"] == Decimal("0"):
+            continue
+        if not show_negative_positions and data["total_amount"] < Decimal("0"):
             continue
 
         total_invested = data["cost_basis"]
