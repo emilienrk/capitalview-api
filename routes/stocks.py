@@ -8,7 +8,7 @@ from sqlmodel import Session
 from database import get_session
 from models import User, StockAccount, StockTransaction
 from services.auth import get_current_user, get_master_key
-from models.enums import StockAccountType, StockTransactionType, AssetType
+from models.enums import AssetType
 from dtos import (
     StockAccountCreate,
     StockAccountUpdate,

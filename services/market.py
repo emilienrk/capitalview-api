@@ -76,7 +76,6 @@ def _create_market_price_entry(
 
     now = datetime.now(timezone.utc)
     price = market_info.get("price") or Decimal("0")
-    # If we got a valid price, set last_updated to now; otherwise force stale
     last_updated = now if price > 0 else datetime(2000, 1, 1, tzinfo=timezone.utc)
 
     mp = MarketPrice(
@@ -93,7 +92,6 @@ def _create_market_price_entry(
         session.commit()
     except Exception:
         session.rollback()
-        # Another request likely inserted the same entry concurrently
         existing = session.exec(select(MarketPrice).where(MarketPrice.isin == lookup_key)).first()
         if existing:
             return existing
@@ -117,7 +115,6 @@ def _get_market_price_internal(session: Session, lookup_key: str, asset_type: As
     cached = session.exec(select(MarketPrice).where(MarketPrice.isin == lookup_key)).first()
 
     if not cached:
-        # Entry doesn't exist — search and create it automatically
         cached = _create_market_price_entry(session, lookup_key, asset_type)
         if not cached:
             return None
@@ -152,7 +149,6 @@ def _get_market_info_internal(session: Session, lookup_key: str, asset_type: Ass
     cached = session.exec(select(MarketPrice).where(MarketPrice.isin == lookup_key)).first()
 
     if not cached:
-        # Entry doesn't exist — search and create it automatically
         cached = _create_market_price_entry(session, lookup_key, asset_type)
         if not cached:
             return None, None

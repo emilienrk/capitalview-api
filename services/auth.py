@@ -18,8 +18,6 @@ from database import get_session
 from models.user import RefreshToken, User
 
 
-# ============== PASSWORD UTILS ==============
-
 def verify_password(plain_password: str, password_hash: str) -> bool:
     """
     Verify a password against an Argon2id hash.
@@ -37,8 +35,6 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
     except nacl.exceptions.InvalidkeyError:
         return False
 
-
-# ============== JWT UTILS ==============
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """
@@ -235,8 +231,6 @@ def revoke_refresh_token(session: Session, token: str) -> bool:
     session.commit()
     return True
 
-
-# ============== FASTAPI DEPENDENCIES ==============
 
 security = HTTPBearer()
 

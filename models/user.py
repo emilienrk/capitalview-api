@@ -2,9 +2,9 @@
 User and UserSettings models.
 """
 from typing import Optional
-from sqlmodel import SQLModel, Field, Relationship
+from sqlmodel import SQLModel, Field
 from sqlalchemy import Column, TEXT
-from datetime import date, datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 import sqlalchemy as sa
 

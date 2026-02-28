@@ -7,8 +7,6 @@ from typing import Optional
 from pydantic import BaseModel, Field, model_validator
 
 
-# ============== ASSET CRUD ==============
-
 class AssetCreate(BaseModel):
     """Create a personal asset. At least one of purchase_price or estimated_value must be provided."""
     name: str
@@ -60,8 +58,6 @@ class AssetResponse(BaseModel):
     updated_at: datetime
 
 
-# ============== VALUATION HISTORY ==============
-
 class AssetValuationCreate(BaseModel):
     """Create a valuation entry."""
     estimated_value: Decimal = Field(ge=0)
@@ -78,8 +74,6 @@ class AssetValuationResponse(BaseModel):
     valued_at: str
     created_at: datetime
 
-
-# ============== SUMMARY ==============
 
 class AssetCategorySummary(BaseModel):
     """Summary for a single category."""

@@ -19,7 +19,7 @@ from dtos import (
 )
 from dtos.crypto import CryptoCompositeTransactionCreate, CrossAccountTransferCreate, FIAT_SYMBOLS
 from services.encryption import encrypt_data, decrypt_data, hash_index
-from services.market import get_crypto_info, get_crypto_price
+from services.market import get_crypto_info
 from services.crypto_account import _map_account_to_response
 
 
@@ -770,3 +770,49 @@ def get_crypto_account_summary(
         profit_loss_percentage=round(profit_loss_pct_acc, 2) if profit_loss_pct_acc else None,
         positions=positions,
     )
+
+
+# ── Balance helpers ──────────────────────────────────────────────────────────
+
+# Types that increase a symbol's holding
+_CREDIT_TYPES: frozenset[str] = frozenset({"BUY", "REWARD", "FIAT_DEPOSIT"})
+# Types that decrease a symbol's holding
+_DEBIT_TYPES: frozenset[str] = frozenset(
+    {"SPEND", "TRANSFER", "EXIT", "FEE", "NON_TAXABLE_EXIT", "GAS_FEE", "FIAT_WITHDRAW"}
+)
+
+
+def get_symbol_balance(
+    session: Session,
+    account_uuid: str,
+    symbol: str,
+    master_key: str,
+) -> Decimal:
+    """
+    Compute the current net holding of *symbol* in the given account.
+
+    Credits (BUY, REWARD, FIAT_DEPOSIT) add to the balance.
+    Debits  (SPEND, TRANSFER, EXIT, FEE, NON_TAXABLE_EXIT, GAS_FEE,
+             FIAT_WITHDRAW) subtract from the balance.
+    FIAT_ANCHOR rows are skipped (accounting reference, not a real cash flow).
+    """
+    account_bidx = hash_index(account_uuid, master_key)
+    transactions = session.exec(
+        select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == account_bidx)
+    ).all()
+
+    balance = Decimal("0")
+    sym_upper = symbol.upper()
+    for tx in transactions:
+        tx_sym = decrypt_data(tx.symbol_enc, master_key).upper()
+        if tx_sym != sym_upper:
+            continue
+        type_str = decrypt_data(tx.type_enc, master_key)
+        amount = Decimal(decrypt_data(tx.amount_enc, master_key))
+        if type_str in _CREDIT_TYPES:
+            balance += amount
+        elif type_str in _DEBIT_TYPES:
+            balance -= amount
+        # FIAT_ANCHOR and unknown types: ignored
+
+    return balance

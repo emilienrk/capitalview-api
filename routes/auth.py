@@ -1,7 +1,6 @@
 """Authentication routes."""
 
 import uuid
-from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response, status

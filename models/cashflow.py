@@ -1,6 +1,5 @@
 """Cashflow model (income and expenses)."""
 
-from typing import Optional
 from datetime import datetime
 from sqlmodel import SQLModel, Field
 import sqlalchemy as sa

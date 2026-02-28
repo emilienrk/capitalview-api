@@ -4,28 +4,19 @@ Used primarily to convert crypto values (USD) to the portfolio base currency (EU
 in the dashboard aggregation.
 """
 
-import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
+from dtos.crypto import FIAT_SYMBOLS
 import yfinance as yf
 
 from dtos import AccountSummaryResponse, PositionResponse
 
-logger = logging.getLogger(__name__)
 
-# Fiat symbols whose prices are already expressed in EUR (hardcoded to 1.0 in
-# get_crypto_account_summary) — they must NOT be multiplied by the USD/EUR rate.
-_FIAT_SYMBOLS: frozenset[str] = frozenset(
-    {"EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "CNY", "NZD", "SEK", "NOK", "DKK"}
-)
-
-# ── In-memory cache ────────────────────────────────────────────
 _cache: dict[str, dict] = {}
 CACHE_TTL = timedelta(hours=1)
 
-# Fallback rate if external fetch fails (also mirrored in frontend useCurrencyToggle.ts)
 _FALLBACK_USD_EUR = Decimal("0.92")
 
 
@@ -58,16 +49,11 @@ def get_exchange_rate(
     rate = _fetch_rate_yahoo(from_currency, to_currency)
 
     if rate is None:
-        # Try inverse
         inverse = _fetch_rate_yahoo(to_currency, from_currency)
         if inverse and inverse > 0:
             rate = Decimal("1") / inverse
 
     if rate is None:
-        # Use fallback
-        logger.warning(
-            "Could not fetch %s→%s rate, using fallback", from_currency, to_currency
-        )
         if from_currency == "USD" and to_currency == "EUR":
             rate = _FALLBACK_USD_EUR
         elif from_currency == "EUR" and to_currency == "USD":
@@ -102,7 +88,7 @@ def _fetch_rate_yahoo(from_currency: str, to_currency: str) -> Optional[Decimal]
             except (AttributeError, TypeError):
                 pass
     except Exception:
-        logger.warning("yfinance fetch failed for %s", symbol, exc_info=True)
+        pass
     return None
 
 
@@ -117,8 +103,6 @@ def convert_amount(
     rate = get_exchange_rate(from_currency, to_currency)
     return amount * rate
 
-
-# ── DTO conversion helpers ─────────────────────────────────────
 
 def convert_position_to_eur(pos: PositionResponse, rate: Decimal) -> PositionResponse:
     """Convert a single USD position to EUR using model_copy to preserve any new fields."""
@@ -181,9 +165,7 @@ def convert_crypto_prices_to_eur(
     """
     converted_positions: list[PositionResponse] = []
     for pos in account.positions:
-        if pos.symbol in _FIAT_SYMBOLS:
-            # Price already expressed in EUR (hardcoded to 1 EUR inside
-            # get_crypto_account_summary) — skip conversion.
+        if pos.symbol in FIAT_SYMBOLS:
             converted_positions.append(pos)
             continue
 

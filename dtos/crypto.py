@@ -63,6 +63,7 @@ class CryptoTransactionBulkCreate(BaseModel):
     executed_at: datetime
     tx_hash: Optional[str] = None
     notes: Optional[str] = None
+    group_uuid: Optional[str] = None
 
 
 class CryptoBulkImportRequest(BaseModel):
@@ -86,6 +87,19 @@ class CryptoTransactionBasicResponse(BaseModel):
     executed_at: datetime
     tx_hash: Optional[str] = None
     notes: Optional[str] = None
+
+
+class CryptoCompositeTransactionResponse(BaseModel):
+    """
+    Wrapper returned by POST /transactions/composite and
+    POST /transactions/cross-account-transfer.
+
+    ``warning`` is set when one or more debited symbols end up with a
+    negative balance after the operation (non-blocking — the transaction
+    was still persisted).
+    """
+    rows: list[CryptoTransactionBasicResponse]
+    warning: Optional[str] = None
 
 
 FIAT_SYMBOLS: frozenset[str] = frozenset(
@@ -149,6 +163,40 @@ class CryptoCompositeTransactionCreate(BaseModel):
     executed_at: datetime
     tx_hash: Optional[str] = None
     notes: Optional[str] = None
+
+
+# ── Bulk Composite Import DTOs ───────────────────────────────
+
+class CryptoCompositeBulkItem(BaseModel):
+    """
+    One composite operation for bulk CSV import.
+    account_id is injected server-side from the request envelope.
+    """
+    type: Literal["BUY", "REWARD", "FIAT_DEPOSIT", "FIAT_WITHDRAW", "CRYPTO_DEPOSIT",
+                  "TRANSFER", "EXIT", "GAS_FEE", "NON_TAXABLE_EXIT"]
+    symbol: str
+    name: Optional[str] = None
+    amount: Decimal = Field(gt=0)
+    quote_symbol: Optional[str] = None
+    quote_amount: Optional[Decimal] = Field(default=None, ge=0)
+    eur_amount: Optional[Decimal] = Field(default=None, ge=0)
+    fee_included: bool = True
+    fee_symbol: Optional[str] = None
+    fee_amount: Optional[Decimal] = Field(default=None, ge=0)
+    executed_at: datetime
+    tx_hash: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class CryptoBulkCompositeImportRequest(BaseModel):
+    """Bulk import of composite operations from a CSV file."""
+    account_id: str
+    transactions: list[CryptoCompositeBulkItem]
+
+
+class CryptoBulkCompositeImportResponse(BaseModel):
+    imported_count: int   # total atomic rows created
+    groups_count: int     # number of composite operations processed
 
 
 # ── Binance Import DTOs ──────────────────────────────────────

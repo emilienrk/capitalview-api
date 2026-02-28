@@ -32,8 +32,6 @@ from services.asset import (
 router = APIRouter(prefix="/assets", tags=["Assets"])
 
 
-# ============== ASSETS CRUD ==============
-
 @router.post("", response_model=AssetResponse, status_code=201)
 def create(
     data: AssetCreate,
@@ -118,8 +116,6 @@ def sell(
 
     return service_sell_asset(session, asset_id, data, master_key)
 
-
-# ============== VALUATION HISTORY ==============
 
 @router.get("/{asset_id}/valuations", response_model=list[AssetValuationResponse])
 def list_valuations(

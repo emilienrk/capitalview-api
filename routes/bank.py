@@ -19,7 +19,7 @@ from services.bank import (
     get_bank_account,
     get_user_bank_accounts,
     update_bank_account,
-    delete_bank_account as service_delete_bank_account
+    delete_bank_account
 )
 
 router = APIRouter(prefix="/bank", tags=["Bank Accounts"])
@@ -107,9 +107,4 @@ def delete_account(
     if not existing:
         raise HTTPException(status_code=404, detail="Account not found")
     
-    from models import BankAccount
-    account_to_delete = session.get(BankAccount, account_id)
-    session.delete(account_to_delete)
-    session.commit()
-    
-    return None
+    return delete_bank_account(session, account_id)

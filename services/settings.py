@@ -1,7 +1,6 @@
 """User settings service."""
 
 from decimal import Decimal
-from typing import Optional
 from sqlmodel import Session, select
 
 from models import UserSettings

@@ -20,8 +20,6 @@ from dtos.asset import (
 from services.encryption import encrypt_data, decrypt_data, hash_index
 
 
-# ─── Helpers ──────────────────────────────────────────────────
-
 def _map_asset_to_response(asset: Asset, master_key: str) -> AssetResponse:
     """Decrypt and map an Asset to the response DTO."""
     name = decrypt_data(asset.name_enc, master_key)
@@ -89,8 +87,6 @@ def _map_valuation_to_response(v: AssetValuation, master_key: str) -> AssetValua
         created_at=v.created_at,
     )
 
-
-# ─── CRUD ─────────────────────────────────────────────────────
 
 def create_asset(
     session: Session,
@@ -290,8 +286,6 @@ def get_asset(
 
     return _map_asset_to_response(asset, master_key)
 
-
-# ─── Valuation History ────────────────────────────────────────
 
 def create_valuation(
     session: Session,
