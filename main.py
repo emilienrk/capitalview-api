@@ -1,8 +1,14 @@
 """CapitalView API - Main entry point."""
 
+import tomllib
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Depends, Request, Response
+
+_pyproject = Path(__file__).parent / "pyproject.toml"
+with _pyproject.open("rb") as _f:
+    __version__: str = tomllib.load(_f)["project"]["version"]
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -58,7 +64,7 @@ limiter = Limiter(key_func=rate_limit_key_func)
 app = FastAPI(
     title=settings.app_name,
     description="Personal wealth management and investment tracking API",
-    version="1.0.0",
+    version=__version__,
     lifespan=lifespan,
 )
 app.state.limiter = limiter
@@ -111,7 +117,7 @@ def root():
 @app.get("/health")
 def health():
     """Simple health check for container monitoring."""
-    return {"status": "ok", "app": settings.app_name, "version": "1.0.0"}
+    return {"status": "ok", "app": settings.app_name, "version": __version__}
 
 
 @app.get("/health/db")
