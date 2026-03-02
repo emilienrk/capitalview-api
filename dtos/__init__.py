@@ -99,6 +99,17 @@ from .dashboard import (
     WealthBreakdown,
 )
 
+# Community
+from .community import (
+    CommunitySettingsUpdate,
+    CommunityPositionResponse,
+    CommunityProfileResponse,
+    CommunityProfileListItem,
+    CommunitySettingsResponse,
+    AvailablePosition,
+    AvailablePositionsResponse,
+)
+
 
 __all__ = [
     # Bank
@@ -172,5 +183,13 @@ __all__ = [
     "DashboardStatisticsResponse",
     "InvestmentDistribution",
     "WealthBreakdown",
+    # Community
+    "CommunitySettingsUpdate",
+    "CommunityPositionResponse",
+    "CommunityProfileResponse",
+    "CommunityProfileListItem",
+    "CommunitySettingsResponse",
+    "AvailablePosition",
+    "AvailablePositionsResponse",
 ]
 

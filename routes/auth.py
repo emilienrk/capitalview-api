@@ -29,6 +29,7 @@ from services.auth import (
     verify_refresh_token,
 )
 from services.encryption import get_masterkey, init_salt, hash_password
+from services.community import refresh_community_positions
 
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -195,6 +196,12 @@ def login(
     
     # Only return master_key in JSON if explicitly requested (opt-in for security)
     return_key_in_json = x_return_master_key and x_return_master_key.lower() in ("true", "1", "yes")
+
+    # Refresh community positions if the user has an active profile
+    try:
+        refresh_community_positions(session, user.uuid, master_key)
+    except Exception:
+        pass  # Non-critical — don't block login if community sync fails
     
     return TokenResponse(
         access_token=access_token,

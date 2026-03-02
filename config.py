@@ -14,19 +14,20 @@ class Settings:
         self.database_url: str = os.environ.get("DATABASE_URL", "")
         self.secret_key: str = os.environ.get("SECRET_KEY", "")
         self.encryption_key: str = os.environ.get("ENCRYPTION_KEY", "")
+        self.community_encryption_key: str = os.environ.get("COMMUNITY_ENCRYPTION_KEY", "")
         
         env = os.getenv("ENV", "production")
         self.environment: str = env
         
         if env == "production":
             if not self.secret_key:
-                print("❌ CRITICAL: SECRET_KEY environment variable is required")
+                print("CRITICAL: SECRET_KEY environment variable is required")
                 sys.exit(1)
             if not self.database_url:
-                print("❌ CRITICAL: DATABASE_URL environment variable is required")
+                print("CRITICAL: DATABASE_URL environment variable is required")
                 sys.exit(1)
             if not self.encryption_key:
-                print("⚠️  WARNING: ENCRYPTION_KEY environment variable is not set")
+                print("WARNING: ENCRYPTION_KEY environment variable is not set")
         
         # ── Configurable settings ─────────────────────────────
         self.algorithm: str = os.getenv("ALGORITHM", "HS256")

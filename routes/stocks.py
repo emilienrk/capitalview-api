@@ -39,6 +39,7 @@ from services.stock_transaction import (
     get_stock_account_summary
 )
 from services.market_data.manager import market_data_manager
+from services.community import refresh_community_positions
 
 router = APIRouter(prefix="/stocks", tags=["Stocks"])
 
@@ -143,7 +144,9 @@ def create_transaction(
         raise HTTPException(status_code=404, detail="Account not found or access denied")
     
     try:
-        return create_stock_transaction(session, data, master_key)
+        result = create_stock_transaction(session, data, master_key)
+        refresh_community_positions(session, current_user.uuid, master_key)
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -196,7 +199,9 @@ def update_transaction(
         raise HTTPException(status_code=404, detail="Transaction not found")
         
     try:
-        return update_stock_transaction(session, tx_model, data, master_key)
+        result = update_stock_transaction(session, tx_model, data, master_key)
+        refresh_community_positions(session, current_user.uuid, master_key)
+        return result
     except Exception:
         raise HTTPException(status_code=403, detail="Access denied (Decryption failed)")
 
@@ -214,6 +219,7 @@ def delete_transaction(
         raise HTTPException(status_code=404, detail="Transaction not found")
         
     delete_stock_transaction(session, transaction_id)
+    refresh_community_positions(session, current_user.uuid, master_key)
     return None
 
 
@@ -282,13 +288,12 @@ def bulk_import_transactions(
         except ValueError:
             continue
 
+    refresh_community_positions(session, current_user.uuid, master_key)
+
     return StockBulkImportResponse(
         imported_count=len(created_responses),
         transactions=created_responses
     )
-
-
-@router.get("/market/search", response_model=list[AssetSearchResult])
 def search_assets(
     q: str,
     current_user: Annotated[User, Depends(get_current_user)],

@@ -58,6 +58,7 @@ from services.crypto_transaction import (
     _DEBIT_TYPES,
 )
 from services.market_data.manager import market_data_manager
+from services.community import refresh_community_positions
 
 router = APIRouter(prefix="/crypto", tags=["Crypto"])
 
@@ -231,6 +232,8 @@ def create_transaction(
 
     resp = create_crypto_transaction(session, data, master_key)
 
+    refresh_community_positions(session, current_user.uuid, master_key)
+
     return CryptoTransactionBasicResponse(
         id=resp.id,
         account_id=data.account_id,
@@ -284,6 +287,7 @@ def create_composite_transaction(
     ]
 
     warning = _compute_balance_warning(session, data.account_id, created, master_key)
+    refresh_community_positions(session, current_user.uuid, master_key)
     return CryptoCompositeTransactionResponse(rows=rows, warning=warning)
 
 
@@ -328,6 +332,7 @@ def create_cross_account_transfer_route(
         master_key,
         extra_account_for_symbols={data.symbol.upper(): data.from_account_id},
     )
+    refresh_community_positions(session, current_user.uuid, master_key)
     return CryptoCompositeTransactionResponse(rows=rows, warning=warning)
 
 
@@ -381,6 +386,8 @@ def update_transaction(
     try:
         resp = update_crypto_transaction(session, tx_model, data, master_key)
 
+        refresh_community_positions(session, current_user.uuid, master_key)
+
         return CryptoTransactionBasicResponse(
             id=resp.id,
             account_id="unknown",  # account_id not stored on tx; caller knows it
@@ -409,6 +416,7 @@ def delete_transaction(
         raise HTTPException(status_code=404, detail="Transaction not found")
         
     delete_crypto_transaction(session, transaction_id)
+    refresh_community_positions(session, current_user.uuid, master_key)
     return None
 
 
@@ -469,6 +477,8 @@ def bulk_import_transactions(
         )
         created_responses.append(basic)
 
+    refresh_community_positions(session, current_user.uuid, master_key)
+
     return CryptoBulkImportResponse(
         imported_count=len(created_responses),
         transactions=created_responses
@@ -515,6 +525,8 @@ def bulk_composite_import_transactions(
         )
         created = create_composite_crypto_transaction(session, composite_dto, master_key)
         total_atomic_rows += len(created)
+
+    refresh_community_positions(session, current_user.uuid, master_key)
 
     return CryptoBulkCompositeImportResponse(
         imported_count=total_atomic_rows,
@@ -609,4 +621,6 @@ def confirm_binance_import(
                 detail=f"Le groupe #{g.group_index + 1} nécessite un montant EUR.",
             )
 
-    return execute_import(session, data.account_id, data.groups, master_key)
+    result = execute_import(session, data.account_id, data.groups, master_key)
+    refresh_community_positions(session, current_user.uuid, master_key)
+    return result
