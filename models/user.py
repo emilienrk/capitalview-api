@@ -53,6 +53,9 @@ class UserSettings(SQLModel, table=True):
     crypto_module_enabled: bool = Field(default=False, nullable=False)
     crypto_mode: str = Field(default="SINGLE", nullable=False)
     crypto_show_negative_positions: bool = Field(default=False, nullable=False)
+    bank_module_enabled: bool = Field(default=True, nullable=False)
+    cashflow_module_enabled: bool = Field(default=True, nullable=False)
+    wealth_module_enabled: bool = Field(default=True, nullable=False)
     # Manual USD→EUR rate override (None = use auto-fetched rate)
     usd_eur_rate: Optional[Decimal] = Field(
         default=None,

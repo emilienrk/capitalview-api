@@ -163,12 +163,18 @@ def get_dashboard_statistics(
     )
 
     # ── Cash (bank balances) ────────────────────────────────
-    bank_summary = get_user_bank_accounts(session, current_user.uuid, master_key)
-    cash_total = bank_summary.total_balance
+    if settings.bank_module_enabled:
+        bank_summary = get_user_bank_accounts(session, current_user.uuid, master_key)
+        cash_total = bank_summary.total_balance
+    else:
+        cash_total = Decimal(0)
 
     # ── Assets (personal possessions, unsold) ───────────────
-    asset_summary = get_user_assets(session, current_user.uuid, master_key)
-    assets_total = asset_summary.total_estimated_value
+    if settings.wealth_module_enabled:
+        asset_summary = get_user_assets(session, current_user.uuid, master_key)
+        assets_total = asset_summary.total_estimated_value
+    else:
+        assets_total = Decimal(0)
 
     # ── Total wealth ────────────────────────────────────────
     investments_total = total_investment_value

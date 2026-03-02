@@ -26,6 +26,9 @@ def _map_settings_to_response(settings: UserSettings, master_key: str) -> UserSe
         crypto_module_enabled=settings.crypto_module_enabled,
         crypto_mode=settings.crypto_mode,
         crypto_show_negative_positions=settings.crypto_show_negative_positions,
+        bank_module_enabled=settings.bank_module_enabled,
+        cashflow_module_enabled=settings.cashflow_module_enabled,
+        wealth_module_enabled=settings.wealth_module_enabled,
         usd_eur_rate=float(settings.usd_eur_rate) if settings.usd_eur_rate is not None else None,
         created_at=settings.created_at,
         updated_at=settings.updated_at,
@@ -97,6 +100,15 @@ def update_settings(
 
     if data.crypto_show_negative_positions is not None:
         settings.crypto_show_negative_positions = data.crypto_show_negative_positions
+
+    if data.bank_module_enabled is not None:
+        settings.bank_module_enabled = data.bank_module_enabled
+
+    if data.cashflow_module_enabled is not None:
+        settings.cashflow_module_enabled = data.cashflow_module_enabled
+
+    if data.wealth_module_enabled is not None:
+        settings.wealth_module_enabled = data.wealth_module_enabled
 
     if "usd_eur_rate" in data.model_fields_set:
         if data.usd_eur_rate is not None:

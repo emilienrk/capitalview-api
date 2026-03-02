@@ -16,6 +16,9 @@ class UserSettingsUpdate(BaseModel):
     crypto_module_enabled: Optional[bool] = None
     crypto_mode: Optional[str] = None
     crypto_show_negative_positions: Optional[bool] = None
+    bank_module_enabled: Optional[bool] = None
+    cashflow_module_enabled: Optional[bool] = None
+    wealth_module_enabled: Optional[bool] = None
     usd_eur_rate: Optional[float] = Field(None, gt=0, le=10)
 
 
@@ -32,6 +35,9 @@ class UserSettingsResponse(BaseModel):
     crypto_module_enabled: bool = False
     crypto_mode: str = "SINGLE"
     crypto_show_negative_positions: bool = False
+    bank_module_enabled: bool = False
+    cashflow_module_enabled: bool = True
+    wealth_module_enabled: bool = False
     usd_eur_rate: Optional[float] = None
     created_at: datetime
     updated_at: datetime

@@ -20,7 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.add_column(
         'user_settings',
-        sa.Column('crypto_module_enabled', sa.Boolean(), server_default='false', nullable=False),
+        sa.Column('crypto_module_enabled', sa.Boolean(), server_default=sa.false(), nullable=False),
     )
     op.add_column(
         'user_settings',
