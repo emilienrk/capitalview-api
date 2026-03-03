@@ -26,6 +26,9 @@ from dtos.community import (
     CommunitySettingsResponse,
     CommunitySettingsUpdate,
     FollowResponse,
+    PickCreate,
+    PickResponse,
+    PickUpdate,
 )
 from services.community import (
     get_available_positions,
@@ -36,6 +39,7 @@ from services.community import (
     update_community_settings,
 )
 from services.follow import follow_user, unfollow_user
+from services.pick import create_pick, update_pick, delete_pick, get_user_picks
 
 router = APIRouter(prefix="/community", tags=["Community"])
 
@@ -134,3 +138,58 @@ def get_available(
 ):
     """List all user positions eligible for community sharing."""
     return get_available_positions(session, current_user.uuid, master_key)
+
+
+# ── Picks (likes) ──────────────────────────────────────────────
+
+@router.get("/picks/me", response_model=List[PickResponse])
+def my_picks(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session),
+):
+    """Get all picks for the current user."""
+    return get_user_picks(session, current_user.uuid)
+
+
+@router.post("/picks", response_model=PickResponse, status_code=201)
+def add_pick(
+    data: PickCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session),
+):
+    """Like / pick a stock or crypto asset."""
+    try:
+        return create_pick(session, current_user.uuid, data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/picks/{pick_id}", response_model=PickResponse)
+def edit_pick(
+    pick_id: int,
+    data: PickUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session),
+):
+    """Update comment / target price on a pick."""
+    try:
+        return update_pick(session, current_user.uuid, pick_id, data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Non autorisé.")
+
+
+@router.delete("/picks/{pick_id}", status_code=204)
+def remove_pick(
+    pick_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session),
+):
+    """Remove a pick."""
+    try:
+        delete_pick(session, current_user.uuid, pick_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Non autorisé.")

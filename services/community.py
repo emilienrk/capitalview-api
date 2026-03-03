@@ -12,9 +12,11 @@ Responsibilities:
 from decimal import Decimal
 from typing import List, Optional
 
+import sqlalchemy as sa
 from sqlmodel import Session, select, func
+from sqlalchemy.orm import aliased
 
-from models.community import CommunityProfile, CommunityPosition
+from models.community import CommunityProfile, CommunityPosition, CommunityFollow
 from models.user import User
 from models.enums import AssetType
 from dtos.community import (
@@ -30,6 +32,7 @@ from dtos.community import (
 from services.community_encryption import community_decrypt, community_encrypt
 from services.market import get_stock_info, get_crypto_info
 from services.follow import get_follow_state, get_followers_count, get_following_count
+from services.pick import get_picks_for_profile
 
 
 def _get_or_create_profile(session: Session, user_id: str) -> CommunityProfile:
@@ -420,14 +423,40 @@ def search_profiles(
 
 
 def list_active_profiles(session: Session, current_user_uuid: str) -> List[CommunityProfileListItem]:
-    """Return all active PUBLIC community profiles (non-private only)."""
+    """Return active community profiles visible to the current user.
+
+    Visible profiles:
+    - All public profiles
+    - Private profiles the current user is following
+
+    Profiles the current user is following appear first.
+    """
+    # Left-join follows to detect which private profiles the user follows
+    follow_alias = aliased(CommunityFollow)
     rows = session.exec(
-        select(User.username, User.uuid, CommunityProfile.display_name, CommunityProfile.bio, CommunityProfile.is_private)
+        select(
+            User.username,
+            User.uuid,
+            CommunityProfile.display_name,
+            CommunityProfile.bio,
+            CommunityProfile.is_private,
+        )
         .join(CommunityProfile, CommunityProfile.user_id == User.uuid)
+        .outerjoin(
+            follow_alias,
+            sa.and_(
+                follow_alias.follower_id == current_user_uuid,
+                follow_alias.following_id == User.uuid,
+            ),
+        )
         .where(
             CommunityProfile.is_active == True,  # noqa: E712
-            CommunityProfile.is_private == False,  # noqa: E712
             User.uuid != current_user_uuid,
+            # Public profiles OR private profiles the user follows
+            sa.or_(
+                CommunityProfile.is_private == False,  # noqa: E712
+                follow_alias.id != None,  # noqa: E711  — user follows this private profile
+            ),
         )
     ).all()
 
@@ -442,6 +471,8 @@ def list_active_profiles(session: Session, current_user_uuid: str) -> List[Commu
             is_private=is_private_val,
             **state,
         ))
+    # Sort: followed users first, then alphabetically
+    results.sort(key=lambda p: (not p.is_following, (p.display_name or p.username).lower()))
     return results
 
 
@@ -525,6 +556,7 @@ def get_public_profile(
         bio=profile.bio,
         is_private=profile.is_private,
         positions=response_positions,
+        picks=get_picks_for_profile(session, user.uuid, username),
         global_pnl_percentage=global_pnl,
         followers_count=followers_count,
         following_count=following_count,

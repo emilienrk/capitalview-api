@@ -39,6 +39,7 @@ class CommunityProfileResponse(BaseModel):
     is_followed_by: bool = False
     is_mutual: bool = False
     positions: List[CommunityPositionResponse] = []
+    picks: List["PickResponse"] = []
     global_pnl_percentage: Optional[float] = None
     followers_count: int = 0
     following_count: int = 0
@@ -100,3 +101,32 @@ class AvailablePositionsResponse(BaseModel):
     """All shareable positions for the authenticated user."""
     stocks: List[AvailablePosition] = []
     crypto: List[AvailablePosition] = []
+
+
+# ── Picks (likes) ────────────────────────────────────────────
+
+
+class PickCreate(BaseModel):
+    """Payload for POST /community/picks."""
+    symbol: str
+    asset_type: str  # "CRYPTO" | "STOCK"
+    comment: Optional[str] = None
+    target_price: Optional[float] = None
+
+
+class PickUpdate(BaseModel):
+    """Payload for PUT /community/picks/{pick_id}."""
+    comment: Optional[str] = None
+    target_price: Optional[float] = None
+
+
+class PickResponse(BaseModel):
+    """A single pick returned in responses."""
+    id: int
+    username: str
+    symbol: str
+    asset_type: str
+    comment: Optional[str] = None
+    target_price: Optional[float] = None
+    created_at: str
+    updated_at: str

@@ -111,3 +111,43 @@ class CommunityPosition(SQLModel, table=True):
             nullable=False,
         ),
     )
+
+
+class CommunityPick(SQLModel, table=True):
+    """A 'like' / pick on a stock or crypto asset.
+
+    Users can publicly like assets with an optional comment and target price.
+    One pick per user per (symbol, asset_type) — enforced by unique constraint.
+    """
+    __tablename__ = "community_picks"
+    __table_args__ = (
+        sa.UniqueConstraint("user_id", "symbol", "asset_type", name="uq_user_pick"),
+        {"extend_existing": True},
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: str = Field(
+        sa_column=Column(
+            sa.String,
+            sa.ForeignKey("users.uuid", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    symbol: str = Field(sa_column=Column(sa.String(30), nullable=False))
+    asset_type: str = Field(sa_column=Column(sa.String(10), nullable=False))
+    comment: Optional[str] = Field(default=None, sa_column=Column(sa.Text, nullable=True))
+    target_price: Optional[float] = Field(default=None, sa_column=Column(sa.Float, nullable=True))
+    created_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    )
+    updated_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            onupdate=sa.func.now(),
+            nullable=False,
+        ),
+    )
