@@ -1,8 +1,13 @@
 """
-Community profile and position models.
+Community profile, follow, and position models.
 
 Allows users to share a public view of their portfolio PnL (%)
 without exposing amounts, quantities, or PRU in cleartext.
+
+Privacy modes:
+- is_private=False: profile appears in search results freely.
+- is_private=True: profile appears only when the exact username is searched.
+  Investments are visible only if both users follow each other (mutual follow).
 """
 from typing import Optional
 from datetime import datetime
@@ -29,21 +34,43 @@ class CommunityProfile(SQLModel, table=True):
         )
     )
     is_active: bool = Field(default=False, nullable=False)
+    is_private: bool = Field(default=True, nullable=False)
     display_name: Optional[str] = Field(default=None, sa_column=Column(sa.String(100), nullable=True))
     bio: Optional[str] = Field(default=None, sa_column=Column(sa.Text, nullable=True))
 
+
+class CommunityFollow(SQLModel, table=True):
+    """Directed follow relationship between two users.
+
+    follower_id → following_id.  Mutual follow is required to view a
+    private profile's investments.
+    """
+    __tablename__ = "community_follows"
+    __table_args__ = (
+        sa.UniqueConstraint("follower_id", "following_id", name="uq_follow_pair"),
+        {"extend_existing": True},
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    follower_id: str = Field(
+        sa_column=Column(
+            sa.String,
+            sa.ForeignKey("users.uuid", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    following_id: str = Field(
+        sa_column=Column(
+            sa.String,
+            sa.ForeignKey("users.uuid", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
     created_at: datetime = Field(
         default=sa.func.now(),
         sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-    )
-    updated_at: datetime = Field(
-        default=sa.func.now(),
-        sa_column=Column(
-            sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
-            onupdate=sa.func.now(),
-            nullable=False,
-        ),
     )
 
 

@@ -39,12 +39,20 @@ class YahooProvider(MarketDataProvider):
             if not price or price <= 0:
                 return None
 
+            isin = None
+            try:
+                raw_isin = ticker.isin
+                if raw_isin and raw_isin != "-":
+                    isin = raw_isin
+            except Exception:
+                pass
+
             return {
                 "name": info.get("shortName") or info.get("longName") or symbol,
                 "currency": info.get("currency", "EUR"),
                 "price": Decimal(str(price)),
                 "symbol": symbol,
-                "isin": getattr(ticker, "isin", None)
+                "isin": isin
             }
         except (ValueError, IndexError, KeyError):
              return None
@@ -136,7 +144,15 @@ class YahooProvider(MarketDataProvider):
                             price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("ask")
                             name = info.get("shortName") or info.get("longName") or name
                             currency = info.get("currency") or currency
-                            isin = getattr(ticker, "isin", None)
+                    except Exception:
+                        pass
+
+                # Fetch ISIN separately (always, not just in fallback path)
+                if isin is None:
+                    try:
+                        raw_isin = ticker.isin
+                        if raw_isin and raw_isin != "-":
+                            isin = raw_isin
                     except Exception:
                         pass
                 

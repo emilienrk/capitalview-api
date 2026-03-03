@@ -18,16 +18,25 @@ NONCE_SIZE = 12
 
 
 def _get_community_key_bytes() -> bytes:
-    """Return the raw 32-byte community key, or raise if not configured."""
+    """Return the raw 32-byte community key, or raise if not configured.
+
+    Accepts the key either as Base64-encoded (44 chars with padding) or as
+    hexadecimal (64 lowercase hex chars = 32 bytes).
+    """
     raw = get_settings().community_encryption_key
     if not raw:
         raise RuntimeError(
             "COMMUNITY_ENCRYPTION_KEY is not set. "
             "Generate one with: python -c \"import os,base64; print(base64.b64encode(os.urandom(32)).decode())\""
         )
-    key_bytes = base64.b64decode(raw)
+    # Detect hex encoding: exactly 64 hexadecimal characters
+    if len(raw) == 64 and all(c in "0123456789abcdefABCDEF" for c in raw):
+        import binascii
+        key_bytes = binascii.unhexlify(raw)
+    else:
+        key_bytes = base64.b64decode(raw)
     if len(key_bytes) != 32:
-        raise RuntimeError("COMMUNITY_ENCRYPTION_KEY must be exactly 32 bytes (Base64-encoded).")
+        raise RuntimeError("COMMUNITY_ENCRYPTION_KEY must be exactly 32 bytes (hex or Base64-encoded).")
     return key_bytes
 
 

@@ -20,7 +20,7 @@ from .crypto import CryptoAccount, CryptoTransaction
 from .market import MarketPrice
 from .note import Note
 from .asset import Asset, AssetValuation
-from .community import CommunityProfile, CommunityPosition
+from .community import CommunityProfile, CommunityPosition, CommunityFollow
 
 __all__ = [
     # Enums
@@ -45,4 +45,5 @@ __all__ = [
     "AssetValuation",
     "CommunityProfile",
     "CommunityPosition",
+    "CommunityFollow",
 ]

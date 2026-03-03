@@ -294,6 +294,9 @@ def bulk_import_transactions(
         imported_count=len(created_responses),
         transactions=created_responses
     )
+
+
+@router.get("/market/search", response_model=list[AssetSearchResult])
 def search_assets(
     q: str,
     current_user: Annotated[User, Depends(get_current_user)],

@@ -2,6 +2,10 @@
 
 All response schemas intentionally omit amounts, quantities, and PRU.
 Only symbols, asset types, and PnL percentages are exposed.
+
+Privacy model:
+- Private profiles appear only when searching for the exact username.
+- Investments are visible only to mutual followers.
 """
 
 from typing import List, Optional
@@ -9,15 +13,9 @@ from pydantic import BaseModel
 
 
 class CommunitySettingsUpdate(BaseModel):
-    """Payload for PUT /community/settings.
-
-    * is_active: enable / disable the community profile.
-    * display_name: optional public display name.
-    * bio: optional short bio / description.
-    * shared_stock_isins: list of stock ISINs the user wants to share.
-    * shared_crypto_symbols: list of crypto symbols the user wants to share.
-    """
+    """Payload for PUT /community/settings."""
     is_active: bool
+    is_private: bool = True
     display_name: Optional[str] = None
     bio: Optional[str] = None
     shared_stock_isins: List[str] = []
@@ -36,8 +34,14 @@ class CommunityProfileResponse(BaseModel):
     username: str
     display_name: Optional[str] = None
     bio: Optional[str] = None
+    is_private: bool = True
+    is_following: bool = False
+    is_followed_by: bool = False
+    is_mutual: bool = False
     positions: List[CommunityPositionResponse] = []
     global_pnl_percentage: Optional[float] = None
+    followers_count: int = 0
+    following_count: int = 0
 
 
 class CommunityProfileListItem(BaseModel):
@@ -45,11 +49,16 @@ class CommunityProfileListItem(BaseModel):
     username: str
     display_name: Optional[str] = None
     bio: Optional[str] = None
+    is_private: bool = True
+    is_following: bool = False
+    is_followed_by: bool = False
+    is_mutual: bool = False
 
 
 class CommunitySettingsResponse(BaseModel):
     """Response after updating community settings."""
     is_active: bool
+    is_private: bool = True
     display_name: Optional[str] = None
     bio: Optional[str] = None
     shared_stock_isins: List[str] = []
@@ -57,10 +66,34 @@ class CommunitySettingsResponse(BaseModel):
     positions_count: int = 0
 
 
+class CommunitySearchResult(BaseModel):
+    """Result from user search."""
+    username: str
+    display_name: Optional[str] = None
+    bio: Optional[str] = None
+    is_private: bool = True
+    is_following: bool = False
+    is_followed_by: bool = False
+    is_mutual: bool = False
+
+
+class FollowResponse(BaseModel):
+    """Response after follow/unfollow action."""
+    is_following: bool
+    is_mutual: bool
+
+
+class FollowStatsResponse(BaseModel):
+    """Follower/following counts for a user."""
+    followers_count: int = 0
+    following_count: int = 0
+
+
 class AvailablePosition(BaseModel):
     """A single position the user can choose to share."""
     symbol: str
     asset_type: str  # "CRYPTO" | "STOCK"
+    name: Optional[str] = None  # Human-readable name (ticker name for stocks)
 
 
 class AvailablePositionsResponse(BaseModel):

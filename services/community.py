@@ -12,7 +12,7 @@ Responsibilities:
 from decimal import Decimal
 from typing import List, Optional
 
-from sqlmodel import Session, select
+from sqlmodel import Session, select, func
 
 from models.community import CommunityProfile, CommunityPosition
 from models.user import User
@@ -23,11 +23,13 @@ from dtos.community import (
     CommunityPositionResponse,
     CommunityProfileListItem,
     CommunityProfileResponse,
+    CommunitySearchResult,
     CommunitySettingsResponse,
     CommunitySettingsUpdate,
 )
 from services.community_encryption import community_decrypt, community_encrypt
 from services.market import get_stock_info, get_crypto_info
+from services.follow import get_follow_state, get_followers_count, get_following_count
 
 
 def _get_or_create_profile(session: Session, user_id: str) -> CommunityProfile:
@@ -239,6 +241,7 @@ def update_community_settings(
     """
     profile = _get_or_create_profile(session, user_uuid)
     profile.is_active = data.is_active
+    profile.is_private = data.is_private
     profile.display_name = data.display_name
     profile.bio = data.bio
     session.add(profile)
@@ -286,6 +289,7 @@ def update_community_settings(
 
     return CommunitySettingsResponse(
         is_active=profile.is_active,
+        is_private=profile.is_private,
         display_name=profile.display_name,
         bio=profile.bio,
         shared_stock_isins=list(stock_pru.keys()),
@@ -358,25 +362,100 @@ def refresh_community_positions(
     session.commit()
 
 
-def list_active_profiles(session: Session) -> List[CommunityProfileListItem]:
-    """Return all active community profiles (usernames + display info)."""
-    rows = session.exec(
-        select(User.username, CommunityProfile.display_name, CommunityProfile.bio)
+def search_profiles(
+    session: Session,
+    query: str,
+    current_user_uuid: str,
+) -> List[CommunitySearchResult]:
+    """Search for community profiles by username.
+
+    - Public profiles (is_private=False): appear if the query partially matches.
+    - Private profiles (is_private=True): appear only if the query matches
+      the exact username (case-insensitive).
+
+    Returns up to 20 results.
+    """
+    query = query.strip()
+    if not query:
+        return []
+
+    # Base query: active profiles only
+    base = (
+        select(User.username, User.uuid, CommunityProfile.display_name, CommunityProfile.bio, CommunityProfile.is_private)
         .join(CommunityProfile, CommunityProfile.user_id == User.uuid)
-        .where(CommunityProfile.is_active == True)  # noqa: E712
+        .where(
+            CommunityProfile.is_active == True,  # noqa: E712
+            User.uuid != current_user_uuid,
+        )
+    )
+
+    # Public profiles: partial match (ILIKE)
+    public_q = base.where(
+        CommunityProfile.is_private == False,  # noqa: E712
+        User.username.ilike(f"%{query}%"),
+    )
+
+    # Private profiles: exact match only (case-insensitive)
+    private_q = base.where(
+        CommunityProfile.is_private == True,  # noqa: E712
+        func.lower(User.username) == query.lower(),
+    )
+
+    from sqlalchemy import union_all
+    combined = union_all(public_q, private_q).limit(20)
+    rows = session.exec(combined).all()
+
+    results = []
+    for row in rows:
+        username, user_uuid, display_name, bio, is_private_val = row
+        state = get_follow_state(session, current_user_uuid, user_uuid)
+        results.append(CommunitySearchResult(
+            username=username,
+            display_name=display_name,
+            bio=bio,
+            is_private=is_private_val,
+            **state,
+        ))
+    return results
+
+
+def list_active_profiles(session: Session, current_user_uuid: str) -> List[CommunityProfileListItem]:
+    """Return all active PUBLIC community profiles (non-private only)."""
+    rows = session.exec(
+        select(User.username, User.uuid, CommunityProfile.display_name, CommunityProfile.bio, CommunityProfile.is_private)
+        .join(CommunityProfile, CommunityProfile.user_id == User.uuid)
+        .where(
+            CommunityProfile.is_active == True,  # noqa: E712
+            CommunityProfile.is_private == False,  # noqa: E712
+            User.uuid != current_user_uuid,
+        )
     ).all()
 
-    return [
-        CommunityProfileListItem(username=row[0], display_name=row[1], bio=row[2])
-        for row in rows
-    ]
+    results = []
+    for row in rows:
+        username, user_uuid, display_name, bio, is_private_val = row
+        state = get_follow_state(session, current_user_uuid, user_uuid)
+        results.append(CommunityProfileListItem(
+            username=username,
+            display_name=display_name,
+            bio=bio,
+            is_private=is_private_val,
+            **state,
+        ))
+    return results
 
 
 def get_public_profile(
     session: Session,
     username: str,
+    current_user_uuid: str,
 ) -> Optional[CommunityProfileResponse]:
     """Build the public profile for *username*.
+
+    Privacy rules:
+    - If the profile is private and users are NOT mutual followers,
+      positions are hidden (empty list, no PnL).
+    - If public or mutual, full positions + PnL are shown.
 
     Decrypts positions with COMMUNITY_ENCRYPTION_KEY, fetches current market
     prices, computes PnL %, and returns only safe data.
@@ -394,52 +473,62 @@ def get_public_profile(
     if not profile:
         return None
 
-    positions = session.exec(
-        select(CommunityPosition).where(CommunityPosition.profile_user_id == profile.user_id)
-    ).all()
+    # Compute follow state
+    state = get_follow_state(session, current_user_uuid, user.uuid)
+    followers_count = get_followers_count(session, user.uuid)
+    following_count = get_following_count(session, user.uuid)
+
+    # Privacy check: private profile + not mutual → hide positions
+    can_view_positions = not profile.is_private or state["is_mutual"] or user.uuid == current_user_uuid
 
     response_positions: list[CommunityPositionResponse] = []
-    # For weighted-average global PnL
-    total_weight = Decimal("0")  # sum of |PRU| per position (proxy for investment weight)
-    weighted_pnl_sum = Decimal("0")
-
-    for pos in positions:
-        symbol = community_decrypt(pos.symbol_encrypted)
-        pru = Decimal(community_decrypt(pos.pru_encrypted))
-        asset_type = pos.asset_type
-
-        # Fetch current price
-        current_price: Optional[Decimal] = None
-        if asset_type == AssetType.STOCK.value:
-            _, current_price = get_stock_info(session, symbol)
-        elif asset_type == AssetType.CRYPTO.value:
-            _, current_price = get_crypto_info(session, symbol)
-
-        pnl_pct: Optional[float] = None
-        if current_price is not None and pru > 0:
-            pnl_pct = float(((current_price - pru) / pru) * 100)
-            pnl_pct = round(pnl_pct, 2)
-
-            # Weight by PRU (proxy — we don't expose absolute amounts)
-            total_weight += pru
-            weighted_pnl_sum += pru * Decimal(str(pnl_pct))
-
-        response_positions.append(CommunityPositionResponse(
-            symbol=symbol,
-            asset_type=asset_type,
-            pnl_percentage=pnl_pct,
-        ))
-
     global_pnl: Optional[float] = None
-    if total_weight > 0:
-        global_pnl = round(float(weighted_pnl_sum / total_weight), 2)
+
+    if can_view_positions:
+        positions = session.exec(
+            select(CommunityPosition).where(CommunityPosition.profile_user_id == profile.user_id)
+        ).all()
+
+        total_weight = Decimal("0")
+        weighted_pnl_sum = Decimal("0")
+
+        for pos in positions:
+            symbol = community_decrypt(pos.symbol_encrypted)
+            pru = Decimal(community_decrypt(pos.pru_encrypted))
+            asset_type = pos.asset_type
+
+            current_price: Optional[Decimal] = None
+            if asset_type == AssetType.STOCK.value:
+                _, current_price = get_stock_info(session, symbol)
+            elif asset_type == AssetType.CRYPTO.value:
+                _, current_price = get_crypto_info(session, symbol)
+
+            pnl_pct: Optional[float] = None
+            if current_price is not None and pru > 0:
+                pnl_pct = float(((current_price - pru) / pru) * 100)
+                pnl_pct = round(pnl_pct, 2)
+                total_weight += pru
+                weighted_pnl_sum += pru * Decimal(str(pnl_pct))
+
+            response_positions.append(CommunityPositionResponse(
+                symbol=symbol,
+                asset_type=asset_type,
+                pnl_percentage=pnl_pct,
+            ))
+
+        if total_weight > 0:
+            global_pnl = round(float(weighted_pnl_sum / total_weight), 2)
 
     return CommunityProfileResponse(
         username=username,
         display_name=profile.display_name,
         bio=profile.bio,
+        is_private=profile.is_private,
         positions=response_positions,
         global_pnl_percentage=global_pnl,
+        followers_count=followers_count,
+        following_count=following_count,
+        **state,
     )
 
 
@@ -455,6 +544,7 @@ def get_community_settings(
     if not profile:
         return CommunitySettingsResponse(
             is_active=False,
+            is_private=True,
             display_name=None,
             bio=None,
             shared_stock_isins=[],
@@ -477,6 +567,7 @@ def get_community_settings(
 
     return CommunitySettingsResponse(
         is_active=profile.is_active,
+        is_private=profile.is_private,
         display_name=profile.display_name,
         bio=profile.bio,
         shared_stock_isins=stock_isins,
@@ -524,8 +615,22 @@ def get_available_positions(
             elif tx_type == "SELL":
                 stock_agg[isin] -= amount
 
+    # Lookup stock names from the MarketPrice cache (keyed by ISIN)
+    from models.market import MarketPrice as MarketPriceModel
+    isin_to_name: dict[str, str] = {}
+    for isin in stock_agg:
+        mp = session.exec(
+            select(MarketPriceModel).where(MarketPriceModel.isin == isin)
+        ).first()
+        if mp and mp.name:
+            isin_to_name[isin] = mp.name
+
     stocks = [
-        AvailablePosition(symbol=isin, asset_type=AssetType.STOCK.value)
+        AvailablePosition(
+            symbol=isin,
+            asset_type=AssetType.STOCK.value,
+            name=isin_to_name.get(isin),
+        )
         for isin, amt in sorted(stock_agg.items())
         if amt > 0
     ]
