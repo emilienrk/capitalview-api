@@ -535,7 +535,8 @@ def get_public_profile(
                 _, current_price = get_crypto_info(session, symbol)
 
             pnl_pct: Optional[float] = None
-            if current_price is not None and pru > 0:
+            # current_price == 0 is a sentinel for "no market data" (see market.py)
+            if current_price is not None and current_price > 0 and pru > 0:
                 pnl_pct = float(((current_price - pru) / pru) * 100)
                 pnl_pct = round(pnl_pct, 2)
                 total_weight += pru
