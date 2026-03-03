@@ -16,6 +16,7 @@ from dtos.stock import StockTransactionCreate, StockTransactionUpdate
 from dtos.stock import StockTransactionCreate, StockTransactionUpdate
 from models.enums import StockTransactionType
 from models.stock import StockAccount, StockTransaction
+from models.market import MarketPrice
 from services.encryption import hash_index, encrypt_data, decrypt_data
 
 
@@ -207,3 +208,85 @@ def test_get_stock_account_summary(mock_market, session: Session, master_key: st
     pos_sold = next((p for p in summary.positions if p.symbol == "SOLD"), None)
     assert pos_sold is None
     assert summary.total_invested == Decimal("3559.5")
+
+
+@patch("services.stock_transaction.get_stock_info")
+def test_position_currency_usd(mock_market, session: Session, master_key: str):
+    """Positions whose MarketPrice.currency = USD must surface currency='USD'."""
+    mock_market.side_effect = lambda s, isin: {
+        "ISIN_AAPL": ("Apple Inc.", Decimal("200.0")),
+        "ISIN_LVMH": ("LVMH", Decimal("500.0")),
+    }.get(isin, (None, None))
+
+    account = StockAccount(
+        uuid="acc_currency_test",
+        user_uuid_bidx=hash_index("user_curr", master_key),
+        name_enc=encrypt_data("CTO Test", master_key),
+        account_type_enc=encrypt_data("CTO", master_key),
+    )
+    session.add(account)
+    session.commit()
+
+    # Manually inject MarketPrice with explicit currencies
+    mp_usd = MarketPrice(
+        isin="ISIN_AAPL", symbol="AAPL", name="Apple Inc.",
+        currency="USD", current_price=Decimal("200.0"),
+        exchange="NASDAQ",
+    )
+    mp_eur = MarketPrice(
+        isin="ISIN_LVMH", symbol="MC", name="LVMH",
+        currency="EUR", current_price=Decimal("500.0"),
+        exchange="PAR",
+    )
+    session.add(mp_usd)
+    session.add(mp_eur)
+    session.commit()
+
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_currency_test", symbol="AAPL", isin="ISIN_AAPL",
+        type=StockTransactionType.BUY,
+        amount=Decimal("1"), price_per_unit=Decimal("180"), fees=Decimal("0"),
+        executed_at=datetime(2024, 1, 1),
+    ), master_key)
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_currency_test", symbol="MC", isin="ISIN_LVMH",
+        type=StockTransactionType.BUY,
+        amount=Decimal("2"), price_per_unit=Decimal("480"), fees=Decimal("0"),
+        executed_at=datetime(2024, 1, 2),
+    ), master_key)
+
+    summary = get_stock_account_summary(session, account, master_key)
+    pos_aapl = next(p for p in summary.positions if p.symbol == "AAPL")
+    pos_lvmh = next(p for p in summary.positions if p.symbol == "MC")
+
+    # USD position surfaces as USD
+    assert pos_aapl.currency == "USD"
+    # EUR position surfaces as EUR
+    assert pos_lvmh.currency == "EUR"
+
+
+@patch("services.stock_transaction.get_stock_info")
+def test_position_currency_defaults_to_eur(mock_market, session: Session, master_key: str):
+    """A position with no MarketPrice entry must default currency to 'EUR'."""
+    mock_market.return_value = ("No-name", Decimal("10.0"))
+
+    account = StockAccount(
+        uuid="acc_no_mp",
+        user_uuid_bidx=hash_index("user_nomp", master_key),
+        name_enc=encrypt_data("PEA Test", master_key),
+        account_type_enc=encrypt_data("PEA", master_key),
+    )
+    session.add(account)
+    session.commit()
+
+    # No MarketPrice inserted — currency must default to EUR
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_no_mp", symbol="XYZ", isin="ISIN_XYZ",
+        type=StockTransactionType.BUY,
+        amount=Decimal("5"), price_per_unit=Decimal("100"), fees=Decimal("0"),
+        executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    summary = get_stock_account_summary(session, account, master_key)
+    pos = next(p for p in summary.positions if p.isin == "ISIN_XYZ")
+    assert pos.currency == "EUR"

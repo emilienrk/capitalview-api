@@ -84,7 +84,7 @@ def get_account(
     account_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
 ):
     """Get a stock account with positions and calculated values."""
     account_basic = get_stock_account(session, account_id, current_user.uuid, master_key)
