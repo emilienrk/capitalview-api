@@ -529,10 +529,11 @@ def get_public_profile(
             asset_type = pos.asset_type
 
             current_price: Optional[Decimal] = None
+            asset_name: Optional[str] = None
             if asset_type == AssetType.STOCK.value:
-                _, current_price = get_stock_info(session, symbol)
+                asset_name, current_price = get_stock_info(session, symbol)
             elif asset_type == AssetType.CRYPTO.value:
-                _, current_price = get_crypto_info(session, symbol)
+                asset_name, current_price = get_crypto_info(session, symbol)
 
             pnl_pct: Optional[float] = None
             # current_price == 0 is a sentinel for "no market data" (see market.py)
@@ -544,6 +545,7 @@ def get_public_profile(
 
             response_positions.append(CommunityPositionResponse(
                 symbol=symbol,
+                name=asset_name,
                 asset_type=asset_type,
                 pnl_percentage=pnl_pct,
             ))
@@ -561,6 +563,7 @@ def get_public_profile(
         global_pnl_percentage=global_pnl,
         followers_count=followers_count,
         following_count=following_count,
+        created_at=user.created_at,
         **state,
     )
 

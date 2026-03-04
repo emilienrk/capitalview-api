@@ -8,6 +8,7 @@ Privacy model:
 - Investments are visible only to mutual followers.
 """
 
+from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel
 
@@ -23,8 +24,9 @@ class CommunitySettingsUpdate(BaseModel):
 
 
 class CommunityPositionResponse(BaseModel):
-    """A single shared position — only symbol, type, and PnL %."""
+    """A single shared position — only symbol, name, type, and PnL %."""
     symbol: str
+    name: Optional[str] = None  # Human-readable name (e.g. "Apple Inc." instead of ISIN)
     asset_type: str  # "CRYPTO" | "STOCK"
     pnl_percentage: Optional[float] = None  # None if market price unavailable
 
@@ -43,6 +45,7 @@ class CommunityProfileResponse(BaseModel):
     global_pnl_percentage: Optional[float] = None
     followers_count: int = 0
     following_count: int = 0
+    created_at: Optional[datetime] = None  # Account creation date
 
 
 class CommunityProfileListItem(BaseModel):
