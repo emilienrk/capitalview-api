@@ -9,7 +9,8 @@ from sqlmodel import Session, select
 from database import get_session
 from models import User, StockAccount, CryptoAccount
 from dtos import PortfolioResponse
-from dtos.dashboard import DashboardStatisticsResponse, InvestmentDistribution, WealthBreakdown
+from dtos.dashboard import DashboardStatisticsResponse, DashboardSummaryResponse, InvestmentDistribution, WealthBreakdown
+from dtos.cashflow import CashflowBalanceResponse
 from services.auth import get_current_user, get_master_key
 from services.encryption import hash_index
 from services.exchange_rate import get_exchange_rate, get_effective_usd_eur_rate, convert_crypto_prices_to_eur
@@ -18,8 +19,32 @@ from services.stock_transaction import get_stock_account_summary
 from services.crypto_transaction import get_crypto_account_summary
 from services.bank import get_user_bank_accounts
 from services.asset import get_user_assets
+from services.cashflow import get_user_cashflow_balance
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+
+
+@router.get("/summary", response_model=DashboardSummaryResponse)
+def get_dashboard_summary(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """
+    Single endpoint returning the complete financial picture for AI agent use:
+    - Dashboard statistics (wealth breakdown, stock/crypto distribution)
+    - Portfolio (all accounts with PnL)
+    - Cashflow balance (inflows, outflows, savings rate)
+    """
+    statistics = get_dashboard_statistics(current_user, master_key, session)
+    portfolio = get_my_portfolio(current_user, master_key, session)
+    cashflow = get_user_cashflow_balance(session, current_user.uuid, master_key)
+
+    return DashboardSummaryResponse(
+        statistics=statistics,
+        portfolio=portfolio,
+        cashflow=cashflow,
+    )
 
 
 @router.get("/exchange-rate")

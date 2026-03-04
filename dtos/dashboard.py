@@ -5,6 +5,9 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from dtos.transaction import PortfolioResponse
+from dtos.cashflow import CashflowBalanceResponse
+
 
 class InvestmentDistribution(BaseModel):
     """Distribution between stock and crypto investments."""
@@ -31,3 +34,10 @@ class DashboardStatisticsResponse(BaseModel):
     """Aggregated dashboard statistics."""
     distribution: InvestmentDistribution
     wealth: WealthBreakdown
+
+
+class DashboardSummaryResponse(BaseModel):
+    """Complete financial summary for AI agent consumption."""
+    statistics: DashboardStatisticsResponse
+    portfolio: PortfolioResponse
+    cashflow: CashflowBalanceResponse
