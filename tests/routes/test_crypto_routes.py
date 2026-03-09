@@ -340,7 +340,7 @@ def test_bulk_composite_import_reward_and_crypto_deposit(mock_info, _mock_rate, 
     assert r.status_code == 201
     body = r.json()
     assert body["groups_count"] == 2
-    assert body["imported_count"] == 3  # 1 REWARD + 2 (FIAT_ANCHOR + BUY)
+    assert body["imported_count"] == 4  # 1 REWARD + 3 (FIAT_DEPOSIT + BUY + SPEND)
 
     summary = client.get(f"/crypto/accounts/{account_id}").json()
 

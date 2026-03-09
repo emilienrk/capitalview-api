@@ -432,7 +432,7 @@ def test_group_based_pru(mock_info, session: Session, master_key: str):
 
 
 def test_crypto_deposit_creates_fiat_anchor_and_buy(session: Session, master_key: str):
-    """CRYPTO_DEPOSIT creates a FIAT_ANCHOR(EUR) + BUY row sharing the same group."""
+    """CRYPTO_DEPOSIT creates a FIAT_DEPOSIT(EUR) + BUY + SPEND(EUR) sharing the same group."""
     account = CryptoAccount(
         uuid="acc_cdeposit",
         user_uuid_bidx=hash_index("u_cd", master_key),
@@ -447,26 +447,28 @@ def test_crypto_deposit_creates_fiat_anchor_and_buy(session: Session, master_key
         type="CRYPTO_DEPOSIT",
         amount=Decimal("0.5"),
         eur_amount=Decimal("15000"),        # original EUR cost
-        fee_included=True,                  # no extra fee
+        fee_included=True,
         executed_at=datetime(2024, 3, 1),
     )
     rows = create_composite_crypto_transaction(session, data, master_key)
-    assert len(rows) == 2
+    assert len(rows) == 3
     types = {r.type for r in rows}
-    assert types == {"FIAT_ANCHOR", "BUY"}
-    anchor = next(r for r in rows if r.type == "FIAT_ANCHOR")
+    assert types == {"FIAT_DEPOSIT", "BUY", "SPEND"}
+    fiat_dep = next(r for r in rows if r.type == "FIAT_DEPOSIT")
     buy = next(r for r in rows if r.type == "BUY")
-    assert anchor.symbol == "EUR"
-    assert anchor.amount == Decimal("15000")
+    spend = next(r for r in rows if r.type == "SPEND")
+    assert fiat_dep.symbol == "EUR"
+    assert fiat_dep.amount == Decimal("15000")
+    assert spend.symbol == "EUR"
+    assert spend.amount == Decimal("15000")
     assert buy.symbol == "BTC"
     assert buy.amount == Decimal("0.5")
-    # PRU = 15000 / 0.5 = 30000
-    assert buy.price_per_unit == Decimal("0")  # crypto → price = 0
-    assert anchor.group_uuid == buy.group_uuid
+    assert buy.price_per_unit == Decimal("0")  # cost resolved from SPEND EUR in same group
+    assert fiat_dep.group_uuid == buy.group_uuid == spend.group_uuid
 
 
 def test_crypto_deposit_with_external_fee_inflates_anchor(session: Session, master_key: str):
-    """CRYPTO_DEPOSIT fee_included=False → FIAT_ANCHOR carries eur_amount + fee_eur."""
+    """CRYPTO_DEPOSIT creates FIAT_DEPOSIT(EUR) + BUY + SPEND(EUR) all at eur_amount (fees ignored)."""
     account = CryptoAccount(
         uuid="acc_cdfee",
         user_uuid_bidx=hash_index("u_cdf", master_key),
@@ -480,19 +482,20 @@ def test_crypto_deposit_with_external_fee_inflates_anchor(session: Session, mast
         symbol="ETH",
         type="CRYPTO_DEPOSIT",
         amount=Decimal("10"),
-        eur_amount=Decimal("20000"),     # asset cost
+        eur_amount=Decimal("20000"),
         fee_included=False,
-        fee_eur=Decimal("50"),           # transfer fee paid separately
+        fee_eur=Decimal("50"),           # fees are no longer applied for CRYPTO_DEPOSIT
         executed_at=datetime(2024, 3, 2),
     )
     rows = create_composite_crypto_transaction(session, data, master_key)
-    assert len(rows) == 2
-    anchor = next(r for r in rows if r.type == "FIAT_ANCHOR")
+    assert len(rows) == 3
+    fiat_dep = next(r for r in rows if r.type == "FIAT_DEPOSIT")
     buy = next(r for r in rows if r.type == "BUY")
-    # Total cost = 20000 + 50 = 20050
-    assert anchor.amount == Decimal("20050")
-    # PRU = 20050 / 10 = 2005
-    assert buy.price_per_unit == Decimal("0")  # crypto → price = 0
+    spend = next(r for r in rows if r.type == "SPEND")
+    # eur_amount only — fee_eur is not added
+    assert fiat_dep.amount == Decimal("20000")
+    assert spend.amount == Decimal("20000")
+    assert buy.price_per_unit == Decimal("0")  # cost resolved from SPEND EUR in same group
 
 
 @patch("services.crypto_transaction.get_crypto_info")
