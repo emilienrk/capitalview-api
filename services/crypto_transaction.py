@@ -124,20 +124,18 @@ def create_composite_crypto_transaction(
     rows: List[TransactionResponse] = []
 
     if data.type == "CRYPTO_DEPOSIT":
-        deposit_fee_eur = Decimal("0") if data.fee_included else (data.fee_eur or Decimal("0"))
         eur_amount = data.eur_amount or Decimal("0")
-        total_cost_eur = eur_amount + deposit_fee_eur
 
-        anchor = CryptoTransactionCreate(
+        fiat_deposit = CryptoTransactionCreate(
             account_id=data.account_id,
             symbol="EUR",
-            type=CryptoTransactionType.FIAT_ANCHOR,
-            amount=total_cost_eur,
+            type=CryptoTransactionType.FIAT_DEPOSIT,
+            amount=eur_amount,
             price_per_unit=Decimal("1"),
             executed_at=data.executed_at,
             notes=data.notes,
         )
-        rows.append(create_crypto_transaction(session, anchor, master_key, group_uuid=group))
+        rows.append(create_crypto_transaction(session, fiat_deposit, master_key, group_uuid=group))
 
         buy = CryptoTransactionCreate(
             account_id=data.account_id,
@@ -151,6 +149,17 @@ def create_composite_crypto_transaction(
             notes=data.notes,
         )
         rows.append(create_crypto_transaction(session, buy, master_key, group_uuid=group))
+
+        spend_eur = CryptoTransactionCreate(
+            account_id=data.account_id,
+            symbol="EUR",
+            type=CryptoTransactionType.SPEND,
+            amount=eur_amount,
+            price_per_unit=Decimal("1"),
+            executed_at=data.executed_at,
+            notes=data.notes,
+        )
+        rows.append(create_crypto_transaction(session, spend_eur, master_key, group_uuid=group))
         return rows
 
     if data.type == "EXIT":
