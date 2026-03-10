@@ -1,6 +1,7 @@
 """Authentication routes."""
 
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response, status
@@ -166,6 +167,11 @@ def login(
         )
     
     master_key = get_masterkey(payload.password, user.auth_salt)
+
+    # Update last login timestamp
+    user.last_login = datetime.now(timezone.utc)
+    session.add(user)
+    session.commit()
 
     access_token = create_access_token(
         data={"sub": user.uuid}
