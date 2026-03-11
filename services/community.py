@@ -651,12 +651,12 @@ def get_available_positions(
             elif tx_type == "SELL":
                 stock_agg[isin] -= amount
 
-    # Lookup stock names from the MarketPrice cache (keyed by ISIN)
-    from models.market import MarketPrice as MarketPriceModel
+    # Lookup stock names from the MarketAsset cache (keyed by ISIN)
+    from models.market import MarketAsset as MarketAssetModel
     isin_to_name: dict[str, str] = {}
     for isin in stock_agg:
         mp = session.exec(
-            select(MarketPriceModel).where(MarketPriceModel.isin == isin)
+            select(MarketAssetModel).where(MarketAssetModel.isin == isin)
         ).first()
         if mp and mp.name:
             isin_to_name[isin] = mp.name

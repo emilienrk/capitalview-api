@@ -7,7 +7,7 @@ from typing import List, Optional
 from sqlmodel import Session, select
 
 from models import StockAccount, StockTransaction
-from models.market import MarketPrice
+from models.market import MarketAsset
 from models.enums import AssetType
 from dtos import (
     StockTransactionCreate,
@@ -74,7 +74,7 @@ def create_stock_transaction(
     exec_at_enc = encrypt_data(data.executed_at.isoformat(), master_key)
     
 
-    mp = session.exec(select(MarketPrice).where(MarketPrice.isin == data.isin)).first()
+    mp = session.exec(select(MarketAsset).where(MarketAsset.isin == data.isin)).first()
     if not mp:
         market_info = None
         
@@ -104,14 +104,13 @@ def create_stock_transaction(
                 "currency": "EUR"
             }
 
-        mp = MarketPrice(
+        mp = MarketAsset(
             isin=data.isin,
             symbol=market_info.get("symbol") or data.symbol,
             name=market_info.get("name") or data.name,
             exchange=market_info.get("exchange") or data.exchange,
-            current_price=market_info.get("price") or Decimal("0"),
             currency=market_info.get("currency") or "EUR",
-            last_updated=datetime(2000, 1, 1, tzinfo=timezone.utc)
+            asset_type="STOCK",
         )
         session.add(mp)
         session.commit()
@@ -150,7 +149,7 @@ def create_stock_transaction(
             resp.name = data.name
         
         if not resp.symbol or not resp.exchange or not resp.name:
-             mp = session.exec(select(MarketPrice).where(MarketPrice.isin == resp.isin)).first()
+             mp = session.exec(select(MarketAsset).where(MarketAsset.isin == resp.isin)).first()
              if mp:
                  if not resp.symbol: resp.symbol = mp.symbol
                  if not resp.exchange: resp.exchange = mp.exchange
@@ -169,7 +168,7 @@ def get_stock_transaction(
         return None
     resp = _decrypt_transaction(transaction, master_key)
     
-    mp = session.exec(select(MarketPrice).where(MarketPrice.isin == resp.isin)).first()
+    mp = session.exec(select(MarketAsset).where(MarketAsset.isin == resp.isin)).first()
     if mp:
         resp.symbol = mp.symbol
         resp.exchange = mp.exchange
@@ -212,7 +211,7 @@ def update_stock_transaction(
 
     resp = _decrypt_transaction(transaction, master_key)
     if resp.isin:
-        mp = session.exec(select(MarketPrice).where(MarketPrice.isin == resp.isin)).first()
+        mp = session.exec(select(MarketAsset).where(MarketAsset.isin == resp.isin)).first()
         if mp:
             resp.symbol = mp.symbol
             resp.exchange = mp.exchange
@@ -251,10 +250,10 @@ def get_account_transactions(
     
     market_map = {}
     if isins:
-        market_prices = session.exec(
-            select(MarketPrice).where(MarketPrice.isin.in_(isins))
+        market_assets = session.exec(
+            select(MarketAsset).where(MarketAsset.isin.in_(isins))
         ).all()
-        for mp in market_prices:
+        for mp in market_assets:
             market_map[mp.isin] = {
                 "name": mp.name, 
                 "symbol": mp.symbol, 
@@ -326,11 +325,11 @@ def get_stock_account_summary(
         pos["total_fees"] += tx.fees
 
     positions: list[PositionResponse] = []
-    # Pre-fetch native currencies from MarketPrice in one batch query
+    # Pre-fetch native currencies from MarketAsset in one batch query
     isins = [k for k in positions_map.keys() if k]
     market_currency_map: dict[str, str] = {}
     if isins:
-        mps = session.exec(select(MarketPrice).where(MarketPrice.isin.in_(isins))).all()
+        mps = session.exec(select(MarketAsset).where(MarketAsset.isin.in_(isins))).all()
         for mp in mps:
             if mp.currency:
                 market_currency_map[mp.isin] = mp.currency.upper()

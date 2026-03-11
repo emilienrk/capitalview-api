@@ -16,7 +16,7 @@ from dtos.stock import StockTransactionCreate, StockTransactionUpdate
 from dtos.stock import StockTransactionCreate, StockTransactionUpdate
 from models.enums import StockTransactionType
 from models.stock import StockAccount, StockTransaction
-from models.market import MarketPrice
+from models.market import MarketAsset
 from services.encryption import hash_index, encrypt_data, decrypt_data
 
 
@@ -227,16 +227,18 @@ def test_position_currency_usd(mock_market, session: Session, master_key: str):
     session.add(account)
     session.commit()
 
-    # Manually inject MarketPrice with explicit currencies
-    mp_usd = MarketPrice(
+    # Manually inject MarketAsset with explicit currencies
+    mp_usd = MarketAsset(
         isin="ISIN_AAPL", symbol="AAPL", name="Apple Inc.",
-        currency="USD", current_price=Decimal("200.0"),
+        currency="USD",
         exchange="NASDAQ",
+        asset_type="STOCK",
     )
-    mp_eur = MarketPrice(
+    mp_eur = MarketAsset(
         isin="ISIN_LVMH", symbol="MC", name="LVMH",
-        currency="EUR", current_price=Decimal("500.0"),
+        currency="EUR",
         exchange="PAR",
+        asset_type="STOCK",
     )
     session.add(mp_usd)
     session.add(mp_eur)

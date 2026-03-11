@@ -8,7 +8,7 @@ from uuid import uuid4
 from sqlmodel import Session, select
 
 from models import CryptoAccount, CryptoTransaction
-from models.market import MarketPrice
+from models.market import MarketAsset
 from models.enums import CryptoTransactionType
 from dtos import (
     CryptoTransactionCreate,
@@ -24,23 +24,22 @@ from services.crypto_account import _map_account_to_response
 
 
 def _upsert_market_cache(session: Session, symbol: str, name: Optional[str]) -> None:
-    market_price = session.exec(
-        select(MarketPrice).where(MarketPrice.isin == symbol.upper())
+    market_asset = session.exec(
+        select(MarketAsset).where(MarketAsset.isin == symbol.upper())
     ).first()
-    if market_price:
-        if name and not market_price.name:
-            market_price.name = name
-            session.add(market_price)
+    if market_asset:
+        if name and not market_asset.name:
+            market_asset.name = name
+            session.add(market_asset)
     else:
-        market_price = MarketPrice(
+        market_asset = MarketAsset(
             isin=symbol.upper(),
             symbol=symbol.upper(),
             name=name or symbol.upper(),
-            current_price=Decimal("0"),
             currency="EUR",
-            last_updated=datetime(2000, 1, 1, tzinfo=timezone.utc),
+            asset_type="CRYPTO",
         )
-        session.add(market_price)
+        session.add(market_asset)
 
 
 def _decrypt_transaction(
@@ -602,11 +601,13 @@ def get_account_transactions(
     symbols = {tx.symbol for tx in decoded if tx.symbol}
     market_map: dict = {}
     if symbols:
-        market_prices = session.exec(
-            select(MarketPrice).where(MarketPrice.isin.in_(symbols))
+        market_assets = session.exec(
+            select(MarketAsset).where(MarketAsset.isin.in_(symbols))
         ).all()
-        for mp in market_prices:
-            market_map[mp.isin] = {"name": mp.name, "current_price": mp.current_price}
+        from services.market import get_latest_price
+        for ma in market_assets:
+            latest = get_latest_price(session, ma.id)
+            market_map[ma.isin] = {"name": ma.name, "current_price": latest}
 
     for tx in decoded:
         info = market_map.get(tx.symbol)

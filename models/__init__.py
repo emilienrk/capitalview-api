@@ -17,7 +17,7 @@ from .cashflow import Cashflow
 from .bank import BankAccount
 from .stock import StockAccount, StockTransaction
 from .crypto import CryptoAccount, CryptoTransaction
-from .market import MarketPrice
+from .market import MarketAsset, MarketPriceHistory, MarketPrice
 from .note import Note
 from .asset import Asset, AssetValuation
 from .community import CommunityProfile, CommunityPosition, CommunityFollow, CommunityPick
@@ -39,6 +39,8 @@ __all__ = [
     "StockTransaction",
     "CryptoAccount",
     "CryptoTransaction",
+    "MarketAsset",
+    "MarketPriceHistory",
     "MarketPrice",
     "Note",
     "Asset",

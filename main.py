@@ -53,8 +53,19 @@ async def lifespan(app: FastAPI):
         print("✅ Database connection successful!")
     except Exception as e:
         print(f"❌ Database connection failed: {e}")
-    
+
+    # Start APScheduler for nightly price updates
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from services.market import update_all_prices_daily
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(update_all_prices_daily, "cron", hour=23, minute=30, id="daily_price_update")
+    scheduler.start()
+    print("⏰ Scheduler started (daily price update at 23:30)")
+
     yield
+
+    scheduler.shutdown(wait=False)
     print("👋 Shutting down...")
 
 
