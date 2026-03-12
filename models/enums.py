@@ -4,17 +4,24 @@ Enumerations for the CapitalView database models.
 from enum import Enum
 
 
+class AccountCategory(str, Enum):
+    """Type of account tracked in account_history snapshots."""
+    STOCK = "STOCK"
+    CRYPTO = "CRYPTO"
+    BANK = "BANK"
+
 class AssetType(str, Enum):
     """Type of asset for market data."""
     STOCK = "STOCK"
     CRYPTO = "CRYPTO"
-
+    COMMODITY = "COMMODITY"
+    BOND = "BOND"
+    FIAT = "FIAT"
 
 class FlowType(str, Enum):
     """Type of cashflow."""
     INFLOW = "INFLOW"
     OUTFLOW = "OUTFLOW"
-
 
 class Frequency(str, Enum):
     """Frequency of a cashflow."""
@@ -41,7 +48,6 @@ class StockAccountType(str, Enum):
     CTO = "CTO"
     PEA_PME = "PEA_PME"
 
-
 class StockTransactionType(str, Enum):
     """Type of stock transaction."""
     BUY = "BUY"
@@ -49,6 +55,11 @@ class StockTransactionType(str, Enum):
     DEPOSIT = "DEPOSIT"
     DIVIDEND = "DIVIDEND"
 
+class CryptoAccountType(str, Enum):
+    """Type factorisé de compte d'investissement crypto."""
+    EXCHANGE = "EXCHANGE"
+    WALLET = "WALLET"
+    DEFI = "DEFI"
 
 class CryptoTransactionType(str, Enum):
     """Type of crypto transaction (atomic ledger model).
