@@ -9,7 +9,7 @@ from sqlmodel import Session, select
 
 from models import CryptoAccount, CryptoTransaction
 from models.market import MarketAsset
-from models.enums import CryptoTransactionType
+from models.enums import CryptoTransactionType, AssetType
 from dtos import (
     CryptoTransactionCreate,
     CryptoTransactionUpdate,
@@ -36,8 +36,7 @@ def _upsert_market_cache(session: Session, symbol: str, name: Optional[str]) -> 
             isin=symbol.upper(),
             symbol=symbol.upper(),
             name=name or symbol.upper(),
-            currency="EUR",
-            asset_type="CRYPTO",
+            asset_type=AssetType.CRYPTO,
         )
         session.add(market_asset)
 

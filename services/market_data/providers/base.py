@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from datetime import date
 from decimal import Decimal
 from typing import List, Optional
 
@@ -21,7 +22,7 @@ class MarketDataProvider(ABC):
         pass
 
     @abstractmethod
-    def get_info(self, symbol: str) -> Optional[dict]:
+    def get_info(self, symbol: str, asset_type: Optional[AssetType] = None) -> Optional[dict]:
         """
         Fetch detailed information for a symbol.
         
@@ -38,7 +39,7 @@ class MarketDataProvider(ABC):
         pass
 
     @abstractmethod
-    def search(self, query: str) -> list[dict]:
+    def search(self, query: str, asset_type: Optional[AssetType] = None) -> list[dict]:
         """
         Search for assets matching a query string.
         
@@ -56,7 +57,7 @@ class MarketDataProvider(ABC):
         pass
 
     @abstractmethod
-    def get_bulk_info(self, symbols: list[str]) -> dict[str, dict]:
+    def get_bulk_info(self, symbols: list[str], asset_type: Optional[AssetType] = None) -> dict[str, dict]:
         """
         Fetch information for multiple symbols in a single batch operation.
         
@@ -68,3 +69,21 @@ class MarketDataProvider(ABC):
                              Symbols that fail to fetch are excluded from the result.
         """
         pass
+
+    def get_historical_prices(
+        self, symbol: str, from_date: date, to_date: date, asset_type: Optional[AssetType] = None
+    ) -> dict[date, Decimal]:
+        """
+        Fetch daily closing prices for a symbol over a date range.
+
+        Args:
+            symbol: The asset symbol.
+            from_date: First day (inclusive).
+            to_date: Last day (inclusive).
+
+        Returns:
+            dict mapping each calendar date with a price to its closing Decimal value.
+            Dates with no data are omitted.
+            Providers that don't support historical data return an empty dict.
+        """
+        return {}

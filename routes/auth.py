@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, Header, HTTPException, Request, Response, status
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlmodel import Session, select
@@ -31,6 +31,7 @@ from services.auth import (
 )
 from services.encryption import get_masterkey, init_salt, hash_password
 from services.community import refresh_community_positions
+from services.account_history import run_lazy_catchup
 
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -141,6 +142,7 @@ def login(
     request: Request,
     payload: LoginRequest,
     response: Response,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     x_return_master_key: Annotated[str | None, Header(alias="X-Return-Master-Key")] = None
 ):
@@ -208,6 +210,9 @@ def login(
         refresh_community_positions(session, user.uuid, master_key)
     except Exception:
         pass  # Non-critical — don't block login if community sync fails
+
+    # Compute missing account history snapshots in the background (never blocks login)
+    background_tasks.add_task(run_lazy_catchup, user.uuid, master_key)
     
     return TokenResponse(
         access_token=access_token,
@@ -221,7 +226,9 @@ def login(
 def refresh_token_endpoint(
     request: Request,
     response: Response,
+    background_tasks: BackgroundTasks,
     refresh_token: Annotated[str | None, Cookie()] = None,
+    master_key_cookie: Annotated[str | None, Cookie(alias="master_key")] = None,
     session: Session = Depends(get_session)
 ):
     """
@@ -268,7 +275,11 @@ def refresh_token_endpoint(
     access_token = create_access_token(
         data={"sub": user.uuid}
     )
-    
+
+    # Trigger account history catchup if master_key cookie is present
+    if master_key_cookie:
+        background_tasks.add_task(run_lazy_catchup, user.uuid, master_key_cookie)
+
     return TokenResponse(
         access_token=access_token,
         token_type="bearer",

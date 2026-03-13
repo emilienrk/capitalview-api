@@ -13,7 +13,7 @@ from dtos.dashboard import DashboardStatisticsResponse, DashboardSummaryResponse
 from dtos.cashflow import CashflowBalanceResponse
 from services.auth import get_current_user, get_master_key
 from services.encryption import hash_index
-from services.exchange_rate import get_exchange_rate, get_effective_usd_eur_rate, convert_crypto_prices_to_eur
+from services.market import get_exchange_rate
 from services.settings import get_or_create_settings
 from services.stock_transaction import get_stock_account_summary
 from services.crypto_transaction import get_crypto_account_summary
@@ -50,11 +50,12 @@ def get_dashboard_summary(
 @router.get("/exchange-rate")
 def get_rate(
     current_user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[Session, Depends(get_session)],
     from_currency: str = "USD",
     to_currency: str = "EUR",
 ) -> dict:
     """Return a cached exchange rate (e.g. USD→EUR) for frontend use."""
-    rate = get_exchange_rate(from_currency, to_currency)
+    rate = get_exchange_rate(session, from_currency, to_currency)
     return {
         "from": from_currency,
         "to": to_currency,
@@ -94,15 +95,11 @@ def get_my_portfolio(
         summary = get_stock_account_summary(session, acc, master_key)
         accounts.append(summary)
     
-    # Convert crypto accounts from USD to EUR for portfolio aggregation
+    # Convert crypto accounts — prices are now stored in EUR in market_price_history
     settings = get_or_create_settings(session, current_user.uuid, master_key)
-    usd_eur_rate = get_effective_usd_eur_rate(
-        float(settings.usd_eur_rate) if settings.usd_eur_rate is not None else None
-    )
     for acc in crypto_models:
         summary = get_crypto_account_summary(session, acc, master_key, settings.crypto_show_negative_positions)
-        summary_eur = convert_crypto_prices_to_eur(summary, usd_eur_rate)
-        accounts.append(summary_eur)
+        accounts.append(summary)
     
     total_invested = sum(a.total_invested for a in accounts)
     total_fees = sum(a.total_fees for a in accounts)
@@ -152,23 +149,19 @@ def get_dashboard_statistics(
         if summary.current_value:
             stock_current_value += summary.current_value
 
-    # ── Crypto accounts (converted to EUR) ──────────────────
+    # ── Crypto accounts ──────────────────────────────────────
     crypto_models = session.exec(
         select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
     ).all()
 
     settings = get_or_create_settings(session, current_user.uuid, master_key)
-    usd_eur_rate = get_effective_usd_eur_rate(
-        float(settings.usd_eur_rate) if settings.usd_eur_rate is not None else None
-    )
     crypto_invested = Decimal(0)
     crypto_current_value = Decimal(0)
     for acc in crypto_models:
         summary = get_crypto_account_summary(session, acc, master_key, settings.crypto_show_negative_positions)
-        summary_eur = convert_crypto_prices_to_eur(summary, usd_eur_rate)
-        crypto_invested += summary_eur.total_invested
-        if summary_eur.current_value:
-            crypto_current_value += summary_eur.current_value
+        crypto_invested += summary.total_invested
+        if summary.current_value:
+            crypto_current_value += summary.current_value
 
     # ── Investment distribution percentages ─────────────────
     total_investment_value = stock_current_value + crypto_current_value

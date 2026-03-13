@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Optional, Dict, List
 
@@ -15,11 +16,15 @@ class YahooProvider(MarketDataProvider):
         self.search_url = self.settings.yahoo_api_url
 
     def type_assets(self) -> List[AssetType]:
-        return [AssetType.STOCK]
+        return [AssetType.STOCK, AssetType.FIAT]
 
-    def get_info(self, symbol: str) -> Optional[Dict]:
+    def get_info(self, symbol: str, asset_type: Optional[AssetType] = None) -> Optional[Dict]:
         if not symbol or not symbol.strip():
             return None
+            
+        original_symbol = symbol
+        if asset_type == AssetType.FIAT and not symbol.endswith("EUR=X"):
+            symbol = f"{symbol}EUR=X"
             
         try:
             ticker = yf.Ticker(symbol)
@@ -48,10 +53,10 @@ class YahooProvider(MarketDataProvider):
                 pass
 
             return {
-                "name": info.get("shortName") or info.get("longName") or symbol,
+                "name": info.get("shortName") or info.get("longName") or original_symbol,
                 "currency": info.get("currency", "EUR"),
                 "price": Decimal(str(price)),
-                "symbol": symbol,
+                "symbol": original_symbol,
                 "isin": isin
             }
         except (ValueError, IndexError, KeyError):
@@ -60,7 +65,7 @@ class YahooProvider(MarketDataProvider):
             print(f"YahooProvider unexpected error for {symbol}: {e}")
             return None
 
-    def search(self, query: str) -> List[Dict]:
+    def search(self, query: str, asset_type: Optional[AssetType] = None) -> List[Dict]:
         if not query or not query.strip():
             return []
             
@@ -105,19 +110,31 @@ class YahooProvider(MarketDataProvider):
             print(f"YahooProvider search error: {e}")
             return []
 
-    def get_bulk_info(self, symbols: List[str]) -> Dict[str, Dict]:
+    def get_bulk_info(self, symbols: List[str], asset_type: Optional[AssetType] = None) -> Dict[str, Dict]:
         if not symbols:
             return {}
         
         valid_symbols = [s.strip() for s in symbols if s and s.strip()]
         if not valid_symbols:
             return {}
+
+        original_symbols = {}
+        if asset_type == AssetType.FIAT:
+            for i in range(len(valid_symbols)):
+                original = valid_symbols[i]
+                if not original.endswith("EUR=X"):
+                    valid_symbols[i] = f"{original}EUR=X"
+                original_symbols[valid_symbols[i]] = original
+        else:
+            for sym in valid_symbols:
+                original_symbols[sym] = sym
         
         results = {}
         try:
             tickers = yf.Tickers(" ".join(valid_symbols))
             
             for sym in valid_symbols:
+                original_sym = original_symbols[sym]
                 if hasattr(tickers, 'tickers') and sym not in tickers.tickers:
                     continue
 
@@ -125,7 +142,7 @@ class YahooProvider(MarketDataProvider):
                 
                 price = None
                 currency = "EUR"
-                name = sym
+                name = original_sym
                 isin = None
 
                 if hasattr(ticker, "fast_info"):
@@ -157,7 +174,7 @@ class YahooProvider(MarketDataProvider):
                         pass
                 
                 if price and price > 0:
-                    results[sym] = {
+                    results[original_sym] = {
                         "price": Decimal(str(price)),
                         "name": name,
                         "currency": currency,
@@ -167,3 +184,32 @@ class YahooProvider(MarketDataProvider):
         except Exception as e:
             print(f"YahooProvider bulk error: {e}")
             return {}
+
+    def get_historical_prices(
+        self, symbol: str, from_date: date, to_date: date, asset_type: Optional[AssetType] = None
+    ) -> dict[date, Decimal]:
+        if not symbol or not symbol.strip():
+            return {}
+
+        original_symbol = symbol
+        if asset_type == AssetType.FIAT and not symbol.endswith("EUR=X"):
+            symbol = f"{symbol}EUR=X"
+
+        try:
+            ticker = yf.Ticker(symbol)
+            # end is exclusive in yfinance
+            hist = ticker.history(start=from_date, end=to_date + timedelta(days=1))
+        except Exception as e:
+            print(f"YahooProvider history error for {symbol}: {e}")
+            return {}
+
+        if hist.empty:
+            return {}
+
+        result: dict[date, Decimal] = {}
+        for dt_idx, row in hist.iterrows():
+            d: date = dt_idx.date() if hasattr(dt_idx, "date") else dt_idx
+            close = row.get("Close")
+            if close and close > 0:
+                result[d] = Decimal(str(close))
+        return result

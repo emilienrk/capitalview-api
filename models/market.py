@@ -12,6 +12,9 @@ import sqlalchemy as sa
 from sqlmodel import Column, Field, SQLModel, UniqueConstraint
 
 
+from models.enums import AssetType
+
+
 class MarketAsset(SQLModel, table=True):
     """Reference data for a tracked market instrument."""
     __tablename__ = "market_assets"
@@ -23,8 +26,7 @@ class MarketAsset(SQLModel, table=True):
     exchange: Optional[str] = Field(default=None)
     name: Optional[str] = Field(default=None)
     sector: Optional[str] = Field(default=None)
-    currency: str = Field(default="USD")
-    asset_type: Optional[str] = Field(default=None)
+    asset_type: Optional[AssetType] = Field(default=None, index=True)
 
 
 class MarketPriceHistory(SQLModel, table=True):

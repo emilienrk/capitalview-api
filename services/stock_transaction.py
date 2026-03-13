@@ -109,8 +109,7 @@ def create_stock_transaction(
             symbol=market_info.get("symbol") or data.symbol,
             name=market_info.get("name") or data.name,
             exchange=market_info.get("exchange") or data.exchange,
-            currency=market_info.get("currency") or "EUR",
-            asset_type="STOCK",
+            asset_type=AssetType.STOCK,
         )
         session.add(mp)
         session.commit()
@@ -325,14 +324,7 @@ def get_stock_account_summary(
         pos["total_fees"] += tx.fees
 
     positions: list[PositionResponse] = []
-    # Pre-fetch native currencies from MarketAsset in one batch query
     isins = [k for k in positions_map.keys() if k]
-    market_currency_map: dict[str, str] = {}
-    if isins:
-        mps = session.exec(select(MarketAsset).where(MarketAsset.isin.in_(isins))).all()
-        for mp in mps:
-            if mp.currency:
-                market_currency_map[mp.isin] = mp.currency.upper()
 
     for position_key, data in positions_map.items():
         if data["total_amount"] <= 0:
@@ -374,7 +366,7 @@ def get_stock_account_summary(
             total_invested=round(total_invested, 2),
             total_fees=round(data["total_fees"], 2),
             fees_percentage=round(fees_pct, 2),
-            currency=market_currency_map.get(isin, "EUR") if isin else "EUR",
+            currency="EUR",
             current_price=current_price,
             current_value=round(current_value, 2) if current_value is not None else None,
             profit_loss=round(profit_loss, 2) if profit_loss is not None else None,

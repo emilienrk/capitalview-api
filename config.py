@@ -51,6 +51,10 @@ class Settings:
         self.cmc_api_url: str = os.getenv("CMC_API_URL", "https://pro-api.coinmarketcap.com")
         self.cmc_api_key: str = os.getenv("CMC_API_KEY", "")
 
+        # ── CoinGecko (crypto historical prices) ─────────────
+        self.coingecko_api_url: str = os.getenv("CG_API_URL", "https://api.coingecko.com/api/v3")
+        self.coingecko_api_key: str = os.getenv("CG_API_KEY", "")
+
 
 @lru_cache()
 def get_settings() -> Settings:

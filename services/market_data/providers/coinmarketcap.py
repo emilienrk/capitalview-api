@@ -21,7 +21,7 @@ class CoinMarketCapProvider(MarketDataProvider):
     def type_assets(self) -> List[AssetType]:
         return [AssetType.CRYPTO]
 
-    def get_info(self, symbol: str) -> Optional[Dict]:
+    def get_info(self, symbol: str, asset_type: Optional[AssetType] = None) -> Optional[Dict]:
         if not symbol or not symbol.strip() or not self.api_key:
             return None
             
@@ -114,7 +114,7 @@ class CoinMarketCapProvider(MarketDataProvider):
             print(f"Error fetching CMC map (Parsing): {e}")
             return self._map_cache
 
-    def search(self, query: str) -> List[Dict]:
+    def search(self, query: str, asset_type: Optional[AssetType] = None) -> List[Dict]:
         if not query or not query.strip():
             return []
             
@@ -132,7 +132,7 @@ class CoinMarketCapProvider(MarketDataProvider):
                 
         return results
 
-    def get_bulk_info(self, symbols: List[str]) -> Dict[str, Dict]:
+    def get_bulk_info(self, symbols: List[str], asset_type: Optional[AssetType] = None) -> Dict[str, Dict]:
         if not symbols or not self.api_key:
             return {}
         

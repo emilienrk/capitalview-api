@@ -11,6 +11,7 @@ from .enums import (
     Frequency,
     StockAccountType,
     StockTransactionType,
+    AccountCategory,
 )
 from .user import User, UserSettings
 from .cashflow import Cashflow
@@ -21,6 +22,7 @@ from .market import MarketAsset, MarketPriceHistory, MarketPrice
 from .note import Note
 from .asset import Asset, AssetValuation
 from .community import CommunityProfile, CommunityPosition, CommunityFollow, CommunityPick
+from .account_history import AccountHistory
 
 __all__ = [
     # Enums
@@ -30,6 +32,7 @@ __all__ = [
     "StockAccountType",
     "StockTransactionType",
     "CryptoTransactionType",
+    "AccountCategory",
     # Models
     "User",
     "UserSettings",
@@ -49,4 +52,5 @@ __all__ = [
     "CommunityPosition",
     "CommunityFollow",
     "CommunityPick",
+    "AccountHistory",
 ]

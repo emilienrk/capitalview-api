@@ -10,6 +10,7 @@ from .notes import router as notes_router
 from .settings import router as settings_router
 from .asset import router as asset_router
 from .community import router as community_router
+from .market import router as market_router
 
 __all__ = [
     "auth_router",
@@ -22,4 +23,5 @@ __all__ = [
     "settings_router",
     "asset_router",
     "community_router",
+    "market_router",
 ]

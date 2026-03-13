@@ -2,7 +2,9 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import date, timedelta
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlmodel import Session
 
 from database import get_session
@@ -39,7 +41,8 @@ from services.stock_transaction import (
     get_stock_account_summary
 )
 from services.market_data.manager import market_data_manager
-from services.community import refresh_community_positions
+from services.account_history import trigger_post_transaction_updates
+from services.encryption import decrypt_data, hash_index
 
 router = APIRouter(prefix="/stocks", tags=["Stocks"])
 
@@ -134,6 +137,7 @@ def delete_account(
 @router.post("/transactions", response_model=TransactionResponse, status_code=201)
 def create_transaction(
     data: StockTransactionCreate,
+    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -145,7 +149,19 @@ def create_transaction(
     
     try:
         result = create_stock_transaction(session, data, master_key)
-        refresh_community_positions(session, current_user.uuid, master_key)
+        
+        executed_date = data.executed_at.date() if hasattr(data.executed_at, "date") else data.executed_at
+        trigger_post_transaction_updates(
+            session=session,
+            background_tasks=background_tasks,
+            user_uuid=current_user.uuid,
+            master_key=master_key,
+            account_id=data.account_id,
+            asset_type=AssetType.STOCK,
+            affected_dates=[executed_date],
+            affected_assets=[data.isin]
+        )
+        
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -189,6 +205,7 @@ def get_transaction(
 def update_transaction(
     transaction_id: str,
     data: StockTransactionUpdate,
+    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -197,10 +214,29 @@ def update_transaction(
     tx_model = session.get(StockTransaction, transaction_id)
     if not tx_model:
         raise HTTPException(status_code=404, detail="Transaction not found")
-        
+
+    # Capture old executed_at before the update so we can rebuild from the earliest affected date.
+    try:
+        old_date = date.fromisoformat(decrypt_data(tx_model.executed_at_enc, master_key)[:10])
+    except Exception:
+        old_date = None
+
     try:
         result = update_stock_transaction(session, tx_model, data, master_key)
-        refresh_community_positions(session, current_user.uuid, master_key)
+        
+        new_date = data.executed_at.date() if hasattr(data.executed_at, "date") else data.executed_at
+        
+        trigger_post_transaction_updates(
+            session=session,
+            background_tasks=background_tasks,
+            user_uuid=current_user.uuid,
+            master_key=master_key,
+            account_id_bidx=tx_model.account_id_bidx,
+            asset_type=AssetType.STOCK,
+            affected_dates=[old_date, new_date],
+            affected_assets=[result.isin]
+        )
+        
         return result
     except Exception:
         raise HTTPException(status_code=403, detail="Access denied (Decryption failed)")
@@ -209,6 +245,7 @@ def update_transaction(
 @router.delete("/transactions/{transaction_id}", status_code=204)
 def delete_transaction(
     transaction_id: str,
+    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -217,9 +254,25 @@ def delete_transaction(
     tx = get_stock_transaction(session, transaction_id, master_key)
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
-        
+
+    # Capture account and date before deleting.
+    tx_model = session.get(StockTransaction, transaction_id)
+    account_id_bidx = tx_model.account_id_bidx if tx_model else None
+    executed_date = tx.executed_at.date() if tx.executed_at and hasattr(tx.executed_at, "date") else None
+
     delete_stock_transaction(session, transaction_id)
-    refresh_community_positions(session, current_user.uuid, master_key)
+    
+    trigger_post_transaction_updates(
+        session=session,
+        background_tasks=background_tasks,
+        user_uuid=current_user.uuid,
+        master_key=master_key,
+        account_id_bidx=account_id_bidx,
+        asset_type=AssetType.STOCK,
+        affected_dates=[executed_date],
+        affected_assets=[tx.isin]
+    )
+    
     return None
 
 
@@ -241,6 +294,7 @@ def get_transactions_by_account(
 @router.post("/transactions/bulk", response_model=StockBulkImportResponse, status_code=201)
 def bulk_import_transactions(
     data: StockBulkImportRequest,
+    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -288,7 +342,21 @@ def bulk_import_transactions(
         except ValueError:
             continue
 
-    refresh_community_positions(session, current_user.uuid, master_key)
+    past_dates = [
+        item.executed_at.date() if hasattr(item.executed_at, "date") else item.executed_at
+        for item in data.transactions
+    ]
+    
+    trigger_post_transaction_updates(
+        session=session,
+        background_tasks=background_tasks,
+        user_uuid=current_user.uuid,
+        master_key=master_key,
+        account_id=data.account_id,
+        asset_type=AssetType.STOCK,
+        affected_dates=past_dates,
+        affected_assets=[item.isin for item in data.transactions if item.isin]
+    )
 
     return StockBulkImportResponse(
         imported_count=len(created_responses),

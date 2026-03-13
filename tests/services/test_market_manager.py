@@ -15,7 +15,7 @@ class MockProvider(MarketDataProvider):
     def type_assets(self) -> List[AssetType]:
         return self.supported_types
 
-    def get_info(self, symbol: str) -> Dict:
+    def get_info(self, symbol: str, asset_type: AssetType = None) -> Dict:
         if self.data and symbol in self.data:
             return self.data[symbol]
         return None
@@ -24,10 +24,10 @@ class MockProvider(MarketDataProvider):
         info = self.get_info(symbol)
         return info["price"] if info else None
 
-    def search(self, query: str) -> List[Dict]:
+    def search(self, query: str, asset_type: AssetType = None) -> List[Dict]:
         return []
 
-    def get_bulk_info(self, symbols: List[str]) -> Dict[str, Dict]:
+    def get_bulk_info(self, symbols: List[str], asset_type: AssetType = None) -> Dict[str, Dict]:
         return {s: self.data.get(s) for s in symbols if s in self.data}
 
 def test_manager_get_info_success_first_provider():

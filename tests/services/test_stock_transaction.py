@@ -14,7 +14,7 @@ from services.stock_transaction import (
 )
 from dtos.stock import StockTransactionCreate, StockTransactionUpdate
 from dtos.stock import StockTransactionCreate, StockTransactionUpdate
-from models.enums import StockTransactionType
+from models.enums import StockTransactionType, AssetType
 from models.stock import StockAccount, StockTransaction
 from models.market import MarketAsset
 from services.encryption import hash_index, encrypt_data, decrypt_data
@@ -211,8 +211,8 @@ def test_get_stock_account_summary(mock_market, session: Session, master_key: st
 
 
 @patch("services.stock_transaction.get_stock_info")
-def test_position_currency_usd(mock_market, session: Session, master_key: str):
-    """Positions whose MarketPrice.currency = USD must surface currency='USD'."""
+def test_position_currency_always_eur(mock_market, session: Session, master_key: str):
+    """All positions must surface currency='EUR' since prices are stored in EUR."""
     mock_market.side_effect = lambda s, isin: {
         "ISIN_AAPL": ("Apple Inc.", Decimal("200.0")),
         "ISIN_LVMH": ("LVMH", Decimal("500.0")),
@@ -227,21 +227,19 @@ def test_position_currency_usd(mock_market, session: Session, master_key: str):
     session.add(account)
     session.commit()
 
-    # Manually inject MarketAsset with explicit currencies
-    mp_usd = MarketAsset(
+    # MarketAssets without currency (removed field) — asset_type only
+    mp_us = MarketAsset(
         isin="ISIN_AAPL", symbol="AAPL", name="Apple Inc.",
-        currency="USD",
         exchange="NASDAQ",
-        asset_type="STOCK",
+        asset_type=AssetType.STOCK,
     )
-    mp_eur = MarketAsset(
+    mp_fr = MarketAsset(
         isin="ISIN_LVMH", symbol="MC", name="LVMH",
-        currency="EUR",
         exchange="PAR",
-        asset_type="STOCK",
+        asset_type=AssetType.STOCK,
     )
-    session.add(mp_usd)
-    session.add(mp_eur)
+    session.add(mp_us)
+    session.add(mp_fr)
     session.commit()
 
     create_stock_transaction(session, StockTransactionCreate(
@@ -261,9 +259,8 @@ def test_position_currency_usd(mock_market, session: Session, master_key: str):
     pos_aapl = next(p for p in summary.positions if p.symbol == "AAPL")
     pos_lvmh = next(p for p in summary.positions if p.symbol == "MC")
 
-    # USD position surfaces as USD
-    assert pos_aapl.currency == "USD"
-    # EUR position surfaces as EUR
+    # Prices are stored in EUR — all positions report EUR
+    assert pos_aapl.currency == "EUR"
     assert pos_lvmh.currency == "EUR"
 
 

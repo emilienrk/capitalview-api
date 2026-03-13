@@ -19,10 +19,10 @@ def _override_deps(session, master_key):
     app.dependency_overrides.clear()
 
 
-@patch("routes.dashboard.get_effective_usd_eur_rate")
 @patch("services.stock_transaction.get_stock_info")
 @patch("services.crypto_transaction.get_crypto_info")
-def test_dashboard_portfolio(mock_crypto, mock_stock, mock_rate, session, master_key):
+@patch("routes.dashboard.get_exchange_rate")
+def test_dashboard_portfolio(mock_rate, mock_crypto, mock_stock, session, master_key):
     mock_stock.return_value = ("Apple Inc.", Decimal("200"))
     mock_crypto.return_value = ("Bitcoin", Decimal("50000"))
     mock_rate.return_value = Decimal("0.90")
@@ -92,17 +92,14 @@ def test_dashboard_portfolio(mock_crypto, mock_stock, mock_rate, session, master
     # Stock invested stays in EUR = 100
     assert Decimal(str(stock_acc["total_invested"])) == Decimal("100")
 
-    # Verify the exchange rate helper was called
-    mock_rate.assert_called()
 
-
-@patch("routes.dashboard.get_effective_usd_eur_rate")
 @patch("routes.dashboard.get_user_bank_accounts")
 @patch("routes.dashboard.get_user_assets")
 @patch("services.stock_transaction.get_stock_info")
 @patch("services.crypto_transaction.get_crypto_info")
+@patch("routes.dashboard.get_exchange_rate")
 def test_dashboard_statistics(
-    mock_crypto, mock_stock, mock_assets, mock_bank, mock_rate, session, master_key
+    mock_rate, mock_crypto, mock_stock, mock_assets, mock_bank, session, master_key
 ):
     from dtos import BankSummaryResponse
     from dtos.asset import AssetSummaryResponse
