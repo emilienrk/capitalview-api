@@ -31,15 +31,19 @@ from dtos.community import (
     PickUpdate,
 )
 from services.community import (
+    create_pick,
+    delete_pick,
+    follow_user,
     get_available_positions,
     get_community_settings,
     get_public_profile,
+    get_user_picks,
     list_active_profiles,
     search_profiles,
+    unfollow_user,
     update_community_settings,
+    update_pick,
 )
-from services.follow import follow_user, unfollow_user
-from services.pick import create_pick, update_pick, delete_pick, get_user_picks
 
 router = APIRouter(prefix="/community", tags=["Community"])
 

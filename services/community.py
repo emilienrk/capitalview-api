@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from sqlmodel import Session, select, func
 from sqlalchemy.orm import aliased
 
-from models.community import CommunityProfile, CommunityPosition, CommunityFollow
+from models.community import CommunityProfile, CommunityPosition, CommunityFollow, CommunityPick
 from models.user import User
 from models.enums import AssetType
 from dtos.community import (
@@ -28,11 +28,13 @@ from dtos.community import (
     CommunitySearchResult,
     CommunitySettingsResponse,
     CommunitySettingsUpdate,
+    FollowResponse,
+    PickCreate,
+    PickResponse,
+    PickUpdate,
 )
-from services.community_encryption import community_decrypt, community_encrypt
+from services.encryption import community_decrypt, community_encrypt
 from services.market import get_stock_info, get_crypto_info
-from services.follow import get_follow_state, get_followers_count, get_following_count
-from services.pick import get_picks_for_profile
 
 
 def _get_or_create_profile(session: Session, user_id: str) -> CommunityProfile:
@@ -49,6 +51,215 @@ def _get_or_create_profile(session: Session, user_id: str) -> CommunityProfile:
         session.commit()
         session.refresh(profile)
     return profile
+
+
+def is_following(session: Session, follower_id: str, following_id: str) -> bool:
+    """Check if follower_id follows following_id."""
+    return session.exec(
+        select(CommunityFollow).where(
+            CommunityFollow.follower_id == follower_id,
+            CommunityFollow.following_id == following_id,
+        )
+    ).first() is not None
+
+
+def is_mutual(session: Session, user_a: str, user_b: str) -> bool:
+    """Check if two users mutually follow each other."""
+    return is_following(session, user_a, user_b) and is_following(session, user_b, user_a)
+
+
+def follow_user(session: Session, follower_id: str, target_username: str) -> FollowResponse:
+    """Follow a user by username. Returns the new follow state."""
+    target = session.exec(select(User).where(User.username == target_username)).first()
+    if not target:
+        raise ValueError("Utilisateur introuvable")
+    if target.uuid == follower_id:
+        raise ValueError("Vous ne pouvez pas vous suivre vous-même")
+
+    # Check the target has an active community profile
+    profile = session.exec(
+        select(CommunityProfile).where(
+            CommunityProfile.user_id == target.uuid,
+            CommunityProfile.is_active == True,  # noqa: E712
+        )
+    ).first()
+    if not profile:
+        raise ValueError("Ce profil n'est pas actif")
+
+    existing = session.exec(
+        select(CommunityFollow).where(
+            CommunityFollow.follower_id == follower_id,
+            CommunityFollow.following_id == target.uuid,
+        )
+    ).first()
+
+    if existing:
+        # Already following
+        mutual = is_following(session, target.uuid, follower_id)
+        return FollowResponse(is_following=True, is_mutual=mutual)
+
+    follow = CommunityFollow(follower_id=follower_id, following_id=target.uuid)
+    session.add(follow)
+    session.commit()
+
+    mutual = is_following(session, target.uuid, follower_id)
+    return FollowResponse(is_following=True, is_mutual=mutual)
+
+
+def unfollow_user(session: Session, follower_id: str, target_username: str) -> FollowResponse:
+    """Unfollow a user by username."""
+    target = session.exec(select(User).where(User.username == target_username)).first()
+    if not target:
+        raise ValueError("Utilisateur introuvable")
+
+    existing = session.exec(
+        select(CommunityFollow).where(
+            CommunityFollow.follower_id == follower_id,
+            CommunityFollow.following_id == target.uuid,
+        )
+    ).first()
+
+    if existing:
+        session.delete(existing)
+        session.commit()
+
+    return FollowResponse(is_following=False, is_mutual=False)
+
+
+def get_followers_count(session: Session, user_id: str) -> int:
+    """Count how many users follow user_id."""
+    result = session.exec(
+        select(func.count()).where(CommunityFollow.following_id == user_id)
+    ).one()
+    return result
+
+
+def get_following_count(session: Session, user_id: str) -> int:
+    """Count how many users user_id follows."""
+    result = session.exec(
+        select(func.count()).where(CommunityFollow.follower_id == user_id)
+    ).one()
+    return result
+
+
+def get_follow_state(session: Session, current_user_id: str, target_user_id: str) -> dict:
+    """Return follow state between current user and target."""
+    i_follow = is_following(session, current_user_id, target_user_id)
+    they_follow = is_following(session, target_user_id, current_user_id)
+    return {
+        "is_following": i_follow,
+        "is_followed_by": they_follow,
+        "is_mutual": i_follow and they_follow,
+    }
+
+
+def _pick_to_response(pick: CommunityPick, username: str) -> PickResponse:
+    return PickResponse(
+        id=pick.id,  # type: ignore[arg-type]
+        username=username,
+        symbol=pick.symbol,
+        asset_type=pick.asset_type,
+        comment=pick.comment,
+        target_price=pick.target_price,
+        created_at=pick.created_at.isoformat(),
+        updated_at=pick.updated_at.isoformat(),
+    )
+
+
+def create_pick(session: Session, user_uuid: str, data: PickCreate) -> PickResponse:
+    """Create a new pick (like) for an asset. Raises ValueError on duplicate."""
+    user = session.get(User, user_uuid)
+    if not user:
+        raise ValueError("Utilisateur introuvable")
+
+    # Ensure user has an active community profile
+    profile = session.exec(
+        select(CommunityProfile).where(
+            CommunityProfile.user_id == user_uuid,
+            CommunityProfile.is_active == True,
+        )
+    ).first()
+    if not profile:
+        raise ValueError("Activez votre profil communautaire dans les paramètres avant de liker un actif.")
+
+    existing = session.exec(
+        select(CommunityPick).where(
+            CommunityPick.user_id == user_uuid,
+            CommunityPick.symbol == data.symbol.upper(),
+            CommunityPick.asset_type == data.asset_type.upper(),
+        )
+    ).first()
+    if existing:
+        raise ValueError("Vous avez déjà liké cet actif")
+
+    pick = CommunityPick(
+        user_id=user_uuid,
+        symbol=data.symbol.upper(),
+        asset_type=data.asset_type.upper(),
+        comment=data.comment,
+        target_price=data.target_price,
+    )
+    session.add(pick)
+    session.commit()
+    session.refresh(pick)
+    return _pick_to_response(pick, user.username)
+
+
+def update_pick(session: Session, user_uuid: str, pick_id: int, data: PickUpdate) -> PickResponse:
+    """Update comment and/or target_price on an existing pick."""
+    pick = session.exec(
+        select(CommunityPick).where(
+            CommunityPick.id == pick_id,
+            CommunityPick.user_id == user_uuid,
+        )
+    ).first()
+    if not pick:
+        raise ValueError("Pick introuvable")
+
+    user = session.get(User, user_uuid)
+    pick.comment = data.comment
+    pick.target_price = data.target_price
+    session.add(pick)
+    session.commit()
+    session.refresh(pick)
+    return _pick_to_response(pick, user.username)  # type: ignore[union-attr]
+
+
+def delete_pick(session: Session, user_uuid: str, pick_id: int) -> None:
+    """Delete a pick (unlike)."""
+    pick = session.exec(
+        select(CommunityPick).where(
+            CommunityPick.id == pick_id,
+            CommunityPick.user_id == user_uuid,
+        )
+    ).first()
+    if not pick:
+        raise ValueError("Pick introuvable")
+    session.delete(pick)
+    session.commit()
+
+
+def get_user_picks(session: Session, user_uuid: str) -> List[PickResponse]:
+    """Return all picks for a given user, newest first."""
+    user = session.get(User, user_uuid)
+    if not user:
+        return []
+    picks = session.exec(
+        select(CommunityPick)
+        .where(CommunityPick.user_id == user_uuid)
+        .order_by(CommunityPick.created_at.desc())  # type: ignore[union-attr]
+    ).all()
+    return [_pick_to_response(p, user.username) for p in picks]
+
+
+def get_picks_for_profile(session: Session, target_user_uuid: str, target_username: str) -> List[PickResponse]:
+    """Return all picks for a target user — used when building public profile."""
+    picks = session.exec(
+        select(CommunityPick)
+        .where(CommunityPick.user_id == target_user_uuid)
+        .order_by(CommunityPick.created_at.desc())  # type: ignore[union-attr]
+    ).all()
+    return [_pick_to_response(p, target_username) for p in picks]
 
 
 def _compute_stock_pru_for_isins(

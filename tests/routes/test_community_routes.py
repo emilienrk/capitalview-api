@@ -507,7 +507,7 @@ class TestProfileDetail:
     def test_get_private_profile_not_mutual_hides_positions(self, session, bob):
         """GET private profile when not mutual: positions=[] and global_pnl=None."""
         client = TestClient(app)
-        from services.community_encryption import community_encrypt
+        from services.encryption import community_encrypt
 
         profile = _activate_profile(session, "user_2", is_private=True)
 
@@ -533,7 +533,7 @@ class TestProfileDetail:
     def test_get_private_profile_mutual_shows_positions(self, session, bob):
         """GET private profile when mutually following: positions visible (pnl=None, no market data)."""
         client = TestClient(app)
-        from services.community_encryption import community_encrypt
+        from services.encryption import community_encrypt
 
         _activate_profile(session, "user_2", is_private=True)
         _activate_profile(session, "user_1", is_private=True)
