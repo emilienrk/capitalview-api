@@ -11,6 +11,61 @@ from .base import MarketDataProvider
 
 
 class YahooProvider(MarketDataProvider):
+    _exchange_codes: dict[str, str] = {
+        # United States
+        "NYQ": "XNYS",  # NYSE
+        "NAS": "XNAS",  # NASDAQ
+        "PCX": "ARCX",  # NYSE Arca
+        "BTS": "BATS",  # BATS Exchange
+        "CBT": "XCBT",  # CBOT
+        "CMX": "XCEC",  # COMEX
+        "NYM": "XNYM",  # NYMEX
+        "NYB": "XNYM",  # NYMEX (aliases)
+        # Europe
+        "PAR": "XPAR",  # Euronext Paris
+        "AMS": "XAMS",  # Euronext Amsterdam
+        "BRU": "XBRU",  # Euronext Brussels
+        "LIS": "XLIS",  # Euronext Lisbon
+        "LSE": "XLON",  # London Stock Exchange
+        "IOB": "XIOB",  # London IOB
+        "FRA": "XFRA",  # Frankfurt (XETRA)
+        "STU": "XSTU",  # Stuttgart
+        "MUN": "XMUN",  # Munich
+        "BER": "XBER",  # Berlin
+        "DUS": "XDUS",  # Düsseldorf
+        "HAM": "XHAM",  # Hamburg
+        "HAN": "XHAN",  # Hannover
+        "MIL": "XMIL",  # Borsa Italiana
+        "MCE": "XMAD",  # Bolsa de Madrid
+        "VIE": "XWBO",  # Wiener Börse
+        "ZRH": "XSWX",  # SIX Swiss Exchange
+        "STO": "XSTO",  # Nasdaq Stockholm
+        "CPH": "XCSE",  # Nasdaq Copenhagen
+        "HEL": "XHEL",  # Nasdaq Helsinki
+        "OSL": "XOSL",  # Oslo Børs
+        # Americas
+        "TSX": "XTSE",  # Toronto Stock Exchange
+        "TOR": "XTSE",  # Toronto Stock Exchange (alias)
+        "SAO": "BVMF",  # B3 (Bovespa)
+        "MEX": "XMEX",  # BMV
+        # Asia-Pacific
+        "ASX": "XASX",  # Australian Securities Exchange
+        "HKG": "XHKG",  # Hong Kong Stock Exchange
+        "TPE": "XTAI",  # Taiwan Stock Exchange
+        "KSC": "XKRX",  # Korea Stock Exchange
+        "SHH": "XSHG",  # Shanghai Stock Exchange
+        "SHZ": "XSHE",  # Shenzhen Stock Exchange
+        "TYO": "XTKS",  # Tokyo Stock Exchange
+        "SGX": "XSES",  # Singapore Exchange
+        "BSE": "XBOM",  # Bombay Stock Exchange
+        "NSI": "XNSE",  # National Stock Exchange India
+        "KLS": "XKLS",  # Bursa Malaysia
+        "SET": "XBKK",  # Stock Exchange of Thailand
+        # Africa & Middle East
+        "JSE": "XJSE",  # Johannesburg Stock Exchange
+        "TAE": "XTAE",  # Tel Aviv Stock Exchange
+    }
+
     def __init__(self):
         self.settings = get_settings()
         self.search_url = self.settings.yahoo_api_url
@@ -57,7 +112,8 @@ class YahooProvider(MarketDataProvider):
                 "currency": info.get("currency", "EUR"),
                 "price": Decimal(str(price)),
                 "symbol": original_symbol,
-                "isin": isin
+                "isin": isin,
+                "exchange": self.normalize_exchange(info.get("exchange")),
             }
         except (ValueError, IndexError, KeyError):
              return None
@@ -101,7 +157,7 @@ class YahooProvider(MarketDataProvider):
                     results.append({
                         "symbol": symbol,
                         "name": quote.get("shortname") or quote.get("longname") or symbol,
-                        "exchange": quote.get("exchange"),
+                        "exchange": self.normalize_exchange(quote.get("exchange")),
                         "type": quote.get("quoteType"),
                         "currency": None
                     })

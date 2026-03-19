@@ -70,6 +70,20 @@ class MarketDataProvider(ABC):
         """
         pass
 
+    _exchange_codes: dict[str, str] = {}
+
+    def normalize_exchange(self, code: str | None) -> str | None:
+        """
+        Translate a provider-specific exchange code to a canonical market name.
+
+        Looks up self._exchange_codes, which each provider declares as a class
+        attribute with its own code vocabulary.  Unknown codes are returned
+        unchanged so no information is silently dropped.
+        """
+        if code is None:
+            return None
+        return self._exchange_codes.get(code, code) or None
+
     def get_historical_prices(
         self, symbol: str, from_date: date, to_date: date, asset_type: Optional[AssetType] = None
     ) -> dict[date, Decimal]:

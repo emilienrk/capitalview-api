@@ -4,8 +4,11 @@ import logging
 import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from functools import lru_cache
 from typing import Optional, Tuple
 
+import exchange_calendars as ec
+import pandas as pd
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, select
@@ -21,6 +24,91 @@ logger = logging.getLogger(__name__)
 
 CACHE_DURATION = timedelta(hours=1)
 _FALLBACK_USD_EUR = Decimal("0.92")
+
+
+# ---------------------------------------------------------------------------
+# Exchange calendar helpers
+# ---------------------------------------------------------------------------
+
+
+@lru_cache(maxsize=64)
+def _get_calendar(mic: str):
+    """Return an exchange_calendars calendar for a MIC code, or None if unsupported."""
+    try:
+        return ec.get_calendar(mic)
+    except Exception:
+        return None
+
+
+def _is_market_open(mic: str) -> bool:
+    """Return True if the exchange is currently in a trading session."""
+    cal = _get_calendar(mic)
+    if cal is None:
+        return True  # unknown exchange → assume open; be conservative
+    try:
+        return bool(cal.is_open_on_minute(pd.Timestamp.now(tz="UTC")))
+    except Exception:
+        return True
+
+
+def _last_market_close(mic: str) -> Optional[datetime]:
+    """Return the UTC datetime of the most recent session close for a MIC code."""
+    cal = _get_calendar(mic)
+    if cal is None:
+        return None
+    try:
+        prev_close = cal.previous_close(pd.Timestamp.now(tz="UTC"))
+        return prev_close.to_pydatetime()
+    except Exception:
+        return None
+
+
+def _is_price_still_valid(
+    asset: MarketAsset,
+    price_entry: MarketPriceHistory,
+    _now: Optional[datetime] = None,
+) -> bool:
+    """
+    Decide whether a cached price is fresh enough to skip an API call.
+
+    Rules:
+    - Fiat (forex, Mon–Fri 24h): stale after CACHE_DURATION on weekdays;
+      always valid on weekends (Sat/Sun UTC — forex is closed, no new price available).
+      Weekend boundary uses UTC because forex closes/opens at 22:00 UTC Fri/Sun.
+    - Crypto (24/7, no exchange session): stale after CACHE_DURATION.
+    - Stock/ETF with a known MIC calendar:
+        * Market currently open  → stale after CACHE_DURATION.
+        * Market currently closed → valid as long as updated_at >= last session close
+          (no point calling the API when the price won't change).
+    - Stock with unknown/unsupported MIC → fall back to CACHE_DURATION.
+
+    _now is injectable for testing (defaults to datetime.now(UTC)).
+    """
+    updated_at = price_entry.updated_at
+    if updated_at and updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    now = _now if _now is not None else datetime.now(timezone.utc)
+
+    # Fiat: forex is closed on weekends — check BEFORE the generic no-exchange fallback
+    # because fiat assets typically have no exchange MIC.
+    if asset.asset_type == AssetType.FIAT:
+        if now.weekday() >= 5:  # Saturday=5, Sunday=6 in UTC
+            return True  # weekend: forex closed, no new prices available
+        return bool(updated_at and updated_at > now - CACHE_DURATION)
+
+    # Crypto (24/7) or asset with no exchange MIC → hourly TTL
+    if asset.asset_type == AssetType.CRYPTO or not asset.exchange:
+        return bool(updated_at and updated_at > now - CACHE_DURATION)
+
+    # Stock: consult the exchange calendar via MIC code
+    if _is_market_open(asset.exchange):
+        return bool(updated_at and updated_at > now - CACHE_DURATION)
+
+    # Market is closed — valid if last update was after the most recent close
+    last_close = _last_market_close(asset.exchange)
+    if last_close is None:
+        return bool(updated_at and updated_at > now - CACHE_DURATION)
+    return bool(updated_at and updated_at >= last_close)
 
 
 def get_exchange_rate(
@@ -289,13 +377,8 @@ def _get_market_price_internal(
 
     # Check today's price row
     today_entry = _get_today_price(session, cached.id)
-    if today_entry:
-        updated_at = today_entry.updated_at
-        if updated_at and updated_at.tzinfo is None:
-            updated_at = updated_at.replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        if updated_at and updated_at > (now - CACHE_DURATION):
-            return today_entry.price
+    if today_entry and _is_price_still_valid(cached, today_entry):
+        return today_entry.price
 
     # Data is stale or missing for today — refresh
     data = _update_cache(session, cached, asset_type)
@@ -331,13 +414,8 @@ def _get_market_info_internal(
             return None, None
 
     today_entry = _get_today_price(session, cached.id)
-    if today_entry:
-        updated_at = today_entry.updated_at
-        if updated_at and updated_at.tzinfo is None:
-            updated_at = updated_at.replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        if updated_at and updated_at > (now - CACHE_DURATION):
-            return cached.name, today_entry.price
+    if today_entry and _is_price_still_valid(cached, today_entry):
+        return cached.name, today_entry.price
 
     data = _update_cache(session, cached, asset_type)
     if data:
@@ -471,8 +549,8 @@ def update_all_prices_daily() -> None:
 # Historical backfill — fill missing daily prices for a date range
 # ---------------------------------------------------------------------------
 
-# Max lookback to prevent abuse (10 years)
-_MAX_BACKFILL_DAYS = 3650
+# Max lookback to prevent abuse (1 year)
+_MAX_BACKFILL_DAYS = 365
 
 
 def _bulk_upsert_rows(session: Session, rows: list[dict]) -> None:
@@ -508,7 +586,6 @@ def _date_range(from_date: date, to_date: date):
 
 def _get_or_create_forex_asset(session: Session, currency: str) -> MarketAsset:
     """Return (or auto-create) a FIAT MarketAsset tracking currency vs EUR."""
-    # L'ISIN et le Symbol deviennent juste "USD"
     asset = session.exec(select(MarketAsset).where(MarketAsset.isin == currency)).first()
     if not asset:
         asset = MarketAsset(
@@ -579,9 +656,8 @@ def _backfill_stock_prices(
     session: Session, asset: MarketAsset, from_date: date, to_date: date
 ) -> tuple[int, int]:
     """
-    Fetch daily closing prices from Yahoo Finance for [from_date, to_date]
+    Fetch daily closing prices from an api for [from_date, to_date]
     and insert the ones that are missing in the DB.
-    Returns (inserted, skipped).
     """
     if not asset.symbol:
         return 0, 0
@@ -594,8 +670,6 @@ def _backfill_stock_prices(
     if not prices:
         return 0, 0
 
-    # Detect the native currency from the provider then fetch the full rate history
-    # so each historical price is converted with the rate of its own date (not today's).
     info = market_data_manager.get_info(asset.symbol, AssetType.STOCK)
     currency = (info.get("currency") if info else None) or "EUR"
 
@@ -645,8 +719,6 @@ def _backfill_crypto_prices(
     if not prices:
         return 0, 0
 
-    # CoinGecko returns USD prices — fetch the per-date USD→EUR rate history
-    # so each day's price is converted with the rate of that specific date.
     usd_eur_by_date = get_historical_exchange_rates_db(session, "USD", from_date, to_date)
     fallback_usd_eur = get_exchange_rate(session, "USD", "EUR")
 
@@ -679,14 +751,8 @@ def backfill_price_history(
     """
     Backfill missing daily prices for an asset from `from_date` to today.
     Auto-creates the MarketAsset entry if it doesn't exist yet.
-
-    Protection:
-      - from_date cannot be in the future
-      - Maximum lookback of _MAX_BACKFILL_DAYS days
-
-    Returns a dict: {inserted, skipped, from_date, to_date, symbol, name}.
-    Raises ValueError for invalid inputs or unresolvable assets.
     """
+
     today = date.today()
 
     if from_date > today:
@@ -739,14 +805,8 @@ def ensure_price_history(
     """
     Guarantee that market_price_history contains data for *lookup_key* from
     *from_date* to yesterday.  Auto-creates the MarketAsset if needed.
-
-    This is the single entry-point any service should call when it needs
-    historical prices.  It is a no-op when all dates are already present.
-
-    Unlike ``backfill_price_history`` (which raises on bad input and is meant
-    for the HTTP route), this function is silent on errors so it can safely be
-    called from background tasks without crashing the caller.
     """
+
     today = date.today()
     # Clamp: never try to backfill the future
     if from_date >= today:
