@@ -828,3 +828,46 @@ def get_symbol_balance(
         # FIAT_ANCHOR and unknown types: ignored
 
     return balance
+
+
+def compute_balance_warning(
+    session: Session,
+    account_uuid: str,
+    created_rows,
+    master_key: str,
+    extra_account_for_symbols: dict[str, str] | None = None,
+) -> str | None:
+    """
+    Check whether any debited crypto symbol has gone negative after an operation.
+    Returns a human-readable warning string (French) or None.
+
+    extra_account_for_symbols maps symbol → account_uuid to support
+    cross-account checks (e.g. source account for a TRANSFER).
+    """
+    to_check: dict[str, str] = {}
+    for row in created_rows:
+        type_str = row.type if isinstance(row.type, str) else row.type.value
+        if type_str not in _DEBIT_TYPES:
+            continue
+        sym = (row.symbol or "").upper()
+        if not sym or sym in FIAT_SYMBOLS:
+            continue
+        acc = (
+            extra_account_for_symbols.get(sym, account_uuid)
+            if extra_account_for_symbols
+            else account_uuid
+        )
+        to_check[sym] = acc
+
+    if not to_check:
+        return None
+
+    negative: list[str] = []
+    for sym, acc in sorted(to_check.items()):
+        balance = get_symbol_balance(session, acc, sym, master_key)
+        if balance < 0:
+            negative.append(f"{sym} (solde\u00a0: {balance:+.8g})")
+
+    if not negative:
+        return None
+    return "Solde insuffisant après cette opération\u00a0— " + ", ".join(negative)

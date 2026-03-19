@@ -63,7 +63,7 @@ def _last_market_close(mic: str) -> Optional[datetime]:
         return None
 
 
-def _is_price_still_valid(
+def _is_cache_fresh(
     asset: MarketAsset,
     price_entry: MarketPriceHistory,
     _now: Optional[datetime] = None,
@@ -115,6 +115,7 @@ def get_exchange_rate(
     session: Session,
     from_currency: str = "USD",
     to_currency: str = "EUR",
+    db_only: bool = False,
 ) -> Decimal:
     """Return the exchange rate *from_currency* → *to_currency*."""
     if from_currency == to_currency:
@@ -124,11 +125,11 @@ def get_exchange_rate(
     rate_to_eur = Decimal("1")
 
     if from_currency != "EUR":
-        price = _get_market_price_internal(session, from_currency, AssetType.FIAT)
+        _, price = _get_market_info_internal(session, from_currency, AssetType.FIAT, db_only=db_only)
         rate_from_eur = price if price is not None else (_FALLBACK_USD_EUR if from_currency == "USD" else Decimal("1"))
         
     if to_currency != "EUR":
-        price = _get_market_price_internal(session, to_currency, AssetType.FIAT)
+        _, price = _get_market_info_internal(session, to_currency, AssetType.FIAT, db_only=db_only)
         rate_to_eur = price if price is not None else (_FALLBACK_USD_EUR if to_currency == "USD" else Decimal("1"))
 
     if rate_to_eur == Decimal("0"):
@@ -255,27 +256,58 @@ def _update_cache(session: Session, entry: MarketAsset, asset_type: AssetType) -
     return None
 
 
+def get_or_create_market_asset(
+    session: Session,
+    lookup_key: str,
+    asset_type: AssetType,
+    symbol_hint: Optional[str] = None,
+) -> Optional[MarketAsset]:
+    """
+    Public entry-point: find or auto-create a MarketAsset for a given key.
+
+    lookup_key  — ISIN for stocks, ticker symbol for crypto/fiat.
+    symbol_hint — known ticker to try first for get_info (avoids a search round-trip).
+                  Useful when the caller already has the symbol (e.g. from a form field).
+    """
+    # Fast path: already in DB
+    existing = session.exec(
+        select(MarketAsset).where(MarketAsset.isin == lookup_key)
+    ).first()
+    if existing:
+        if _ensure_asset_type(existing, asset_type):
+            session.add(existing)
+            session.commit()
+            session.refresh(existing)
+        return existing
+
+    return _create_market_asset_entry(session, lookup_key, asset_type, symbol_hint=symbol_hint)
+
+
 def _create_market_asset_entry(
-    session: Session, lookup_key: str, asset_type: AssetType
+    session: Session, lookup_key: str, asset_type: AssetType, symbol_hint: Optional[str] = None
 ) -> Optional[MarketAsset]:
     """Auto-create a MarketAsset entry (+ initial price) when it doesn't exist."""
     market_info = None
 
     if asset_type == AssetType.STOCK:
-        results = market_data_manager.search(lookup_key, AssetType.STOCK)
-        if results:
-            res = results[0]
-            symbol = res.get("symbol")
-            if symbol:
-                market_info = market_data_manager.get_info(symbol, AssetType.STOCK)
-                if not market_info:
-                    market_info = {
-                        "name": res.get("name"),
-                        "symbol": symbol,
-                        "currency": res.get("currency", "EUR"),
-                        "price": Decimal("0"),
-                        "exchange": res.get("exchange"),
-                    }
+        # If we already know the ticker, try get_info directly before doing a search
+        if symbol_hint:
+            market_info = market_data_manager.get_info(symbol_hint, AssetType.STOCK)
+        if not market_info:
+            results = market_data_manager.search(lookup_key, AssetType.STOCK)
+            if results:
+                res = results[0]
+                symbol = res.get("symbol")
+                if symbol:
+                    market_info = market_data_manager.get_info(symbol, AssetType.STOCK)
+                    if not market_info:
+                        market_info = {
+                            "name": res.get("name"),
+                            "symbol": symbol,
+                            "currency": res.get("currency", "EUR"),
+                            "price": Decimal("0"),
+                            "exchange": res.get("exchange"),
+                        }
     elif asset_type == AssetType.CRYPTO:
         market_info = market_data_manager.get_info(lookup_key, AssetType.CRYPTO)
         if not market_info:
@@ -352,56 +384,30 @@ def _create_market_asset_entry(
 # ---------------------------------------------------------------------------
 
 
-def get_stock_price(session: Session, isin: str) -> Optional[Decimal]:
+def search_assets(query: str, asset_type: AssetType) -> list[dict]:
+    """Search for market assets by name or symbol. Delegates to the provider manager."""
+    return market_data_manager.search(query, asset_type)
+
+
+def get_assets_bulk_info(symbols: list[str], asset_type: AssetType) -> dict[str, dict]:
+    """Fetch live info for multiple symbols. Delegates to the provider manager."""
+    return market_data_manager.get_bulk_info(symbols, asset_type)
+
+
+def get_stock_price(session: Session, isin: str, db_only: bool = False) -> Optional[Decimal]:
     """Get current market price for a Stock (lookup by ISIN)."""
-    return _get_market_price_internal(session, isin, AssetType.STOCK)
+    _, price = _get_market_info_internal(session, isin, AssetType.STOCK, db_only=db_only)
+    return price
 
 
-def get_crypto_price(session: Session, symbol: str) -> Optional[Decimal]:
+def get_crypto_price(session: Session, symbol: str, db_only: bool = False) -> Optional[Decimal]:
     """Get current market price for a Crypto (lookup by Symbol)."""
-    return _get_market_price_internal(session, symbol, AssetType.CRYPTO)
-
-
-def _get_market_price_internal(
-    session: Session, lookup_key: str, asset_type: AssetType
-) -> Optional[Decimal]:
-    """Shared logic for fetching price. Auto-creates missing entries."""
-    cached = session.exec(
-        select(MarketAsset).where(MarketAsset.isin == lookup_key)
-    ).first()
-
-    if not cached:
-        cached = _create_market_asset_entry(session, lookup_key, asset_type)
-        if not cached:
-            return None
-
-    # Check today's price row
-    today_entry = _get_today_price(session, cached.id)
-    if today_entry and _is_price_still_valid(cached, today_entry):
-        return today_entry.price
-
-    # Data is stale or missing for today — refresh
-    data = _update_cache(session, cached, asset_type)
-    if data:
-        return data["price"]
-
-    # Fallback: latest historical price
-    latest = _get_latest_price_entry(session, cached.id)
-    return latest.price if latest else None
-
-
-def get_stock_info(session: Session, isin: str) -> Tuple[Optional[str], Optional[Decimal]]:
-    """Get (Name, Price) for a Stock."""
-    return _get_market_info_internal(session, isin, AssetType.STOCK)
-
-
-def get_crypto_info(session: Session, symbol: str) -> Tuple[Optional[str], Optional[Decimal]]:
-    """Get (Name, Price) for a Crypto."""
-    return _get_market_info_internal(session, symbol, AssetType.CRYPTO)
+    _, price = _get_market_info_internal(session, symbol, AssetType.CRYPTO, db_only=db_only)
+    return price
 
 
 def _get_market_info_internal(
-    session: Session, lookup_key: str, asset_type: AssetType
+    session: Session, lookup_key: str, asset_type: AssetType, db_only: bool = False
 ) -> Tuple[Optional[str], Optional[Decimal]]:
     """Shared logic for fetching info. Auto-creates missing entries."""
     cached = session.exec(
@@ -409,12 +415,20 @@ def _get_market_info_internal(
     ).first()
 
     if not cached:
+        if db_only:
+            # Asset unknown → nothing in DB, return empty immediately (no API call)
+            return None, None
         cached = _create_market_asset_entry(session, lookup_key, asset_type)
         if not cached:
             return None, None
 
+    if db_only:
+        # Return the most recent price we have, regardless of freshness
+        latest = _get_latest_price_entry(session, cached.id)
+        return cached.name, (latest.price if latest else None)
+
     today_entry = _get_today_price(session, cached.id)
-    if today_entry and _is_price_still_valid(cached, today_entry):
+    if today_entry and _is_cache_fresh(cached, today_entry):
         return cached.name, today_entry.price
 
     data = _update_cache(session, cached, asset_type)
@@ -423,6 +437,16 @@ def _get_market_info_internal(
 
     latest = _get_latest_price_entry(session, cached.id)
     return cached.name, (latest.price if latest else None)
+
+
+def get_stock_info(session: Session, isin: str, db_only: bool = False) -> Tuple[Optional[str], Optional[Decimal]]:
+    """Get (Name, Price) for a Stock."""
+    return _get_market_info_internal(session, isin, AssetType.STOCK, db_only=db_only)
+
+
+def get_crypto_info(session: Session, symbol: str, db_only: bool = False) -> Tuple[Optional[str], Optional[Decimal]]:
+    """Get (Name, Price) for a Crypto."""
+    return _get_market_info_internal(session, symbol, AssetType.CRYPTO, db_only=db_only)
 
 
 # ---------------------------------------------------------------------------

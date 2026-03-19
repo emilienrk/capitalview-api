@@ -11,16 +11,21 @@ from .base import MarketDataProvider
 
 
 class YahooProvider(MarketDataProvider):
+    # Yahoo Finance exchange codes → ISO 10383 MIC codes.
+    # Verified against live yfinance API responses (ticker.info["exchange"]).
     _exchange_codes: dict[str, str] = {
         # United States
+        "NMS": "XNAS",  # NASDAQ Global Select Market (most NASDAQ stocks)
+        "NAS": "XNAS",  # NASDAQ (alternate code, rare)
+        "NGM": "XNAS",  # NASDAQ Global Market
+        "NCM": "XNAS",  # NASDAQ Capital Market
         "NYQ": "XNYS",  # NYSE
-        "NAS": "XNAS",  # NASDAQ
         "PCX": "ARCX",  # NYSE Arca
         "BTS": "BATS",  # BATS Exchange
         "CBT": "XCBT",  # CBOT
         "CMX": "XCEC",  # COMEX
         "NYM": "XNYM",  # NYMEX
-        "NYB": "XNYM",  # NYMEX (aliases)
+        "NYB": "XNYM",  # NYMEX (alias)
         # Europe
         "PAR": "XPAR",  # Euronext Paris
         "AMS": "XAMS",  # Euronext Amsterdam
@@ -28,7 +33,7 @@ class YahooProvider(MarketDataProvider):
         "LIS": "XLIS",  # Euronext Lisbon
         "LSE": "XLON",  # London Stock Exchange
         "IOB": "XIOB",  # London IOB
-        "FRA": "XFRA",  # Frankfurt (XETRA)
+        "GER": "XFRA",  # Frankfurt XETRA (Yahoo code = "GER", not "FRA")
         "STU": "XSTU",  # Stuttgart
         "MUN": "XMUN",  # Munich
         "BER": "XBER",  # Berlin
@@ -38,29 +43,28 @@ class YahooProvider(MarketDataProvider):
         "MIL": "XMIL",  # Borsa Italiana
         "MCE": "XMAD",  # Bolsa de Madrid
         "VIE": "XWBO",  # Wiener Börse
-        "ZRH": "XSWX",  # SIX Swiss Exchange
+        "EBS": "XSWX",  # SIX Swiss Exchange (Yahoo code = "EBS", not "ZRH")
         "STO": "XSTO",  # Nasdaq Stockholm
         "CPH": "XCSE",  # Nasdaq Copenhagen
         "HEL": "XHEL",  # Nasdaq Helsinki
-        "OSL": "XOSL",  # Oslo Børs
+        "YHD": "XOSL",  # Oslo Børs (Yahoo code = "YHD", not "OSL")
         # Americas
-        "TSX": "XTSE",  # Toronto Stock Exchange
-        "TOR": "XTSE",  # Toronto Stock Exchange (alias)
-        "SAO": "BVMF",  # B3 (Bovespa)
+        "TOR": "XTSE",  # Toronto Stock Exchange
+        "SAO": "BVMF",  # B3 (São Paulo)
         "MEX": "XMEX",  # BMV
         # Asia-Pacific
         "ASX": "XASX",  # Australian Securities Exchange
         "HKG": "XHKG",  # Hong Kong Stock Exchange
-        "TPE": "XTAI",  # Taiwan Stock Exchange
         "KSC": "XKRX",  # Korea Stock Exchange
         "SHH": "XSHG",  # Shanghai Stock Exchange
         "SHZ": "XSHE",  # Shenzhen Stock Exchange
-        "TYO": "XTKS",  # Tokyo Stock Exchange
-        "SGX": "XSES",  # Singapore Exchange
-        "BSE": "XBOM",  # Bombay Stock Exchange
+        "JPX": "XTKS",  # Tokyo Stock Exchange (Yahoo code = "JPX", not "TYO")
+        "SES": "XSES",  # Singapore Exchange (Yahoo code = "SES", not "SGX")
         "NSI": "XNSE",  # National Stock Exchange India
+        "BSE": "XBOM",  # Bombay Stock Exchange
         "KLS": "XKLS",  # Bursa Malaysia
         "SET": "XBKK",  # Stock Exchange of Thailand
+        "TPE": "XTAI",  # Taiwan Stock Exchange
         # Africa & Middle East
         "JSE": "XJSE",  # Johannesburg Stock Exchange
         "TAE": "XTAE",  # Tel Aviv Stock Exchange

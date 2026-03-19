@@ -40,7 +40,7 @@ from services.stock_transaction import (
     delete_stock_transaction,
     get_stock_account_summary
 )
-from services.market_data.manager import market_data_manager
+from services.market import search_assets, get_assets_bulk_info
 from services.account_history import trigger_post_transaction_updates
 from services.encryption import decrypt_data, hash_index
 
@@ -372,7 +372,7 @@ def search_assets(
     """Search for assets (stocks, ETFs, etc.) by name or symbol."""
     if not q:
         return []
-    results = market_data_manager.search(q, AssetType.STOCK)
+    results = search_assets(q, AssetType.STOCK)
 
     return [
         AssetSearchResult(
@@ -395,7 +395,7 @@ def get_assets_info(
     if not symbols:
         return []
 
-    data = market_data_manager.get_bulk_info(symbols, AssetType.STOCK)
+    data = get_assets_bulk_info(symbols, AssetType.STOCK)
 
     response = []
     for symbol, info in data.items():

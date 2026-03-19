@@ -46,67 +46,21 @@ from services.crypto_account import (
 from services.settings import get_or_create_settings
 from services.encryption import decrypt_data, hash_index
 from services.account_history import trigger_post_transaction_updates
-from dtos.crypto import FIAT_SYMBOLS
+from services.market import search_assets, get_assets_bulk_info
 from services.crypto_transaction import (
     create_composite_crypto_transaction,
     create_cross_account_transfer,
     create_crypto_transaction,
     get_crypto_transaction,
     get_account_transactions,
-    get_symbol_balance,
     update_crypto_transaction,
     delete_crypto_transaction,
     get_crypto_account_summary,
-    _DEBIT_TYPES,
+    compute_balance_warning,
 )
-from services.market_data.manager import market_data_manager
+from dtos.crypto import FIAT_SYMBOLS
 
 router = APIRouter(prefix="/crypto", tags=["Crypto"])
-
-
-def _compute_balance_warning(
-    session,
-    account_uuid: str,
-    created_rows,
-    master_key: str,
-    extra_account_for_symbols: dict[str, str] | None = None,
-) -> str | None:
-    """
-    Check whether any debited crypto symbol has gone negative after the
-    operation.  Returns a human-readable warning string or None.
-
-    ``extra_account_for_symbols`` maps symbol → account_uuid to support
-    cross-account checks (e.g., source account for a TRANSFER).
-    """
-    # Collect (symbol, account) pairs that were debited
-    to_check: dict[str, str] = {}  # symbol → account_uuid
-    for row in created_rows:
-        type_str = row.type if isinstance(row.type, str) else row.type.value
-        if type_str not in _DEBIT_TYPES:
-            continue
-        sym = (row.symbol or "").upper()
-        if not sym or sym in FIAT_SYMBOLS:
-            continue
-        # Prefer the extra mapping when provided (cross-account TRANSFER row)
-        acc = (
-            extra_account_for_symbols.get(sym, account_uuid)
-            if extra_account_for_symbols
-            else account_uuid
-        )
-        to_check[sym] = acc
-
-    if not to_check:
-        return None
-
-    negative: list[str] = []
-    for sym, acc in sorted(to_check.items()):
-        balance = get_symbol_balance(session, acc, sym, master_key)
-        if balance < 0:
-            negative.append(f"{sym} (solde : {balance:+.8g})")
-
-    if not negative:
-        return None
-    return "Solde insuffisant après cette opération — " + ", ".join(negative)
 
 
 # ============== ACCOUNTS ==============
@@ -293,7 +247,7 @@ def create_composite_transaction(
         for tx in created
     ]
 
-    warning = _compute_balance_warning(session, data.account_id, created, master_key)
+    warning = compute_balance_warning(session, data.account_id, created, master_key)
     
     executed_date = data.executed_at.date() if hasattr(data.executed_at, "date") else data.executed_at
     trigger_post_transaction_updates(
@@ -345,7 +299,7 @@ def create_cross_account_transfer_route(
     ]
 
     # For cross-account transfers the symbol is always debited from the source account
-    warning = _compute_balance_warning(
+    warning = compute_balance_warning(
         session,
         data.from_account_id,
         created,
@@ -649,14 +603,14 @@ def bulk_composite_import_transactions(
 
 
 @router.get("/market/search", response_model=list[AssetSearchResult])
-def search_assets(
+def search_crypto_assets(
     q: str,
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Search for crypto assets by name or symbol."""
     if not q:
         return []
-    results = market_data_manager.search(q, AssetType.CRYPTO)
+    results = search_assets(q, AssetType.CRYPTO)
 
     return [
         AssetSearchResult(
@@ -670,7 +624,7 @@ def search_assets(
 
 
 @router.post("/market/info", response_model=list[AssetInfoResponse])
-def get_assets_info(
+def get_crypto_assets_info(
     symbols: list[str],
     current_user: Annotated[User, Depends(get_current_user)],
 ):
@@ -678,7 +632,7 @@ def get_assets_info(
     if not symbols:
         return []
 
-    data = market_data_manager.get_bulk_info(symbols, AssetType.CRYPTO)
+    data = get_assets_bulk_info(symbols, AssetType.CRYPTO)
 
     response = []
     for symbol, info in data.items():

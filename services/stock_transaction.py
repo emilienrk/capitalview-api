@@ -17,8 +17,7 @@ from dtos import (
     AccountSummaryResponse,
 )
 from services.encryption import encrypt_data, decrypt_data, hash_index
-from services.market import get_stock_info
-from services.market_data import market_data_manager
+from services.market import get_stock_info, get_or_create_market_asset
 from services.stock_account import _map_account_to_response
 
 
@@ -76,43 +75,9 @@ def create_stock_transaction(
 
     mp = session.exec(select(MarketAsset).where(MarketAsset.isin == data.isin)).first()
     if not mp:
-        market_info = None
-        
-        if data.symbol:
-            market_info = market_data_manager.get_info(data.symbol, AssetType.STOCK)
-        
-        if not market_info:
-            results = market_data_manager.search(data.isin, AssetType.STOCK)
-            if results:
-                res = results[0]
-                market_info = market_data_manager.get_info(res["symbol"], AssetType.STOCK)
-                if not market_info:
-                    market_info = {
-                        "name": res.get("name"),
-                        "symbol": res.get("symbol"),
-                        "currency": res.get("currency", "EUR"),
-                        "price": Decimal("0"),
-                        "exchange": res.get("exchange")
-                    }
-
-        if not market_info:
-            market_info = {
-                "symbol": data.symbol,
-                "name": data.name or data.symbol,
-                "exchange": data.exchange,
-                "price": Decimal("0"),
-                "currency": "EUR"
-            }
-
-        mp = MarketAsset(
-            isin=data.isin,
-            symbol=market_info.get("symbol") or data.symbol,
-            name=market_info.get("name") or data.name,
-            exchange=market_info.get("exchange") or data.exchange,
-            asset_type=AssetType.STOCK,
+        mp = get_or_create_market_asset(
+            session, data.isin, AssetType.STOCK, symbol_hint=data.symbol or None
         )
-        session.add(mp)
-        session.commit()
     else:
         if data.symbol and not mp.symbol:
             mp.symbol = data.symbol
