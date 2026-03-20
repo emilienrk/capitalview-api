@@ -161,7 +161,7 @@ def test_get_account_transactions(session: Session, master_key: str):
 @patch("services.stock_transaction.get_stock_info")
 def test_get_stock_account_summary(mock_market, session: Session, master_key: str):
     # Side effect now receives (session, isin)
-    mock_market.side_effect = lambda s, isin: {
+    mock_market.side_effect = lambda s, isin, db_only=False: {
         "ISIN_AAPL": ("Apple Inc.", Decimal("180.0")),
         "ISIN_MSFT": ("Microsoft", Decimal("300.0")),
         "ISIN_SOLD": ("Sold Stock", Decimal("10.0")),
@@ -213,7 +213,7 @@ def test_get_stock_account_summary(mock_market, session: Session, master_key: st
 @patch("services.stock_transaction.get_stock_info")
 def test_position_currency_always_eur(mock_market, session: Session, master_key: str):
     """All positions must surface currency='EUR' since prices are stored in EUR."""
-    mock_market.side_effect = lambda s, isin: {
+    mock_market.side_effect = lambda s, isin, db_only=False: {
         "ISIN_AAPL": ("Apple Inc.", Decimal("200.0")),
         "ISIN_LVMH": ("LVMH", Decimal("500.0")),
     }.get(isin, (None, None))

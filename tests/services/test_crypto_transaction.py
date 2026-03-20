@@ -131,7 +131,7 @@ def test_get_account_transactions(session: Session, master_key: str):
 
 @patch("services.crypto_transaction.get_crypto_info")
 def test_get_crypto_account_summary(mock_info, session: Session, master_key: str):
-    mock_info.side_effect = lambda s, symbol: {
+    mock_info.side_effect = lambda s, symbol, db_only=False: {
         "BTC": ("Bitcoin", Decimal("40000.0")),
         "ETH": ("Ethereum", Decimal("3000.0")),
     }.get(symbol, ("Unknown", Decimal("0")))

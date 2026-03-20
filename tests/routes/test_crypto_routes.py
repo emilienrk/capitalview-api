@@ -305,7 +305,7 @@ def test_bulk_composite_import_reward_and_crypto_deposit(mock_info, session, mas
     - REWARD → 1 row, total_invested = 0
     - CRYPTO_DEPOSIT → 2 rows (FIAT_ANCHOR + BUY), cost = 15000
     """
-    mock_info.side_effect = lambda s, symbol: {
+    mock_info.side_effect = lambda s, symbol, db_only=False: {
         "ETH": ("Ethereum", Decimal("3000")),
         "BTC": ("Bitcoin", Decimal("35000")),
     }.get(symbol, ("?", Decimal("0")))
