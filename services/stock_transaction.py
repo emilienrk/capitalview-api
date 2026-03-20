@@ -78,11 +78,26 @@ def create_stock_transaction(
         mp = get_or_create_market_asset(
             session, data.isin, AssetType.STOCK, symbol_hint=data.symbol or None
         )
-    else:
-        if data.symbol and not mp.symbol:
-            mp.symbol = data.symbol
-            session.add(mp)
+    if not mp and data.isin and data.symbol:
+        # Fallback: persist a minimal MarketAsset so the symbol survives across requests
+        # (happens when external market API is unavailable or the ISIN is unknown)
+        mp = MarketAsset(
+            isin=data.isin,
+            symbol=data.symbol,
+            name=data.name or data.symbol,
+            asset_type=AssetType.STOCK,
+        )
+        session.add(mp)
+        try:
             session.commit()
+            session.refresh(mp)
+        except Exception:
+            session.rollback()
+            mp = session.exec(select(MarketAsset).where(MarketAsset.isin == data.isin)).first()
+    elif mp and data.symbol and not mp.symbol:
+        mp.symbol = data.symbol
+        session.add(mp)
+        session.commit()
 
     notes_enc = None
     if data.notes:

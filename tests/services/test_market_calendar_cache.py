@@ -5,7 +5,7 @@ Covered functions:
   - _get_calendar
   - _is_market_open
   - _last_market_close
-  - _is_price_still_valid
+  - _is_cache_fresh
   - get_stock_price (integration: market closed → DB-only path)
 """
 
@@ -28,8 +28,8 @@ from models.market import MarketAsset, MarketPriceHistory
 from services.market import (
     CACHE_DURATION,
     _get_calendar,
+    _is_cache_fresh,
     _is_market_open,
-    _is_price_still_valid,
     _last_market_close,
     _upsert_price,
     get_stock_price,
@@ -157,7 +157,7 @@ class TestLastMarketClose:
 
 
 # ---------------------------------------------------------------------------
-# _is_price_still_valid — unit tests (asset + price_entry provided directly)
+# _is_cache_fresh — unit tests (asset + price_entry provided directly)
 # ---------------------------------------------------------------------------
 
 
@@ -180,12 +180,12 @@ class TestIsPriceStillValidCrypto:
     def test_fresh_cache_valid(self, session: Session):
         ma = self._asset(session)
         entry = _price_entry(session, ma.id, Decimal("50000"), _NOW - timedelta(minutes=5))
-        assert _is_price_still_valid(ma, entry, _now=_NOW) is True
+        assert _is_cache_fresh(ma, entry, _now=_NOW) is True
 
     def test_stale_cache_invalid(self, session: Session):
         ma = self._asset(session)
         entry = _price_entry(session, ma.id, Decimal("50000"), _NOW - CACHE_DURATION - timedelta(minutes=5))
-        assert _is_price_still_valid(ma, entry, _now=_NOW) is False
+        assert _is_cache_fresh(ma, entry, _now=_NOW) is False
 
 
 class TestIsPriceStillValidFiat:
@@ -201,14 +201,14 @@ class TestIsPriceStillValidFiat:
         monday = datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc)
         updated = monday - timedelta(minutes=5)
         entry = _price_entry(session, ma.id, Decimal("0.92"), updated)
-        assert _is_price_still_valid(ma, entry, _now=monday) is True
+        assert _is_cache_fresh(ma, entry, _now=monday) is True
 
     def test_stale_weekday_invalid(self, session: Session):
         ma = self._asset(session)
         monday = datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc)
         updated = monday - CACHE_DURATION - timedelta(minutes=5)
         entry = _price_entry(session, ma.id, Decimal("0.92"), updated)
-        assert _is_price_still_valid(ma, entry, _now=monday) is False
+        assert _is_cache_fresh(ma, entry, _now=monday) is False
 
     def test_weekend_always_valid(self, session: Session):
         ma = self._asset(session)
@@ -216,14 +216,14 @@ class TestIsPriceStillValidFiat:
         # Even an update 48h ago → valid on weekend (forex closed)
         updated = saturday - timedelta(hours=48)
         entry = _price_entry(session, ma.id, Decimal("0.92"), updated)
-        assert _is_price_still_valid(ma, entry, _now=saturday) is True
+        assert _is_cache_fresh(ma, entry, _now=saturday) is True
 
     def test_sunday_always_valid(self, session: Session):
         ma = self._asset(session)
         sunday = datetime(2026, 3, 22, 12, 0, tzinfo=timezone.utc)
         updated = sunday - timedelta(hours=24)
         entry = _price_entry(session, ma.id, Decimal("0.92"), updated)
-        assert _is_price_still_valid(ma, entry, _now=sunday) is True
+        assert _is_cache_fresh(ma, entry, _now=sunday) is True
 
 
 class TestIsPriceStillValidStock:
@@ -239,13 +239,13 @@ class TestIsPriceStillValidStock:
         ma = self._asset(session)
         entry = _price_entry(session, ma.id, Decimal("60"), _NOW - timedelta(minutes=5))
         with patch("services.market._is_market_open", return_value=True):
-            assert _is_price_still_valid(ma, entry, _now=_NOW) is True
+            assert _is_cache_fresh(ma, entry, _now=_NOW) is True
 
     def test_market_open_stale_invalid(self, session: Session):
         ma = self._asset(session)
         entry = _price_entry(session, ma.id, Decimal("60"), _NOW - CACHE_DURATION - timedelta(minutes=5))
         with patch("services.market._is_market_open", return_value=True):
-            assert _is_price_still_valid(ma, entry, _now=_NOW) is False
+            assert _is_cache_fresh(ma, entry, _now=_NOW) is False
 
     def test_market_closed_updated_after_last_close_valid(self, session: Session):
         ma = self._asset(session)
@@ -254,7 +254,7 @@ class TestIsPriceStillValidStock:
         entry = _price_entry(session, ma.id, Decimal("60"), updated_after_close)
         with patch("services.market._is_market_open", return_value=False):
             with patch("services.market._last_market_close", return_value=last_close):
-                assert _is_price_still_valid(ma, entry) is True
+                assert _is_cache_fresh(ma, entry) is True
 
     def test_market_closed_updated_before_last_close_invalid(self, session: Session):
         ma = self._asset(session)
@@ -263,21 +263,21 @@ class TestIsPriceStillValidStock:
         entry = _price_entry(session, ma.id, Decimal("60"), updated_before_close)
         with patch("services.market._is_market_open", return_value=False):
             with patch("services.market._last_market_close", return_value=last_close):
-                assert _is_price_still_valid(ma, entry) is False
+                assert _is_cache_fresh(ma, entry) is False
 
     def test_market_closed_unknown_last_close_falls_back_to_hourly_fresh(self, session: Session):
         ma = self._asset(session)
         entry = _price_entry(session, ma.id, Decimal("60"), _NOW - timedelta(minutes=5))
         with patch("services.market._is_market_open", return_value=False):
             with patch("services.market._last_market_close", return_value=None):
-                assert _is_price_still_valid(ma, entry, _now=_NOW) is True
+                assert _is_cache_fresh(ma, entry, _now=_NOW) is True
 
     def test_market_closed_unknown_last_close_falls_back_to_hourly_stale(self, session: Session):
         ma = self._asset(session)
         entry = _price_entry(session, ma.id, Decimal("60"), _NOW - CACHE_DURATION - timedelta(minutes=5))
         with patch("services.market._is_market_open", return_value=False):
             with patch("services.market._last_market_close", return_value=None):
-                assert _is_price_still_valid(ma, entry, _now=_NOW) is False
+                assert _is_cache_fresh(ma, entry, _now=_NOW) is False
 
     def test_unknown_exchange_falls_back_to_hourly(self, session: Session):
         """Asset with no exchange field → behaves like crypto (hourly TTL)."""
@@ -287,8 +287,8 @@ class TestIsPriceStillValidStock:
         )
         entry_fresh = _price_entry(session, ma.id, Decimal("100"), _NOW - timedelta(minutes=5))
         entry_stale = _price_entry(session, ma.id, Decimal("100"), _NOW - CACHE_DURATION - timedelta(minutes=5))
-        assert _is_price_still_valid(ma, entry_fresh, _now=_NOW) is True
-        assert _is_price_still_valid(ma, entry_stale, _now=_NOW) is False
+        assert _is_cache_fresh(ma, entry_fresh, _now=_NOW) is True
+        assert _is_cache_fresh(ma, entry_stale, _now=_NOW) is False
 
 
 # ---------------------------------------------------------------------------

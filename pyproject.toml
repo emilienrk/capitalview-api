@@ -5,7 +5,7 @@ description = "Personal wealth management and investment tracking application - 
 authors = [
     {name = "Emilien", email = "user@example.com"}
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 license = {text = "MIT"}
 
 dependencies = [
@@ -51,7 +51,7 @@ dev = [
 
 [tool.black]
 line-length = 100
-target-version = ['py312']
+target-version = ['py314']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -71,7 +71,7 @@ extend-exclude = '''
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py314"
 exclude = [
     ".git",
     ".mypy_cache",
