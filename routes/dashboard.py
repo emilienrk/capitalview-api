@@ -128,6 +128,7 @@ def get_dashboard_statistics(
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
+    db_only: bool = False,
 ):
     """
     Compute aggregated dashboard statistics:
@@ -144,7 +145,7 @@ def get_dashboard_statistics(
     stock_invested = Decimal(0)
     stock_current_value = Decimal(0)
     for acc in stock_models:
-        summary = get_stock_account_summary(session, acc, master_key)
+        summary = get_stock_account_summary(session, acc, master_key, db_only=db_only)
         stock_invested += summary.total_invested
         if summary.current_value:
             stock_current_value += summary.current_value
@@ -158,7 +159,7 @@ def get_dashboard_statistics(
     crypto_invested = Decimal(0)
     crypto_current_value = Decimal(0)
     for acc in crypto_models:
-        summary = get_crypto_account_summary(session, acc, master_key, settings.crypto_show_negative_positions)
+        summary = get_crypto_account_summary(session, acc, master_key, settings.crypto_show_negative_positions, db_only=db_only)
         crypto_invested += summary.total_invested
         if summary.current_value:
             crypto_current_value += summary.current_value
