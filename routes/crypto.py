@@ -119,7 +119,8 @@ def get_account(
     account_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    db_only: bool = False,
 ):
     """Get a crypto account with positions and calculated values."""
     account_basic = get_crypto_account(session, account_id, current_user.uuid, master_key)
@@ -128,7 +129,7 @@ def get_account(
 
     account_model = session.get(CryptoAccount, account_id)
     settings = get_or_create_settings(session, current_user.uuid, master_key)
-    summary = get_crypto_account_summary(session, account_model, master_key, settings.crypto_show_negative_positions)
+    summary = get_crypto_account_summary(session, account_model, master_key, settings.crypto_show_negative_positions, db_only=db_only)
     return summary
 
 

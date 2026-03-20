@@ -627,6 +627,7 @@ def get_crypto_account_summary(
     account: CryptoAccount,
     master_key: str,
     show_negative_positions: bool = False,
+    db_only: bool = False,
 ) -> AccountSummaryResponse:
     acc_resp = _map_account_to_response(account, master_key)
 
@@ -721,7 +722,7 @@ def get_crypto_account_summary(
             name = symbol
             current_price = Decimal("1")
         else:
-            name, current_price = get_crypto_info(session, symbol)
+            name, current_price = get_crypto_info(session, symbol, db_only)
 
         current_value = profit_loss = profit_loss_pct = None
         if current_price:

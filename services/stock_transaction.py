@@ -256,6 +256,7 @@ def get_stock_account_summary(
     session: Session,
     account: StockAccount,
     master_key: str,
+    db_only: bool = False,
 ) -> AccountSummaryResponse:
     """Build a full account summary with positions and P&L."""
     acc_resp = _map_account_to_response(account, master_key)
@@ -323,7 +324,7 @@ def get_stock_account_summary(
         market_name = None
         
         if isin:
-            market_name, current_price = get_stock_info(session, isin)
+            market_name, current_price = get_stock_info(session, isin, db_only=db_only)
         
         final_name = market_name if market_name else name
 

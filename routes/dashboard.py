@@ -10,7 +10,6 @@ from database import get_session
 from models import User, StockAccount, CryptoAccount
 from dtos import PortfolioResponse
 from dtos.dashboard import DashboardStatisticsResponse, DashboardSummaryResponse, InvestmentDistribution, WealthBreakdown
-from dtos.cashflow import CashflowBalanceResponse
 from services.auth import get_current_user, get_master_key
 from services.encryption import hash_index
 from services.market import get_exchange_rate
@@ -67,7 +66,8 @@ def get_rate(
 def get_my_portfolio(
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    db_only: bool = False,
 ):
     """
     Get complete portfolio for authenticated user.
@@ -92,13 +92,13 @@ def get_my_portfolio(
     accounts = []
     
     for acc in stock_models:
-        summary = get_stock_account_summary(session, acc, master_key)
+        summary = get_stock_account_summary(session, acc, master_key, db_only=db_only)
         accounts.append(summary)
     
     # Convert crypto accounts — prices are now stored in EUR in market_price_history
     settings = get_or_create_settings(session, current_user.uuid, master_key)
     for acc in crypto_models:
-        summary = get_crypto_account_summary(session, acc, master_key, settings.crypto_show_negative_positions)
+        summary = get_crypto_account_summary(session, acc, master_key, settings.crypto_show_negative_positions, db_only=db_only)
         accounts.append(summary)
     
     total_invested = sum(a.total_invested for a in accounts)

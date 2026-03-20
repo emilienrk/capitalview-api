@@ -88,6 +88,7 @@ def get_account(
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
+    db_only: bool = False,
 ):
     """Get a stock account with positions and calculated values."""
     account_basic = get_stock_account(session, account_id, current_user.uuid, master_key)
@@ -96,7 +97,7 @@ def get_account(
         
     account_model = session.get(StockAccount, account_id)
     
-    return get_stock_account_summary(session, account_model, master_key)
+    return get_stock_account_summary(session, account_model, master_key, db_only=db_only)
 
 
 @router.put("/accounts/{account_id}", response_model=StockAccountBasicResponse)
