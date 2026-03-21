@@ -1,5 +1,6 @@
 """Asset service — CRUD + valuation history."""
 
+import json
 from collections import defaultdict
 from decimal import Decimal
 from typing import Optional
@@ -7,6 +8,7 @@ from typing import Optional
 from sqlmodel import Session, select
 
 from models.asset import Asset, AssetValuation
+from models.account_history import AccountHistory
 from dtos.asset import (
     AssetCreate,
     AssetUpdate,
@@ -17,6 +19,7 @@ from dtos.asset import (
     AssetCategorySummary,
     AssetSummaryResponse,
 )
+from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotResponse
 from services.encryption import encrypt_data, decrypt_data, hash_index
 
 
@@ -343,3 +346,66 @@ def delete_valuation(
     session.delete(v)
     session.commit()
     return True
+
+
+def get_asset_portfolio_history(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+) -> list[AccountHistorySnapshotResponse]:
+    """
+    Return decrypted daily snapshots for the user's virtual asset portfolio.
+    All physical assets are stored under a single virtual account ID:
+    ASSET_PORTFOLIO::{user_uuid_bidx}.
+    """
+    user_bidx = hash_index(user_uuid, master_key)
+    virtual_account_id = f"ASSET_PORTFOLIO::{user_bidx}"
+    account_id_bidx = hash_index(virtual_account_id, master_key)
+
+    rows = session.exec(
+        select(AccountHistory)
+        .where(AccountHistory.account_id_bidx == account_id_bidx)
+        .order_by(AccountHistory.snapshot_date)
+    ).all()
+
+    result = []
+    for row in rows:
+        total_value = Decimal(decrypt_data(row.total_value_enc, master_key))
+        total_invested = Decimal(decrypt_data(row.total_invested_enc, master_key))
+        daily_pnl = (
+            Decimal(decrypt_data(row.daily_pnl_enc, master_key))
+            if row.daily_pnl_enc
+            else None
+        )
+
+        positions = None
+        if row.positions_enc:
+            raw_json = decrypt_data(row.positions_enc, master_key)
+            if raw_json:
+                try:
+                    parsed = json.loads(raw_json)
+                    positions = [
+                        AccountHistoryPosition(
+                            symbol=p["symbol"],
+                            quantity=Decimal(p["quantity"]),
+                            value=Decimal(p["value"]),
+                            price=Decimal(p["price"]) if p.get("price") is not None else None,
+                            invested=Decimal(p["invested"]),
+                            percentage=Decimal(p["percentage"]),
+                        )
+                        for p in parsed
+                    ]
+                except Exception:
+                    positions = None
+
+        result.append(
+            AccountHistorySnapshotResponse(
+                snapshot_date=row.snapshot_date,
+                total_value=total_value,
+                total_invested=total_invested,
+                daily_pnl=daily_pnl,
+                positions=positions,
+            )
+        )
+
+    return result

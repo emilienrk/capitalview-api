@@ -1,6 +1,6 @@
 """Transaction and portfolio schemas (shared between stock and crypto)."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -72,3 +72,22 @@ class PortfolioResponse(BaseModel):
     profit_loss: Optional[Decimal] = None
     profit_loss_percentage: Optional[Decimal] = None
     accounts: list[AccountSummaryResponse]
+
+
+class AccountHistoryPosition(BaseModel):
+    """Single asset position within a daily snapshot."""
+    symbol: str
+    quantity: Decimal
+    value: Decimal
+    price: Optional[Decimal] = None
+    invested: Decimal
+    percentage: Decimal
+
+
+class AccountHistorySnapshotResponse(BaseModel):
+    """Decrypted daily snapshot for an account."""
+    snapshot_date: date
+    total_value: Decimal
+    total_invested: Decimal
+    daily_pnl: Optional[Decimal] = None
+    positions: Optional[list[AccountHistoryPosition]] = None

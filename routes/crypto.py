@@ -25,6 +25,7 @@ from dtos import (
     CryptoTransactionUpdate,
     CryptoTransactionBasicResponse,
     AccountSummaryResponse,
+    AccountHistorySnapshotResponse,
     TransactionResponse,
     AssetSearchResult,
     AssetInfoResponse,
@@ -42,6 +43,8 @@ from services.crypto_account import (
     get_user_crypto_accounts,
     update_crypto_account,
     delete_crypto_account,
+    get_crypto_account_history,
+    get_all_crypto_accounts_history,
 )
 from services.settings import get_or_create_settings
 from services.encryption import decrypt_data, hash_index
@@ -114,6 +117,16 @@ def get_default_account(
     return summary
 
 
+@router.get("/history", response_model=list[AccountHistorySnapshotResponse])
+def get_all_history(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Get aggregated historical snapshots across all crypto accounts."""
+    return get_all_crypto_accounts_history(session, current_user.uuid, master_key)
+
+
 @router.get("/accounts/{account_id}", response_model=AccountSummaryResponse)
 def get_account(
     account_id: str,
@@ -131,6 +144,19 @@ def get_account(
     settings = get_or_create_settings(session, current_user.uuid, master_key)
     summary = get_crypto_account_summary(session, account_model, master_key, settings.crypto_show_negative_positions, db_only=db_only)
     return summary
+
+
+@router.get("/accounts/{account_id}/history", response_model=list[AccountHistorySnapshotResponse])
+def get_account_history_route(
+    account_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Get historical daily snapshots for a crypto account."""
+    if not get_crypto_account(session, account_id, current_user.uuid, master_key):
+        raise HTTPException(status_code=404, detail="Account not found")
+    return get_crypto_account_history(session, account_id, master_key)
 
 
 @router.put("/accounts/{account_id}", response_model=CryptoAccountBasicResponse)

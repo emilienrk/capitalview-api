@@ -19,8 +19,11 @@ from services.bank import (
     get_bank_account,
     get_user_bank_accounts,
     update_bank_account,
-    delete_bank_account
+    delete_bank_account,
+    get_bank_account_history,
+    get_all_bank_accounts_history,
 )
+from dtos.transaction import AccountHistorySnapshotResponse
 
 router = APIRouter(prefix="/bank", tags=["Bank Accounts"])
 
@@ -58,6 +61,29 @@ def get_accounts(
 ):
     """Get all bank accounts with total balance for current user."""
     return get_user_bank_accounts(session, current_user.uuid, master_key)
+
+
+@router.get("/history", response_model=list[AccountHistorySnapshotResponse])
+def get_all_history(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Get aggregated historical snapshots across all bank accounts."""
+    return get_all_bank_accounts_history(session, current_user.uuid, master_key)
+
+
+@router.get("/accounts/{account_id}/history", response_model=list[AccountHistorySnapshotResponse])
+def get_account_history(
+    account_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Get historical daily snapshots for a bank account."""
+    if not get_bank_account(session, account_id, current_user.uuid, master_key):
+        raise HTTPException(status_code=404, detail="Account not found")
+    return get_bank_account_history(session, account_id, master_key)
 
 
 @router.get("/accounts/{account_id}", response_model=BankAccountResponse)

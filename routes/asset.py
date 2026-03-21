@@ -27,7 +27,9 @@ from services.asset import (
     create_valuation,
     get_asset_valuations,
     delete_valuation as service_delete_valuation,
+    get_asset_portfolio_history,
 )
+from dtos.transaction import AccountHistorySnapshotResponse
 
 router = APIRouter(prefix="/assets", tags=["Assets"])
 
@@ -51,6 +53,16 @@ def list_assets(
 ):
     """Get all personal assets with summary for current user."""
     return get_user_assets(session, current_user.uuid, master_key)
+
+
+@router.get("/history", response_model=list[AccountHistorySnapshotResponse])
+def get_portfolio_history(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Get historical daily snapshots for the user's asset portfolio."""
+    return get_asset_portfolio_history(session, current_user.uuid, master_key)
 
 
 @router.get("/{asset_id}", response_model=AssetResponse)

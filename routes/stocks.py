@@ -21,6 +21,7 @@ from dtos import (
     StockTransactionUpdate,
     StockTransactionBasicResponse,
     AccountSummaryResponse,
+    AccountHistorySnapshotResponse,
     TransactionResponse,
     AssetSearchResult,
     AssetInfoResponse,
@@ -30,7 +31,9 @@ from services.stock_account import (
     get_stock_account,
     get_user_stock_accounts,
     update_stock_account,
-    delete_stock_account
+    delete_stock_account,
+    get_stock_account_history,
+    get_all_stock_accounts_history,
 )
 from services.stock_transaction import (
     create_stock_transaction,
@@ -82,6 +85,16 @@ def list_accounts(
     return get_user_stock_accounts(session, current_user.uuid, master_key)
 
 
+@router.get("/history", response_model=list[AccountHistorySnapshotResponse])
+def get_all_history(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Get aggregated historical snapshots across all stock accounts."""
+    return get_all_stock_accounts_history(session, current_user.uuid, master_key)
+
+
 @router.get("/accounts/{account_id}", response_model=AccountSummaryResponse)
 def get_account(
     account_id: str,
@@ -98,6 +111,19 @@ def get_account(
     account_model = session.get(StockAccount, account_id)
     
     return get_stock_account_summary(session, account_model, master_key, db_only=db_only)
+
+
+@router.get("/accounts/{account_id}/history", response_model=list[AccountHistorySnapshotResponse])
+def get_account_history_route(
+    account_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Get historical daily snapshots for a stock account."""
+    if not get_stock_account(session, account_id, current_user.uuid, master_key):
+        raise HTTPException(status_code=404, detail="Account not found")
+    return get_stock_account_history(session, account_id, master_key)
 
 
 @router.put("/accounts/{account_id}", response_model=StockAccountBasicResponse)

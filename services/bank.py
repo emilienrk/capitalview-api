@@ -1,12 +1,15 @@
 """Bank account service."""
 
+import json
 from decimal import Decimal
 from typing import Optional
 
 from sqlmodel import Session, select
 
 from models import BankAccount, BankAccountType
+from models.account_history import AccountHistory
 from dtos import BankAccountCreate, BankAccountUpdate, BankAccountResponse, BankSummaryResponse
+from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotResponse
 from services.encryption import encrypt_data, decrypt_data, hash_index
 
 
@@ -150,3 +153,111 @@ def get_bank_account(
         return None
         
     return _map_to_response(account, master_key)
+
+
+def _decode_history_row(row: AccountHistory, master_key: str) -> AccountHistorySnapshotResponse:
+    """Decrypt a single AccountHistory row into a response DTO."""
+    total_value = Decimal(decrypt_data(row.total_value_enc, master_key))
+    total_invested = Decimal(decrypt_data(row.total_invested_enc, master_key))
+    daily_pnl = (
+        Decimal(decrypt_data(row.daily_pnl_enc, master_key))
+        if row.daily_pnl_enc
+        else None
+    )
+
+    positions = None
+    if row.positions_enc:
+        raw_json = decrypt_data(row.positions_enc, master_key)
+        if raw_json:
+            try:
+                parsed = json.loads(raw_json)
+                positions = [
+                    AccountHistoryPosition(
+                        symbol=p["symbol"],
+                        quantity=Decimal(p["quantity"]),
+                        value=Decimal(p["value"]),
+                        price=Decimal(p["price"]) if p.get("price") is not None else None,
+                        invested=Decimal(p["invested"]),
+                        percentage=Decimal(p["percentage"]),
+                    )
+                    for p in parsed
+                ]
+            except Exception:
+                positions = None
+
+    return AccountHistorySnapshotResponse(
+        snapshot_date=row.snapshot_date,
+        total_value=total_value,
+        total_invested=total_invested,
+        daily_pnl=daily_pnl,
+        positions=positions,
+    )
+
+
+def get_bank_account_history(
+    session: Session,
+    account_uuid: str,
+    master_key: str,
+) -> list[AccountHistorySnapshotResponse]:
+    """Return decrypted daily snapshots for a bank account, ordered by date."""
+    account_id_bidx = hash_index(account_uuid, master_key)
+
+    rows = session.exec(
+        select(AccountHistory)
+        .where(AccountHistory.account_id_bidx == account_id_bidx)
+        .order_by(AccountHistory.snapshot_date)
+    ).all()
+
+    return [_decode_history_row(row, master_key) for row in rows]
+
+
+def get_all_bank_accounts_history(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+) -> list[AccountHistorySnapshotResponse]:
+    """
+    Aggregate daily snapshots across all bank accounts for a user.
+    The bank position is always EUR so values are simply summed by date.
+    """
+    user_bidx = hash_index(user_uuid, master_key)
+    accounts = session.exec(
+        select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
+    ).all()
+
+    # date -> {total_value, total_invested, total_qty}
+    aggregated: dict = {}
+
+    for acc in accounts:
+        for snap in get_bank_account_history(session, acc.uuid, master_key):
+            d = snap.snapshot_date
+            if d not in aggregated:
+                aggregated[d] = {"total_value": Decimal("0"), "total_invested": Decimal("0")}
+            aggregated[d]["total_value"] += snap.total_value
+            aggregated[d]["total_invested"] += snap.total_invested
+
+    result = []
+    for d in sorted(aggregated):
+        day = aggregated[d]
+        total_value = day["total_value"]
+        positions = [
+            AccountHistoryPosition(
+                symbol="EUR",
+                quantity=total_value,
+                value=total_value,
+                price=Decimal("1"),
+                invested=day["total_invested"],
+                percentage=Decimal("100"),
+            )
+        ] if total_value > Decimal("0") else None
+        result.append(
+            AccountHistorySnapshotResponse(
+                snapshot_date=d,
+                total_value=total_value,
+                total_invested=day["total_invested"],
+                daily_pnl=None,
+                positions=positions,
+            )
+        )
+
+    return result

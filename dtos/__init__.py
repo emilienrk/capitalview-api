@@ -20,6 +20,8 @@ from .cashflow import (
 
 # Transaction schemas (shared)
 from .transaction import (
+    AccountHistoryPosition,
+    AccountHistorySnapshotResponse,
     AccountSummaryResponse,
     PortfolioResponse,
     PositionResponse,

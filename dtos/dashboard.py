@@ -1,5 +1,6 @@
 """Dashboard statistics schemas."""
 
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 
@@ -41,3 +42,16 @@ class DashboardSummaryResponse(BaseModel):
     statistics: DashboardStatisticsResponse
     portfolio: PortfolioResponse
     cashflow: CashflowBalanceResponse
+
+
+class GlobalHistorySnapshotResponse(BaseModel):
+    """
+    Aggregated daily snapshot of total wealth across all account types.
+    No positions included — lightweight overview for charts.
+    """
+    snapshot_date: date
+    total_wealth: Decimal
+    stock_value: Decimal
+    crypto_value: Decimal
+    bank_value: Decimal
+    assets_value: Decimal

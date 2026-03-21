@@ -1,5 +1,6 @@
 """Dashboard routes - Personal portfolio overview."""
 
+from collections import defaultdict
 from decimal import Decimal
 from typing import Annotated
 
@@ -9,15 +10,23 @@ from sqlmodel import Session, select
 from database import get_session
 from models import User, StockAccount, CryptoAccount
 from dtos import PortfolioResponse
-from dtos.dashboard import DashboardStatisticsResponse, DashboardSummaryResponse, InvestmentDistribution, WealthBreakdown
+from dtos.dashboard import (
+    DashboardStatisticsResponse,
+    DashboardSummaryResponse,
+    GlobalHistorySnapshotResponse,
+    InvestmentDistribution,
+    WealthBreakdown,
+)
 from services.auth import get_current_user, get_master_key
 from services.encryption import hash_index
 from services.market import get_exchange_rate
 from services.settings import get_or_create_settings
 from services.stock_transaction import get_stock_account_summary
 from services.crypto_transaction import get_crypto_account_summary
-from services.bank import get_user_bank_accounts
-from services.asset import get_user_assets
+from services.bank import get_user_bank_accounts, get_all_bank_accounts_history
+from services.asset import get_user_assets, get_asset_portfolio_history
+from services.stock_account import get_all_stock_accounts_history
+from services.crypto_account import get_all_crypto_accounts_history
 from services.cashflow import get_user_cashflow_balance
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
@@ -60,6 +69,56 @@ def get_rate(
         "to": to_currency,
         "rate": float(rate),
     }
+
+
+@router.get("/history", response_model=list[GlobalHistorySnapshotResponse])
+def get_global_history(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """
+    Aggregated daily wealth history across all account types (stock, crypto, bank, assets).
+    Returns one entry per day with total_wealth and a breakdown by category.
+    No positions included — designed for lightweight chart rendering.
+    """
+    settings = get_or_create_settings(session, current_user.uuid, master_key)
+
+    # Fetch per-category histories in parallel (same session, sequential is fine)
+    stock_snaps = {s.snapshot_date: s.total_value for s in get_all_stock_accounts_history(session, current_user.uuid, master_key)}
+    crypto_snaps = {s.snapshot_date: s.total_value for s in get_all_crypto_accounts_history(session, current_user.uuid, master_key)}
+
+    bank_snaps: dict = {}
+    if settings.bank_module_enabled:
+        bank_snaps = {s.snapshot_date: s.total_value for s in get_all_bank_accounts_history(session, current_user.uuid, master_key)}
+
+    assets_snaps: dict = {}
+    if settings.wealth_module_enabled:
+        assets_snaps = {s.snapshot_date: s.total_value for s in get_asset_portfolio_history(session, current_user.uuid, master_key)}
+
+    # Union of all dates
+    all_dates = sorted(
+        stock_snaps.keys() | crypto_snaps.keys() | bank_snaps.keys() | assets_snaps.keys()
+    )
+
+    result = []
+    for d in all_dates:
+        stock_v = stock_snaps.get(d, Decimal("0"))
+        crypto_v = crypto_snaps.get(d, Decimal("0"))
+        bank_v = bank_snaps.get(d, Decimal("0"))
+        assets_v = assets_snaps.get(d, Decimal("0"))
+        result.append(
+            GlobalHistorySnapshotResponse(
+                snapshot_date=d,
+                total_wealth=stock_v + crypto_v + bank_v + assets_v,
+                stock_value=stock_v,
+                crypto_value=crypto_v,
+                bank_value=bank_v,
+                assets_value=assets_v,
+            )
+        )
+
+    return result
 
 
 @router.get("/portfolio", response_model=PortfolioResponse)
