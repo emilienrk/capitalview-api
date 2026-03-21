@@ -105,16 +105,17 @@ def create_eur_deposit(
 
 
 def _compute_eur_balance(session: Session, account_uuid: str, master_key: str) -> Decimal:
-    """Compute current EUR cash balance: deposits - BUY costs + SELL proceeds."""
     txs = get_account_transactions(session, account_uuid, master_key)
     txs.sort(key=lambda x: x.executed_at)
     eur = Decimal("0")
     for tx in txs:
-        if tx.isin == "EUR" and tx.type == "DEPOSIT":
+        if tx.type == "DEPOSIT" and tx.isin == "EUR":
             eur += tx.amount
-        elif tx.isin != "EUR" and tx.type == "BUY":
+        elif tx.type == "BUY" and tx.isin != "EUR":
             eur -= (tx.amount * tx.price_per_unit) + tx.fees
-        elif tx.isin != "EUR" and tx.type == "SELL":
+        elif tx.type == "DIVIDEND":
+            eur += (tx.amount * tx.price_per_unit) - tx.fees
+        elif tx.type == "SELL" and tx.isin != "EUR":
             eur += (tx.amount * tx.price_per_unit) - tx.fees
     return eur
 
@@ -341,17 +342,26 @@ def get_stock_account_summary(
     master_key: str,
     db_only: bool = False,
 ) -> AccountSummaryResponse:
-    """Build a full account summary with positions and P&L."""
     acc_resp = _map_account_to_response(account, master_key)
 
     transactions = get_account_transactions(session, account.uuid, master_key)
     transactions.sort(key=lambda x: x.executed_at)
 
-    positions_map: dict[str, dict] = {}
+    positions_map: dict[str, dict] = {
+        "EUR": {
+            "isin": "EUR",
+            "symbol": "EUR",
+            "name": "Euros",
+            "exchange": None,
+            "total_amount": Decimal("0"),
+            "total_cost": Decimal("0"),
+            "total_fees": Decimal("0"),
+        }
+    }
 
     for tx in transactions:
         position_key = tx.isin
-        
+
         if position_key not in positions_map:
             positions_map[position_key] = {
                 "isin": tx.isin,
@@ -364,49 +374,43 @@ def get_stock_account_summary(
             }
 
         pos = positions_map[position_key]
-        
+
+        # Enrich metadata from first transaction that has it
         if tx.symbol and not pos["symbol"]:
             pos["symbol"] = tx.symbol
         if tx.name and not pos["name"]:
             pos["name"] = tx.name
         if tx.exchange and not pos["exchange"]:
             pos["exchange"] = tx.exchange
-        if tx.isin and not pos["isin"]:
-            pos["isin"] = tx.isin
 
-        if tx.type in ("BUY", "DIVIDEND", "DEPOSIT"):
+        if tx.type == "DEPOSIT" and tx.isin == "EUR":
+            positions_map["EUR"]["total_amount"] += tx.amount
+
+        elif tx.type == "BUY":
+            cost = (tx.amount * tx.price_per_unit) + tx.fees
             pos["total_amount"] += tx.amount
-            pos["total_cost"] += (tx.amount * tx.price_per_unit) + tx.fees
+            pos["total_cost"] += cost
+            pos["total_fees"] += tx.fees
+            positions_map["EUR"]["total_amount"] -= cost
 
-            # BUY consumes EUR cash: deduct cost from EUR position if it exists
-            if tx.type == "BUY" and tx.isin != "EUR" and "EUR" in positions_map:
-                cost = (tx.amount * tx.price_per_unit) + tx.fees
-                positions_map["EUR"]["total_amount"] -= cost
+        elif tx.type == "DIVIDEND":
+            proceeds = (tx.amount * tx.price_per_unit) - tx.fees
+            positions_map["EUR"]["total_amount"] += proceeds
+            pos["total_fees"] += tx.fees
 
         elif tx.type == "SELL" and pos["total_amount"] > 0:
             fraction = min(tx.amount / pos["total_amount"], Decimal("1"))
-            pos["total_amount"] -= tx.amount
-            pos["total_cost"] -= pos["total_cost"] * fraction
-            pos["total_amount"] = max(pos["total_amount"], Decimal("0"))
-            pos["total_cost"] = max(pos["total_cost"], Decimal("0"))
-
-            # SELL returns EUR cash: add proceeds to EUR position if it exists
-            if tx.isin != "EUR" and "EUR" in positions_map:
-                proceeds = (tx.amount * tx.price_per_unit) - tx.fees
-                positions_map["EUR"]["total_amount"] += proceeds
-
-        pos["total_fees"] += tx.fees
+            proceeds = (tx.amount * tx.price_per_unit) - tx.fees
+            pos["total_amount"] = max(pos["total_amount"] - tx.amount, Decimal("0"))
+            pos["total_cost"] = max(pos["total_cost"] * (Decimal("1") - fraction), Decimal("0"))
+            pos["total_fees"] += tx.fees
+            positions_map["EUR"]["total_amount"] += proceeds
 
     positions: list[PositionResponse] = []
-    isins = [k for k in positions_map.keys() if k]
 
     for position_key, data in positions_map.items():
-        if data["total_amount"] <= 0:
-            continue
-
         isin = data.get("isin")
 
-        # EUR cash position: price is always 1, never call market API
         if isin == "EUR":
             eur_amount = max(data["total_amount"], Decimal("0"))
             if eur_amount <= 0:
@@ -429,35 +433,25 @@ def get_stock_account_summary(
             ))
             continue
 
-        symbol = data.get("symbol")
-        name = data.get("name")
-        exchange = data.get("exchange")
+        if data["total_amount"] <= 0:
+            continue
 
         total_invested = data["total_cost"]
         avg_price = total_invested / data["total_amount"] if data["total_amount"] > 0 else Decimal("0")
         fees_pct = (data["total_fees"] / total_invested * 100) if total_invested > 0 else Decimal("0")
 
-        current_price = None
-        market_name = None
+        market_name, current_price = get_stock_info(session, isin, db_only=db_only) if isin else (None, None)
 
-        if isin:
-            market_name, current_price = get_stock_info(session, isin, db_only=db_only)
-
-        final_name = market_name if market_name else name
-
-        current_value = None
-        profit_loss = None
-        profit_loss_pct = None
-
+        current_value = profit_loss = profit_loss_pct = None
         if current_price is not None:
             current_value = data["total_amount"] * current_price
             profit_loss = current_value - total_invested
             profit_loss_pct = (profit_loss / total_invested * 100) if total_invested > 0 else Decimal("0")
 
         positions.append(PositionResponse(
-            symbol=symbol or position_key,
-            exchange=exchange,
-            name=final_name,
+            symbol=data.get("symbol") or position_key,
+            exchange=data.get("exchange"),
+            name=market_name or data.get("name"),
             isin=isin,
             total_amount=data["total_amount"],
             average_buy_price=round(avg_price, 4),
@@ -471,16 +465,12 @@ def get_stock_account_summary(
             profit_loss_percentage=round(profit_loss_pct, 2) if profit_loss_pct is not None else None,
         ))
 
-    # Totals exclude EUR cash position (it's not invested capital)
     stock_positions = [p for p in positions if p.isin != "EUR"]
     total_invested_acc = sum(p.total_invested for p in stock_positions)
     total_fees_acc = sum(p.total_fees for p in stock_positions)
-    # current_value includes EUR cash (real account value)
     current_value_acc = sum(p.current_value for p in positions if p.current_value is not None)
 
-    profit_loss_acc = None
-    profit_loss_pct_acc = None
-
+    profit_loss_acc = profit_loss_pct_acc = None
     if any(p.current_value is not None for p in stock_positions):
         stock_value = sum(p.current_value for p in stock_positions if p.current_value is not None)
         profit_loss_acc = stock_value - total_invested_acc
@@ -493,7 +483,7 @@ def get_stock_account_summary(
         account_type=acc_resp.account_type.value,
         total_invested=round(total_invested_acc, 2),
         total_fees=round(total_fees_acc, 2),
-        current_value=round(current_value_acc, 2) if current_value_acc is not None else None,
+        current_value=round(current_value_acc, 2) if current_value_acc else None,
         profit_loss=round(profit_loss_acc, 2) if profit_loss_acc is not None else None,
         profit_loss_percentage=round(profit_loss_pct_acc, 2) if profit_loss_pct_acc is not None else None,
         positions=positions,

@@ -262,6 +262,10 @@ def _generate_missing_snapshots(
     for p in account_snapshot.frozen_positions:
         current_positions[p.symbol] = {"quantity": p.quantity, "invested": p.total_invested}
 
+    # Keep a EUR cash bucket available so replay is order-independent.
+    if "EUR" not in current_positions:
+        current_positions["EUR"] = {"quantity": Decimal("0"), "invested": Decimal("0")}
+
     for d in missing_dates:
         # Phase A: Replay transactions up to day `d` if exact mode
         if is_exact_mode:
@@ -284,23 +288,22 @@ def _generate_missing_snapshots(
                 if sym not in current_positions:
                     current_positions[sym] = {"quantity": Decimal("0"), "invested": Decimal("0")}
 
-                if tx_type in ("BUY", "DIVIDEND", "REWARD"):
+                is_eur_deposit = tx_type in ("DEPOSIT", "FIAT_DEPOSIT") and sym == "EUR"
+                is_legacy_stock_deposit = tx_type == "DEPOSIT" and sym != "EUR"
+
+                if tx_type in ("BUY", "DIVIDEND", "REWARD") or is_legacy_stock_deposit:
                     current_positions[sym]["quantity"] += amount
                     current_positions[sym]["invested"] += (amount * price_per_unit) + fees
                     current_invested += (amount * price_per_unit) + fees
 
-                    # BUY consumes EUR cash: deduct cost from EUR position if it exists
-                    if tx_type == "BUY" and sym != "EUR" and "EUR" in current_positions:
+                    # Any stock/crypto acquisition consumes EUR cash.
+                    if sym != "EUR":
                         cost = (amount * price_per_unit) + fees
                         current_positions["EUR"]["quantity"] -= cost
 
-                elif tx_type in ("DEPOSIT", "FIAT_DEPOSIT"):
-                    # EUR cash (isin=EUR for stocks, symbol=EUR for crypto):
-                    # track quantity as cash position but NOT as invested capital
-                    current_positions[sym]["quantity"] += amount
-                    if sym != "EUR":
-                        current_positions[sym]["invested"] += (amount * price_per_unit) + fees
-                        current_invested += (amount * price_per_unit) + fees
+                elif is_eur_deposit:
+                    # EUR cash only: track quantity, not invested capital.
+                    current_positions["EUR"]["quantity"] += amount
                 elif tx_type in ("SELL", "SPEND"):
                     if current_positions[sym]["quantity"] > 0:
                         fraction = min(amount / current_positions[sym]["quantity"], Decimal("1"))
@@ -309,8 +312,8 @@ def _generate_missing_snapshots(
                             current_positions[sym]["invested"] -= current_positions[sym]["invested"] * fraction
                             current_invested -= current_invested * fraction
 
-                    # SELL returns EUR cash: add proceeds to EUR position if it exists
-                    if tx_type == "SELL" and sym != "EUR" and "EUR" in current_positions:
+                    # SELL returns EUR cash.
+                    if tx_type == "SELL" and sym != "EUR":
                         proceeds = (amount * price_per_unit) - fees
                         current_positions["EUR"]["quantity"] += proceeds
 
