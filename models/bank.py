@@ -2,7 +2,7 @@
 BankAccount model (standard bank accounts).
 """
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, date
 from sqlmodel import SQLModel, Field
 import sqlalchemy as sa
 from sqlalchemy import Column, TEXT
@@ -33,4 +33,9 @@ class BankAccount(SQLModel, table=True):
             onupdate=sa.func.now(),
             nullable=False,
         )
+    )
+    # Last date the balance was automatically updated via linked cashflows
+    balance_updated_at: Optional[date] = Field(
+        default=None,
+        sa_column=Column(sa.Date, nullable=True),
     )

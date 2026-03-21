@@ -1,6 +1,7 @@
 """Cashflow model (income and expenses)."""
 
 from datetime import datetime
+from typing import Optional
 from sqlmodel import SQLModel, Field
 import sqlalchemy as sa
 from sqlalchemy import Column, TEXT
@@ -20,7 +21,8 @@ class Cashflow(SQLModel, table=True):
     amount_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     frequency_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     transaction_date_enc: str = Field(sa_column=Column(TEXT, nullable=False))
-
+    # Blind index to link to a bank account (queryable without decryption)
+    bank_account_uuid_bidx: Optional[str] = Field(default=None, sa_column=Column(TEXT, nullable=True, index=True))
     created_at: datetime = Field(
         default=sa.func.now(),
         sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)

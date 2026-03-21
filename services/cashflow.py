@@ -1,7 +1,8 @@
 """Cashflow service."""
 
+import calendar
 from decimal import Decimal
-from datetime import date
+from datetime import date, timedelta
 from collections import defaultdict
 from typing import Optional, List
 
@@ -32,8 +33,16 @@ def get_monthly_amount(amount: Decimal, frequency: Frequency) -> Decimal:
     return amount * multipliers.get(frequency, Decimal("1"))
 
 
-def _map_cashflow_to_response(cashflow: Cashflow, master_key: str) -> CashflowResponse:
-    """Decrypt and map Cashflow to response DTO."""
+def _map_cashflow_to_response(
+    cashflow: Cashflow,
+    master_key: str,
+    bank_bidx_map: Optional[dict] = None,
+) -> CashflowResponse:
+    """Decrypt and map Cashflow to response DTO.
+
+    bank_bidx_map: optional dict of {bank_account_uuid_bidx -> bank_account_uuid},
+    used to resolve the linked bank account UUID from its blind index.
+    """
     name = decrypt_data(cashflow.name_enc, master_key)
     flow_type_str = decrypt_data(cashflow.flow_type_enc, master_key)
     category = decrypt_data(cashflow.category_enc, master_key)
@@ -46,6 +55,10 @@ def _map_cashflow_to_response(cashflow: Cashflow, master_key: str) -> CashflowRe
     flow_type = FlowType(flow_type_str)
     transaction_date = date.fromisoformat(date_str)
 
+    bank_account_id = None
+    if cashflow.bank_account_uuid_bidx and bank_bidx_map:
+        bank_account_id = bank_bidx_map.get(cashflow.bank_account_uuid_bidx)
+
     return CashflowResponse(
         id=cashflow.uuid,
         name=name,
@@ -55,6 +68,7 @@ def _map_cashflow_to_response(cashflow: Cashflow, master_key: str) -> CashflowRe
         frequency=frequency.value,
         transaction_date=transaction_date,
         monthly_amount=get_monthly_amount(amount, frequency),
+        bank_account_id=bank_account_id,
         created_at=cashflow.created_at,
         updated_at=cashflow.updated_at,
     )
@@ -75,6 +89,7 @@ def create_cashflow(
     amount_enc = encrypt_data(str(data.amount), master_key)
     frequency_enc = encrypt_data(data.frequency.value, master_key)
     date_enc = encrypt_data(data.transaction_date.isoformat(), master_key)
+    bank_acc_bidx = hash_index(data.bank_account_id, master_key) if data.bank_account_id else None
     
     cashflow = Cashflow(
         user_uuid_bidx=user_bidx,
@@ -83,21 +98,24 @@ def create_cashflow(
         category_enc=category_enc,
         amount_enc=amount_enc,
         frequency_enc=frequency_enc,
-        transaction_date_enc=date_enc
+        transaction_date_enc=date_enc,
+        bank_account_uuid_bidx=bank_acc_bidx,
     )
     
     session.add(cashflow)
     session.commit()
     session.refresh(cashflow)
     
-    return _map_cashflow_to_response(cashflow, master_key)
+    bank_bidx_map = _build_bank_bidx_map(session, user_uuid, master_key)
+    return _map_cashflow_to_response(cashflow, master_key, bank_bidx_map)
 
 
 def update_cashflow(
     session: Session,
     cashflow: Cashflow,
     data: CashflowUpdate,
-    master_key: str
+    master_key: str,
+    user_uuid: str,
 ) -> CashflowResponse:
     """Update an existing cashflow."""
     if data.name is not None:
@@ -117,12 +135,17 @@ def update_cashflow(
         
     if data.transaction_date is not None:
         cashflow.transaction_date_enc = encrypt_data(data.transaction_date.isoformat(), master_key)
+
+    if data.bank_account_id is not None:
+        # Empty string means unlinking the account
+        cashflow.bank_account_uuid_bidx = hash_index(data.bank_account_id, master_key) if data.bank_account_id else None
         
     session.add(cashflow)
     session.commit()
     session.refresh(cashflow)
     
-    return _map_cashflow_to_response(cashflow, master_key)
+    bank_bidx_map = _build_bank_bidx_map(session, user_uuid, master_key)
+    return _map_cashflow_to_response(cashflow, master_key, bank_bidx_map)
 
 
 def delete_cashflow(
@@ -153,8 +176,9 @@ def get_cashflow(
     user_bidx = hash_index(user_uuid, master_key)
     if cashflow.user_uuid_bidx != user_bidx:
         return None
-        
-    return _map_cashflow_to_response(cashflow, master_key)
+
+    bank_bidx_map = _build_bank_bidx_map(session, user_uuid, master_key)
+    return _map_cashflow_to_response(cashflow, master_key, bank_bidx_map)
 
 
 def aggregate_by_category(cashflows: list[CashflowResponse]) -> list[CashflowCategoryResponse]:
@@ -179,6 +203,16 @@ def aggregate_by_category(cashflows: list[CashflowResponse]) -> list[CashflowCat
     return result
 
 
+def _build_bank_bidx_map(session: Session, user_uuid: str, master_key: str) -> dict:
+    """Build a map of {bank_account_uuid_bidx -> bank_account.uuid} for a user."""
+    from models import BankAccount
+    user_bidx = hash_index(user_uuid, master_key)
+    accounts = session.exec(
+        select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
+    ).all()
+    return {hash_index(acc.uuid, master_key): acc.uuid for acc in accounts}
+
+
 def get_all_user_cashflows(
     session: Session, 
     user_uuid: str, 
@@ -189,7 +223,8 @@ def get_all_user_cashflows(
     cashflows = session.exec(
         select(Cashflow).where(Cashflow.user_uuid_bidx == user_bidx)
     ).all()
-    return [_map_cashflow_to_response(cf, master_key) for cf in cashflows]
+    bank_bidx_map = _build_bank_bidx_map(session, user_uuid, master_key)
+    return [_map_cashflow_to_response(cf, master_key, bank_bidx_map) for cf in cashflows]
 
 
 def get_cashflows_by_type(
@@ -247,6 +282,7 @@ def get_user_cashflow_balance(
     
     net_balance = inflows.total_amount - outflows.total_amount
     monthly_balance = inflows.monthly_total - outflows.monthly_total
+
     
     # Calculate savings rate
     savings_rate = None
@@ -264,3 +300,79 @@ def get_user_cashflow_balance(
         inflows=inflows,
         outflows=outflows,
     )
+
+
+def get_cashflow_occurrences(
+    cf: CashflowResponse,
+    from_date: date,
+    to_date: date,
+) -> list[date]:
+    """Return all firing dates of a cashflow in the half-open interval (from_date, to_date].
+
+    from_date is exclusive (last processed date).
+    to_date is inclusive (today).
+    """
+    if from_date >= to_date:
+        return []
+
+    reference = cf.transaction_date
+    frequency = Frequency(cf.frequency)
+    occurrences: list[date] = []
+
+    if frequency == Frequency.ONCE:
+        if from_date < reference <= to_date:
+            occurrences.append(reference)
+        return occurrences
+
+    current = reference
+
+    if frequency == Frequency.DAILY:
+        if current <= from_date:
+            # Jump forward to the first day strictly after from_date
+            delta = (from_date - current).days + 1
+            current = current + timedelta(days=delta)
+        while current <= to_date:
+            occurrences.append(current)
+            current += timedelta(days=1)
+
+    elif frequency == Frequency.WEEKLY:
+        if current <= from_date:
+            delta = (from_date - current).days
+            weeks = delta // 7 + 1
+            current = current + timedelta(weeks=weeks)
+        while current <= to_date:
+            occurrences.append(current)
+            current += timedelta(weeks=1)
+
+    elif frequency == Frequency.MONTHLY:
+        anchor_day = reference.day
+        # Advance month by month until current is strictly after from_date
+        while current <= from_date:
+            next_month = current.month % 12 + 1
+            next_year = current.year + (1 if current.month == 12 else 0)
+            last_day = calendar.monthrange(next_year, next_month)[1]
+            current = date(next_year, next_month, min(anchor_day, last_day))
+        while current <= to_date:
+            occurrences.append(current)
+            next_month = current.month % 12 + 1
+            next_year = current.year + (1 if current.month == 12 else 0)
+            last_day = calendar.monthrange(next_year, next_month)[1]
+            current = date(next_year, next_month, min(anchor_day, last_day))
+
+    elif frequency == Frequency.YEARLY:
+        anchor_month = reference.month
+        anchor_day = reference.day
+        while current <= from_date:
+            try:
+                current = date(current.year + 1, anchor_month, anchor_day)
+            except ValueError:
+                # Feb 29 on a non-leap year → Feb 28
+                current = date(current.year + 1, anchor_month, 28)
+        while current <= to_date:
+            occurrences.append(current)
+            try:
+                current = date(current.year + 1, anchor_month, anchor_day)
+            except ValueError:
+                current = date(current.year + 1, anchor_month, 28)
+
+    return occurrences

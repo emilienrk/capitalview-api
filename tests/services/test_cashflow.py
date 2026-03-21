@@ -15,8 +15,11 @@ from services.cashflow import (
     get_monthly_amount
 )
 from dtos.cashflow import CashflowCreate, CashflowUpdate
-from models.enums import FlowType, Frequency
+from models.enums import FlowType, Frequency, BankAccountType
 from models.cashflow import Cashflow
+from models.bank import BankAccount
+from services.bank import create_bank_account
+from dtos.bank import BankAccountCreate
 from services.encryption import hash_index, decrypt_data, encrypt_data
 
 
@@ -79,7 +82,7 @@ def test_update_cashflow(session: Session, master_key: str):
     cf = create_cashflow(session, data, user_uuid, master_key)
     db_cf = session.get(Cashflow, cf.id)
     update_data = CashflowUpdate(name="Gym & Spa", amount=Decimal("80"), frequency=Frequency.YEARLY)
-    updated = update_cashflow(session, db_cf, update_data, master_key)
+    updated = update_cashflow(session, db_cf, update_data, master_key, user_uuid)
     assert updated.name == "Gym & Spa"
     assert updated.amount == Decimal("80")
     assert updated.frequency == Frequency.YEARLY.value
@@ -133,3 +136,179 @@ def test_get_all_user_cashflows(session: Session, master_key: str):
     result = get_all_user_cashflows(session, user_uuid, master_key)
     assert len(result) == 1
     assert result[0].name == "A"
+
+
+# ─── bank_account_id link (blind index) ──────────────────────
+
+
+def test_create_cashflow_with_bank_account_id(session: Session, master_key: str):
+    user_uuid = "user_cf_bank_link"
+    # Create a real bank account first
+    acc = create_bank_account(
+        session,
+        BankAccountCreate(name="Main", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        user_uuid,
+        master_key,
+    )
+    cf = create_cashflow(
+        session,
+        CashflowCreate(
+            name="Rent",
+            flow_type=FlowType.OUTFLOW,
+            category="housing",
+            amount=Decimal("800"),
+            frequency=Frequency.MONTHLY,
+            transaction_date=date(2026, 1, 5),
+            bank_account_id=acc.id,
+        ),
+        user_uuid,
+        master_key,
+    )
+    assert cf.bank_account_id == acc.id
+    # Verify blind index stored in DB (not the plain UUID)
+    db_cf = session.get(Cashflow, cf.id)
+    assert db_cf.bank_account_uuid_bidx is not None
+    assert db_cf.bank_account_uuid_bidx != acc.id
+    assert db_cf.bank_account_uuid_bidx == hash_index(acc.id, master_key)
+
+
+def test_create_cashflow_without_bank_account_id(session: Session, master_key: str):
+    user_uuid = "user_cf_no_bank"
+    cf = create_cashflow(
+        session,
+        CashflowCreate(
+            name="Income",
+            flow_type=FlowType.INFLOW,
+            category="work",
+            amount=Decimal("3000"),
+            frequency=Frequency.MONTHLY,
+            transaction_date=date(2026, 1, 28),
+            bank_account_id=None,
+        ),
+        user_uuid,
+        master_key,
+    )
+    assert cf.bank_account_id is None
+    db_cf = session.get(Cashflow, cf.id)
+    assert db_cf.bank_account_uuid_bidx is None
+
+
+def test_get_cashflow_resolves_bank_account_id(session: Session, master_key: str):
+    user_uuid = "user_cf_resolve"
+    acc = create_bank_account(
+        session,
+        BankAccountCreate(name="Savings", balance=Decimal("0"), account_type=BankAccountType.SAVINGS),
+        user_uuid,
+        master_key,
+    )
+    cf = create_cashflow(
+        session,
+        CashflowCreate(
+            name="Transfer",
+            flow_type=FlowType.OUTFLOW,
+            category="transfer",
+            amount=Decimal("200"),
+            frequency=Frequency.MONTHLY,
+            transaction_date=date(2026, 1, 1),
+            bank_account_id=acc.id,
+        ),
+        user_uuid,
+        master_key,
+    )
+    fetched = get_cashflow(session, cf.id, user_uuid, master_key)
+    assert fetched.bank_account_id == acc.id
+
+
+def test_update_cashflow_links_bank_account(session: Session, master_key: str):
+    user_uuid = "user_cf_update_link"
+    acc = create_bank_account(
+        session,
+        BankAccountCreate(name="Checking", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        user_uuid,
+        master_key,
+    )
+    cf = create_cashflow(
+        session,
+        CashflowCreate(
+            name="Netflix",
+            flow_type=FlowType.OUTFLOW,
+            category="leisure",
+            amount=Decimal("15"),
+            frequency=Frequency.MONTHLY,
+            transaction_date=date(2026, 1, 12),
+        ),
+        user_uuid,
+        master_key,
+    )
+    assert cf.bank_account_id is None
+
+    db_cf = session.get(Cashflow, cf.id)
+    updated = update_cashflow(
+        session, db_cf,
+        CashflowUpdate(bank_account_id=acc.id),
+        master_key,
+        user_uuid,
+    )
+    assert updated.bank_account_id == acc.id
+
+
+def test_update_cashflow_unlinks_bank_account(session: Session, master_key: str):
+    user_uuid = "user_cf_unlink"
+    acc = create_bank_account(
+        session,
+        BankAccountCreate(name="Checking", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        user_uuid,
+        master_key,
+    )
+    cf = create_cashflow(
+        session,
+        CashflowCreate(
+            name="Spotify",
+            flow_type=FlowType.OUTFLOW,
+            category="music",
+            amount=Decimal("10"),
+            frequency=Frequency.MONTHLY,
+            transaction_date=date(2026, 1, 20),
+            bank_account_id=acc.id,
+        ),
+        user_uuid,
+        master_key,
+    )
+    assert cf.bank_account_id == acc.id
+
+    db_cf = session.get(Cashflow, cf.id)
+    updated = update_cashflow(
+        session, db_cf,
+        CashflowUpdate(bank_account_id=""),  # Empty string = unlink
+        master_key,
+        user_uuid,
+    )
+    assert updated.bank_account_id is None
+
+
+def test_bank_account_id_not_exposed_across_users(session: Session, master_key: str):
+    """A cashflow linked to user_A should not expose a bank account UUID to user_B."""
+    user_a = "user_isolation_a"
+    user_b = "user_isolation_b"
+    acc = create_bank_account(
+        session,
+        BankAccountCreate(name="Private", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        user_a,
+        master_key,
+    )
+    cf = create_cashflow(
+        session,
+        CashflowCreate(
+            name="Private CF",
+            flow_type=FlowType.OUTFLOW,
+            category="private",
+            amount=Decimal("100"),
+            frequency=Frequency.MONTHLY,
+            transaction_date=date(2026, 1, 1),
+            bank_account_id=acc.id,
+        ),
+        user_a,
+        master_key,
+    )
+    # user_B cannot access user_A's cashflow at all
+    assert get_cashflow(session, cf.id, user_b, master_key) is None

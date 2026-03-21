@@ -108,7 +108,7 @@ def update_entry(
         raise HTTPException(status_code=404, detail="Cashflow not found")
     
     cashflow_model = session.get(Cashflow, cashflow_id)
-    return update_cashflow(session, cashflow_model, cashflow_data, master_key)
+    return update_cashflow(session, cashflow_model, cashflow_data, master_key, current_user.uuid)
 
 
 @router.delete("/{cashflow_id}", status_code=204)

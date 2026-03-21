@@ -17,6 +17,7 @@ class CashflowCreate(BaseModel):
     amount: Decimal
     frequency: Frequency
     transaction_date: date
+    bank_account_id: Optional[str] = None
 
 
 class CashflowUpdate(BaseModel):
@@ -27,6 +28,7 @@ class CashflowUpdate(BaseModel):
     amount: Optional[Decimal] = None
     frequency: Optional[Frequency] = None
     transaction_date: Optional[date] = None
+    bank_account_id: Optional[str] = None
 
 
 class CashflowResponse(BaseModel):
@@ -42,6 +44,7 @@ class CashflowResponse(BaseModel):
     updated_at: datetime
 
     monthly_amount: Decimal  # Amount normalized to monthly
+    bank_account_id: Optional[str] = None  # Linked bank account UUID
 
 
 class CashflowCategoryResponse(BaseModel):

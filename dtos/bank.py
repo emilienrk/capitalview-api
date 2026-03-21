@@ -1,6 +1,6 @@
 """Bank account schemas."""
 
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 from typing import Optional
 
@@ -36,6 +36,7 @@ class BankAccountResponse(BaseModel):
     identifier: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    balance_updated_at: Optional[date] = None  # Last auto-sync date from cashflows
 
 
 class BankSummaryResponse(BaseModel):
