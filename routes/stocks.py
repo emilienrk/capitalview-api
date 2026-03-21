@@ -20,6 +20,7 @@ from dtos import (
     StockTransactionCreate,
     StockTransactionUpdate,
     StockTransactionBasicResponse,
+    EurDepositCreate,
     AccountSummaryResponse,
     AccountHistorySnapshotResponse,
     TransactionResponse,
@@ -37,6 +38,7 @@ from services.stock_account import (
 )
 from services.stock_transaction import (
     create_stock_transaction,
+    create_eur_deposit,
     get_stock_transaction,
     get_account_transactions,
     update_stock_transaction,
@@ -157,6 +159,39 @@ def delete_account(
         
     delete_stock_account(session, account_id, master_key)
     return None
+
+
+@router.post("/accounts/{account_id}/deposit", response_model=TransactionResponse, status_code=201)
+def create_account_deposit(
+    account_id: str,
+    data: EurDepositCreate,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Deposit EUR cash into a stock account."""
+    account = get_stock_account(session, account_id, current_user.uuid, master_key)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found or access denied")
+
+    result = create_eur_deposit(
+        session, account_id, data.amount, data.executed_at, master_key, data.notes
+    )
+
+    executed_date = data.executed_at.date() if hasattr(data.executed_at, "date") else data.executed_at
+    trigger_post_transaction_updates(
+        session=session,
+        background_tasks=background_tasks,
+        user_uuid=current_user.uuid,
+        master_key=master_key,
+        account_id=account_id,
+        asset_type=AssetType.STOCK,
+        affected_dates=[executed_date],
+        affected_assets=["EUR"],
+    )
+
+    return result
 
 
 # ============== TRANSACTIONS ==============

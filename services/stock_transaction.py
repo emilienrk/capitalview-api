@@ -37,11 +37,14 @@ def _decrypt_transaction(tx: StockTransaction, master_key: str) -> TransactionRe
     total_cost = (amount * price) + fees
     fees_pct = (fees / total_cost * 100) if total_cost > 0 else Decimal("0")
 
+    symbol = "EUR" if isin == "EUR" else None
+    name = "Euros" if isin == "EUR" else None
+
     return TransactionResponse(
         id=tx.uuid,
         isin=isin,
-        symbol=None,
-        name=None,
+        symbol=symbol,
+        name=name,
         exchange=None,
         type=type_str,
         amount=amount,
@@ -50,6 +53,51 @@ def _decrypt_transaction(tx: StockTransaction, master_key: str) -> TransactionRe
         executed_at=executed_at,
         total_cost=total_cost,
         fees_percentage=round(fees_pct, 2),
+    )
+
+
+def create_eur_deposit(
+    session: Session,
+    account_uuid: str,
+    amount: Decimal,
+    executed_at: datetime,
+    master_key: str,
+    notes: Optional[str] = None,
+) -> TransactionResponse:
+    """Record a EUR cash deposit into a stock account.
+    
+    Uses type=DEPOSIT + isin=EUR as sentinel: price_per_unit=1 (EUR is source of
+    truth, no market call needed).
+    """
+    account_bidx = hash_index(account_uuid, master_key)
+
+    transaction = StockTransaction(
+        account_id_bidx=account_bidx,
+        isin_enc=encrypt_data("EUR", master_key),
+        type_enc=encrypt_data("DEPOSIT", master_key),
+        amount_enc=encrypt_data(str(amount), master_key),
+        price_per_unit_enc=encrypt_data("1", master_key),
+        fees_enc=encrypt_data("0", master_key),
+        executed_at_enc=encrypt_data(executed_at.isoformat(), master_key),
+        notes_enc=encrypt_data(notes, master_key) if notes else None,
+    )
+    session.add(transaction)
+    session.commit()
+    session.refresh(transaction)
+
+    return TransactionResponse(
+        id=transaction.uuid,
+        isin="EUR",
+        symbol="EUR",
+        name="Euros",
+        exchange=None,
+        type="DEPOSIT",
+        amount=amount,
+        price_per_unit=Decimal("1"),
+        fees=Decimal("0"),
+        executed_at=executed_at,
+        total_cost=amount,
+        fees_percentage=Decimal("0"),
     )
 
 
@@ -310,8 +358,29 @@ def get_stock_account_summary(
     for position_key, data in positions_map.items():
         if data["total_amount"] <= 0:
             continue
-            
+
         isin = data.get("isin")
+
+        # EUR cash position: price is always 1, never call market API
+        if isin == "EUR":
+            positions.append(PositionResponse(
+                symbol="EUR",
+                exchange=None,
+                name="Euros",
+                isin="EUR",
+                total_amount=data["total_amount"],
+                average_buy_price=Decimal("1"),
+                total_invested=round(data["total_amount"], 2),
+                total_fees=Decimal("0"),
+                fees_percentage=Decimal("0"),
+                currency="EUR",
+                current_price=Decimal("1"),
+                current_value=round(data["total_amount"], 2),
+                profit_loss=Decimal("0"),
+                profit_loss_percentage=Decimal("0"),
+            ))
+            continue
+
         symbol = data.get("symbol")
         name = data.get("name")
         exchange = data.get("exchange")
@@ -319,13 +388,13 @@ def get_stock_account_summary(
         total_invested = data["total_cost"]
         avg_price = total_invested / data["total_amount"] if data["total_amount"] > 0 else Decimal("0")
         fees_pct = (data["total_fees"] / total_invested * 100) if total_invested > 0 else Decimal("0")
-        
+
         current_price = None
         market_name = None
-        
+
         if isin:
             market_name, current_price = get_stock_info(session, isin, db_only=db_only)
-        
+
         final_name = market_name if market_name else name
 
         current_value = None
@@ -354,15 +423,19 @@ def get_stock_account_summary(
             profit_loss_percentage=round(profit_loss_pct, 2) if profit_loss_pct is not None else None,
         ))
 
-    total_invested_acc = sum(p.total_invested for p in positions)
-    total_fees_acc = sum(p.total_fees for p in positions)
+    # Totals exclude EUR cash position (it's not invested capital)
+    stock_positions = [p for p in positions if p.isin != "EUR"]
+    total_invested_acc = sum(p.total_invested for p in stock_positions)
+    total_fees_acc = sum(p.total_fees for p in stock_positions)
+    # current_value includes EUR cash (real account value)
     current_value_acc = sum(p.current_value for p in positions if p.current_value is not None)
 
     profit_loss_acc = None
     profit_loss_pct_acc = None
 
-    if any(p.current_value is not None for p in positions):
-        profit_loss_acc = current_value_acc - total_invested_acc
+    if any(p.current_value is not None for p in stock_positions):
+        stock_value = sum(p.current_value for p in stock_positions if p.current_value is not None)
+        profit_loss_acc = stock_value - total_invested_acc
         if total_invested_acc > 0:
             profit_loss_pct_acc = (profit_loss_acc / total_invested_acc * 100)
 

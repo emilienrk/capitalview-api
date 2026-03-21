@@ -35,6 +35,13 @@ class StockAccountBasicResponse(BaseModel):
     updated_at: datetime
 
 
+class EurDepositCreate(BaseModel):
+    """Deposit EUR cash into a stock account."""
+    amount: Decimal = Field(gt=0)
+    executed_at: datetime
+    notes: Optional[str] = None
+
+
 class StockTransactionCreate(BaseModel):
     """Create a stock transaction."""
     account_id: str

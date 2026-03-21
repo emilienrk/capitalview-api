@@ -39,6 +39,7 @@ from .stock import (
     StockTransactionBulkCreate,
     StockTransactionCreate,
     StockTransactionUpdate,
+    EurDepositCreate,
     AssetSearchResult,
     AssetInfoResponse,
 )

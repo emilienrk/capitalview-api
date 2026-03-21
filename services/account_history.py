@@ -273,25 +273,36 @@ def _generate_missing_snapshots(
                 price_per_unit = getattr(tx, "price_per_unit", Decimal("0"))
                 fees = getattr(tx, "fees", Decimal("0"))
                 
-                # Handling fiat deposits differently
-                if tx_type in ("FIAT_DEPOSIT", "FIAT_ANCHOR", "FEE", "EXIT", "TRANSFER") or not sym:
+                # Skip non-position types; allow FIAT_DEPOSIT only when it's EUR cash (crypto)
+                if tx_type in ("FIAT_ANCHOR", "FEE", "EXIT", "TRANSFER") or not sym:
                     tx_idx += 1
                     continue
-                
+                if tx_type == "FIAT_DEPOSIT" and sym != "EUR":
+                    tx_idx += 1
+                    continue
+
                 if sym not in current_positions:
                     current_positions[sym] = {"quantity": Decimal("0"), "invested": Decimal("0")}
-                
-                if tx_type in ("BUY", "DEPOSIT", "DIVIDEND", "REWARD"):
+
+                if tx_type in ("BUY", "DIVIDEND", "REWARD"):
                     current_positions[sym]["quantity"] += amount
                     current_positions[sym]["invested"] += (amount * price_per_unit) + fees
                     current_invested += (amount * price_per_unit) + fees
+                elif tx_type in ("DEPOSIT", "FIAT_DEPOSIT"):
+                    # EUR cash (isin=EUR for stocks, symbol=EUR for crypto):
+                    # track quantity as cash position but NOT as invested capital
+                    current_positions[sym]["quantity"] += amount
+                    if sym != "EUR":
+                        current_positions[sym]["invested"] += (amount * price_per_unit) + fees
+                        current_invested += (amount * price_per_unit) + fees
                 elif tx_type in ("SELL", "SPEND"):
                     if current_positions[sym]["quantity"] > 0:
                         fraction = min(amount / current_positions[sym]["quantity"], Decimal("1"))
                         current_positions[sym]["quantity"] -= amount
-                        current_positions[sym]["invested"] -= current_positions[sym]["invested"] * fraction
-                        current_invested -= current_invested * fraction
-                
+                        if sym != "EUR":  # EUR cash is not invested capital
+                            current_positions[sym]["invested"] -= current_positions[sym]["invested"] * fraction
+                            current_invested -= current_invested * fraction
+
                 tx_idx += 1
 
         # Phase B: calculate the day's value
@@ -370,8 +381,9 @@ def _generate_missing_snapshots(
             for sym, pos_data in current_positions.items():
                 if pos_data["quantity"] <= Decimal("0"):
                     continue
-                
-                price = price_matrix.get(sym, {}).get(d)
+
+                # EUR cash: price is always 1, no market lookup needed
+                price = Decimal("1") if sym == "EUR" else price_matrix.get(sym, {}).get(d)
                 if price is not None:
                     value = pos_data["quantity"] * price
                     total_value += value
@@ -705,7 +717,8 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
 
             # Include bootstrap-held symbols (important when no new txs).
             for pos in acc_snap.frozen_positions:
-                symbols.add(pos.symbol)
+                if pos.symbol != "EUR":  # EUR price is always 1, no market fetch needed
+                    symbols.add(pos.symbol)
 
             for symbol in symbols:
                 symbol_types_map.setdefault(symbol, set()).add(atype)
@@ -907,8 +920,8 @@ def trigger_post_transaction_updates(
         if not account_id_bidx:
             return
 
-        # Clean the list of assets
-        clean_assets = list({a for a in affected_assets if a})
+        # Clean the list of assets — exclude EUR (price=1, no market data needed)
+        clean_assets = list({a for a in affected_assets if a and a != "EUR"})
 
         background_tasks.add_task(
             rebuild_account_history_from_date,
