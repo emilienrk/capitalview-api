@@ -45,7 +45,7 @@ from services.stock_transaction import (
     delete_stock_transaction,
     get_stock_account_summary
 )
-from services.market import search_assets, get_assets_bulk_info
+from services.market import search_assets as _search_assets_svc, get_assets_bulk_info
 from services.account_history import trigger_post_transaction_updates
 from services.encryption import decrypt_data, hash_index
 
@@ -427,14 +427,14 @@ def bulk_import_transactions(
 
 
 @router.get("/market/search", response_model=list[AssetSearchResult])
-def search_assets(
+def search_market_assets(
     q: str,
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Search for assets (stocks, ETFs, etc.) by name or symbol."""
     if not q:
         return []
-    results = search_assets(q, AssetType.STOCK)
+    results = _search_assets_svc(q, AssetType.STOCK)
 
     return [
         AssetSearchResult(

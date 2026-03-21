@@ -1,7 +1,7 @@
 """Stock transaction services."""
 
 from decimal import Decimal
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from sqlmodel import Session, select
@@ -101,16 +101,48 @@ def create_eur_deposit(
     )
 
 
+def _compute_eur_balance(session: Session, account_uuid: str, master_key: str) -> Decimal:
+    """Compute current EUR cash balance: deposits - BUY costs + SELL proceeds."""
+    txs = get_account_transactions(session, account_uuid, master_key)
+    txs.sort(key=lambda x: x.executed_at)
+    eur = Decimal("0")
+    for tx in txs:
+        if tx.isin == "EUR" and tx.type == "DEPOSIT":
+            eur += tx.amount
+        elif tx.isin != "EUR" and tx.type == "BUY":
+            eur -= (tx.amount * tx.price_per_unit) + tx.fees
+        elif tx.isin != "EUR" and tx.type == "SELL":
+            eur += (tx.amount * tx.price_per_unit) - tx.fees
+    return eur
+
+
 def create_stock_transaction(
     session: Session,
     data: StockTransactionCreate,
     master_key: str,
 ) -> TransactionResponse:
-    """Create a new encrypted stock transaction."""
+    """Create a new encrypted stock transaction.
+
+    For BUY transactions: if the account has insufficient EUR cash, an automatic
+    EUR deposit is created first to cover the shortfall (without bank deduction).
+    """
     if data.isin:
         data.isin = data.isin.strip()
     if data.symbol:
         data.symbol = data.symbol.strip()
+
+    # Auto-fund EUR balance for BUY transactions if needed
+    if data.type.value == "BUY" and data.isin != "EUR":
+        cost = (data.amount * data.price_per_unit) + data.fees
+        current_eur = max(_compute_eur_balance(session, data.account_id, master_key), Decimal("0"))
+        shortage = cost - current_eur
+        if shortage > Decimal("0"):
+            # Auto-deposit happens 1 second before the BUY so it's replayed first
+            deposit_time = data.executed_at - timedelta(seconds=1)
+            create_eur_deposit(
+                session, data.account_id, round(shortage, 2), deposit_time, master_key,
+                notes="Provision automatique",
+            )
 
     account_bidx = hash_index(data.account_id, master_key)
     isin_enc = encrypt_data(data.isin, master_key)
@@ -343,12 +375,22 @@ def get_stock_account_summary(
             pos["total_amount"] += tx.amount
             pos["total_cost"] += (tx.amount * tx.price_per_unit) + tx.fees
 
+            # BUY consumes EUR cash: deduct cost from EUR position if it exists
+            if tx.type == "BUY" and tx.isin != "EUR" and "EUR" in positions_map:
+                cost = (tx.amount * tx.price_per_unit) + tx.fees
+                positions_map["EUR"]["total_amount"] -= cost
+
         elif tx.type == "SELL" and pos["total_amount"] > 0:
             fraction = min(tx.amount / pos["total_amount"], Decimal("1"))
             pos["total_amount"] -= tx.amount
             pos["total_cost"] -= pos["total_cost"] * fraction
             pos["total_amount"] = max(pos["total_amount"], Decimal("0"))
             pos["total_cost"] = max(pos["total_cost"], Decimal("0"))
+
+            # SELL returns EUR cash: add proceeds to EUR position if it exists
+            if tx.isin != "EUR" and "EUR" in positions_map:
+                proceeds = (tx.amount * tx.price_per_unit) - tx.fees
+                positions_map["EUR"]["total_amount"] += proceeds
 
         pos["total_fees"] += tx.fees
 
@@ -363,19 +405,22 @@ def get_stock_account_summary(
 
         # EUR cash position: price is always 1, never call market API
         if isin == "EUR":
+            eur_amount = max(data["total_amount"], Decimal("0"))
+            if eur_amount <= 0:
+                continue
             positions.append(PositionResponse(
                 symbol="EUR",
                 exchange=None,
                 name="Euros",
                 isin="EUR",
-                total_amount=data["total_amount"],
+                total_amount=eur_amount,
                 average_buy_price=Decimal("1"),
-                total_invested=round(data["total_amount"], 2),
+                total_invested=round(eur_amount, 2),
                 total_fees=Decimal("0"),
                 fees_percentage=Decimal("0"),
                 currency="EUR",
                 current_price=Decimal("1"),
-                current_value=round(data["total_amount"], 2),
+                current_value=round(eur_amount, 2),
                 profit_loss=Decimal("0"),
                 profit_loss_percentage=Decimal("0"),
             ))

@@ -150,12 +150,17 @@ def test_get_account_transactions(session: Session, master_key: str):
         account_id=acc2, symbol="C", isin="ISIN_C", type=StockTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), fees=Decimal(0), executed_at=datetime.now()
     ), master_key)
     txs_1 = get_account_transactions(session, acc1, master_key)
-    assert len(txs_1) == 2
-    symbols = {t.symbol for t in txs_1}
+    # Each BUY without prior EUR balance creates an auto EUR deposit → 2 BUY + 2 EUR deposits
+    non_eur_1 = [t for t in txs_1 if t.isin != "EUR"]
+    assert len(non_eur_1) == 2
+    symbols = {t.symbol for t in non_eur_1}
     assert symbols == {"A", "B"}
+    # Verify no acc2 transactions leaked into acc1
+    assert all(t.isin != "ISIN_C" for t in txs_1)
     txs_2 = get_account_transactions(session, acc2, master_key)
-    assert len(txs_2) == 1
-    assert txs_2[0].symbol == "C"
+    non_eur_2 = [t for t in txs_2 if t.isin != "EUR"]
+    assert len(non_eur_2) == 1
+    assert non_eur_2[0].symbol == "C"
 
 
 @patch("services.stock_transaction.get_stock_info")

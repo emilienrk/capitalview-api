@@ -288,6 +288,12 @@ def _generate_missing_snapshots(
                     current_positions[sym]["quantity"] += amount
                     current_positions[sym]["invested"] += (amount * price_per_unit) + fees
                     current_invested += (amount * price_per_unit) + fees
+
+                    # BUY consumes EUR cash: deduct cost from EUR position if it exists
+                    if tx_type == "BUY" and sym != "EUR" and "EUR" in current_positions:
+                        cost = (amount * price_per_unit) + fees
+                        current_positions["EUR"]["quantity"] -= cost
+
                 elif tx_type in ("DEPOSIT", "FIAT_DEPOSIT"):
                     # EUR cash (isin=EUR for stocks, symbol=EUR for crypto):
                     # track quantity as cash position but NOT as invested capital
@@ -302,6 +308,11 @@ def _generate_missing_snapshots(
                         if sym != "EUR":  # EUR cash is not invested capital
                             current_positions[sym]["invested"] -= current_positions[sym]["invested"] * fraction
                             current_invested -= current_invested * fraction
+
+                    # SELL returns EUR cash: add proceeds to EUR position if it exists
+                    if tx_type == "SELL" and sym != "EUR" and "EUR" in current_positions:
+                        proceeds = (amount * price_per_unit) - fees
+                        current_positions["EUR"]["quantity"] += proceeds
 
                 tx_idx += 1
 
@@ -379,20 +390,24 @@ def _generate_missing_snapshots(
             temp_positions = []
             
             for sym, pos_data in current_positions.items():
-                if pos_data["quantity"] <= Decimal("0"):
+                qty = pos_data["quantity"]
+                # Clamp EUR quantity to 0 (can go negative from BUY deductions)
+                if sym == "EUR":
+                    qty = max(qty, Decimal("0"))
+                if qty <= Decimal("0"):
                     continue
 
                 # EUR cash: price is always 1, no market lookup needed
                 price = Decimal("1") if sym == "EUR" else price_matrix.get(sym, {}).get(d)
                 if price is not None:
-                    value = pos_data["quantity"] * price
+                    value = qty * price
                     total_value += value
                 else:
                     value = Decimal("0")
                 temp_positions.append(
                     {
                         "symbol": sym,
-                        "quantity": pos_data["quantity"],
+                        "quantity": qty,
                         "value": value,
                         "price": price,
                         "invested": pos_data["invested"],
