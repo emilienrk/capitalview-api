@@ -9,6 +9,7 @@ class AccountCategory(str, Enum):
     STOCK = "STOCK"
     CRYPTO = "CRYPTO"
     BANK = "BANK"
+    ASSET = "ASSET"
 
 class AssetType(str, Enum):
     """Type of asset for market data."""

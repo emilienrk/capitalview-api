@@ -17,14 +17,17 @@ import pytest
 from sqlmodel import Session
 
 from models.account_history import AccountHistory
+from models.asset import Asset, AssetValuation
 from models.enums import AccountCategory
 from models.market import MarketAsset, MarketPriceHistory
 from services.account_history import (
     _AccountSnapshot,
     FrozenPosition,
+    _build_asset_snapshots,
     _fill_price_gaps,
     _generate_missing_snapshots,
     _get_last_snapshot_dates,
+    _parse_positions_json,
     _get_price_matrix,
 )
 from services.encryption import decrypt_data, encrypt_data, hash_index
@@ -333,7 +336,7 @@ def test_generate_missing_snapshots_stock_values(master_key: str):
 
 
 def test_generate_missing_snapshots_bank_frozen(master_key: str):
-    """Bank account value is frozen — identical for all days, no positions_enc."""
+    """Bank account value is frozen and exported as a single EUR position."""
     user_bidx = hash_index("user_bank_test", master_key)
     acc_bidx = hash_index("acc_bank_test", master_key)
     balance = Decimal("5000.00")
@@ -358,8 +361,11 @@ def test_generate_missing_snapshots_bank_frozen(master_key: str):
     assert len(rows) == 2
     for row in rows:
         assert decrypt_data(row["total_value_enc"], master_key) == "5000.00"
-        # Bank rows carry no positions JSON
-        assert row["positions_enc"] is None
+        assert row["positions_enc"] is not None
+        positions_dec = json.loads(decrypt_data(row["positions_enc"], master_key))
+        assert len(positions_dec) == 1
+        assert positions_dec[0]["symbol"] == "EUR"
+        assert positions_dec[0]["percentage"] == "100.00"
     assert rows[0]["account_type"] == AccountCategory.BANK.value
 
 
@@ -402,6 +408,8 @@ def test_generate_missing_snapshots_position_with_missing_price_zero(master_key:
     by_symbol = {p["symbol"]: p for p in positions_dec}
     assert by_symbol["PRICED"]["value"] == "200.00"
     assert by_symbol["UNPRICED"]["value"] == "0.00"
+    assert by_symbol["PRICED"]["invested"] == "200.00"
+    assert by_symbol["UNPRICED"]["invested"] == "500.00"
 
 
 def test_generate_missing_snapshots_positions_json_structure(master_key: str):
@@ -437,6 +445,22 @@ def test_generate_missing_snapshots_positions_json_structure(master_key: str):
     assert entry["quantity"] == "0.5"
     # 0.5 × 40000 = 20000
     assert entry["value"] == "20000.00"
+    assert entry["invested"] == "15000.00"
+
+
+def test_parse_positions_json_reads_invested_with_backward_compat():
+    """Parser should read invested when present and default to 0 when absent."""
+    parsed = _parse_positions_json(
+        json.dumps([
+            {"symbol": "BTC", "quantity": "1.25", "invested": "42000.50"},
+            {"symbol": "ETH", "quantity": "3"},  # old payload without invested
+        ])
+    )
+
+    assert len(parsed) == 2
+    by_symbol = {p.symbol: p for p in parsed}
+    assert by_symbol["BTC"].total_invested == Decimal("42000.50")
+    assert by_symbol["ETH"].total_invested == Decimal("0")
 
 
 def test_generate_missing_snapshots_no_positions(master_key: str):
@@ -491,3 +515,100 @@ def test_generate_missing_snapshots_row_metadata(master_key: str):
     assert "uuid" in row
     assert "created_at" in row
     assert "updated_at" in row
+
+
+def test_generate_missing_snapshots_exact_mode_with_bootstrap_state(master_key: str):
+    """Exact mode must start from bootstrap positions when only post-snapshot txs are replayed."""
+    user_bidx = hash_index("user_bootstrap", master_key)
+    acc_bidx = hash_index("acc_bootstrap", master_key)
+
+    class Tx:
+        def __init__(self, executed_at: datetime, tx_type: str, amount: Decimal, price: Decimal):
+            self.executed_at = executed_at
+            self.type = tx_type
+            self.amount = amount
+            self.price_per_unit = price
+            self.fees = Decimal("0")
+            self.symbol = "BTC"
+            self.isin = None
+
+    # Represents only transactions after the previous snapshot.
+    post_snapshot_txs = [
+        Tx(datetime(2024, 3, 2, 12, 0, 0), "BUY", Decimal("0.2"), Decimal("50000")),
+    ]
+
+    rows = _generate_missing_snapshots(
+        user_uuid_bidx=user_bidx,
+        account_id_bidx=acc_bidx,
+        account_snapshot=_AccountSnapshot(
+            account_id="fake_id",
+            account_type=AccountCategory.CRYPTO,
+            frozen_positions=[
+                FrozenPosition(symbol="BTC", quantity=Decimal("1.0"), total_invested=Decimal("40000"))
+            ],
+            total_invested=Decimal("40000"),
+            transactions=post_snapshot_txs,
+        ),
+        price_matrix={
+            "BTC": {
+                date(2024, 3, 2): Decimal("50000"),
+                date(2024, 3, 3): Decimal("55000"),
+            }
+        },
+        missing_dates=[date(2024, 3, 2), date(2024, 3, 3)],
+        prev_value=Decimal("50000"),  # previous snapshot: 1 BTC * 50k
+        master_key=master_key,
+    )
+
+    assert len(rows) == 2
+    # Day 1: (1.0 + 0.2) * 50k
+    assert decrypt_data(rows[0]["total_value_enc"], master_key) == "60000.00"
+    # Day 2: 1.2 * 55k
+    assert decrypt_data(rows[1]["total_value_enc"], master_key) == "66000.00"
+
+
+def test_build_asset_snapshots_keeps_past_then_drops_after_sale(session: Session, master_key: str):
+    """Asset snapshots keep detailed physical assets with sale and valuation metadata."""
+    user_uuid = "user-assets-sale"
+    user_bidx = hash_index(user_uuid, master_key)
+
+    sold_asset = Asset(
+        user_uuid_bidx=user_bidx,
+        name_enc=encrypt_data("Montre", master_key),
+        category_enc=encrypt_data("Luxe", master_key),
+        estimated_value_enc=encrypt_data("1000", master_key),
+        sold_at_enc=encrypt_data("2024-03-10", master_key),
+    )
+    active_asset = Asset(
+        user_uuid_bidx=user_bidx,
+        name_enc=encrypt_data("Or", master_key),
+        category_enc=encrypt_data("Métal", master_key),
+        estimated_value_enc=encrypt_data("300", master_key),
+    )
+    session.add(sold_asset)
+    session.add(active_asset)
+    session.commit()
+    session.refresh(sold_asset)
+
+    session.add(
+        AssetValuation(
+            asset_uuid=sold_asset.uuid,
+            estimated_value_enc=encrypt_data("1200", master_key),
+            valued_at_enc=encrypt_data("2024-03-09", master_key),
+        )
+    )
+    session.commit()
+
+    snapshots = _build_asset_snapshots(session, master_key, user_bidx)
+    assert len(snapshots) == 1
+
+    snap = snapshots[0]
+    assert snap.account_type == AccountCategory.ASSET
+    assert len(snap.physical_assets) == 2
+
+    by_name = {a.name: a for a in snap.physical_assets}
+    assert "Montre" in by_name
+    assert "Or" in by_name
+
+    assert by_name["Montre"].sold_at == date(2024, 3, 10)
+    assert by_name["Montre"].valuations == [(date(2024, 3, 9), Decimal("1200"))]

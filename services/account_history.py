@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 import uuid
+import copy
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -28,6 +29,7 @@ from sqlmodel import Session, select
 
 from database import get_engine
 from models.account_history import AccountHistory
+from models.asset import Asset, AssetValuation
 from models.enums import AccountCategory, AssetType
 from models.market import MarketAsset, MarketPriceHistory
 from models import BankAccount, CryptoAccount, StockAccount
@@ -52,12 +54,22 @@ class FrozenPosition:
 
 
 @dataclass
+class IndividualAsset:
+    """Représente un actif physique unique et son historique de prix."""
+    name: str
+    acquired_at: date
+    sold_at: Optional[date]
+    invested: Decimal
+    valuations: list[tuple[date, Decimal]]
+
+
+@dataclass
 class _AccountSnapshot:
     """All data needed to generate N daily snapshots for one account."""
 
     account_id: str
     account_type: AccountCategory
-    account_created_at: date = field(default_factory=date.today)  # used as start date when no history exists
+    account_created_at: date = field(default_factory=lambda: datetime.now(timezone.utc).date())
 
     # Fallback / Bank mode
     frozen_positions: list[FrozenPosition] = field(default_factory=list)
@@ -65,6 +77,46 @@ class _AccountSnapshot:
 
     # Exact mode for Stocks and Crypto
     transactions: list = field(default_factory=list)
+
+    physical_assets: list[IndividualAsset] = field(default_factory=list)
+
+
+def _parse_iso_date(value: str) -> Optional[date]:
+    """Parse an ISO-like string into a date. Return None when invalid."""
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    except Exception:
+        return None
+
+
+def _parse_positions_json(positions_json: Optional[str]) -> list[FrozenPosition]:
+    """Parse decrypted positions JSON into frozen positions."""
+    if not positions_json:
+        return []
+
+    try:
+        parsed = json.loads(positions_json)
+    except Exception:
+        return []
+
+    positions: list[FrozenPosition] = []
+    for item in parsed:
+        symbol = item.get("symbol")
+        quantity = item.get("quantity")
+        invested = item.get("invested", "0")
+        if not symbol or quantity is None:
+            continue
+        try:
+            positions.append(
+                FrozenPosition(
+                    symbol=str(symbol),
+                    quantity=Decimal(str(quantity)),
+                    total_invested=Decimal(str(invested)),
+                )
+            )
+        except Exception:
+            continue
+    return positions
 
 
 # ---------------------------------------------------------------------------
@@ -201,14 +253,14 @@ def _generate_missing_snapshots(
     is_exact_mode = bool(account_snapshot.transactions)
     tx_idx = 0
     txs = account_snapshot.transactions
-    
+
     # Dict: symbol -> {"quantity": Decimal, "invested": Decimal}
     current_positions = {}
     current_invested = account_snapshot.total_invested
 
-    if not is_exact_mode:
-        for p in account_snapshot.frozen_positions:
-            current_positions[p.symbol] = {"quantity": p.quantity, "invested": p.total_invested}
+    # Seed current positions from frozen state
+    for p in account_snapshot.frozen_positions:
+        current_positions[p.symbol] = {"quantity": p.quantity, "invested": p.total_invested}
 
     for d in missing_dates:
         # Phase A: Replay transactions up to day `d` if exact mode
@@ -231,11 +283,13 @@ def _generate_missing_snapshots(
                 
                 if tx_type in ("BUY", "DEPOSIT", "DIVIDEND", "REWARD"):
                     current_positions[sym]["quantity"] += amount
+                    current_positions[sym]["invested"] += (amount * price_per_unit) + fees
                     current_invested += (amount * price_per_unit) + fees
                 elif tx_type in ("SELL", "SPEND"):
                     if current_positions[sym]["quantity"] > 0:
                         fraction = min(amount / current_positions[sym]["quantity"], Decimal("1"))
                         current_positions[sym]["quantity"] -= amount
+                        current_positions[sym]["invested"] -= current_positions[sym]["invested"] * fraction
                         current_invested -= current_invested * fraction
                 
                 tx_idx += 1
@@ -244,13 +298,74 @@ def _generate_missing_snapshots(
         if account_snapshot.account_type == AccountCategory.BANK:
             # Bank balance doesn't fluctuate with the market — keep it frozen
             if is_exact_mode:
-                total_value = current_positions.get("EUR", {}).get("quantity", Decimal("0"))
+                qty = current_positions.get("EUR", {}).get("quantity", Decimal("0"))
+                invested = current_positions.get("EUR", {}).get("invested", Decimal("0"))
             else:
-                total_value = account_snapshot.frozen_positions[0].quantity if account_snapshot.frozen_positions else Decimal("0")
-            positions_json = None
+                qty = account_snapshot.frozen_positions[0].quantity if account_snapshot.frozen_positions else Decimal("0")
+                invested = account_snapshot.frozen_positions[0].total_invested if account_snapshot.frozen_positions else Decimal("0")
+
+            total_value = qty
+
+            snapshot_positions = []
+            if total_value > Decimal("0"):
+                snapshot_positions.append({
+                    "symbol": "EUR",
+                    "quantity": str(qty),
+                    "value": str(round(total_value, 2)),
+                    "price": "1.00",
+                    "invested": str(round(invested, 2)),
+                    "percentage": "100.00"
+                })
+            positions_json = json.dumps(snapshot_positions) if snapshot_positions else None
+
+
+        elif account_snapshot.account_type == AccountCategory.ASSET:
+            total_value = Decimal("0")
+            current_invested = Decimal("0")
+            temp_positions = []
+
+            for asset in account_snapshot.physical_assets:
+                if d < asset.acquired_at:
+                    continue
+                
+                if asset.sold_at and d >= asset.sold_at:
+                    continue
+
+                current_val = asset.invested
+                for v_date, v_price in asset.valuations:
+                    if v_date <= d:
+                        current_val = v_price
+                    else:
+                        break
+
+                total_value += current_val
+                current_invested += asset.invested
+
+                temp_positions.append({
+                    "symbol": asset.name,
+                    "quantity": Decimal("1"),
+                    "value": current_val,
+                    "price": current_val,
+                    "invested": asset.invested,
+                })
+
+            snapshot_positions = []
+            for p in temp_positions:
+                percentage = (p["value"] / total_value) * Decimal("100") if total_value > Decimal("0") else Decimal("0")
+                snapshot_positions.append({
+                    "symbol": p["symbol"],
+                    "quantity": str(p["quantity"]),
+                    "value": str(round(p["value"], 2)),
+                    "price": str(round(p["price"], 2)),
+                    "invested": str(round(p["invested"], 2)),
+                    "percentage": str(round(percentage, 2))
+                })
+
+            positions_json = json.dumps(snapshot_positions) if snapshot_positions else None
         else:
             total_value = Decimal("0")
             snapshot_positions = []
+            temp_positions = []
             
             for sym, pos_data in current_positions.items():
                 if pos_data["quantity"] <= Decimal("0"):
@@ -261,10 +376,31 @@ def _generate_missing_snapshots(
                     value = pos_data["quantity"] * price
                     total_value += value
                 else:
-                    # No price for this date — record quantity but contribute 0 to total_value
                     value = Decimal("0")
+                temp_positions.append(
+                    {
+                        "symbol": sym,
+                        "quantity": pos_data["quantity"],
+                        "value": value,
+                        "price": price,
+                        "invested": pos_data["invested"],
+                    }
+                )
+            for p in temp_positions:
+                if total_value > Decimal("0"):
+                    percentage = (p["value"] / total_value) * Decimal("100")
+                else:
+                    percentage = Decimal("0")
+
                 snapshot_positions.append(
-                    {"symbol": sym, "quantity": str(pos_data["quantity"]), "value": str(round(value, 2))}
+                    {
+                        "symbol": p["symbol"],
+                        "quantity": str(p["quantity"]),
+                        "value": str(round(p["value"], 2)),
+                        "price": str(round(p["price"], 2)) if p["price"] is not None else None,
+                        "invested": str(round(p["invested"], 2)),
+                        "percentage": str(round(percentage, 2))
+                    }
                 )
             positions_json = json.dumps(snapshot_positions) if snapshot_positions else None
 
@@ -378,6 +514,84 @@ def _build_bank_snapshots(
     return result
 
 
+def _build_asset_snapshots(
+    session: Session,
+    master_key: str,
+    user_uuid_bidx: str,
+) -> list[_AccountSnapshot]:
+    """Return one virtual _AccountSnapshot keeping physical assets detailed."""
+    assets = session.exec(
+        select(Asset).where(Asset.user_uuid_bidx == user_uuid_bidx)
+    ).all()
+
+    if not assets:
+        return []
+
+    asset_ids = [a.uuid for a in assets]
+    valuations = session.exec(
+        select(AssetValuation).where(AssetValuation.asset_uuid.in_(asset_ids))
+    ).all()
+
+    valuations_by_asset: dict[str, list[tuple[date, Decimal]]] = {}
+    for valuation in valuations:
+        valued_at_raw = decrypt_data(valuation.valued_at_enc, master_key)
+        valued_at = _parse_iso_date(valued_at_raw)
+        if valued_at is None:
+            continue
+        try:
+            value = Decimal(decrypt_data(valuation.estimated_value_enc, master_key))
+            valuations_by_asset.setdefault(valuation.asset_uuid, []).append((valued_at, value))
+        except Exception:
+            continue
+
+    account_created_at = min(a.created_at.date() for a in assets)
+    physical_assets: list[IndividualAsset] = []
+
+    for asset in assets:
+        try:
+            name = decrypt_data(asset.name_enc, master_key)
+        except Exception:
+            name = "Actif inconnu"
+
+        try:
+            invested = Decimal(decrypt_data(asset.purchase_price_enc, master_key))
+        except Exception:
+            invested = Decimal("0")
+
+        acquired_at = asset.created_at.date()
+        if asset.acquisition_date_enc:
+            acq_raw = decrypt_data(asset.acquisition_date_enc, master_key)
+            parsed_acq = _parse_iso_date(acq_raw)
+            if parsed_acq:
+                acquired_at = parsed_acq
+
+        sold_at: Optional[date] = None
+        if asset.sold_at_enc:
+            sold_at_raw = decrypt_data(asset.sold_at_enc, master_key)
+            sold_at = _parse_iso_date(sold_at_raw)
+
+        series = sorted(valuations_by_asset.get(asset.uuid, []), key=lambda item: item[0])
+        
+        physical_assets.append(IndividualAsset(
+            name=name,
+            acquired_at=acquired_at,
+            sold_at=sold_at,
+            invested=invested,
+            valuations=series
+        ))
+
+    virtual_account_id = f"ASSET_PORTFOLIO::{user_uuid_bidx}"
+    return [
+        _AccountSnapshot(
+            account_id=virtual_account_id,
+            account_type=AccountCategory.ASSET,
+            account_created_at=account_created_at,
+            physical_assets=physical_assets,
+            total_invested=Decimal("0"),
+        )
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Phase 4 — Entry point (called as BackgroundTask from /login)
 # ---------------------------------------------------------------------------
@@ -394,7 +608,7 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
 
     with Session(engine) as session:
         user_uuid_bidx = hash_index(user_uuid, master_key)
-        yesterday = date.today() - timedelta(days=1)
+        yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
 
         # ── 1. Load settings ──────────────────────────────────────────────────
         settings = get_or_create_settings(session, user_uuid, master_key)
@@ -419,6 +633,11 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
             all_accounts += _build_bank_snapshots(session, master_key, user_uuid_bidx)
         except Exception as exc:
             logger.warning("account_history: bank snapshot error: %s", exc)
+
+        try:
+            all_accounts += _build_asset_snapshots(session, master_key, user_uuid_bidx)
+        except Exception as exc:
+            logger.warning("account_history: asset snapshot error: %s", exc)
 
         if not all_accounts:
             return
@@ -465,43 +684,38 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
 
         earliest_date = min(d for _, dates in accounts_to_process for d in dates)
 
+        # Build once: symbol -> set(asset_type), then reuse for both steps below.
+        symbol_types_map: dict[str, set[AssetType]] = {}
         for acc_snap, _ in accounts_to_process:
-            if acc_snap.account_type == AccountCategory.BANK:
+            if acc_snap.account_type not in (AccountCategory.STOCK, AccountCategory.CRYPTO):
                 continue
+
             atype = (
                 AssetType.STOCK
                 if acc_snap.account_type == AccountCategory.STOCK
                 else AssetType.CRYPTO
             )
-            
-            # Helper to get all symbols involved dynamically
-            symbols = set()
+
+            symbols: set[str] = set()
             if acc_snap.transactions:
                 for tx in acc_snap.transactions:
                     sym = getattr(tx, "isin", None) or getattr(tx, "symbol", None)
                     if sym and getattr(tx, "type", "") not in ("FIAT_DEPOSIT", "FIAT_ANCHOR") and sym != "EUR":
                         symbols.add(sym)
-            else:
-                for pos in acc_snap.frozen_positions:
-                    symbols.add(pos.symbol)
-                    
+
+            # Include bootstrap-held symbols (important when no new txs).
+            for pos in acc_snap.frozen_positions:
+                symbols.add(pos.symbol)
+
             for symbol in symbols:
+                symbol_types_map.setdefault(symbol, set()).add(atype)
+
+        for symbol, asset_types in symbol_types_map.items():
+            for atype in asset_types:
                 ensure_price_history(session, symbol, atype, earliest_date)
 
         # ── 5. Build price matrix (union of all per-account date ranges) ───────
-        all_symbols = set()
-        for acc_snap, _ in accounts_to_process:
-            if acc_snap.account_type != AccountCategory.BANK:
-                if acc_snap.transactions:
-                    for tx in acc_snap.transactions:
-                        sym = getattr(tx, "isin", None) or getattr(tx, "symbol", None)
-                        if sym and getattr(tx, "type", "") not in ("FIAT_DEPOSIT", "FIAT_ANCHOR") and sym != "EUR":
-                            all_symbols.add(sym)
-                else:
-                    for pos in acc_snap.frozen_positions:
-                        all_symbols.add(pos.symbol)
-        
-        all_symbols = list(all_symbols)
+        all_symbols = list(symbol_types_map.keys())
 
         # Collect the full date span needed across all accounts
         all_missing_dates_sorted = sorted({
@@ -540,10 +754,43 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
             else:
                 prev_value = Decimal("0")
 
+            # For exact-mode accounts, bootstrap from the previous snapshot to
+            # avoid replaying the full transaction history on each login.
+            effective_snapshot = acc_snap
+            if (
+                last_row
+                and acc_snap.account_type in (AccountCategory.STOCK, AccountCategory.CRYPTO)
+            ):
+                bootstrap_positions: list[FrozenPosition] = []
+                if last_row.positions_enc:
+                    try:
+                        positions_raw = decrypt_data(last_row.positions_enc, master_key)
+                        bootstrap_positions = _parse_positions_json(positions_raw)
+                    except Exception:
+                        bootstrap_positions = []
+
+                bootstrap_invested = acc_snap.total_invested
+                try:
+                    bootstrap_invested = Decimal(decrypt_data(last_row.total_invested_enc, master_key))
+                except Exception:
+                    pass
+
+                start_date = missing_dates[0]
+                filtered_txs = [
+                    tx
+                    for tx in acc_snap.transactions
+                    if getattr(tx, "executed_at").date() >= start_date
+                ]
+
+                effective_snapshot = copy.copy(acc_snap)
+                effective_snapshot.frozen_positions = bootstrap_positions
+                effective_snapshot.total_invested = bootstrap_invested
+                effective_snapshot.transactions = filtered_txs
+
             rows = _generate_missing_snapshots(
                 user_uuid_bidx=user_uuid_bidx,
                 account_id_bidx=account_id_bidx,
-                account_snapshot=acc_snap,
+                account_snapshot=effective_snapshot,
                 price_matrix=price_matrix,
                 missing_dates=missing_dates,
                 prev_value=prev_value,
@@ -649,7 +896,7 @@ def trigger_post_transaction_updates(
     refresh_community_positions(session, user_uuid, master_key)
 
     # 2. Filter affected dates that are strictly in the past
-    yesterday = date.today() - timedelta(days=1)
+    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
     past_dates = [d for d in affected_dates if d is not None and d <= yesterday]
 
     if past_dates:
