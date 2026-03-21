@@ -34,6 +34,8 @@ def _decrypt_transaction(tx: StockTransaction, master_key: str) -> TransactionRe
     except ValueError:
         executed_at = tx.created_at
 
+    notes = decrypt_data(tx.notes_enc, master_key) if tx.notes_enc else None
+
     total_cost = (amount * price) + fees
     fees_pct = (fees / total_cost * 100) if total_cost > 0 else Decimal("0")
 
@@ -51,6 +53,7 @@ def _decrypt_transaction(tx: StockTransaction, master_key: str) -> TransactionRe
         price_per_unit=price,
         fees=fees,
         executed_at=executed_at,
+        notes=notes,
         total_cost=total_cost,
         fees_percentage=round(fees_pct, 2),
     )

@@ -22,6 +22,7 @@ class TransactionResponse(BaseModel):
     executed_at: datetime
     currency: str = "EUR"
     
+    notes: Optional[str] = None
     total_cost: Decimal
     fees_percentage: Decimal
     group_uuid: Optional[str] = None
