@@ -43,8 +43,9 @@ class PositionResponse(BaseModel):
     total_invested: Decimal
     total_fees: Decimal
     fees_percentage: Decimal
+    total_dividends: Decimal = Decimal("0")
     currency: str = "EUR"
-    
+
     current_price: Optional[Decimal] = None
     current_value: Optional[Decimal] = None
     profit_loss: Optional[Decimal] = None
@@ -58,6 +59,7 @@ class AccountSummaryResponse(BaseModel):
     account_type: str
     total_invested: Decimal
     total_fees: Decimal
+    total_dividends: Decimal = Decimal("0")
     currency: str = "EUR"
     current_value: Optional[Decimal] = None
     profit_loss: Optional[Decimal] = None

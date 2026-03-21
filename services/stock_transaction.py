@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Optional
 
 from sqlmodel import Session, select
 
@@ -298,7 +298,7 @@ def get_account_transactions(
     session: Session,
     account_uuid: str,
     master_key: str,
-) -> List[TransactionResponse]:
+) -> list[TransactionResponse]:
     """Get all transactions for a specific account with enriched market data."""
     account_bidx = hash_index(account_uuid, master_key)
 
@@ -355,7 +355,9 @@ def get_stock_account_summary(
             "exchange": None,
             "total_amount": Decimal("0"),
             "total_cost": Decimal("0"),
+            "total_buy_fees": Decimal("0"),
             "total_fees": Decimal("0"),
+            "total_dividends": Decimal("0"),
         }
     }
 
@@ -370,7 +372,9 @@ def get_stock_account_summary(
                 "exchange": tx.exchange,
                 "total_amount": Decimal("0"),
                 "total_cost": Decimal("0"),
+                "total_buy_fees": Decimal("0"),
                 "total_fees": Decimal("0"),
+                "total_dividends": Decimal("0"),
             }
 
         pos = positions_map[position_key]
@@ -390,6 +394,7 @@ def get_stock_account_summary(
             cost = (tx.amount * tx.price_per_unit) + tx.fees
             pos["total_amount"] += tx.amount
             pos["total_cost"] += cost
+            pos["total_buy_fees"] += tx.fees
             pos["total_fees"] += tx.fees
             positions_map["EUR"]["total_amount"] -= cost
 
@@ -397,6 +402,7 @@ def get_stock_account_summary(
             proceeds = (tx.amount * tx.price_per_unit) - tx.fees
             positions_map["EUR"]["total_amount"] += proceeds
             pos["total_fees"] += tx.fees
+            pos["total_dividends"] += proceeds
 
         elif tx.type == "SELL" and pos["total_amount"] > 0:
             fraction = min(tx.amount / pos["total_amount"], Decimal("1"))
@@ -438,7 +444,8 @@ def get_stock_account_summary(
 
         total_invested = data["total_cost"]
         avg_price = total_invested / data["total_amount"] if data["total_amount"] > 0 else Decimal("0")
-        fees_pct = (data["total_fees"] / total_invested * 100) if total_invested > 0 else Decimal("0")
+        # fees_percentage only counts buy fees against buy cost (excludes sell/dividend fees)
+        fees_pct = (data["total_buy_fees"] / total_invested * 100) if total_invested > 0 else Decimal("0")
 
         market_name, current_price = get_stock_info(session, isin, db_only=db_only) if isin else (None, None)
 
@@ -458,6 +465,7 @@ def get_stock_account_summary(
             total_invested=round(total_invested, 2),
             total_fees=round(data["total_fees"], 2),
             fees_percentage=round(fees_pct, 2),
+            total_dividends=round(data["total_dividends"], 2),
             currency="EUR",
             current_price=current_price,
             current_value=round(current_value, 2) if current_value is not None else None,
@@ -477,12 +485,18 @@ def get_stock_account_summary(
         if total_invested_acc > 0:
             profit_loss_pct_acc = (profit_loss_acc / total_invested_acc * 100)
 
+    # Sum dividends from positions_map directly to include dividends on fully-sold positions
+    total_dividends_acc = sum(
+        v["total_dividends"] for k, v in positions_map.items() if k != "EUR"
+    )
+
     return AccountSummaryResponse(
         account_id=acc_resp.id,
         account_name=acc_resp.name,
         account_type=acc_resp.account_type.value,
         total_invested=round(total_invested_acc, 2),
         total_fees=round(total_fees_acc, 2),
+        total_dividends=round(total_dividends_acc, 2),
         current_value=round(current_value_acc, 2) if current_value_acc else None,
         profit_loss=round(profit_loss_acc, 2) if profit_loss_acc is not None else None,
         profit_loss_percentage=round(profit_loss_pct_acc, 2) if profit_loss_pct_acc is not None else None,

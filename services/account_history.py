@@ -289,9 +289,8 @@ def _generate_missing_snapshots(
                     current_positions[sym] = {"quantity": Decimal("0"), "invested": Decimal("0")}
 
                 is_eur_deposit = tx_type in ("DEPOSIT", "FIAT_DEPOSIT") and sym == "EUR"
-                is_legacy_stock_deposit = tx_type == "DEPOSIT" and sym != "EUR"
 
-                if tx_type in ("BUY", "DIVIDEND", "REWARD") or is_legacy_stock_deposit:
+                if tx_type in ("BUY", "REWARD"):
                     current_positions[sym]["quantity"] += amount
                     current_positions[sym]["invested"] += (amount * price_per_unit) + fees
                     current_invested += (amount * price_per_unit) + fees
@@ -300,6 +299,11 @@ def _generate_missing_snapshots(
                     if sym != "EUR":
                         cost = (amount * price_per_unit) + fees
                         current_positions["EUR"]["quantity"] -= cost
+
+                elif tx_type == "DIVIDEND":
+                    # Cash dividend: proceeds go to EUR cash, position quantity unchanged.
+                    proceeds = (amount * price_per_unit) - fees
+                    current_positions["EUR"]["quantity"] += proceeds
 
                 elif is_eur_deposit:
                     # EUR cash only: track quantity, not invested capital.
