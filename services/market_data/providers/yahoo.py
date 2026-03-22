@@ -232,10 +232,10 @@ class YahooProvider(MarketDataProvider):
                             isin = raw_isin
                     except Exception:
                         pass
-                
-                if price and price > 0:
+
+                if (price and price > 0) or isin:
                     results[original_sym] = {
-                        "price": Decimal(str(price)),
+                        "price": Decimal(str(price)) if price and price > 0 else None,
                         "name": name,
                         "currency": currency,
                         "isin": isin
