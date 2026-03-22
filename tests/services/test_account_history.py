@@ -27,6 +27,7 @@ from services.account_history import (
     _fill_price_gaps,
     _generate_missing_snapshots,
     _get_last_snapshot_dates,
+    _interpolate_asset_value,
     _parse_positions_json,
     _get_price_matrix,
 )
@@ -612,3 +613,189 @@ def test_build_asset_snapshots_keeps_past_then_drops_after_sale(session: Session
 
     assert by_name["Montre"].sold_at == date(2024, 3, 10)
     assert by_name["Montre"].valuations == [(date(2024, 3, 9), Decimal("1200"))]
+
+
+# ---------------------------------------------------------------------------
+# _interpolate_asset_value
+# ---------------------------------------------------------------------------
+
+
+def test_interpolate_no_valuations_returns_invested():
+    """With no valuations, the value is flat at the invested amount."""
+    val = _interpolate_asset_value(
+        invested=Decimal("200000"),
+        acquired_at=date(2024, 1, 1),
+        valuations=[],
+        d=date(2024, 6, 1),
+    )
+    assert val == Decimal("200000")
+
+
+def test_interpolate_after_last_valuation_is_flat():
+    """After the last valuation date, the value stays flat at the last valuation."""
+    val = _interpolate_asset_value(
+        invested=Decimal("200000"),
+        acquired_at=date(2024, 1, 1),
+        valuations=[(date(2024, 6, 1), Decimal("210000"))],
+        d=date(2024, 9, 1),
+    )
+    assert val == Decimal("210000")
+
+
+def test_interpolate_on_valuation_date_returns_exact_value():
+    """On the exact valuation date, the interpolated value equals the valuation."""
+    val = _interpolate_asset_value(
+        invested=Decimal("200000"),
+        acquired_at=date(2024, 1, 1),
+        valuations=[(date(2024, 6, 1), Decimal("210000"))],
+        d=date(2024, 6, 1),
+    )
+    assert val == Decimal("210000")
+
+
+def test_interpolate_midpoint_between_acquisition_and_first_valuation():
+    """Midpoint between acquisition and first valuation is the arithmetic mean."""
+    # From 200 000 on Jan 1 to 210 000 on Jul 1 (181 days).
+    # The midpoint is Apr 1 which is day 91 out of 181.
+    acquired = date(2024, 1, 1)
+    val_date = date(2024, 7, 1)
+    invested = Decimal("200000")
+    valuation = Decimal("210000")
+    mid = date(2024, 4, 1)
+
+    days_total = (val_date - acquired).days          # 182
+    days_elapsed = (mid - acquired).days             # 91
+
+    expected = invested + (valuation - invested) * Decimal(days_elapsed) / Decimal(days_total)
+
+    result = _interpolate_asset_value(
+        invested=invested,
+        acquired_at=acquired,
+        valuations=[(val_date, valuation)],
+        d=mid,
+    )
+    assert result == expected
+
+
+def test_interpolate_between_two_valuations():
+    """Between two explicit valuations, interpolation uses their segment."""
+    v1 = (date(2024, 1, 1), Decimal("100"))
+    v2 = (date(2024, 1, 11), Decimal("200"))    # +100 over 10 days → +10/day
+    mid = date(2024, 1, 6)  # day 5 → 100 + 50 = 150
+
+    result = _interpolate_asset_value(
+        invested=Decimal("50"),
+        acquired_at=date(2023, 6, 1),
+        valuations=[v1, v2],
+        d=mid,
+    )
+    assert result == Decimal("150")
+
+
+def test_interpolate_retroactive_daily_increments():
+    """Simulates the 200k → 210k over 150 days scenario from the spec."""
+    # Jan 1 = 200 000, Jun 30 = 210 000  (180 days, +10k)
+    acquired = date(2024, 1, 1)
+    new_valuation_date = date(2024, 6, 30)
+    invested = Decimal("200000")
+    new_value = Decimal("210000")
+    days = (new_valuation_date - acquired).days  # 181
+
+    daily_increment = (new_value - invested) / Decimal(days)
+
+    for offset in [1, 2, 30, 90, 150]:
+        d = acquired + __import__("datetime").timedelta(days=offset)
+        expected = invested + daily_increment * Decimal(offset)
+        result = _interpolate_asset_value(
+            invested=invested,
+            acquired_at=acquired,
+            valuations=[(new_valuation_date, new_value)],
+            d=d,
+        )
+        # Allow 1-cent tolerance due to Decimal division
+        assert abs(result - expected) < Decimal("0.01"), (
+            f"Day +{offset}: expected ≈{expected:.2f}, got {result:.2f}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# _generate_missing_snapshots — ASSET linear interpolation
+# ---------------------------------------------------------------------------
+
+
+def test_generate_asset_snapshots_interpolates_value(master_key: str):
+    """ASSET snapshots linearly interpolate between acquisition value and a new valuation."""
+    from services.account_history import IndividualAsset
+
+    user_bidx = hash_index("user_asset_interp", master_key)
+    acc_bidx = hash_index("ASSET_PORTFOLIO::user_asset_interp", master_key)
+
+    acquired = date(2024, 1, 1)
+    val_date = date(2024, 1, 11)  # +100 over 10 days → +10/day
+    invested = Decimal("1000")
+    new_val = Decimal("1100")
+
+    snap = _AccountSnapshot(
+        account_id="ASSET_PORTFOLIO::user_asset_interp",
+        account_type=AccountCategory.ASSET,
+        account_created_at=acquired,
+        physical_assets=[
+            IndividualAsset(
+                name="Maison",
+                acquired_at=acquired,
+                sold_at=None,
+                invested=invested,
+                valuations=[(val_date, new_val)],
+            )
+        ],
+    )
+
+    # Generate day 5 → should be 1000 + (1100-1000)*5/10 = 1050
+    rows = _generate_missing_snapshots(
+        user_uuid_bidx=user_bidx,
+        account_id_bidx=acc_bidx,
+        account_snapshot=snap,
+        price_matrix={},
+        missing_dates=[date(2024, 1, 6)],
+        prev_value=Decimal("0"),
+        master_key=master_key,
+    )
+
+    assert len(rows) == 1
+    val = Decimal(decrypt_data(rows[0]["total_value_enc"], master_key))
+    assert val == Decimal("1050.00")
+
+
+def test_generate_asset_snapshots_flat_after_last_valuation(master_key: str):
+    """After the last valuation, ASSET value stays flat."""
+    from services.account_history import IndividualAsset
+
+    user_bidx = hash_index("user_asset_flat", master_key)
+    acc_bidx = hash_index("ASSET_PORTFOLIO::user_asset_flat", master_key)
+
+    snap = _AccountSnapshot(
+        account_id="ASSET_PORTFOLIO::user_asset_flat",
+        account_type=AccountCategory.ASSET,
+        account_created_at=date(2024, 1, 1),
+        physical_assets=[
+            IndividualAsset(
+                name="Voiture",
+                acquired_at=date(2024, 1, 1),
+                sold_at=None,
+                invested=Decimal("10000"),
+                valuations=[(date(2024, 3, 1), Decimal("12000"))],
+            )
+        ],
+    )
+
+    rows = _generate_missing_snapshots(
+        user_uuid_bidx=user_bidx,
+        account_id_bidx=acc_bidx,
+        account_snapshot=snap,
+        price_matrix={},
+        missing_dates=[date(2024, 6, 1)],
+        prev_value=Decimal("0"),
+        master_key=master_key,
+    )
+
+    assert Decimal(decrypt_data(rows[0]["total_value_enc"], master_key)) == Decimal("12000.00")

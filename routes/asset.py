@@ -1,8 +1,9 @@
 """Personal assets CRUD routes."""
 
+from datetime import date, datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlmodel import Session
 
 from database import get_session
@@ -28,10 +29,33 @@ from services.asset import (
     get_asset_valuations,
     delete_valuation as service_delete_valuation,
     get_asset_portfolio_history,
+    get_asset_rebuild_start_date,
+    get_asset_acquired_at,
 )
+from services.account_history import rebuild_account_history_from_date
+from services.encryption import hash_index
 from dtos.transaction import AccountHistorySnapshotResponse
 
 router = APIRouter(prefix="/assets", tags=["Assets"])
+
+
+def _schedule_asset_history_rebuild(
+    background_tasks: BackgroundTasks,
+    user_uuid: str,
+    master_key: str,
+    from_date,
+) -> None:
+    """Schedule a retroactive history rebuild for the user's ASSET virtual account."""
+    user_uuid_bidx = hash_index(user_uuid, master_key)
+    virtual_account_id = f"ASSET_PORTFOLIO::{user_uuid_bidx}"
+    account_id_bidx = hash_index(virtual_account_id, master_key)
+    background_tasks.add_task(
+        rebuild_account_history_from_date,
+        user_uuid,
+        account_id_bidx,
+        from_date,
+        master_key,
+    )
 
 
 @router.post("", response_model=AssetResponse, status_code=201)
@@ -83,6 +107,7 @@ def get_one(
 def update(
     asset_id: str,
     data: AssetUpdate,
+    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -94,7 +119,35 @@ def update(
         raise HTTPException(status_code=404, detail="Asset not found")
 
     asset_model = session.get(AssetModel, asset_id)
-    return update_asset(session, asset_model, data, master_key)
+
+    old_acquired_at = get_asset_acquired_at(asset_model, master_key)
+
+    result = update_asset(session, asset_model, data, master_key)
+
+    rebuild_from: date | None = None
+
+    if data.acquisition_date is not None:
+        try:
+            new_acquired_at = datetime.fromisoformat(
+                data.acquisition_date.replace("Z", "+00:00")
+            ).date()
+        except Exception:
+            new_acquired_at = old_acquired_at
+        rebuild_from = min(old_acquired_at, new_acquired_at)
+
+    if data.purchase_price is not None:
+        rebuild_from = min(rebuild_from, old_acquired_at) if rebuild_from else old_acquired_at
+
+    if data.estimated_value is not None:
+        anchor_date = get_asset_rebuild_start_date(
+            session, asset_id, datetime.now(timezone.utc).date(), master_key
+        )
+        rebuild_from = min(rebuild_from, anchor_date) if rebuild_from else anchor_date
+
+    if rebuild_from is not None:
+        _schedule_asset_history_rebuild(background_tasks, current_user.uuid, master_key, rebuild_from)
+
+    return result
 
 
 @router.delete("/{asset_id}", status_code=204)
@@ -148,6 +201,7 @@ def list_valuations(
 def add_valuation(
     asset_id: str,
     data: AssetValuationCreate,
+    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -157,13 +211,27 @@ def add_valuation(
     if not existing:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    return create_valuation(session, asset_id, data, master_key)
+    # Determine rebuild start BEFORE creating the new valuation (so the new
+    # entry is not yet in the DB when we search for the previous one)
+    try:
+        val_date = datetime.fromisoformat(data.valued_at.replace("Z", "+00:00")).date()
+    except Exception:
+        val_date = datetime.utcnow().date()
+
+    from_date = get_asset_rebuild_start_date(session, asset_id, val_date, master_key)
+
+    result = create_valuation(session, asset_id, data, master_key)
+
+    _schedule_asset_history_rebuild(background_tasks, current_user.uuid, master_key, from_date)
+
+    return result
 
 
 @router.delete("/{asset_id}/valuations/{valuation_id}", status_code=204)
 def remove_valuation(
     asset_id: str,
     valuation_id: str,
+    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -173,7 +241,24 @@ def remove_valuation(
     if not existing:
         raise HTTPException(status_code=404, detail="Asset not found")
 
+    # Capture the valuation date BEFORE deleting it so we can find the right from_date
+    from models.asset import AssetValuation as AssetValuationModel
+    v = session.get(AssetValuationModel, valuation_id)
+    if not v:
+        raise HTTPException(status_code=404, detail="Valuation not found")
+
+    try:
+        from services.encryption import decrypt_data as _dec
+        val_date_raw = _dec(v.valued_at_enc, master_key)
+        val_date = datetime.fromisoformat(val_date_raw.replace("Z", "+00:00")).date()
+    except Exception:
+        val_date = datetime.now(datetime.timezone.utc).date()
+
+    from_date = get_asset_rebuild_start_date(session, asset_id, val_date, master_key)
+
     if not service_delete_valuation(session, valuation_id):
         raise HTTPException(status_code=404, detail="Valuation not found")
+
+    _schedule_asset_history_rebuild(background_tasks, current_user.uuid, master_key, from_date)
 
     return None

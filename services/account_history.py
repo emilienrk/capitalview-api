@@ -89,6 +89,44 @@ def _parse_iso_date(value: str) -> Optional[date]:
         return None
 
 
+def _interpolate_asset_value(
+    invested: Decimal,
+    acquired_at: date,
+    valuations: list[tuple[date, Decimal]],
+    d: date,
+) -> Decimal:
+    """
+    Return the linearly-interpolated value of an asset on day *d*.
+
+    The anchor timeline is built from:
+      (acquired_at, invested)  +  sorted valuation pairs [(date, value), ...]
+
+    - Before the first anchor: returns *invested* (shouldn't normally happen).
+    - Between two consecutive anchors: linear interpolation.
+    - After the last anchor: flat at the last anchor value.
+    """
+    # Build the full sorted anchor list: [(date, value), ...]
+    anchors: list[tuple[date, Decimal]] = [(acquired_at, invested)] + list(valuations)
+
+    if len(anchors) == 1 or d >= anchors[-1][0]:
+        # Flat at the last known value
+        return anchors[-1][1]
+
+    # Find the segment [anchors[i], anchors[i+1]) that contains d
+    for i in range(len(anchors) - 1):
+        start_d, start_v = anchors[i]
+        end_d, end_v = anchors[i + 1]
+        if start_d <= d < end_d:
+            total_days = (end_d - start_d).days
+            if total_days == 0:
+                return end_v
+            elapsed = (d - start_d).days
+            return start_v + (end_v - start_v) * Decimal(elapsed) / Decimal(total_days)
+
+    # d is before the first anchor — return invested as safe fallback
+    return invested
+
+
 def _parse_positions_json(positions_json: Optional[str]) -> list[FrozenPosition]:
     """Parse decrypted positions JSON into frozen positions."""
     if not positions_json:
@@ -356,16 +394,14 @@ def _generate_missing_snapshots(
             for asset in account_snapshot.physical_assets:
                 if d < asset.acquired_at:
                     continue
-                
+
                 if asset.sold_at and d >= asset.sold_at:
                     continue
 
-                current_val = asset.invested
-                for v_date, v_price in asset.valuations:
-                    if v_date <= d:
-                        current_val = v_price
-                    else:
-                        break
+                # Linear interpolation between consecutive valuation anchors
+                current_val = _interpolate_asset_value(
+                    asset.invested, asset.acquired_at, asset.valuations, d
+                )
 
                 total_value += current_val
                 current_invested += asset.invested

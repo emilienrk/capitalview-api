@@ -2,6 +2,7 @@
 
 import json
 from collections import defaultdict
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -346,6 +347,94 @@ def delete_valuation(
     session.delete(v)
     session.commit()
     return True
+
+
+def get_asset_rebuild_start_date(
+    session: Session,
+    asset_uuid: str,
+    reference_date: date,
+    master_key: str,
+) -> date:
+    """
+    Return the earliest date from which account history must be rebuilt when a
+    valuation at *reference_date* is added or removed for *asset_uuid*.
+
+    The rebuild must start at the beginning of the interpolation segment that
+    contains *reference_date*, i.e. the date of the previous valuation (or the
+    asset's acquisition date if none exists).
+    """
+    asset = session.get(Asset, asset_uuid)
+    if not asset:
+        return reference_date
+
+    # Collect all existing valuation dates for this asset
+    valuations = session.exec(
+        select(AssetValuation).where(AssetValuation.asset_uuid == asset_uuid)
+    ).all()
+
+    prev_date: Optional[date] = None
+    for v in valuations:
+        try:
+            raw = _decrypt_valued_at(v.valued_at_enc, master_key)
+            if raw and raw < reference_date:
+                if prev_date is None or raw > prev_date:
+                    prev_date = raw
+        except Exception:
+            continue
+
+    if prev_date:
+        return prev_date
+
+    # Fall back to the asset's acquisition date
+    if asset.acquisition_date_enc:
+        try:
+            from services.encryption import decrypt_data as _dec
+            raw_acq = _dec(asset.acquisition_date_enc, master_key)
+            acq = _parse_date_str(raw_acq)
+            if acq:
+                return acq
+        except Exception:
+            pass
+
+    return asset.created_at.date()
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_date_str(value: str) -> Optional[date]:
+    """Parse an ISO-like string to a date. Returns None on failure."""
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    except Exception:
+        return None
+
+
+def _decrypt_valued_at(valued_at_enc: str, master_key: str) -> Optional[date]:
+    """Decrypt a valued_at field and return as a date. Returns None on failure."""
+    try:
+        raw = decrypt_data(valued_at_enc, master_key)
+        return _parse_date_str(raw)
+    except Exception:
+        return None
+
+
+def get_asset_acquired_at(asset: Asset, master_key: str) -> date:
+    """
+    Return the acquisition date of an asset (decrypted).
+    Falls back to created_at when the field is absent or unparseable.
+    """
+    if asset.acquisition_date_enc:
+        try:
+            raw = decrypt_data(asset.acquisition_date_enc, master_key)
+            parsed = _parse_date_str(raw)
+            if parsed:
+                return parsed
+        except Exception:
+            pass
+    return asset.created_at.date()
 
 
 def get_asset_portfolio_history(

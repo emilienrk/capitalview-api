@@ -1,5 +1,7 @@
 """Tests for /assets routes."""
 
+from datetime import date
+from unittest.mock import patch, call
 import pytest
 from fastapi.testclient import TestClient
 
@@ -285,3 +287,113 @@ def test_delete_asset_cascades_valuations(session, master_key):
 
     # Asset is gone
     assert client.get(f"/assets/{asset_id}").status_code == 404
+
+
+# ──────────────────────── Rebuild trigger (anchor edge cases) ────────────────
+
+
+def test_update_acquisition_date_rebuild_uses_earliest_date(session, master_key):
+    """Moving acquisition_date forward → rebuild starts from the OLD (earlier) date."""
+    client = TestClient(app)
+    created = client.post("/assets", json={
+        "name": "Maison",
+        "category": "Immobilier",
+        "estimated_value": 200000,
+        "purchase_price": 200000,
+        "acquisition_date": "2024-01-01",
+    }).json()
+    asset_id = created["id"]
+
+    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+        r = client.put(f"/assets/{asset_id}", json={"acquisition_date": "2024-06-01"})
+        assert r.status_code == 200
+
+        mock_rebuild.assert_called_once()
+        _, kwargs = mock_rebuild.call_args[0], mock_rebuild.call_args[1] or {}
+        # from_date is the 3rd positional arg
+        from_date_arg = mock_rebuild.call_args[0][2]
+        # Must start at the OLD date (2024-01-01), not the new one (2024-06-01)
+        assert from_date_arg == date(2024, 1, 1)
+
+
+def test_update_acquisition_date_rebuild_uses_new_date_when_earlier(session, master_key):
+    """Moving acquisition_date backward → rebuild starts from the NEW (earlier) date."""
+    client = TestClient(app)
+    created = client.post("/assets", json={
+        "name": "Appartement",
+        "category": "Immobilier",
+        "estimated_value": 150000,
+        "purchase_price": 150000,
+        "acquisition_date": "2024-06-01",
+    }).json()
+    asset_id = created["id"]
+
+    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+        r = client.put(f"/assets/{asset_id}", json={"acquisition_date": "2024-01-01"})
+        assert r.status_code == 200
+
+        from_date_arg = mock_rebuild.call_args[0][2]
+        # New date is earlier → rebuild from 2024-01-01
+        assert from_date_arg == date(2024, 1, 1)
+
+
+def test_update_purchase_price_rebuild_starts_at_acquired_at(session, master_key):
+    """Changing purchase_price (anchor-zero value) triggers rebuild from acquired_at."""
+    client = TestClient(app)
+    created = client.post("/assets", json={
+        "name": "Terrain",
+        "category": "Immobilier",
+        "estimated_value": 50000,
+        "purchase_price": 50000,
+        "acquisition_date": "2023-03-15",
+    }).json()
+    asset_id = created["id"]
+
+    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+        r = client.put(f"/assets/{asset_id}", json={"purchase_price": 55000})
+        assert r.status_code == 200
+
+        from_date_arg = mock_rebuild.call_args[0][2]
+        assert from_date_arg == date(2023, 3, 15)
+
+
+def test_update_name_only_does_not_trigger_rebuild(session, master_key):
+    """Updating a non-anchor field (name) must NOT schedule a history rebuild."""
+    client = TestClient(app)
+    created = client.post("/assets", json={
+        "name": "Old Name",
+        "category": "Autre",
+        "estimated_value": 1000,
+        "acquisition_date": "2024-01-01",
+    }).json()
+    asset_id = created["id"]
+
+    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+        r = client.put(f"/assets/{asset_id}", json={"name": "New Name"})
+        assert r.status_code == 200
+        mock_rebuild.assert_not_called()
+
+
+def test_update_both_anchors_rebuild_from_absolute_earliest(session, master_key):
+    """Changing both acquisition_date (pushed later) AND purchase_price → min of all candidates."""
+    client = TestClient(app)
+    created = client.post("/assets", json={
+        "name": "Villa",
+        "category": "Immobilier",
+        "estimated_value": 300000,
+        "purchase_price": 300000,
+        "acquisition_date": "2024-03-01",
+    }).json()
+    asset_id = created["id"]
+
+    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+        # Shift acquisition date forward to June; purchase_price also changes.
+        # from_date must be 2024-03-01 (the old, earlier, acquisition date).
+        r = client.put(f"/assets/{asset_id}", json={
+            "acquisition_date": "2024-06-01",
+            "purchase_price": 310000,
+        })
+        assert r.status_code == 200
+
+        from_date_arg = mock_rebuild.call_args[0][2]
+        assert from_date_arg == date(2024, 3, 1)
