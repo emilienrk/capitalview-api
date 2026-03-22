@@ -2,7 +2,7 @@
 CryptoAccount and CryptoTransaction models.
 """
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, date
 from sqlmodel import SQLModel, Field
 import sqlalchemy as sa
 from sqlalchemy import Column, TEXT
@@ -20,6 +20,12 @@ class CryptoAccount(SQLModel, table=True):
     platform_enc: Optional[str] = Field(sa_column=Column(TEXT))
     public_address_enc: Optional[str] = Field(sa_column=Column(TEXT))
     
+    # Date the crypto account was actually opened (user-supplied)
+    opened_at: Optional[date] = Field(
+        default=None,
+        sa_column=Column(sa.Date, nullable=True),
+    )
+
     created_at: datetime = Field(
         default=sa.func.now(),
         sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 from typing import Literal, Optional
 
@@ -11,12 +11,14 @@ class CryptoAccountCreate(BaseModel):
     name: str
     platform: Optional[str] = None
     public_address: Optional[str] = None
+    opened_at: Optional[date] = None
 
 
 class CryptoAccountUpdate(BaseModel):
     name: Optional[str] = None
     platform: Optional[str] = None
     public_address: Optional[str] = None
+    opened_at: Optional[date] = None
 
 
 class CryptoAccountBasicResponse(BaseModel):
@@ -24,6 +26,7 @@ class CryptoAccountBasicResponse(BaseModel):
     name: str
     platform: Optional[str] = None
     public_address: Optional[str] = None
+    opened_at: Optional[date] = None
     created_at: datetime
     updated_at: datetime
 

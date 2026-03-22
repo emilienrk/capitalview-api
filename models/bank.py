@@ -39,3 +39,8 @@ class BankAccount(SQLModel, table=True):
         default=None,
         sa_column=Column(sa.Date, nullable=True),
     )
+    # Date the bank account was actually opened (user-supplied)
+    opened_at: Optional[date] = Field(
+        default=None,
+        sa_column=Column(sa.Date, nullable=True),
+    )

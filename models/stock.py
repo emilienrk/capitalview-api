@@ -2,7 +2,7 @@
 StockAccount and StockTransaction models.
 """
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, date
 from sqlmodel import SQLModel, Field
 import sqlalchemy as sa
 from sqlalchemy import Column, TEXT
@@ -21,6 +21,12 @@ class StockAccount(SQLModel, table=True):
     identifier_enc: Optional[str] = Field(sa_column=Column(TEXT))
     account_type_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     
+    # Date the stock account was actually opened (user-supplied)
+    opened_at: Optional[date] = Field(
+        default=None,
+        sa_column=Column(sa.Date, nullable=True),
+    )
+
     created_at: datetime = Field(
         default=sa.func.now(),
         sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)

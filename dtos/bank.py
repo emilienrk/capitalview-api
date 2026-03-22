@@ -16,6 +16,7 @@ class BankAccountCreate(BaseModel):
     institution_name: Optional[str] = None
     identifier: Optional[str] = None
     balance: Decimal = Decimal("0")
+    opened_at: Optional[date] = None
 
 
 class BankAccountUpdate(BaseModel):
@@ -24,6 +25,7 @@ class BankAccountUpdate(BaseModel):
     institution_name: Optional[str] = None
     identifier: Optional[str] = None
     balance: Optional[Decimal] = None
+    opened_at: Optional[date] = None
 
 
 class BankAccountResponse(BaseModel):
@@ -34,6 +36,7 @@ class BankAccountResponse(BaseModel):
     balance: Decimal
     account_type: BankAccountType
     identifier: Optional[str] = None
+    opened_at: Optional[date] = None
     created_at: datetime
     updated_at: datetime
     balance_updated_at: Optional[date] = None  # Last auto-sync date from cashflows

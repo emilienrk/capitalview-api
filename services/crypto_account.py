@@ -34,6 +34,7 @@ def _map_account_to_response(account: CryptoAccount, master_key: str) -> CryptoA
         name=name,
         platform=platform,
         public_address=address,
+        opened_at=account.opened_at,
         created_at=account.created_at,
         updated_at=account.updated_at,
     )
@@ -63,6 +64,7 @@ def create_crypto_account(
         name_enc=name_enc,
         platform_enc=platform_enc,
         public_address_enc=address_enc,
+        opened_at=data.opened_at,
     )
     
     session.add(account)
@@ -151,6 +153,9 @@ def update_crypto_account(
         
     if data.public_address is not None:
         account.public_address_enc = encrypt_data(data.public_address, master_key)
+
+    if data.opened_at is not None:
+        account.opened_at = data.opened_at
         
     session.add(account)
     session.commit()

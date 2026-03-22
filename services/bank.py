@@ -40,6 +40,7 @@ def _map_to_response(account: BankAccount, master_key: str) -> BankAccountRespon
         account_type=BankAccountType(type_str),
         institution_name=inst_name,
         identifier=identifier,
+        opened_at=account.opened_at,
         balance_updated_at=account.balance_updated_at,
         created_at=account.created_at,
         updated_at=account.updated_at,
@@ -74,6 +75,7 @@ def create_bank_account(
         account_type_enc=type_enc,
         institution_name_enc=inst_enc,
         identifier_enc=ident_enc,
+        opened_at=data.opened_at,
     )
     
     session.add(account)
@@ -104,6 +106,9 @@ def update_bank_account(
         
     if data.identifier is not None:
         account.identifier_enc = encrypt_data(data.identifier, master_key)
+
+    if data.opened_at is not None:
+        account.opened_at = data.opened_at
         
     session.add(account)
     session.commit()

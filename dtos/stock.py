@@ -1,6 +1,6 @@
 """Stock account and transaction schemas."""
 
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 from typing import Optional
 
@@ -15,6 +15,7 @@ class StockAccountCreate(BaseModel):
     account_type: StockAccountType
     institution_name: Optional[str] = None
     identifier: Optional[str] = None
+    opened_at: Optional[date] = None
 
 
 class StockAccountUpdate(BaseModel):
@@ -22,6 +23,7 @@ class StockAccountUpdate(BaseModel):
     name: Optional[str] = None
     institution_name: Optional[str] = None
     identifier: Optional[str] = None
+    opened_at: Optional[date] = None
 
 
 class StockAccountBasicResponse(BaseModel):
@@ -31,6 +33,7 @@ class StockAccountBasicResponse(BaseModel):
     account_type: StockAccountType
     institution_name: Optional[str] = None
     identifier: Optional[str] = None
+    opened_at: Optional[date] = None
     created_at: datetime
     updated_at: datetime
 
