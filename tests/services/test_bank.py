@@ -113,9 +113,23 @@ def test_update_bank_account(session: Session, master_key: str):
 def test_delete_bank_account(session: Session, master_key: str):
     user_uuid = "user_1"
     created = create_bank_account(session, BankAccountCreate(name="Del", balance=Decimal("0"), account_type=BankAccountType.CHECKING), user_uuid, master_key)
-    assert delete_bank_account(session, created.id) is True
+    account_id_bidx = hash_index(created.id, master_key)
+    user_bidx = hash_index(user_uuid, master_key)
+    session.add(AccountHistory(
+        uuid=str(uuid_mod.uuid4()),
+        user_uuid_bidx=user_bidx,
+        account_id_bidx=account_id_bidx,
+        account_type=AccountCategory.BANK,
+        snapshot_date=date(2025, 1, 1),
+        total_value_enc=encrypt_data("0", master_key),
+        total_invested_enc=encrypt_data("0", master_key),
+    ))
+    session.commit()
+
+    assert delete_bank_account(session, created.id, master_key) is True
     assert session.get(BankAccount, created.id) is None
-    assert delete_bank_account(session, "non_existent") is False
+    assert _get_history_rows(session, account_id_bidx) == []
+    assert delete_bank_account(session, "non_existent", master_key) is False
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import json
 from decimal import Decimal
 from typing import List, Optional
 
+import sqlalchemy as sa
 from sqlmodel import Session, select
 
 from models import StockAccount, StockAccountType, StockTransaction
@@ -158,6 +159,11 @@ def delete_stock_account(
     
     for tx in transactions:
         session.delete(tx)
+
+    # Remove historical snapshots for this account as well.
+    session.exec(
+        sa.delete(AccountHistory).where(AccountHistory.account_id_bidx == account_bidx)
+    )
         
     session.delete(account)
     session.commit()

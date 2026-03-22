@@ -175,4 +175,4 @@ def delete_account(
     if not existing:
         raise HTTPException(status_code=404, detail="Account not found")
     
-    return delete_bank_account(session, account_id)
+    return delete_bank_account(session, account_id, master_key)

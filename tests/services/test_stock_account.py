@@ -1,6 +1,7 @@
 import pytest
 from decimal import Decimal
-from sqlmodel import Session
+from datetime import date, datetime
+from sqlmodel import Session, select
 
 from services.stock_account import (
     create_stock_account,
@@ -10,9 +11,10 @@ from services.stock_account import (
     delete_stock_account,
 )
 from dtos.stock import StockAccountCreate, StockAccountUpdate
-from models.enums import StockAccountType
+from models.enums import StockAccountType, StockTransactionType, AccountCategory
 from models.stock import StockAccount
-from services.encryption import hash_index
+from models.account_history import AccountHistory
+from services.encryption import hash_index, encrypt_data
 
 
 def test_create_stock_account(session: Session, master_key: str):
@@ -91,8 +93,6 @@ def test_delete_stock_account(session: Session, master_key: str):
     acc_tx = create_stock_account(session, StockAccountCreate(name="With Tx", account_type=StockAccountType.CTO), user_uuid, master_key)
     from services.stock_transaction import create_stock_transaction
     from dtos.stock import StockTransactionCreate
-    from models.enums import StockTransactionType
-    from datetime import datetime
     tx_data = StockTransactionCreate(
         account_id=acc_tx.id,
         symbol="TEST",
@@ -103,7 +103,26 @@ def test_delete_stock_account(session: Session, master_key: str):
         executed_at=datetime.now()
     )
     tx = create_stock_transaction(session, tx_data, master_key)
+
+    # Seed one history row to verify account-history cleanup on delete.
+    account_bidx = hash_index(acc_tx.id, master_key)
+    session.add(
+        AccountHistory(
+            user_uuid_bidx=hash_index(user_uuid, master_key),
+            account_id_bidx=account_bidx,
+            account_type=AccountCategory.STOCK,
+            snapshot_date=date(2025, 1, 1),
+            total_value_enc=encrypt_data("1", master_key),
+            total_invested_enc=encrypt_data("1", master_key),
+        )
+    )
+    session.commit()
+
     assert delete_stock_account(session, acc_tx.id, master_key) is True
     assert session.get(StockAccount, acc_tx.id) is None
     from models.stock import StockTransaction
     assert session.get(StockTransaction, tx.id) is None
+    history_rows = session.exec(
+        select(AccountHistory).where(AccountHistory.account_id_bidx == account_bidx)
+    ).all()
+    assert history_rows == []

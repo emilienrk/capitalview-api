@@ -119,12 +119,18 @@ def update_bank_account(
 
 def delete_bank_account(
     session: Session,
-    account_uuid: str
+    account_uuid: str,
+    master_key: str,
 ) -> bool:
-    """Delete a bank account."""
+    """Delete a bank account and its account history snapshots."""
     account = session.get(BankAccount, account_uuid)
     if not account:
         return False
+
+    account_id_bidx = hash_index(account_uuid, master_key)
+    session.exec(
+        sa.delete(AccountHistory).where(AccountHistory.account_id_bidx == account_id_bidx)
+    )
         
     session.delete(account)
     session.commit()

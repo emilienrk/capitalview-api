@@ -1,6 +1,6 @@
 import pytest
 from sqlmodel import Session, select
-from datetime import datetime
+from datetime import date, datetime
 
 from services.crypto_account import (
     create_crypto_account,
@@ -12,8 +12,9 @@ from services.crypto_account import (
 from services.crypto_transaction import create_crypto_transaction
 from dtos.crypto import CryptoAccountCreate, CryptoAccountUpdate, CryptoTransactionCreate
 from models.crypto import CryptoAccount, CryptoTransaction
-from models.enums import CryptoTransactionType
-from services.encryption import hash_index, decrypt_data
+from models.account_history import AccountHistory
+from models.enums import CryptoTransactionType, AccountCategory
+from services.encryption import hash_index, decrypt_data, encrypt_data
 from decimal import Decimal
 
 
@@ -94,6 +95,18 @@ def test_delete_crypto_account_cascade(session: Session, master_key: str):
     )
     create_crypto_transaction(session, tx_data, master_key)
     acc_bidx = hash_index(acc.id, master_key)
+    session.add(
+        AccountHistory(
+            user_uuid_bidx=hash_index(user_uuid, master_key),
+            account_id_bidx=acc_bidx,
+            account_type=AccountCategory.CRYPTO,
+            snapshot_date=date(2025, 1, 1),
+            total_value_enc=encrypt_data("1", master_key),
+            total_invested_enc=encrypt_data("1", master_key),
+        )
+    )
+    session.commit()
+
     txs = session.exec(select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == acc_bidx)).all()
     assert len(txs) == 1
     result = delete_crypto_account(session, acc.id, master_key)
@@ -101,6 +114,10 @@ def test_delete_crypto_account_cascade(session: Session, master_key: str):
     assert session.get(CryptoAccount, acc.id) is None
     txs_after = session.exec(select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == acc_bidx)).all()
     assert len(txs_after) == 0
+    history_rows_after = session.exec(
+        select(AccountHistory).where(AccountHistory.account_id_bidx == acc_bidx)
+    ).all()
+    assert history_rows_after == []
 
 def test_delete_crypto_account_not_found(session: Session, master_key: str):
     assert delete_crypto_account(session, "non_existent", master_key) is False
