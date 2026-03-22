@@ -30,7 +30,7 @@ def _decrypt_transaction(tx: StockTransaction, master_key: str) -> TransactionRe
     fees = Decimal(decrypt_data(tx.fees_enc, master_key))
     exec_at_str = decrypt_data(tx.executed_at_enc, master_key)
     try:
-        executed_at = datetime.fromisoformat(exec_at_str)
+        executed_at = datetime.fromisoformat(exec_at_str.replace("Z", "+00:00"))
     except ValueError:
         executed_at = tx.created_at
 

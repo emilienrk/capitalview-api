@@ -162,20 +162,45 @@ def _parse_positions_json(positions_json: Optional[str]) -> list[FrozenPosition]
 # ---------------------------------------------------------------------------
 
 
-def _get_last_snapshot_dates(session: Session, user_uuid_bidx: str) -> dict[str, date]:
+def _get_snapshot_date_bounds(session: Session, user_uuid_bidx: str) -> dict[str, tuple[date, date]]:
     """
-    Return {account_id_bidx: last_snapshot_date} for every account of this user.
-    An account absent from the dict has no history yet.
+    Return {account_id_bidx: (first_snapshot_date, last_snapshot_date)}
+    for every account of this user.
     """
     rows = session.exec(
         sa.select(
             AccountHistory.account_id_bidx,
+            sa.func.min(AccountHistory.snapshot_date).label("first_date"),
             sa.func.max(AccountHistory.snapshot_date).label("last_date"),
         )
         .where(AccountHistory.user_uuid_bidx == user_uuid_bidx)
         .group_by(AccountHistory.account_id_bidx)
     ).all()
-    return {row.account_id_bidx: row.last_date for row in rows}
+    return {
+        row.account_id_bidx: (row.first_date, row.last_date)
+        for row in rows
+    }
+
+
+def _resolve_account_start_date(
+    default_created_at: date,
+    opened_at: Optional[date],
+    txs: Optional[list],
+) -> date:
+    """Pick the earliest known business start date for an account."""
+    candidates: list[date] = [default_created_at]
+
+    if opened_at is not None:
+        candidates.append(opened_at)
+
+    if txs:
+        try:
+            first_tx_date = min(getattr(tx, "executed_at").date() for tx in txs)
+            candidates.append(first_tx_date)
+        except Exception:
+            pass
+
+    return min(candidates)
 
 
 def _get_price_matrix(
@@ -514,15 +539,20 @@ def _build_stock_snapshots(
 
     result: list[_AccountSnapshot] = []
     for acc in accounts:
-        # Recuperer directement les transactions pour le mode exact
+        # Recupere directement les transactions pour le mode exact.
         txs = get_account_transactions(session, acc.uuid, master_key)
         txs.sort(key=lambda x: x.executed_at)
+        account_start_date = _resolve_account_start_date(
+            default_created_at=acc.created_at.date(),
+            opened_at=acc.opened_at,
+            txs=txs,
+        )
         
         result.append(
             _AccountSnapshot(
                 account_id=acc.uuid,
                 account_type=AccountCategory.STOCK,
-                account_created_at=acc.created_at.date(),
+                account_created_at=account_start_date,
                 transactions=txs
             )
         )
@@ -544,15 +574,20 @@ def _build_crypto_snapshots(
 
     result: list[_AccountSnapshot] = []
     for acc in accounts:
-        # Recuperer directement les transactions pour le mode exact
+        # Recupere directement les transactions pour le mode exact.
         txs = get_account_transactions(session, acc.uuid, master_key)
         txs.sort(key=lambda x: x.executed_at)
+        account_start_date = _resolve_account_start_date(
+            default_created_at=acc.created_at.date(),
+            opened_at=acc.opened_at,
+            txs=txs,
+        )
         
         result.append(
             _AccountSnapshot(
                 account_id=acc.uuid,
                 account_type=AccountCategory.CRYPTO,
-                account_created_at=acc.created_at.date(),
+                account_created_at=account_start_date,
                 transactions=txs
             )
         )
@@ -712,15 +747,36 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
         if not all_accounts:
             return
 
-        # ── 3. Fetch per-account last snapshot dates ──────────────────────────
-        last_snapshot_dates = _get_last_snapshot_dates(session, user_uuid_bidx)
+        # ── 3. Fetch per-account snapshot bounds ──────────────────────────────
+        snapshot_date_bounds = _get_snapshot_date_bounds(session, user_uuid_bidx)
 
         # ── 4. Compute per-account missing dates ──────────────────────────────
         accounts_to_process: list[tuple[_AccountSnapshot, list[date]]] = []
 
         for acc_snap in all_accounts:
             account_id_bidx = hash_index(acc_snap.account_id, master_key)
-            last_date = last_snapshot_dates.get(account_id_bidx)
+            first_and_last = snapshot_date_bounds.get(account_id_bidx)
+
+            # Auto-heal stale history starts from old logic (created_at-based).
+            # If the true account start is earlier than existing snapshots, we
+            # invalidate and rebuild the full account history once.
+            if first_and_last is not None:
+                first_date, _ = first_and_last
+                if first_date > acc_snap.account_created_at:
+                    session.exec(
+                        sa.delete(AccountHistory).where(
+                            AccountHistory.account_id_bidx == account_id_bidx,
+                        )
+                    )
+                    first_and_last = None
+                    logger.info(
+                        "account_history catchup: invalidated stale start for account_bidx=%s (first=%s, expected_start=%s)",
+                        account_id_bidx[:8] + "…",
+                        first_date,
+                        acc_snap.account_created_at,
+                    )
+
+            last_date = first_and_last[1] if first_and_last is not None else None
 
             if last_date is not None and last_date >= yesterday:
                 continue  # already up-to-date

@@ -2,7 +2,8 @@
 Tests for services/account_history.py
 
 Cover the core pure and DB-backed helpers:
-  - _get_last_snapshot_dates
+    - _get_snapshot_date_bounds
+    - _resolve_account_start_date
   - _get_price_matrix
   - _fill_price_gaps
   - _generate_missing_snapshots
@@ -26,7 +27,8 @@ from services.account_history import (
     _build_asset_snapshots,
     _fill_price_gaps,
     _generate_missing_snapshots,
-    _get_last_snapshot_dates,
+    _get_snapshot_date_bounds,
+    _resolve_account_start_date,
     _interpolate_asset_value,
     _parse_positions_json,
     _get_price_matrix,
@@ -94,18 +96,21 @@ def _make_price(
 
 
 # ---------------------------------------------------------------------------
-# _get_last_snapshot_dates
+# _get_snapshot_date_bounds
 # ---------------------------------------------------------------------------
 
 
-def test_get_last_snapshot_dates_empty(session: Session, master_key: str):
+def test_get_snapshot_date_bounds_empty(session: Session, master_key: str):
     """Returns empty dict when no snapshots exist for the user."""
-    result = _get_last_snapshot_dates(session, "bidx_ghost_user")
+    result = _get_snapshot_date_bounds(session, "bidx_ghost_user")
     assert result == {}
 
 
-def test_get_last_snapshot_dates_returns_max_per_account(session: Session, master_key: str):
-    """Returns the most recent snapshot date per account."""
+def test_get_snapshot_date_bounds_returns_min_and_max_per_account(
+    session: Session,
+    master_key: str,
+):
+    """Returns the first and latest snapshot dates per account."""
     user_bidx = "bidx_user_multi_dates"
     acc1_bidx = "bidx_acc_alpha"
     acc2_bidx = "bidx_acc_beta"
@@ -128,13 +133,13 @@ def test_get_last_snapshot_dates_returns_max_per_account(session: Session, maste
         total_value="200.00", master_key=master_key,
     )
 
-    result = _get_last_snapshot_dates(session, user_bidx)
+    result = _get_snapshot_date_bounds(session, user_bidx)
 
-    assert result[acc1_bidx] == date(2024, 1, 5)
-    assert result[acc2_bidx] == date(2024, 1, 3)
+    assert result[acc1_bidx] == (date(2024, 1, 1), date(2024, 1, 5))
+    assert result[acc2_bidx] == (date(2024, 1, 3), date(2024, 1, 3))
 
 
-def test_get_last_snapshot_dates_scoped_to_user(session: Session, master_key: str):
+def test_get_snapshot_date_bounds_scoped_to_user(session: Session, master_key: str):
     """Rows belonging to another user do not appear in the result."""
     user1_bidx = "bidx_user_owner"
     user2_bidx = "bidx_user_stranger"
@@ -146,10 +151,24 @@ def test_get_last_snapshot_dates_scoped_to_user(session: Session, master_key: st
         total_value="500.00", master_key=master_key,
     )
 
-    assert _get_last_snapshot_dates(session, user2_bidx) == {}
-    result_user1 = _get_last_snapshot_dates(session, user1_bidx)
+    assert _get_snapshot_date_bounds(session, user2_bidx) == {}
+    result_user1 = _get_snapshot_date_bounds(session, user1_bidx)
     assert acc_bidx in result_user1
-    assert result_user1[acc_bidx] == date(2024, 1, 10)
+    assert result_user1[acc_bidx] == (date(2024, 1, 10), date(2024, 1, 10))
+
+
+def test_resolve_account_start_date_prefers_earliest_known_business_date():
+    """Uses the earliest date among created_at, opened_at and first tx date."""
+    tx_old = type("Tx", (), {"executed_at": datetime(2024, 1, 15, tzinfo=timezone.utc)})()
+    tx_new = type("Tx", (), {"executed_at": datetime(2024, 2, 10, tzinfo=timezone.utc)})()
+
+    resolved = _resolve_account_start_date(
+        default_created_at=date(2024, 3, 1),
+        opened_at=date(2024, 2, 1),
+        txs=[tx_new, tx_old],
+    )
+
+    assert resolved == date(2024, 1, 15)
 
 
 # ---------------------------------------------------------------------------
