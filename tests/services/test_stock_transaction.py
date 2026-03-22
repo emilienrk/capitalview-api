@@ -92,12 +92,27 @@ def test_update_stock_transaction(session: Session, master_key: str):
     )
     created = create_stock_transaction(session, data, master_key)
     tx_db = session.get(StockTransaction, created.id)
+
+    # Add a second BUY so that when tx_db (BUY 10) is excluded from the held
+    # quantity computation, there are still 10 units held from this transaction.
+    extra_buy = StockTransactionCreate(
+        account_id="acc_123",
+        symbol="GOOGL",
+        isin="ISIN_GOOGL",
+        type=StockTransactionType.BUY,
+        amount=Decimal("10"),
+        price_per_unit=Decimal("100"),
+        fees=Decimal("0"),
+        executed_at=datetime(2023, 1, 1),
+    )
+    create_stock_transaction(session, extra_buy, master_key)
+
     new_date = datetime(2023, 2, 2, 12, 0, 0)
     update_data = StockTransactionUpdate(
         symbol="GOOG", # This update is ignored for MarketPrice/Transaction storage, but logic checks?
         exchange="NASDAQ",
         type=StockTransactionType.SELL,
-        amount=Decimal("20"),
+        amount=Decimal("10"),
         price_per_unit=Decimal("105"),
         fees=Decimal("1"),
         executed_at=new_date,
@@ -109,7 +124,7 @@ def test_update_stock_transaction(session: Session, master_key: str):
     
     assert updated.symbol == "GOOGL" 
     assert updated.type == "SELL"
-    assert updated.amount == Decimal("20")
+    assert updated.amount == Decimal("10")
     assert updated.price_per_unit == Decimal("105")
     assert updated.fees == Decimal("1")
     assert updated.executed_at == new_date
@@ -294,3 +309,76 @@ def test_position_currency_defaults_to_eur(mock_market, session: Session, master
     summary = get_stock_account_summary(session, account, master_key)
     pos = next(p for p in summary.positions if p.isin == "ISIN_XYZ")
     assert pos.currency == "EUR"
+
+
+def test_create_sell_exceeds_held(session: Session, master_key: str):
+    """Vendre plus que la quantité détenue doit lever ValueError."""
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_sell",
+        symbol="AAPL",
+        isin="ISIN_AAPL",
+        type=StockTransactionType.BUY,
+        amount=Decimal("5"),
+        price_per_unit=Decimal("100"),
+        fees=Decimal("0"),
+        executed_at=datetime(2023, 1, 1),
+    ), master_key)
+
+    with pytest.raises(ValueError, match="supérieure à la position"):
+        create_stock_transaction(session, StockTransactionCreate(
+            account_id="acc_sell",
+            symbol="AAPL",
+            isin="ISIN_AAPL",
+            type=StockTransactionType.SELL,
+            amount=Decimal("10"),  # More than 5 held
+            price_per_unit=Decimal("110"),
+            fees=Decimal("0"),
+            executed_at=datetime(2023, 2, 1),
+        ), master_key)
+
+
+def test_create_sell_asset_not_owned(session: Session, master_key: str):
+    """Vendre une action non détenue (position nulle) doit lever ValueError."""
+    with pytest.raises(ValueError, match="supérieure à la position"):
+        create_stock_transaction(session, StockTransactionCreate(
+            account_id="acc_no_position",
+            symbol="TSLA",
+            isin="ISIN_TSLA",
+            type=StockTransactionType.SELL,
+            amount=Decimal("1"),
+            price_per_unit=Decimal("200"),
+            fees=Decimal("0"),
+            executed_at=datetime(2023, 1, 1),
+        ), master_key)
+
+
+def test_update_sell_exceeds_held(session: Session, master_key: str):
+    """Mettre à jour une transaction pour vendre plus que la quantité détenue doit lever ValueError."""
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_upd_sell",
+        symbol="MSFT",
+        isin="ISIN_MSFT",
+        type=StockTransactionType.BUY,
+        amount=Decimal("3"),
+        price_per_unit=Decimal("200"),
+        fees=Decimal("0"),
+        executed_at=datetime(2023, 1, 1),
+    ), master_key)
+    tx2 = create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_upd_sell",
+        symbol="MSFT",
+        isin="ISIN_MSFT",
+        type=StockTransactionType.BUY,
+        amount=Decimal("2"),
+        price_per_unit=Decimal("200"),
+        fees=Decimal("0"),
+        executed_at=datetime(2023, 1, 2),
+    ), master_key)
+    tx2_db = session.get(StockTransaction, tx2.id)
+
+    # tx2 (BUY 2) is excluded → only 3 remain held; trying to sell 10 must fail
+    with pytest.raises(ValueError, match="supérieure à la position"):
+        update_stock_transaction(session, tx2_db, StockTransactionUpdate(
+            type=StockTransactionType.SELL,
+            amount=Decimal("10"),
+        ), master_key)
