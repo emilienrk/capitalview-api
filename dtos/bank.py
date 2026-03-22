@@ -43,3 +43,15 @@ class BankSummaryResponse(BaseModel):
     """Summary of all bank accounts."""
     total_balance: Decimal
     accounts: list[BankAccountResponse]
+
+
+class BankHistoryEntry(BaseModel):
+    """A single (date, value) data point for bank history import."""
+    snapshot_date: date
+    value: Decimal
+
+
+class BankHistoryImportRequest(BaseModel):
+    """Import historical balance snapshots for a bank account."""
+    entries: list[BankHistoryEntry]
+    overwrite: bool = False

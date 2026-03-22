@@ -13,6 +13,7 @@ from dtos import (
     BankAccountUpdate,
     BankAccountResponse,
     BankSummaryResponse,
+    BankHistoryImportRequest,
 )
 from services.bank import (
     create_bank_account,
@@ -22,6 +23,8 @@ from services.bank import (
     delete_bank_account,
     get_bank_account_history,
     get_all_bank_accounts_history,
+    delete_bank_account_history,
+    import_bank_account_history,
 )
 from dtos.transaction import AccountHistorySnapshotResponse
 
@@ -71,6 +74,45 @@ def get_all_history(
 ):
     """Get aggregated historical snapshots across all bank accounts."""
     return get_all_bank_accounts_history(session, current_user.uuid, master_key)
+
+
+@router.delete("/accounts/{account_id}/history", status_code=204)
+def delete_account_history(
+    account_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Delete all historical snapshots for a bank account."""
+    if not get_bank_account(session, account_id, current_user.uuid, master_key):
+        raise HTTPException(status_code=404, detail="Account not found")
+    delete_bank_account_history(session, account_id, master_key)
+
+
+@router.post("/accounts/{account_id}/history/import", status_code=200)
+def import_account_history(
+    account_id: str,
+    payload: BankHistoryImportRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+) -> dict:
+    """Import historical balance snapshots for a bank account.
+
+    Entries: a list of {snapshot_date, value} pairs.
+    When overwrite=True, all existing history is deleted before import.
+    When overwrite=False (default), existing rows are preserved.
+    """
+    from models import BankAccount as BankAccountModel
+
+    if not get_bank_account(session, account_id, current_user.uuid, master_key):
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    account = session.get(BankAccountModel, account_id)
+    count = import_bank_account_history(
+        session, account, payload.entries, master_key, overwrite=payload.overwrite
+    )
+    return {"inserted": count}
 
 
 @router.get("/accounts/{account_id}/history", response_model=list[AccountHistorySnapshotResponse])

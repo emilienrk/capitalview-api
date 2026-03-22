@@ -1,16 +1,20 @@
 """Bank account service."""
 
 import json
+import uuid
 from decimal import Decimal
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
+import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, select
 
 from models import BankAccount, BankAccountType
 from models.account_history import AccountHistory
-from models.enums import FlowType
+from models.enums import AccountCategory, FlowType
 from dtos import BankAccountCreate, BankAccountUpdate, BankAccountResponse, BankSummaryResponse
+from dtos.bank import BankHistoryEntry
 from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotResponse
 from services.encryption import encrypt_data, decrypt_data, hash_index
 
@@ -278,6 +282,115 @@ def get_bank_account_history(
     ).all()
 
     return [_decode_history_row(row, master_key) for row in rows]
+
+
+def delete_bank_account_history(
+    session: Session,
+    account_uuid: str,
+    master_key: str,
+) -> int:
+    """Delete all history snapshots for a bank account. Returns the number of deleted rows."""
+    account_id_bidx = hash_index(account_uuid, master_key)
+    result = session.exec(
+        sa.delete(AccountHistory).where(AccountHistory.account_id_bidx == account_id_bidx)
+    )
+    session.commit()
+    return result.rowcount
+
+
+def import_bank_account_history(
+    session: Session,
+    account: BankAccount,
+    entries: list[BankHistoryEntry],
+    master_key: str,
+    overwrite: bool = False,
+) -> int:
+    """
+    Import a list of (date, value) snapshots for a bank account.
+
+    Fills the full range from account creation to yesterday:
+    - Dates before the first known entry are set to 0.
+    - Gaps between known entries are forward-filled with the last known value.
+    - If overwrite=True, existing history is deleted first; otherwise existing
+      rows are preserved (on_conflict_do_nothing).
+
+    Returns the number of rows written.
+    """
+    if not entries:
+        return 0
+
+    if overwrite:
+        delete_bank_account_history(session, account.uuid, master_key)
+
+    sorted_entries = sorted(entries, key=lambda e: e.snapshot_date)
+    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    account_start = account.created_at.date()
+    first_entry_date = sorted_entries[0].snapshot_date
+
+    # Start from the earliest of account creation and first imported entry,
+    # so historical data predating the app account creation is not silently dropped.
+    fill_start = min(account_start, first_entry_date)
+    if fill_start > yesterday:
+        return 0
+
+    # Build a date → value lookup
+    value_by_date: dict[date, Decimal] = {e.snapshot_date: e.value for e in sorted_entries}
+
+    now = datetime.now(timezone.utc)
+    account_id_bidx = hash_index(account.uuid, master_key)
+
+    rows: list[dict] = []
+    last_value = Decimal("0")
+    prev_value = Decimal("0")
+
+    d = fill_start
+    while d <= yesterday:
+        if d < first_entry_date:
+            last_value = Decimal("0")
+        elif d in value_by_date:
+            last_value = value_by_date[d]
+        # else: carry forward last_value
+
+        total_value = last_value
+        daily_pnl = total_value - prev_value
+
+        positions_json: Optional[str] = None
+        if total_value > Decimal("0"):
+            positions_json = json.dumps([{
+                "symbol": "EUR",
+                "quantity": str(total_value),
+                "value": str(total_value),
+                "price": "1",
+                "invested": str(total_value),
+                "percentage": "100",
+            }])
+
+        rows.append({
+            "uuid": str(uuid.uuid4()),
+            "user_uuid_bidx": account.user_uuid_bidx,
+            "account_id_bidx": account_id_bidx,
+            "account_type": AccountCategory.BANK.value,
+            "snapshot_date": d,
+            "total_value_enc": encrypt_data(str(round(total_value, 2)), master_key),
+            "total_invested_enc": encrypt_data(str(round(total_value, 2)), master_key),
+            "daily_pnl_enc": encrypt_data(str(round(daily_pnl, 2)), master_key),
+            "positions_enc": encrypt_data(positions_json, master_key) if positions_json else None,
+            "created_at": now,
+            "updated_at": now,
+        })
+
+        prev_value = total_value
+        d += timedelta(days=1)
+
+    if not rows:
+        return 0
+
+    stmt = pg_insert(AccountHistory).values(rows).on_conflict_do_nothing(
+        constraint="uq_account_history_account_date"
+    )
+    session.exec(stmt)
+    session.commit()
+    return len(rows)
 
 
 def get_all_bank_accounts_history(

@@ -6,6 +6,8 @@ from .bank import (
     BankAccountResponse,
     BankAccountUpdate,
     BankSummaryResponse,
+    BankHistoryEntry,
+    BankHistoryImportRequest,
 )
 
 # Cashflow schemas

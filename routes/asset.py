@@ -252,7 +252,7 @@ def remove_valuation(
         val_date_raw = _dec(v.valued_at_enc, master_key)
         val_date = datetime.fromisoformat(val_date_raw.replace("Z", "+00:00")).date()
     except Exception:
-        val_date = datetime.now(datetime.timezone.utc).date()
+        val_date = datetime.now(timezone.utc).date()
 
     from_date = get_asset_rebuild_start_date(session, asset_id, val_date, master_key)
 
