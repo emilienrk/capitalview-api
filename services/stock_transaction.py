@@ -120,6 +120,48 @@ def _compute_eur_balance(session: Session, account_uuid: str, master_key: str) -
     return eur
 
 
+def _compute_held_quantity(session: Session, account_uuid: str, isin: str, master_key: str) -> Decimal:
+    """Return the net quantity currently held for a given ISIN in an account."""
+    txs = get_account_transactions(session, account_uuid, master_key)
+    held = Decimal("0")
+    for tx in txs:
+        if tx.isin != isin:
+            continue
+        if tx.type == "BUY":
+            held += tx.amount
+        elif tx.type == "SELL":
+            held -= tx.amount
+    return held
+
+
+def _compute_held_quantity_by_bidx(
+    session: Session, account_id_bidx: str, isin: str, master_key: str,
+    exclude_tx_uuid: Optional[str] = None,
+) -> Decimal:
+    """Same as _compute_held_quantity but works directly from the stored bidx.
+    
+    Used in update_stock_transaction where we have the bidx but not the UUID.
+    exclude_tx_uuid allows discounting the current transaction being edited.
+    """
+    raw_txs = session.exec(
+        select(StockTransaction).where(StockTransaction.account_id_bidx == account_id_bidx)
+    ).all()
+    held = Decimal("0")
+    for raw in raw_txs:
+        if exclude_tx_uuid and raw.uuid == exclude_tx_uuid:
+            continue
+        tx_type = decrypt_data(raw.type_enc, master_key)
+        tx_isin = decrypt_data(raw.isin_enc, master_key)
+        if tx_isin != isin:
+            continue
+        tx_amount = Decimal(decrypt_data(raw.amount_enc, master_key))
+        if tx_type == "BUY":
+            held += tx_amount
+        elif tx_type == "SELL":
+            held -= tx_amount
+    return held
+
+
 def create_stock_transaction(
     session: Session,
     data: StockTransactionCreate,
@@ -134,6 +176,14 @@ def create_stock_transaction(
         data.isin = data.isin.strip()
     if data.symbol:
         data.symbol = data.symbol.strip()
+
+    # Validate SELL quantity against current position
+    if data.type.value == "SELL" and data.isin != "EUR":
+        held = _compute_held_quantity(session, data.account_id, data.isin, master_key)
+        if data.amount > held:
+            raise ValueError(
+                f"Quantité vendue ({data.amount}) supérieure à la position détenue ({round(held, 8)})"
+            )
 
     # Auto-fund EUR balance for BUY transactions if needed
     if data.type.value == "BUY" and data.isin != "EUR":
@@ -252,6 +302,23 @@ def update_stock_transaction(
     if data.symbol:
         data.symbol = data.symbol.strip()
 
+    # Validate SELL quantity: compute held quantity excluding this transaction itself
+    current = _decrypt_transaction(transaction, master_key)
+    effective_type = data.type.value if data.type is not None else current.type
+    effective_isin = data.isin if data.isin is not None else current.isin
+    effective_amount = data.amount if data.amount is not None else current.amount
+
+    if effective_type == "SELL" and effective_isin and effective_isin != "EUR":
+        # Compute held quantity without this transaction so we can re-validate cleanly
+        held = _compute_held_quantity_by_bidx(
+            session, transaction.account_id_bidx, effective_isin, master_key,
+            exclude_tx_uuid=transaction.uuid,
+        )
+        if effective_amount > held:
+            raise ValueError(
+                f"Quantité vendue ({effective_amount}) supérieure à la position détenue ({round(held, 8)})"
+            )
+
     if data.isin is not None:
         transaction.isin_enc = encrypt_data(data.isin, master_key) if data.isin else None
         
@@ -347,6 +414,8 @@ def get_stock_account_summary(
     transactions = get_account_transactions(session, account.uuid, master_key)
     transactions.sort(key=lambda x: x.executed_at)
 
+    total_deposits_acc = Decimal("0")
+
     positions_map: dict[str, dict] = {
         "EUR": {
             "isin": "EUR",
@@ -389,6 +458,7 @@ def get_stock_account_summary(
 
         if tx.type == "DEPOSIT" and tx.isin == "EUR":
             positions_map["EUR"]["total_amount"] += tx.amount
+            total_deposits_acc += tx.amount
 
         elif tx.type == "BUY":
             cost = (tx.amount * tx.price_per_unit) + tx.fees
@@ -495,6 +565,7 @@ def get_stock_account_summary(
         account_name=acc_resp.name,
         account_type=acc_resp.account_type.value,
         total_invested=round(total_invested_acc, 2),
+        total_deposits=round(total_deposits_acc, 2),
         total_fees=round(total_fees_acc, 2),
         total_dividends=round(total_dividends_acc, 2),
         current_value=round(current_value_acc, 2) if current_value_acc else None,

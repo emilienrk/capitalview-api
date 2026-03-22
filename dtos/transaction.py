@@ -58,6 +58,7 @@ class AccountSummaryResponse(BaseModel):
     account_name: str
     account_type: str
     total_invested: Decimal
+    total_deposits: Decimal = Decimal("0")
     total_fees: Decimal
     total_dividends: Decimal = Decimal("0")
     currency: str = "EUR"
