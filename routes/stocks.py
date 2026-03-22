@@ -176,7 +176,7 @@ def create_account_deposit(
         raise HTTPException(status_code=404, detail="Account not found or access denied")
 
     result = create_eur_deposit(
-        session, account_id, data.amount, data.executed_at, master_key, data.notes
+        session, account_id, data.amount, data.executed_at, master_key, data.notes, data.fees
     )
 
     executed_date = data.executed_at.date() if hasattr(data.executed_at, "date") else data.executed_at
@@ -369,22 +369,31 @@ def bulk_import_transactions(
     created_responses = []
     
     for item in data.transactions:
-        create_dto = StockTransactionCreate(
-            account_id=data.account_id,
-            symbol=None,
-            isin=item.isin,
-            name=None,
-            exchange=None,
-            type=item.type,
-            amount=item.amount,
-            price_per_unit=item.price_per_unit,
-            fees=item.fees,
-            executed_at=item.executed_at,
-            notes=item.notes
-        )
-        
         try:
-            resp = create_stock_transaction(session, create_dto, master_key)
+            if item.type.value == "DEPOSIT":
+                resp = create_eur_deposit(
+                    session=session,
+                    account_uuid=data.account_id,
+                    amount=item.amount,
+                    executed_at=item.executed_at,
+                    master_key=master_key,
+                    notes=item.notes,
+                )
+            else:
+                create_dto = StockTransactionCreate(
+                    account_id=data.account_id,
+                    symbol=None,
+                    isin=item.isin,
+                    name=None,
+                    exchange=None,
+                    type=item.type,
+                    amount=item.amount,
+                    price_per_unit=item.price_per_unit,
+                    fees=item.fees,
+                    executed_at=item.executed_at,
+                    notes=item.notes
+                )
+                resp = create_stock_transaction(session, create_dto, master_key)
             
             basic = StockTransactionBasicResponse(
                 id=resp.id,

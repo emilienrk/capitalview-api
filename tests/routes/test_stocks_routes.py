@@ -195,3 +195,48 @@ def test_create_stock_transaction_negative_validation(session, master_key):
     }
     r = client.post("/stocks/transactions", json=tx_neg_fees)
     assert r.status_code == 422
+
+
+def test_bulk_import_deposit_with_fees_stores_net_amount(session, master_key):
+    client = TestClient(app)
+
+    account_resp = client.post("/stocks/accounts", json={"name": "CTO Import", "account_type": "CTO"})
+    assert account_resp.status_code == 201
+    account_id = account_resp.json()["id"]
+
+    bulk = {
+        "account_id": account_id,
+        "transactions": [
+            {
+                "isin": "EUR",
+                "type": "DEPOSIT",
+                "amount": "975",
+                "price_per_unit": "1",
+                "fees": "0",
+                "executed_at": "2024-01-01T10:00:00",
+                "notes": "Import CSV",
+            }
+        ],
+    }
+
+    rbulk = client.post("/stocks/transactions/bulk", json=bulk)
+    assert rbulk.status_code == 201
+    assert rbulk.json()["imported_count"] == 1
+
+    txs_resp = client.get(f"/stocks/transactions/account/{account_id}")
+    assert txs_resp.status_code == 200
+    txs = txs_resp.json()
+    deposit = next((t for t in txs if t["type"] == "DEPOSIT" and t["isin"] == "EUR"), None)
+    assert deposit is not None
+    assert Decimal(str(deposit["amount"])) == Decimal("975")
+    assert Decimal(str(deposit["fees"])) == Decimal("0")
+    assert Decimal(str(deposit["price_per_unit"])) == Decimal("1")
+
+    summary_resp = client.get(f"/stocks/accounts/{account_id}")
+    assert summary_resp.status_code == 200
+    summary = summary_resp.json()
+    assert Decimal(str(summary["total_deposits"])) == Decimal("975")
+
+    eur_position = next((p for p in summary["positions"] if p["isin"] == "EUR"), None)
+    assert eur_position is not None
+    assert Decimal(str(eur_position["total_amount"])) == Decimal("975")

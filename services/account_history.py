@@ -370,7 +370,7 @@ def _generate_missing_snapshots(
 
                 elif is_eur_deposit:
                     # EUR cash only: track quantity, not invested capital.
-                    current_positions["EUR"]["quantity"] += amount
+                    current_positions["EUR"]["quantity"] += (amount - fees)
                 elif tx_type in ("SELL", "SPEND"):
                     if current_positions[sym]["quantity"] > 0:
                         fraction = min(amount / current_positions[sym]["quantity"], Decimal("1"))

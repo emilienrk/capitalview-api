@@ -36,8 +36,12 @@ def _decrypt_transaction(tx: StockTransaction, master_key: str) -> TransactionRe
 
     notes = decrypt_data(tx.notes_enc, master_key) if tx.notes_enc else None
 
-    total_cost = (amount * price) + fees
-    fees_pct = (fees / total_cost * 100) if total_cost > 0 else Decimal("0")
+    if type_str == "DEPOSIT" and isin == "EUR":
+        total_cost = amount - fees
+        fees_pct = (fees / amount * 100) if amount > 0 else Decimal("0")
+    else:
+        total_cost = (amount * price) + fees
+        fees_pct = (fees / total_cost * 100) if total_cost > 0 else Decimal("0")
 
     symbol = "EUR" if isin == "EUR" else None
     name = "Euros" if isin == "EUR" else None
@@ -66,6 +70,7 @@ def create_eur_deposit(
     executed_at: datetime,
     master_key: str,
     notes: Optional[str] = None,
+    fees: Decimal = Decimal("0"),
 ) -> TransactionResponse:
     """Record a EUR cash deposit into a stock account.
     
@@ -80,7 +85,7 @@ def create_eur_deposit(
         type_enc=encrypt_data("DEPOSIT", master_key),
         amount_enc=encrypt_data(str(amount), master_key),
         price_per_unit_enc=encrypt_data("1", master_key),
-        fees_enc=encrypt_data("0", master_key),
+        fees_enc=encrypt_data(str(fees), master_key),
         executed_at_enc=encrypt_data(executed_at.isoformat(), master_key),
         notes_enc=encrypt_data(notes, master_key) if notes else None,
     )
@@ -97,10 +102,10 @@ def create_eur_deposit(
         type="DEPOSIT",
         amount=amount,
         price_per_unit=Decimal("1"),
-        fees=Decimal("0"),
+        fees=fees,
         executed_at=executed_at,
-        total_cost=amount,
-        fees_percentage=Decimal("0"),
+        total_cost=amount - fees,
+        fees_percentage=round((fees / amount * 100), 2) if amount > 0 else Decimal("0"),
     )
 
 
@@ -110,7 +115,7 @@ def _compute_eur_balance(session: Session, account_uuid: str, master_key: str) -
     eur = Decimal("0")
     for tx in txs:
         if tx.type == "DEPOSIT" and tx.isin == "EUR":
-            eur += tx.amount
+            eur += tx.amount - tx.fees
         elif tx.type == "BUY" and tx.isin != "EUR":
             eur -= (tx.amount * tx.price_per_unit) + tx.fees
         elif tx.type == "DIVIDEND":
@@ -457,8 +462,9 @@ def get_stock_account_summary(
             pos["exchange"] = tx.exchange
 
         if tx.type == "DEPOSIT" and tx.isin == "EUR":
-            positions_map["EUR"]["total_amount"] += tx.amount
-            total_deposits_acc += tx.amount
+            net_deposit = tx.amount - tx.fees
+            positions_map["EUR"]["total_amount"] += net_deposit
+            total_deposits_acc += net_deposit
 
         elif tx.type == "BUY":
             cost = (tx.amount * tx.price_per_unit) + tx.fees
