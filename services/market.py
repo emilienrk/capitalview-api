@@ -573,8 +573,8 @@ def update_all_prices_daily() -> None:
 # Historical backfill — fill missing daily prices for a date range
 # ---------------------------------------------------------------------------
 
-# Max lookback to prevent abuse (1 year)
-_MAX_BACKFILL_DAYS = 365
+# Max lookback to prevent abuse (10 year)
+_MAX_BACKFILL_DAYS = 3650
 
 
 def _bulk_upsert_rows(session: Session, rows: list[dict]) -> None:
