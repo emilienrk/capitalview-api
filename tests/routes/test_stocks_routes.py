@@ -240,3 +240,44 @@ def test_bulk_import_deposit_with_fees_stores_net_amount(session, master_key):
     eur_position = next((p for p in summary["positions"] if p["isin"] == "EUR"), None)
     assert eur_position is not None
     assert Decimal(str(eur_position["total_amount"])) == Decimal("975")
+
+
+def test_bulk_import_sorts_transactions_to_allow_loss_sells(session, master_key):
+    client = TestClient(app)
+
+    account_resp = client.post("/stocks/accounts", json={"name": "CTO Chrono", "account_type": "CTO"})
+    assert account_resp.status_code == 201
+    account_id = account_resp.json()["id"]
+
+    # Intentionally unsorted input: SELL comes before the BUY that opens the position.
+    bulk = {
+        "account_id": account_id,
+        "transactions": [
+            {
+                "isin": "FR0011869353",
+                "type": "SELL",
+                "amount": "16",
+                "price_per_unit": "24.314",
+                "fees": "1.95",
+                "executed_at": "2026-02-10T10:00:00",
+            },
+            {
+                "isin": "FR0011869353",
+                "type": "BUY",
+                "amount": "16",
+                "price_per_unit": "26.1875",
+                "fees": "0",
+                "executed_at": "2026-02-01T10:00:00",
+            },
+        ],
+    }
+
+    rbulk = client.post("/stocks/transactions/bulk", json=bulk)
+    assert rbulk.status_code == 201
+    body = rbulk.json()
+    assert body["imported_count"] == 2
+
+    txs_resp = client.get(f"/stocks/transactions/account/{account_id}")
+    assert txs_resp.status_code == 200
+    txs = txs_resp.json()
+    assert sum(1 for t in txs if t["isin"] == "FR0011869353") == 2

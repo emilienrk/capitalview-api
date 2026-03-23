@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlmodel import Session
@@ -50,6 +50,35 @@ from services.account_history import trigger_post_transaction_updates
 from services.encryption import decrypt_data, hash_index
 
 router = APIRouter(prefix="/stocks", tags=["Stocks"])
+
+
+def _bulk_tx_order_key(item_with_index: tuple[int, object]) -> tuple:
+    """Deterministic processing order for bulk stock imports.
+
+    We replay transactions chronologically so SELL validation sees prior BUY rows.
+    For identical timestamps, we process cash/funding first, then inventory changes.
+    """
+    index, item = item_with_index
+    type_priority = {
+        "DEPOSIT": 0,
+        "DIVIDEND": 1,
+        "BUY": 2,
+        "SELL": 3,
+    }
+    raw_executed_at = getattr(item, "executed_at", None)
+    if isinstance(raw_executed_at, datetime):
+        executed_at = (
+            raw_executed_at.replace(tzinfo=timezone.utc)
+            if raw_executed_at.tzinfo is None
+            else raw_executed_at.astimezone(timezone.utc)
+        ).isoformat()
+        date_rank = 0
+    else:
+        executed_at = ""
+        date_rank = 1
+
+    item_type = item.type.value if hasattr(item.type, "value") else str(item.type)
+    return (date_rank, executed_at, type_priority.get(item_type, 99), index)
 
 
 # ============== ACCOUNTS ==============
@@ -367,8 +396,11 @@ def bulk_import_transactions(
         raise HTTPException(status_code=404, detail="Account not found")
 
     created_responses = []
-    
-    for item in data.transactions:
+    ordered_transactions = [
+        item for _, item in sorted(enumerate(data.transactions), key=_bulk_tx_order_key)
+    ]
+
+    for item in ordered_transactions:
         try:
             if item.type.value == "DEPOSIT":
                 resp = create_eur_deposit(
