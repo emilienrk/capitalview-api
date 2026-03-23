@@ -239,36 +239,39 @@ def create_asset(
     session.flush()
 
     today_iso = datetime.now(timezone.utc).date().isoformat()
-    acquisition_anchor_date = data.acquisition_date or today_iso
 
-    # Anchor the curve at acquisition with purchase price when available.
-    if purchase_price is not None:
+    # Create a historical purchase anchor only when we know the acquisition date.
+    if purchase_price is not None and data.acquisition_date:
         _create_valuation_row(
             session=session,
             asset_uuid=asset.uuid,
             estimated_value=purchase_price,
-            valued_at=acquisition_anchor_date,
+            valued_at=data.acquisition_date,
             master_key=master_key,
             source="asset_create_purchase",
         )
 
-    # If user also provides a current estimated value, add a second point at "now".
+    # If user provides a current estimated value, this is the current anchor.
     if data.estimated_value is not None:
-        should_create_current_point = True
-
-        # Avoid duplicate valuation when acquisition anchor already matches today's value/date.
-        if purchase_price is not None and acquisition_anchor_date == today_iso:
-            should_create_current_point = data.estimated_value != purchase_price
-
-        if should_create_current_point:
-            _create_valuation_row(
-                session=session,
-                asset_uuid=asset.uuid,
-                estimated_value=data.estimated_value,
-                valued_at=today_iso,
-                master_key=master_key,
-                source="asset_create_current",
-            )
+        _create_valuation_row(
+            session=session,
+            asset_uuid=asset.uuid,
+            estimated_value=data.estimated_value,
+            valued_at=today_iso,
+            master_key=master_key,
+            source="asset_create_current",
+        )
+    # Otherwise keep one valuation point from purchase price so the asset has a current value.
+    elif purchase_price is not None:
+        fallback_date = data.acquisition_date or today_iso
+        _create_valuation_row(
+            session=session,
+            asset_uuid=asset.uuid,
+            estimated_value=purchase_price,
+            valued_at=fallback_date,
+            master_key=master_key,
+            source="asset_create_purchase",
+        )
 
     session.commit()
     session.refresh(asset)
@@ -633,9 +636,13 @@ def _ensure_valuation_date_not_before_acquisition(
     valued_at: str,
     master_key: str,
 ) -> None:
-    """Reject valuation dates older than asset acquisition date."""
+    """Reject valuation dates older than explicit acquisition date."""
     asset = session.get(Asset, asset_uuid)
     if not asset:
+        return
+
+    # Only enforce this rule when user has explicitly provided an acquisition date.
+    if not asset.acquisition_date_enc:
         return
 
     valuation_date = _parse_date_str(valued_at)
