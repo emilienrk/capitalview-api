@@ -596,14 +596,12 @@ def test_build_asset_snapshots_keeps_past_then_drops_after_sale(session: Session
         user_uuid_bidx=user_bidx,
         name_enc=encrypt_data("Montre", master_key),
         category_enc=encrypt_data("Luxe", master_key),
-        estimated_value_enc=encrypt_data("1000", master_key),
         sold_at_enc=encrypt_data("2024-03-10", master_key),
     )
     active_asset = Asset(
         user_uuid_bidx=user_bidx,
         name_enc=encrypt_data("Or", master_key),
         category_enc=encrypt_data("Métal", master_key),
-        estimated_value_enc=encrypt_data("300", master_key),
     )
     session.add(sold_asset)
     session.add(active_asset)
@@ -632,6 +630,39 @@ def test_build_asset_snapshots_keeps_past_then_drops_after_sale(session: Session
 
     assert by_name["Montre"].sold_at == date(2024, 3, 10)
     assert by_name["Montre"].valuations == [(date(2024, 3, 9), Decimal("1200"))]
+
+
+def test_build_asset_snapshots_uses_earliest_acquisition_date_as_start(
+    session: Session,
+    master_key: str,
+):
+    """Virtual ASSET account must start at the earliest business acquisition date."""
+    user_uuid = "user-assets-acq-start"
+    user_bidx = hash_index(user_uuid, master_key)
+
+    # Simulate assets created today in DB, but with older business acquisition dates.
+    asset_2024 = Asset(
+        user_uuid_bidx=user_bidx,
+        name_enc=encrypt_data("Voiture", master_key),
+        category_enc=encrypt_data("Transport", master_key),
+        acquisition_date_enc=encrypt_data("2024-03-15", master_key),
+    )
+    asset_2023 = Asset(
+        user_uuid_bidx=user_bidx,
+        name_enc=encrypt_data("Montre", master_key),
+        category_enc=encrypt_data("Luxe", master_key),
+        acquisition_date_enc=encrypt_data("2023-06-01", master_key),
+    )
+    session.add(asset_2024)
+    session.add(asset_2023)
+    session.commit()
+
+    snapshots = _build_asset_snapshots(session, master_key, user_bidx)
+    assert len(snapshots) == 1
+
+    snap = snapshots[0]
+    assert snap.account_type == AccountCategory.ASSET
+    assert snap.account_created_at == date(2023, 6, 1)
 
 
 # ---------------------------------------------------------------------------

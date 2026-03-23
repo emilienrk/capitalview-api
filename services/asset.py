@@ -2,7 +2,7 @@
 
 import json
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -16,6 +16,7 @@ from dtos.asset import (
     AssetSell,
     AssetResponse,
     AssetValuationCreate,
+    AssetValuationUpdate,
     AssetValuationResponse,
     AssetCategorySummary,
     AssetSummaryResponse,
@@ -24,11 +25,84 @@ from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotRespo
 from services.encryption import encrypt_data, decrypt_data, hash_index
 
 
-def _map_asset_to_response(asset: Asset, master_key: str) -> AssetResponse:
+def _valuation_sort_key(v: AssetValuation, master_key: str) -> tuple[date, datetime]:
+    """Sort by valued_at first, then created_at as tiebreaker."""
+    valued_at = _decrypt_valued_at(v.valued_at_enc, master_key) or date.min
+    return valued_at, v.created_at
+
+
+def _pick_latest_valuation(
+    valuations: list[AssetValuation],
+    master_key: str,
+) -> Optional[AssetValuation]:
+    """Return the latest valuation using valued_at then created_at ordering."""
+    if not valuations:
+        return None
+    return max(valuations, key=lambda v: _valuation_sort_key(v, master_key))
+
+
+def _latest_valuations_by_asset(
+    session: Session,
+    asset_ids: list[str],
+    master_key: str,
+) -> dict[str, AssetValuation]:
+    """Load latest valuation for each asset in one query."""
+    if not asset_ids:
+        return {}
+
+    rows = session.exec(
+        select(AssetValuation).where(AssetValuation.asset_uuid.in_(asset_ids))
+    ).all()
+
+    grouped: dict[str, list[AssetValuation]] = defaultdict(list)
+    for row in rows:
+        grouped[row.asset_uuid].append(row)
+
+    result: dict[str, AssetValuation] = {}
+    for asset_uuid, vals in grouped.items():
+        latest = _pick_latest_valuation(vals, master_key)
+        if latest:
+            result[asset_uuid] = latest
+
+    return result
+
+
+def _resolve_asset_estimated_value(
+    asset: Asset,
+    latest_valuation: Optional[AssetValuation],
+    master_key: str,
+) -> Decimal:
+    """Resolve current asset value from latest valuation with safe fallbacks."""
+    if asset.sold_price_enc:
+        try:
+            return Decimal(decrypt_data(asset.sold_price_enc, master_key))
+        except Exception:
+            pass
+
+    if latest_valuation:
+        try:
+            return Decimal(decrypt_data(latest_valuation.estimated_value_enc, master_key))
+        except Exception:
+            pass
+
+    if asset.purchase_price_enc:
+        try:
+            return Decimal(decrypt_data(asset.purchase_price_enc, master_key))
+        except Exception:
+            pass
+
+    return Decimal("0")
+
+
+def _map_asset_to_response(
+    asset: Asset,
+    master_key: str,
+    latest_valuation: Optional[AssetValuation] = None,
+) -> AssetResponse:
     """Decrypt and map an Asset to the response DTO."""
     name = decrypt_data(asset.name_enc, master_key)
     category = decrypt_data(asset.category_enc, master_key)
-    estimated_value = Decimal(decrypt_data(asset.estimated_value_enc, master_key))
+    estimated_value = _resolve_asset_estimated_value(asset, latest_valuation, master_key)
 
     description = None
     if asset.description_enc:
@@ -51,6 +125,14 @@ def _map_asset_to_response(asset: Asset, master_key: str) -> AssetResponse:
     if asset.sold_at_enc:
         sold_at = decrypt_data(asset.sold_at_enc, master_key)
 
+    # Get last valuation date
+    last_valuation_date: Optional[str] = None
+    if latest_valuation:
+        try:
+            last_valuation_date = decrypt_data(latest_valuation.valued_at_enc, master_key)
+        except Exception:
+            pass
+
     # Compute profit/loss
     profit_loss: Optional[Decimal] = None
     if purchase_price is not None and purchase_price > 0:
@@ -68,6 +150,7 @@ def _map_asset_to_response(asset: Asset, master_key: str) -> AssetResponse:
         profit_loss=profit_loss,
         sold_price=sold_price,
         sold_at=sold_at,
+        last_valuation_date=last_valuation_date,
         created_at=asset.created_at,
         updated_at=asset.updated_at,
     )
@@ -88,8 +171,32 @@ def _map_valuation_to_response(v: AssetValuation, master_key: str) -> AssetValua
         estimated_value=estimated_value,
         note=note,
         valued_at=valued_at,
+        source=v.source,
         created_at=v.created_at,
+        updated_at=v.updated_at,
     )
+
+
+def _create_valuation_row(
+    session: Session,
+    asset_uuid: str,
+    estimated_value: Decimal,
+    valued_at: str,
+    master_key: str,
+    note: Optional[str] = None,
+    source: Optional[str] = None,
+) -> AssetValuation:
+    """Create and stage a valuation row (caller controls commit)."""
+    note_enc = encrypt_data(note, master_key) if note else None
+    valuation = AssetValuation(
+        asset_uuid=asset_uuid,
+        estimated_value_enc=encrypt_data(str(estimated_value), master_key),
+        note_enc=note_enc,
+        valued_at_enc=encrypt_data(valued_at, master_key),
+        source=source,
+    )
+    session.add(valuation)
+    return valuation
 
 
 def create_asset(
@@ -98,18 +205,13 @@ def create_asset(
     user_uuid: str,
     master_key: str,
 ) -> AssetResponse:
-    """Create a new encrypted asset. Auto-fills missing price from the other."""
+    """Create a new encrypted asset and initial valuation."""
     user_bidx = hash_index(user_uuid, master_key)
 
-    # If only purchase_price is provided, use it as estimated_value too
     purchase_price = data.purchase_price
-    estimated_value = data.estimated_value
-    if purchase_price is not None and estimated_value is None:
-        estimated_value = purchase_price
 
     name_enc = encrypt_data(data.name, master_key)
     category_enc = encrypt_data(data.category, master_key)
-    estimated_value_enc = encrypt_data(str(estimated_value), master_key)
 
     description_enc = None
     if data.description:
@@ -129,16 +231,56 @@ def create_asset(
         description_enc=description_enc,
         category_enc=category_enc,
         purchase_price_enc=purchase_price_enc,
-        estimated_value_enc=estimated_value_enc,
         currency=data.currency,
         acquisition_date_enc=acquisition_date_enc,
     )
 
     session.add(asset)
+    session.flush()
+
+    today_iso = datetime.now(timezone.utc).date().isoformat()
+    acquisition_anchor_date = data.acquisition_date or today_iso
+
+    # Anchor the curve at acquisition with purchase price when available.
+    if purchase_price is not None:
+        _create_valuation_row(
+            session=session,
+            asset_uuid=asset.uuid,
+            estimated_value=purchase_price,
+            valued_at=acquisition_anchor_date,
+            master_key=master_key,
+            source="asset_create_purchase",
+        )
+
+    # If user also provides a current estimated value, add a second point at "now".
+    if data.estimated_value is not None:
+        should_create_current_point = True
+
+        # Avoid duplicate valuation when acquisition anchor already matches today's value/date.
+        if purchase_price is not None and acquisition_anchor_date == today_iso:
+            should_create_current_point = data.estimated_value != purchase_price
+
+        if should_create_current_point:
+            _create_valuation_row(
+                session=session,
+                asset_uuid=asset.uuid,
+                estimated_value=data.estimated_value,
+                valued_at=today_iso,
+                master_key=master_key,
+                source="asset_create_current",
+            )
+
     session.commit()
     session.refresh(asset)
 
-    return _map_asset_to_response(asset, master_key)
+    latest = _pick_latest_valuation(
+        session.exec(
+            select(AssetValuation).where(AssetValuation.asset_uuid == asset.uuid)
+        ).all(),
+        master_key,
+    )
+
+    return _map_asset_to_response(asset, master_key, latest)
 
 
 def update_asset(
@@ -160,9 +302,6 @@ def update_asset(
     if data.purchase_price is not None:
         asset.purchase_price_enc = encrypt_data(str(data.purchase_price), master_key)
 
-    if data.estimated_value is not None:
-        asset.estimated_value_enc = encrypt_data(str(data.estimated_value), master_key)
-
     if data.currency is not None:
         asset.currency = data.currency
 
@@ -173,7 +312,14 @@ def update_asset(
     session.commit()
     session.refresh(asset)
 
-    return _map_asset_to_response(asset, master_key)
+    latest = _pick_latest_valuation(
+        session.exec(
+            select(AssetValuation).where(AssetValuation.asset_uuid == asset.uuid)
+        ).all(),
+        master_key,
+    )
+
+    return _map_asset_to_response(asset, master_key, latest)
 
 
 def delete_asset(
@@ -211,14 +357,27 @@ def sell_asset(
     asset.sold_price_enc = encrypt_data(str(data.sold_price), master_key)
     asset.sold_at_enc = encrypt_data(data.sold_at, master_key)
 
-    # Update estimated value to sold price
-    asset.estimated_value_enc = encrypt_data(str(data.sold_price), master_key)
+    _create_valuation_row(
+        session=session,
+        asset_uuid=asset_uuid,
+        estimated_value=data.sold_price,
+        valued_at=data.sold_at,
+        master_key=master_key,
+        source="sell",
+    )
 
     session.add(asset)
     session.commit()
     session.refresh(asset)
 
-    return _map_asset_to_response(asset, master_key)
+    latest = _pick_latest_valuation(
+        session.exec(
+            select(AssetValuation).where(AssetValuation.asset_uuid == asset.uuid)
+        ).all(),
+        master_key,
+    )
+
+    return _map_asset_to_response(asset, master_key, latest)
 
 
 def get_user_assets(
@@ -234,7 +393,16 @@ def get_user_assets(
         select(Asset).where(Asset.user_uuid_bidx == user_bidx)
     ).all()
 
-    all_responses = [_map_asset_to_response(a, master_key) for a in assets]
+    latest_by_asset = _latest_valuations_by_asset(
+        session,
+        [a.uuid for a in assets],
+        master_key,
+    )
+
+    all_responses = [
+        _map_asset_to_response(a, master_key, latest_by_asset.get(a.uuid))
+        for a in assets
+    ]
 
     # Filter out sold assets unless explicitly requested
     if not include_sold:
@@ -288,7 +456,14 @@ def get_asset(
     if asset.user_uuid_bidx != user_bidx:
         return None
 
-    return _map_asset_to_response(asset, master_key)
+    latest = _pick_latest_valuation(
+        session.exec(
+            select(AssetValuation).where(AssetValuation.asset_uuid == asset.uuid)
+        ).all(),
+        master_key,
+    )
+
+    return _map_asset_to_response(asset, master_key, latest)
 
 
 def create_valuation(
@@ -298,24 +473,57 @@ def create_valuation(
     master_key: str,
 ) -> AssetValuationResponse:
     """Add a valuation entry for an asset."""
-    estimated_value_enc = encrypt_data(str(data.estimated_value), master_key)
-    valued_at_enc = encrypt_data(data.valued_at, master_key)
-
-    note_enc = None
-    if data.note:
-        note_enc = encrypt_data(data.note, master_key)
-
-    valuation = AssetValuation(
+    _ensure_valuation_date_not_before_acquisition(
+        session=session,
         asset_uuid=asset_uuid,
-        estimated_value_enc=estimated_value_enc,
-        note_enc=note_enc,
-        valued_at_enc=valued_at_enc,
+        valued_at=data.valued_at,
+        master_key=master_key,
+    )
+
+    valuation = _create_valuation_row(
+        session=session,
+        asset_uuid=asset_uuid,
+        estimated_value=data.estimated_value,
+        valued_at=data.valued_at,
+        master_key=master_key,
+        note=data.note,
+        source="manual",
     )
 
     session.add(valuation)
     session.commit()
     session.refresh(valuation)
 
+    return _map_valuation_to_response(valuation, master_key)
+
+
+def update_valuation(
+    session: Session,
+    valuation: AssetValuation,
+    data: AssetValuationUpdate,
+    master_key: str,
+) -> AssetValuationResponse:
+    """Update a valuation entry."""
+    if "valued_at" in data.model_fields_set and data.valued_at is not None:
+        _ensure_valuation_date_not_before_acquisition(
+            session=session,
+            asset_uuid=valuation.asset_uuid,
+            valued_at=data.valued_at,
+            master_key=master_key,
+        )
+
+    if "estimated_value" in data.model_fields_set and data.estimated_value is not None:
+        valuation.estimated_value_enc = encrypt_data(str(data.estimated_value), master_key)
+
+    if "note" in data.model_fields_set:
+        valuation.note_enc = encrypt_data(data.note, master_key) if data.note else None
+
+    if "valued_at" in data.model_fields_set and data.valued_at is not None:
+        valuation.valued_at_enc = encrypt_data(data.valued_at, master_key)
+
+    session.add(valuation)
+    session.commit()
+    session.refresh(valuation)
     return _map_valuation_to_response(valuation, master_key)
 
 
@@ -329,10 +537,8 @@ def get_asset_valuations(
         select(AssetValuation).where(AssetValuation.asset_uuid == asset_uuid)
     ).all()
 
-    responses = [_map_valuation_to_response(v, master_key) for v in valuations]
-    # Sort by valued_at descending
-    responses.sort(key=lambda v: v.valued_at, reverse=True)
-    return responses
+    valuations.sort(key=lambda v: _valuation_sort_key(v, master_key), reverse=True)
+    return [_map_valuation_to_response(v, master_key) for v in valuations]
 
 
 def delete_valuation(
@@ -388,8 +594,8 @@ def get_asset_rebuild_start_date(
     # Fall back to the asset's acquisition date
     if asset.acquisition_date_enc:
         try:
-            from services.encryption import decrypt_data as _dec
-            raw_acq = _dec(asset.acquisition_date_enc, master_key)
+            from services.encryption import decrypt_data
+            raw_acq = decrypt_data(asset.acquisition_date_enc, master_key)
             acq = _parse_date_str(raw_acq)
             if acq:
                 return acq
@@ -419,6 +625,28 @@ def _decrypt_valued_at(valued_at_enc: str, master_key: str) -> Optional[date]:
         return _parse_date_str(raw)
     except Exception:
         return None
+
+
+def _ensure_valuation_date_not_before_acquisition(
+    session: Session,
+    asset_uuid: str,
+    valued_at: str,
+    master_key: str,
+) -> None:
+    """Reject valuation dates older than asset acquisition date."""
+    asset = session.get(Asset, asset_uuid)
+    if not asset:
+        return
+
+    valuation_date = _parse_date_str(valued_at)
+    if not valuation_date:
+        return
+
+    acquired_at = get_asset_acquired_at(asset, master_key)
+    if valuation_date < acquired_at:
+        raise ValueError(
+            f"La date de valorisation ne peut pas etre avant la date d'acquisition ({acquired_at.isoformat()})."
+        )
 
 
 def get_asset_acquired_at(asset: Asset, master_key: str) -> date:

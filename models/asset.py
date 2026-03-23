@@ -21,7 +21,6 @@ class Asset(SQLModel, table=True):
     description_enc: Optional[str] = Field(sa_column=Column(TEXT))
     category_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     purchase_price_enc: Optional[str] = Field(sa_column=Column(TEXT))
-    estimated_value_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     currency: str = Field(default="EUR", sa_column=Column(TEXT, nullable=False, server_default="EUR"))
     acquisition_date_enc: Optional[str] = Field(sa_column=Column(TEXT))
     sold_price_enc: Optional[str] = Field(default=None, sa_column=Column(TEXT))
@@ -48,12 +47,24 @@ class AssetValuation(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    asset_uuid: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
+    asset_uuid: str = Field(
+        sa_column=Column(TEXT, sa.ForeignKey("assets.uuid", ondelete="CASCADE"), nullable=False, index=True)
+    )
     estimated_value_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     note_enc: Optional[str] = Field(sa_column=Column(TEXT))
     valued_at_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    source: Optional[str] = Field(default=None, sa_column=Column(TEXT, nullable=True))
 
     created_at: datetime = Field(
         default=sa.func.now(),
         sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+    )
+    updated_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            onupdate=sa.func.now(),
+            nullable=False,
+        )
     )

@@ -639,7 +639,10 @@ def _build_asset_snapshots(
 
     valuations_by_asset: dict[str, list[tuple[date, Decimal]]] = {}
     for valuation in valuations:
-        valued_at_raw = decrypt_data(valuation.valued_at_enc, master_key)
+        try:
+            valued_at_raw = decrypt_data(valuation.valued_at_enc, master_key)
+        except Exception:
+            valued_at_raw = valuation.valued_at_enc
         valued_at = _parse_iso_date(valued_at_raw)
         if valued_at is None:
             continue
@@ -649,7 +652,7 @@ def _build_asset_snapshots(
         except Exception:
             continue
 
-    account_created_at = min(a.created_at.date() for a in assets)
+    account_start_date: Optional[date] = None
     physical_assets: list[IndividualAsset] = []
 
     for asset in assets:
@@ -669,6 +672,9 @@ def _build_asset_snapshots(
             parsed_acq = _parse_iso_date(acq_raw)
             if parsed_acq:
                 acquired_at = parsed_acq
+
+        if account_start_date is None or acquired_at < account_start_date:
+            account_start_date = acquired_at
 
         sold_at: Optional[date] = None
         if asset.sold_at_enc:
@@ -690,7 +696,7 @@ def _build_asset_snapshots(
         _AccountSnapshot(
             account_id=virtual_account_id,
             account_type=AccountCategory.ASSET,
-            account_created_at=account_created_at,
+            account_created_at=account_start_date or min(a.created_at.date() for a in assets),
             physical_assets=physical_assets,
             total_invested=Decimal("0"),
         )
@@ -722,27 +728,35 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
         all_accounts: list[_AccountSnapshot] = []
 
         try:
-            all_accounts += _build_stock_snapshots(session, master_key, user_uuid_bidx)
+            stock_accounts = _build_stock_snapshots(session, master_key, user_uuid_bidx)
+            all_accounts += stock_accounts
         except Exception as exc:
             logger.warning("account_history: stock snapshot error: %s", exc)
+            session.rollback()
 
         try:
             show_negative = getattr(settings, "crypto_show_negative_positions", False)
-            all_accounts += _build_crypto_snapshots(
+            crypto_accounts = _build_crypto_snapshots(
                 session, master_key, user_uuid_bidx, show_negative
             )
+            all_accounts += crypto_accounts
         except Exception as exc:
             logger.warning("account_history: crypto snapshot error: %s", exc)
+            session.rollback()
 
         try:
-            all_accounts += _build_bank_snapshots(session, master_key, user_uuid_bidx)
+            bank_accounts = _build_bank_snapshots(session, master_key, user_uuid_bidx)
+            all_accounts += bank_accounts
         except Exception as exc:
             logger.warning("account_history: bank snapshot error: %s", exc)
+            session.rollback()
 
         try:
-            all_accounts += _build_asset_snapshots(session, master_key, user_uuid_bidx)
+            asset_accounts = _build_asset_snapshots(session, master_key, user_uuid_bidx)
+            all_accounts += asset_accounts
         except Exception as exc:
             logger.warning("account_history: asset snapshot error: %s", exc)
+            session.rollback()
 
         if not all_accounts:
             return
@@ -769,12 +783,6 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
                         )
                     )
                     first_and_last = None
-                    logger.info(
-                        "account_history catchup: invalidated stale start for account_bidx=%s (first=%s, expected_start=%s)",
-                        account_id_bidx[:8] + "…",
-                        first_date,
-                        acc_snap.account_created_at,
-                    )
 
             last_date = first_and_last[1] if first_and_last is not None else None
 
@@ -797,12 +805,6 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
 
         if not accounts_to_process:
             return
-
-        logger.info(
-            "account_history catchup: %d account(s) need backfill for user_bidx=%s",
-            len(accounts_to_process),
-            user_uuid_bidx[:8] + "…",
-        )
 
         # ── 4b. Ensure historical market prices exist for all affected symbols ──
         # Delegated to services/market.py which is the single owner of price data.

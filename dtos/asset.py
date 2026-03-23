@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class AssetCreate(BaseModel):
@@ -16,6 +16,19 @@ class AssetCreate(BaseModel):
     estimated_value: Optional[Decimal] = None
     currency: str = "EUR"
     acquisition_date: Optional[str] = None
+
+    @field_validator("acquisition_date", mode="before")
+    @classmethod
+    def validate_acquisition_date(cls, v: Optional[str]) -> Optional[str]:
+        """Validate that acquisition_date is in ISO format (YYYY-MM-DD)."""
+        if v is None or v == "":
+            return None
+        try:
+            # Try to parse as ISO date (YYYY-MM-DD)
+            datetime.fromisoformat(v).date()
+            return v
+        except (ValueError, TypeError):
+            raise ValueError("acquisition_date doit être au format ISO (YYYY-MM-DD)")
 
     @model_validator(mode="after")
     def at_least_one_price(self) -> "AssetCreate":
@@ -30,7 +43,6 @@ class AssetUpdate(BaseModel):
     description: Optional[str] = None
     category: Optional[str] = None
     purchase_price: Optional[Decimal] = None
-    estimated_value: Optional[Decimal] = Field(None, ge=0)
     currency: Optional[str] = None
     acquisition_date: Optional[str] = None
 
@@ -54,6 +66,7 @@ class AssetResponse(BaseModel):
     profit_loss: Optional[Decimal] = None
     sold_price: Optional[Decimal] = None
     sold_at: Optional[str] = None
+    last_valuation_date: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -65,6 +78,19 @@ class AssetValuationCreate(BaseModel):
     valued_at: str  # ISO date string
 
 
+class AssetValuationUpdate(BaseModel):
+    """Update a valuation entry."""
+    estimated_value: Optional[Decimal] = Field(None, ge=0)
+    note: Optional[str] = None
+    valued_at: Optional[str] = None
+
+    @model_validator(mode="after")
+    def at_least_one_field(self) -> "AssetValuationUpdate":
+        if not self.model_fields_set:
+            raise ValueError("Au moins un champ doit être fourni")
+        return self
+
+
 class AssetValuationResponse(BaseModel):
     """Valuation history entry response."""
     id: str
@@ -72,7 +98,9 @@ class AssetValuationResponse(BaseModel):
     estimated_value: Decimal
     note: Optional[str] = None
     valued_at: str
+    source: Optional[str] = None
     created_at: datetime
+    updated_at: datetime
 
 
 class AssetCategorySummary(BaseModel):

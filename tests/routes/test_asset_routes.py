@@ -110,10 +110,10 @@ def test_update_asset(session, master_key):
     created = client.post("/assets", json={"name": "Old Name", "category": "Autre", "estimated_value": 50}).json()
     asset_id = created["id"]
 
-    r = client.put(f"/assets/{asset_id}", json={"name": "New Name", "estimated_value": 75})
+    r = client.put(f"/assets/{asset_id}", json={"name": "New Name"})
     assert r.status_code == 200
     assert r.json()["name"] == "New Name"
-    assert float(r.json()["estimated_value"]) == 75
+    assert float(r.json()["estimated_value"]) == 50
 
 
 def test_update_asset_not_found(session, master_key):
@@ -138,6 +138,41 @@ def test_delete_asset_not_found(session, master_key):
     client = TestClient(app)
     r = client.delete("/assets/nonexistent")
     assert r.status_code == 404
+
+
+def test_create_asset_triggers_history_rebuild(session, master_key):
+    client = TestClient(app)
+
+    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+        r = client.post("/assets", json={
+            "name": "Maison",
+            "category": "Immobilier",
+            "estimated_value": 200000,
+            "acquisition_date": "2024-01-15",
+        })
+
+        assert r.status_code == 201
+        mock_rebuild.assert_called_once()
+        from_date_arg = mock_rebuild.call_args[0][2]
+        assert from_date_arg == date(2024, 1, 15)
+
+
+def test_delete_asset_triggers_history_rebuild(session, master_key):
+    client = TestClient(app)
+    created = client.post("/assets", json={
+        "name": "Delete Me",
+        "category": "Autre",
+        "estimated_value": 100,
+        "acquisition_date": "2023-11-01",
+    }).json()
+    asset_id = created["id"]
+
+    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+        r = client.delete(f"/assets/{asset_id}")
+        assert r.status_code == 204
+        mock_rebuild.assert_called_once()
+        from_date_arg = mock_rebuild.call_args[0][2]
+        assert from_date_arg == date(2023, 11, 1)
 
 
 # ──────────────────────── Sell ────────────────────────────
@@ -181,6 +216,27 @@ def test_sell_asset_not_found(session, master_key):
     client = TestClient(app)
     r = client.post("/assets/nonexistent/sell", json={"sold_price": 100, "sold_at": "2025-01-01"})
     assert r.status_code == 404
+
+
+def test_sell_asset_triggers_history_rebuild(session, master_key):
+    client = TestClient(app)
+    created = client.post("/assets", json={
+        "name": "Sell Trigger",
+        "category": "Autre",
+        "estimated_value": 1000,
+        "acquisition_date": "2024-01-01",
+    }).json()
+    asset_id = created["id"]
+
+    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+        r = client.post(f"/assets/{asset_id}/sell", json={
+            "sold_price": 900,
+            "sold_at": "2024-06-10",
+        })
+        assert r.status_code == 200
+        mock_rebuild.assert_called_once()
+        from_date_arg = mock_rebuild.call_args[0][2]
+        assert from_date_arg == date(2024, 1, 1)
 
 
 # ──────────────────────── Profit/Loss ─────────────────────
@@ -238,7 +294,7 @@ def test_valuation_crud(session, master_key):
     r = client.get(f"/assets/{asset_id}/valuations")
     assert r.status_code == 200
     valuations = r.json()
-    assert len(valuations) == 2
+    assert len(valuations) == 3
 
     # Delete one valuation
     v_id = valuations[0]["id"]
@@ -246,7 +302,29 @@ def test_valuation_crud(session, master_key):
     assert r_del.status_code == 204
 
     r2 = client.get(f"/assets/{asset_id}/valuations")
-    assert len(r2.json()) == 1
+    assert len(r2.json()) == 2
+
+
+def test_valuation_update(session, master_key):
+    client = TestClient(app)
+    created = client.post("/assets", json={"name": "Bike", "category": "Véhicule", "estimated_value": 1000}).json()
+    asset_id = created["id"]
+
+    v = client.post(f"/assets/{asset_id}/valuations", json={
+        "estimated_value": 900,
+        "valued_at": "2025-03-01",
+        "note": "initial",
+    }).json()
+
+    r = client.put(
+        f"/assets/{asset_id}/valuations/{v['id']}",
+        json={"estimated_value": 950, "valued_at": "2025-03-02", "note": "corrigé"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert float(data["estimated_value"]) == 950
+    assert data["valued_at"] == "2025-03-02"
+    assert data["note"] == "corrigé"
 
 
 def test_valuation_asset_not_found(session, master_key):
@@ -280,7 +358,7 @@ def test_delete_asset_cascades_valuations(session, master_key):
     client.post(f"/assets/{asset_id}/valuations", json={"estimated_value": 8, "valued_at": "2025-06-01"})
 
     r = client.get(f"/assets/{asset_id}/valuations")
-    assert len(r.json()) == 2
+    assert len(r.json()) == 3
 
     # Delete the asset
     client.delete(f"/assets/{asset_id}")

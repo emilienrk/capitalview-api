@@ -1,6 +1,7 @@
 """Tests for asset service layer."""
 
 import pytest
+from datetime import date
 from decimal import Decimal
 from sqlmodel import Session
 
@@ -12,10 +13,11 @@ from services.asset import (
     delete_asset,
     sell_asset,
     create_valuation,
+    update_valuation,
     get_asset_valuations,
     delete_valuation,
 )
-from dtos.asset import AssetCreate, AssetUpdate, AssetSell, AssetValuationCreate
+from dtos.asset import AssetCreate, AssetUpdate, AssetSell, AssetValuationCreate, AssetValuationUpdate
 from models.asset import Asset, AssetValuation
 from services.encryption import hash_index
 
@@ -46,7 +48,6 @@ def test_create_asset(session: Session, master_key: str):
     assert db_asset is not None
     assert db_asset.user_uuid_bidx == hash_index(user_uuid, master_key)
     assert db_asset.name_enc != "AWP Dragon Lore"
-    assert db_asset.estimated_value_enc != "1500"
 
 
 def test_create_asset_minimal_estimated(session: Session, master_key: str):
@@ -131,13 +132,12 @@ def test_update_asset(session: Session, master_key: str):
 
     updated = update_asset(session, db_asset, AssetUpdate(
         name="New Name",
-        estimated_value=Decimal("75"),
         category="Gaming",
         description="Updated description",
     ), master_key)
 
     assert updated.name == "New Name"
-    assert updated.estimated_value == Decimal("75")
+    assert updated.estimated_value == Decimal("50")
     assert updated.category == "Gaming"
     assert updated.description == "Updated description"
 
@@ -179,7 +179,7 @@ def test_delete_asset_cascades_valuations(session: Session, master_key: str):
     create_valuation(session, created.id, AssetValuationCreate(estimated_value=Decimal("6"), valued_at="2025-06-01"), master_key)
 
     valuations_before = get_asset_valuations(session, created.id, master_key)
-    assert len(valuations_before) == 2
+    assert len(valuations_before) == 3
 
     delete_asset(session, created.id)
 
@@ -302,16 +302,34 @@ def test_get_asset_valuations(session: Session, master_key: str):
     create_valuation(session, asset.id, AssetValuationCreate(estimated_value=Decimal("90"), valued_at="2025-06-01"), master_key)
 
     valuations = get_asset_valuations(session, asset.id, master_key)
-    assert len(valuations) == 3
+    assert len(valuations) == 4
     # Should be sorted by valued_at descending
-    assert valuations[0].valued_at == "2025-06-01"
+    assert valuations[0].valued_at == date.today().isoformat()
     assert valuations[-1].valued_at == "2024-01-01"
 
 
 def test_get_asset_valuations_empty(session: Session, master_key: str):
     asset = create_asset(session, AssetCreate(name="No History", category="Autre", estimated_value=Decimal("10")), "user_1", master_key)
     valuations = get_asset_valuations(session, asset.id, master_key)
-    assert valuations == []
+    assert len(valuations) == 1
+    assert valuations[0].estimated_value == Decimal("10")
+
+
+def test_update_valuation(session: Session, master_key: str):
+    asset = create_asset(session, AssetCreate(name="Upd-V", category="Autre", estimated_value=Decimal("100")), "user_1", master_key)
+    v = create_valuation(session, asset.id, AssetValuationCreate(estimated_value=Decimal("80"), valued_at="2025-01-01"), master_key)
+    db_val = session.get(AssetValuation, v.id)
+
+    updated = update_valuation(
+        session,
+        db_val,
+        AssetValuationUpdate(estimated_value=Decimal("85"), note="Correction", valued_at="2025-01-02"),
+        master_key,
+    )
+
+    assert updated.estimated_value == Decimal("85")
+    assert updated.note == "Correction"
+    assert updated.valued_at == "2025-01-02"
 
 
 def test_delete_valuation(session: Session, master_key: str):
