@@ -430,9 +430,12 @@ def get_all_bank_accounts_history(
             aggregated[d]["total_invested"] += snap.total_invested
 
     result = []
+    prev_value = None
     for d in sorted(aggregated):
         day = aggregated[d]
         total_value = day["total_value"]
+        daily_pnl = (total_value - prev_value) if prev_value is not None else None
+        prev_value = total_value
         positions = [
             AccountHistoryPosition(
                 symbol="EUR",
@@ -448,7 +451,7 @@ def get_all_bank_accounts_history(
                 snapshot_date=d,
                 total_value=total_value,
                 total_invested=day["total_invested"],
-                daily_pnl=None,
+                daily_pnl=daily_pnl,
                 positions=positions,
             )
         )

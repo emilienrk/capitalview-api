@@ -319,11 +319,20 @@ class TestCryptoAccountHistory:
         _insert_history_row(session, user_bidx=user_bidx, account_id_bidx=hash_index(acc2.id, master_key),
                             account_type=AccountCategory.CRYPTO, snapshot_date=date(2026, 1, 1),
                             total_value="4000.00", total_invested="3000.00", master_key=master_key)
+        _insert_history_row(session, user_bidx=user_bidx, account_id_bidx=hash_index(acc1.id, master_key),
+                            account_type=AccountCategory.CRYPTO, snapshot_date=date(2026, 1, 2),
+                            total_value="10100.00", total_invested="8000.00", master_key=master_key)
+        _insert_history_row(session, user_bidx=user_bidx, account_id_bidx=hash_index(acc2.id, master_key),
+                            account_type=AccountCategory.CRYPTO, snapshot_date=date(2026, 1, 2),
+                            total_value="4100.00", total_invested="3000.00", master_key=master_key)
 
         result = get_all_crypto_accounts_history(session, user, master_key)
-        assert len(result) == 1
+        assert len(result) == 2
         assert result[0].total_value == Decimal("14000.00")
         assert result[0].total_invested == Decimal("11000.00")
+        assert result[0].daily_pnl is None
+        assert result[1].total_value == Decimal("14200.00")
+        assert result[1].daily_pnl == Decimal("200.00")
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@ from sqlmodel import Session, select
 from database import get_engine
 from models.account_history import AccountHistory
 from models.asset import Asset, AssetValuation
+from dtos.crypto import FIAT_SYMBOLS
 from models.enums import AccountCategory, AssetType
 from models.market import MarketAsset, MarketPriceHistory
 from models import BankAccount, CryptoAccount, StockAccount
@@ -304,6 +305,7 @@ def _generate_missing_snapshots(
     missing_dates: list[date],
     prev_value: Decimal,
     master_key: str,
+    has_previous_snapshot: bool = True,
 ) -> list[dict]:
     """
     Generate one encrypted row dict per missing date.
@@ -317,6 +319,46 @@ def _generate_missing_snapshots(
     tx_idx = 0
     txs = account_snapshot.transactions
 
+    # For crypto composite groups, BUY rows often carry price=0 and the true
+    # EUR cost sits in FIAT_ANCHOR (or fiat SPEND). Build a lookup once so
+    # invested basis is not lost in snapshots.
+    buy_group_cost_by_tx_id: dict[str, Decimal] = {}
+    if is_exact_mode and account_snapshot.account_type == AccountCategory.CRYPTO:
+        anchor_by_group: dict[str, Decimal] = {}
+        fiat_spend_by_group: dict[str, Decimal] = {}
+
+        for tx in txs:
+            group_uuid = getattr(tx, "group_uuid", None)
+            if not group_uuid:
+                continue
+
+            tx_type = getattr(tx, "type", "")
+            sym = (getattr(tx, "isin", None) or getattr(tx, "symbol", None) or "").upper()
+            amount = getattr(tx, "amount", Decimal("0"))
+            price_per_unit = getattr(tx, "price_per_unit", Decimal("0"))
+            fees = getattr(tx, "fees", Decimal("0"))
+            row_cost = (amount * price_per_unit) + fees
+
+            if tx_type == "FIAT_ANCHOR":
+                anchor_by_group.setdefault(group_uuid, Decimal("0"))
+                anchor_by_group[group_uuid] += row_cost
+            elif tx_type == "SPEND" and sym in FIAT_SYMBOLS:
+                fiat_spend_by_group.setdefault(group_uuid, Decimal("0"))
+                fiat_spend_by_group[group_uuid] += row_cost
+
+        for tx in txs:
+            if getattr(tx, "type", "") != "BUY":
+                continue
+            group_uuid = getattr(tx, "group_uuid", None)
+            tx_id = str(getattr(tx, "id", ""))
+            if not group_uuid or not tx_id:
+                continue
+
+            if group_uuid in anchor_by_group:
+                buy_group_cost_by_tx_id[tx_id] = anchor_by_group[group_uuid]
+            elif group_uuid in fiat_spend_by_group:
+                buy_group_cost_by_tx_id[tx_id] = fiat_spend_by_group[group_uuid]
+
     # Dict: symbol -> {"quantity": Decimal, "invested": Decimal}
     current_positions = {}
     current_invested = account_snapshot.total_invested
@@ -329,7 +371,7 @@ def _generate_missing_snapshots(
     if "EUR" not in current_positions:
         current_positions["EUR"] = {"quantity": Decimal("0"), "invested": Decimal("0")}
 
-    for d in missing_dates:
+    for day_index, d in enumerate(missing_dates):
         # Phase A: Replay transactions up to day `d` if exact mode
         if is_exact_mode:
             while tx_idx < len(txs) and getattr(txs[tx_idx], "executed_at").date() <= d:
@@ -339,6 +381,7 @@ def _generate_missing_snapshots(
                 amount = getattr(tx, "amount", Decimal("0"))
                 price_per_unit = getattr(tx, "price_per_unit", Decimal("0"))
                 fees = getattr(tx, "fees", Decimal("0"))
+                tx_id = str(getattr(tx, "id", ""))
                 
                 # Skip non-position types; allow FIAT_DEPOSIT only when it's EUR cash (crypto)
                 if tx_type in ("FIAT_ANCHOR", "FEE", "EXIT", "TRANSFER") or not sym:
@@ -354,14 +397,17 @@ def _generate_missing_snapshots(
                 is_eur_deposit = tx_type in ("DEPOSIT", "FIAT_DEPOSIT") and sym == "EUR"
 
                 if tx_type in ("BUY", "REWARD"):
+                    tx_cost = (amount * price_per_unit) + fees
+                    if tx_type == "BUY":
+                        tx_cost = buy_group_cost_by_tx_id.get(tx_id, tx_cost)
+
                     current_positions[sym]["quantity"] += amount
-                    current_positions[sym]["invested"] += (amount * price_per_unit) + fees
-                    current_invested += (amount * price_per_unit) + fees
+                    current_positions[sym]["invested"] += tx_cost
+                    current_invested += tx_cost
 
                     # Any stock/crypto acquisition consumes EUR cash.
                     if sym != "EUR":
-                        cost = (amount * price_per_unit) + fees
-                        current_positions["EUR"]["quantity"] -= cost
+                        current_positions["EUR"]["quantity"] -= tx_cost
 
                 elif tx_type == "DIVIDEND":
                     # Cash dividend: proceeds go to EUR cash, position quantity unchanged.
@@ -376,8 +422,9 @@ def _generate_missing_snapshots(
                         fraction = min(amount / current_positions[sym]["quantity"], Decimal("1"))
                         current_positions[sym]["quantity"] -= amount
                         if sym != "EUR":  # EUR cash is not invested capital
-                            current_positions[sym]["invested"] -= current_positions[sym]["invested"] * fraction
-                            current_invested -= current_invested * fraction
+                            deduction_invested = current_positions[sym]["invested"] * fraction
+                            current_positions[sym]["invested"] -= deduction_invested
+                            current_invested -= deduction_invested
 
                     # SELL returns EUR cash.
                     if tx_type == "SELL" and sym != "EUR":
@@ -499,7 +546,11 @@ def _generate_missing_snapshots(
                 )
             positions_json = json.dumps(snapshot_positions) if snapshot_positions else None
 
-        daily_pnl = total_value - prev_value
+        if day_index == 0 and not has_previous_snapshot:
+            # First snapshot has no prior day reference; avoid artificial spike vs zero.
+            daily_pnl = Decimal("0")
+        else:
+            daily_pnl = total_value - prev_value
 
         row: dict = {
             "uuid": uuid.uuid7(),
@@ -923,6 +974,7 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
                 price_matrix=price_matrix,
                 missing_dates=missing_dates,
                 prev_value=prev_value,
+                has_previous_snapshot=last_row is not None,
                 master_key=master_key,
             )
             all_rows.extend(rows)

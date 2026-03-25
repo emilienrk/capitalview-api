@@ -468,6 +468,199 @@ def test_generate_missing_snapshots_positions_json_structure(master_key: str):
     assert entry["invested"] == "15000.00"
 
 
+def test_generate_missing_snapshots_crypto_buy_uses_group_anchor_cost(master_key: str):
+    """For composite crypto BUY(price=0), invested should come from FIAT_ANCHOR group cost."""
+    user_bidx = hash_index("user_crypto_anchor", master_key)
+    acc_bidx = hash_index("acc_crypto_anchor", master_key)
+
+    tx_anchor = type(
+        "Tx",
+        (),
+        {
+            "id": "tx_anchor",
+            "group_uuid": "g1",
+            "type": "FIAT_ANCHOR",
+            "symbol": "EUR",
+            "amount": Decimal("100"),
+            "price_per_unit": Decimal("1"),
+            "fees": Decimal("0"),
+            "executed_at": datetime(2024, 4, 1, 10, 0, tzinfo=timezone.utc),
+        },
+    )()
+    tx_buy = type(
+        "Tx",
+        (),
+        {
+            "id": "tx_buy",
+            "group_uuid": "g1",
+            "type": "BUY",
+            "symbol": "BTC",
+            "amount": Decimal("0.01"),
+            "price_per_unit": Decimal("0"),
+            "fees": Decimal("0"),
+            "executed_at": datetime(2024, 4, 1, 10, 1, tzinfo=timezone.utc),
+        },
+    )()
+
+    rows = _generate_missing_snapshots(
+        user_uuid_bidx=user_bidx,
+        account_id_bidx=acc_bidx,
+        account_snapshot=_AccountSnapshot(
+            account_id="fake_id",
+            account_type=AccountCategory.CRYPTO,
+            transactions=[tx_anchor, tx_buy],
+            total_invested=Decimal("0"),
+        ),
+        price_matrix={"BTC": {date(2024, 4, 1): Decimal("12000")}},
+        missing_dates=[date(2024, 4, 1)],
+        prev_value=Decimal("0"),
+        master_key=master_key,
+    )
+
+    assert len(rows) == 1
+    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "100.00"
+
+    positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
+    by_symbol = {p["symbol"]: p for p in positions_dec}
+    assert by_symbol["BTC"]["invested"] == "100.00"
+
+
+def test_generate_missing_snapshots_sell_partial_reduces_invested_correctly(master_key: str):
+    """When selling part of a position, invested must be reduced by only that symbol's fraction, not total."""
+    user_bidx = hash_index("user_sell_invested", master_key)
+    acc_bidx = hash_index("acc_sell_invested", master_key)
+
+    # Buy BTC and ETH, then sell half of ETH
+    tx_buy_btc = type(
+        "Tx",
+        (),
+        {
+            "id": "buy_btc",
+            "type": "BUY",
+            "symbol": "BTC",
+            "amount": Decimal("1"),
+            "price_per_unit": Decimal("50000"),
+            "fees": Decimal("0"),
+            "executed_at": datetime(2024, 5, 1, 10, 0, tzinfo=timezone.utc),
+        },
+    )()
+    tx_buy_eth = type(
+        "Tx",
+        (),
+        {
+            "id": "buy_eth",
+            "type": "BUY",
+            "symbol": "ETH",
+            "amount": Decimal("2"),
+            "price_per_unit": Decimal("2000"),
+            "fees": Decimal("0"),
+            "executed_at": datetime(2024, 5, 1, 11, 0, tzinfo=timezone.utc),
+        },
+    )()
+    tx_sell_eth = type(
+        "Tx",
+        (),
+        {
+            "id": "sell_eth",
+            "type": "SELL",
+            "symbol": "ETH",
+            "amount": Decimal("1"),
+            "price_per_unit": Decimal("2500"),
+            "fees": Decimal("0"),
+            "executed_at": datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc),
+        },
+    )()
+
+    rows = _generate_missing_snapshots(
+        user_uuid_bidx=user_bidx,
+        account_id_bidx=acc_bidx,
+        account_snapshot=_AccountSnapshot(
+            account_id="fake_id",
+            account_type=AccountCategory.CRYPTO,
+            transactions=[tx_buy_btc, tx_buy_eth, tx_sell_eth],
+            total_invested=Decimal("0"),
+        ),
+        price_matrix={
+            "BTC": {date(2024, 5, 1): Decimal("50000")},
+            "ETH": {date(2024, 5, 1): Decimal("2500")},
+        },
+        missing_dates=[date(2024, 5, 1)],
+        prev_value=Decimal("0"),
+        master_key=master_key,
+    )
+
+    assert len(rows) == 1
+    # ❌ BUG (fixed): Without the fix, current_invested -= current_invested * 0.5 would subtract 54000 * 0.5 = 27000
+    # ✓ With fix: only ETH's 4000 * 0.5 = 2000 is subtracted from ETH's invested, total becomes 50000 + 4000 - 2000 = 52000
+    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "52000.00"
+
+    positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
+    by_symbol = {p["symbol"]: p for p in positions_dec}
+    assert by_symbol["BTC"]["invested"] == "50000.00"
+    assert by_symbol["ETH"]["invested"] == "2000.00"
+
+
+def test_generate_missing_snapshots_crypto_group_cost_includes_fees(master_key: str):
+    """Group cost calculation must include fees from FIAT_ANCHOR or fiat SPEND."""
+    user_bidx = hash_index("user_crypto_fees", master_key)
+    acc_bidx = hash_index("acc_crypto_fees", master_key)
+    group_uuid = "group_with_fees_123"
+
+    # FIAT_ANCHOR: 100 EUR * 1.00 price = 100, but with 5 EUR fees = 105 total cost
+    tx_anchor = type(
+        "Tx",
+        (),
+        {
+            "id": "anchor_1",
+            "type": "FIAT_ANCHOR",
+            "symbol": "EUR",
+            "amount": Decimal("100"),
+            "price_per_unit": Decimal("1"),
+            "fees": Decimal("5"),
+            "group_uuid": group_uuid,
+            "executed_at": datetime(2024, 5, 1, 10, 0, tzinfo=timezone.utc),
+        },
+    )()
+    # BUY with price=0 (cost will come from group FIAT_ANCHOR)
+    tx_buy = type(
+        "Tx",
+        (),
+        {
+            "id": "buy_btc_1",
+            "type": "BUY",
+            "symbol": "BTC",
+            "amount": Decimal("1"),
+            "price_per_unit": Decimal("0"),
+            "fees": Decimal("0"),
+            "group_uuid": group_uuid,
+            "executed_at": datetime(2024, 5, 1, 10, 0, tzinfo=timezone.utc),
+        },
+    )()
+
+    rows = _generate_missing_snapshots(
+        user_uuid_bidx=user_bidx,
+        account_id_bidx=acc_bidx,
+        account_snapshot=_AccountSnapshot(
+            account_id="fake_id",
+            account_type=AccountCategory.CRYPTO,
+            transactions=[tx_anchor, tx_buy],
+            total_invested=Decimal("0"),
+        ),
+        price_matrix={"BTC": {date(2024, 5, 1): Decimal("12000")}},
+        missing_dates=[date(2024, 5, 1)],
+        prev_value=Decimal("0"),
+        master_key=master_key,
+    )
+
+    assert len(rows) == 1
+    # Total invested should be 105 (100 + 5 fees from FIAT_ANCHOR), not just 100
+    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "105.00"
+
+    positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
+    by_symbol = {p["symbol"]: p for p in positions_dec}
+    assert by_symbol["BTC"]["invested"] == "105.00"
+
+
 def test_parse_positions_json_reads_invested_with_backward_compat():
     """Parser should read invested when present and default to 0 when absent."""
     parsed = _parse_positions_json(

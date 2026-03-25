@@ -302,9 +302,11 @@ def get_all_crypto_accounts_history(
                     aggregated[d]["positions"][sym]["price"] = pos.price
 
     result = []
+    prev_value: Decimal | None = None
     for d in sorted(aggregated):
         day = aggregated[d]
         total_value = day["total_value"]
+        daily_pnl = (total_value - prev_value) if prev_value is not None else None
         positions = [
             AccountHistoryPosition(
                 symbol=sym,
@@ -325,9 +327,10 @@ def get_all_crypto_accounts_history(
                 snapshot_date=d,
                 total_value=total_value,
                 total_invested=day["total_invested"],
-                daily_pnl=None,
+                daily_pnl=round(daily_pnl, 2) if daily_pnl is not None else None,
                 positions=positions,
             )
         )
+        prev_value = total_value
 
     return result
