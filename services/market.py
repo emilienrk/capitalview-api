@@ -389,9 +389,21 @@ def search_assets(query: str, asset_type: AssetType) -> list[dict]:
     return market_data_manager.search(query, asset_type)
 
 
-def get_assets_bulk_info(symbols: list[str], asset_type: AssetType) -> dict[str, dict]:
-    """Fetch live info for multiple symbols. Delegates to the provider manager."""
-    return market_data_manager.get_bulk_info(symbols, asset_type)
+def get_assets_bulk_info(session: Session, symbols: list[str], asset_type: AssetType) -> dict[str, dict]:
+    """Fetch live info for multiple symbols and convert all prices to EUR."""
+    data = market_data_manager.get_bulk_info(symbols, asset_type)
+    for sym, info in data.items():
+        if info.get("price"):
+            currency = info.get("currency")
+            if asset_type == AssetType.CRYPTO and not currency:
+                currency = "USD"
+            elif not currency:
+                currency = "EUR"
+            
+            eur_price = _to_eur(session, info["price"], currency)
+            info["price"] = eur_price
+            info["currency"] = "EUR"
+    return data
 
 
 def get_stock_price(session: Session, isin: str, db_only: bool = False) -> Optional[Decimal]:

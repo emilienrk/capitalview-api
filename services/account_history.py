@@ -513,7 +513,16 @@ def _generate_missing_snapshots(
                     continue
 
                 # EUR cash: price is always 1, no market lookup needed
-                price = Decimal("1") if sym == "EUR" else price_matrix.get(sym, {}).get(d)
+                if sym == "EUR":
+                    price = Decimal("1")
+                else:
+                    price = price_matrix.get(sym, {}).get(d)
+                
+                # Fallback: if market price is strictly unknown, assume its price is the last stored
+                if price is None and qty > Decimal("0"):
+                    if pos_data["invested"] > Decimal("0") and sym in FIAT_SYMBOLS:
+                        price = pos_data["invested"] / qty
+                
                 if price is not None:
                     value = qty * price
                     total_value += value

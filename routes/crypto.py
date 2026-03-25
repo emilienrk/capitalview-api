@@ -654,12 +654,13 @@ def search_crypto_assets(
 def get_crypto_assets_info(
     symbols: list[str],
     current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session),
 ):
     """Get live data for multiple crypto assets."""
     if not symbols:
         return []
 
-    data = get_assets_bulk_info(symbols, AssetType.CRYPTO)
+    data = get_assets_bulk_info(session, symbols, AssetType.CRYPTO)
 
     response = []
     for symbol, info in data.items():

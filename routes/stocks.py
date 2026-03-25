@@ -493,12 +493,13 @@ def search_market_assets(
 def get_assets_info(
     symbols: list[str],
     current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session),
 ):
     """Get live data for multiple assets."""
     if not symbols:
         return []
 
-    data = get_assets_bulk_info(symbols, AssetType.STOCK)
+    data = get_assets_bulk_info(session, symbols, AssetType.STOCK)
 
     response = []
     for symbol, info in data.items():
