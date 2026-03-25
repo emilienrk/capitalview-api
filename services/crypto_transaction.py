@@ -1,7 +1,7 @@
 """Crypto transaction services — atomic ledger model."""
 
 from decimal import Decimal
-from datetime import datetime, timezone
+from datetime import datetime, date
 from typing import List, Optional
 from uuid import uuid4
 
@@ -624,15 +624,17 @@ def get_account_transactions(
 
 def get_crypto_account_summary(
     session: Session,
-    account: CryptoAccount,
-    master_key: str,
+    transactions: list[TransactionResponse],
     show_negative_positions: bool = False,
+    as_of: date = None,
     db_only: bool = False,
+    preloaded_prices: dict[str, Decimal] = None,
 ) -> AccountSummaryResponse:
-    acc_resp = _map_account_to_response(account, master_key)
+    if as_of is None:
+        as_of = date.today()
 
-    transactions = get_account_transactions(session, account.uuid, master_key)
     transactions.sort(key=lambda x: x.executed_at)
+    transactions = [tx for tx in transactions if tx.executed_at.date() <= as_of]
 
     buy_group_cost: dict[str, Decimal] = {}
     anchor_by_group: dict[str, Decimal] = {}
@@ -722,7 +724,11 @@ def get_crypto_account_summary(
             name = symbol
             current_price = Decimal("1")
         else:
-            name, current_price = get_crypto_info(session, symbol, db_only)
+            if preloaded_prices is not None:
+                current_price = preloaded_prices.get(symbol)
+                name = symbol
+            else:
+                name, current_price = get_crypto_info(session, symbol, as_of=as_of, db_only=db_only)
 
         current_value = profit_loss = profit_loss_pct = None
         if current_price:
@@ -772,9 +778,6 @@ def get_crypto_account_summary(
             profit_loss_pct_acc = (profit_loss_acc / total_invested_acc * 100)
 
     return AccountSummaryResponse(
-        account_id=acc_resp.id,
-        account_name=acc_resp.name,
-        account_type="CRYPTO",
         total_invested=round(total_invested_acc, 2),
         total_fees=round(total_fees_acc, 2),
         currency="EUR",

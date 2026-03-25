@@ -22,9 +22,8 @@ from .cashflow import (
 
 # Transaction schemas (shared)
 from .transaction import (
-    AccountHistoryPosition,
-    AccountHistorySnapshotResponse,
     AccountSummaryResponse,
+    PortfolioAccountSummaryResponse,
     PortfolioResponse,
     PositionResponse,
     TransactionResponse,
@@ -131,6 +130,7 @@ __all__ = [
     "CashflowUpdate",
     # Transaction
     "AccountSummaryResponse",
+    "PortfolioAccountSummaryResponse",
     "PortfolioResponse",
     "PositionResponse",
     "TransactionResponse",

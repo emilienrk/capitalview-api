@@ -19,6 +19,11 @@ from models.crypto import CryptoAccount, CryptoTransaction
 from services.encryption import hash_index, encrypt_data
 
 
+def _crypto_summary(session: Session, account_id: str, master_key: str):
+    txs = get_account_transactions(session, account_id, master_key)
+    return get_crypto_account_summary(session, txs)
+
+
 def test_create_crypto_transaction(session: Session, master_key: str):
     data = CryptoTransactionCreate(
         account_id="acc_crypto",
@@ -131,7 +136,7 @@ def test_get_account_transactions(session: Session, master_key: str):
 
 @patch("services.crypto_transaction.get_crypto_info")
 def test_get_crypto_account_summary(mock_info, session: Session, master_key: str):
-    mock_info.side_effect = lambda s, symbol, db_only=False: {
+    mock_info.side_effect = lambda s, symbol, db_only=False, as_of=None: {
         "BTC": ("Bitcoin", Decimal("40000.0")),
         "ETH": ("Ethereum", Decimal("3000.0")),
     }.get(symbol, ("Unknown", Decimal("0")))
@@ -164,7 +169,7 @@ def test_get_crypto_account_summary(mock_info, session: Session, master_key: str
         account_id="acc_main_crypto", symbol="BTC", type=CryptoTransactionType.SPEND,
         amount=Decimal("0.5"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 3)
     ), master_key)
-    summary = get_crypto_account_summary(session, account, master_key)
+    summary = _crypto_summary(session, account.uuid, master_key)
     pos_btc = next(p for p in summary.positions if p.symbol == "BTC")
     assert pos_btc.total_amount == Decimal("0.5")
     assert pos_btc.total_invested == Decimal("15000")
@@ -181,7 +186,7 @@ def test_get_crypto_account_summary(mock_info, session: Session, master_key: str
         account_id="acc_main_crypto", symbol="ETH", type=CryptoTransactionType.SPEND,
         amount=Decimal("15"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 4)
     ), master_key)
-    summary_safety = get_crypto_account_summary(session, account, master_key)
+    summary_safety = _crypto_summary(session, account.uuid, master_key)
     pos_eth_safety = next((p for p in summary_safety.positions if p.symbol == "ETH"), None)
     assert pos_eth_safety is None
 
@@ -333,7 +338,7 @@ def test_get_crypto_account_summary_with_fee_row(mock_info, session: Session, ma
         account_id="acc_fee_row", symbol="BTC", type=CryptoTransactionType.FEE,
         amount=Decimal("0.001"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 2)
     ), master_key)
-    summary = get_crypto_account_summary(session, account, master_key)
+    summary = _crypto_summary(session, account.uuid, master_key)
     pos = next(p for p in summary.positions if p.symbol == "BTC")
     assert pos.total_amount == Decimal("0.999")
     assert summary.total_fees == Decimal("0")  # crypto FEE price=0 → fees_eur=0
@@ -359,7 +364,7 @@ def test_get_crypto_account_summary_reward(mock_info, session: Session, master_k
         account_id="acc_staking", symbol="ETH", type=CryptoTransactionType.REWARD,
         amount=Decimal("0.1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 2)
     ), master_key)
-    summary = get_crypto_account_summary(session, account, master_key)
+    summary = _crypto_summary(session, account.uuid, master_key)
     pos = next(p for p in summary.positions if p.symbol == "ETH")
     assert pos.total_amount == Decimal("1.1")
     assert pos.total_invested == Decimal("3000")  # reward not counted as invested
@@ -369,7 +374,7 @@ def test_get_crypto_account_summary_empty(session: Session, master_key: str):
     account = CryptoAccount(uuid="acc_empty", user_uuid_bidx=hash_index("u1", master_key), name_enc=encrypt_data("Empty", master_key))
     session.add(account)
     session.commit()
-    summary = get_crypto_account_summary(session, account, master_key)
+    summary = _crypto_summary(session, account.uuid, master_key)
     assert summary.total_invested == Decimal("0")
     assert summary.total_fees == Decimal("0")
     assert summary.current_value is None
@@ -423,7 +428,7 @@ def test_group_based_pru(mock_info, session: Session, master_key: str):
         executed_at=datetime(2024, 1, 1),
     ), master_key, group_uuid=group_a)
 
-    summary = get_crypto_account_summary(session, account, master_key)
+    summary = _crypto_summary(session, account.uuid, master_key)
     pos_btc = next(p for p in summary.positions if p.symbol == "BTC")
 
     # ACB = FIAT_ANCHOR.amount = 30002
@@ -520,7 +525,7 @@ def test_fiat_anchor_not_counted_in_positions(mock_info, session: Session, maste
         executed_at=datetime(2024, 3, 3),
     )
     create_composite_crypto_transaction(session, data, master_key)
-    summary = get_crypto_account_summary(session, account, master_key)
+    summary = _crypto_summary(session, account.uuid, master_key)
 
     # Should have exactly one position: BTC
     assert len(summary.positions) == 1
@@ -559,7 +564,7 @@ def test_transfer_neutral_proportional_removal(mock_info, session: Session, mast
         amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2024, 1, 2)
     ), master_key)
 
-    summary = get_crypto_account_summary(session, account, master_key)
+    summary = _crypto_summary(session, account.uuid, master_key)
     pos = next(p for p in summary.positions if p.symbol == "ETH")
     assert pos.total_amount == Decimal("3")
     assert pos.total_invested == Decimal("6000")  # 8000 - 25% = 6000
@@ -592,7 +597,7 @@ def test_exit_proportional_removal(mock_info, session: Session, master_key: str)
         amount=Decimal("0.5"), price_per_unit=Decimal("40000"), executed_at=datetime(2024, 1, 2)
     ), master_key)
 
-    summary = get_crypto_account_summary(session, account, master_key)
+    summary = _crypto_summary(session, account.uuid, master_key)
     pos = next(p for p in summary.positions if p.symbol == "BTC")
     assert pos.total_amount == Decimal("0.5")
     assert pos.total_invested == Decimal("15000")  # 30000 - 50%
@@ -914,7 +919,7 @@ def test_bulk_create_with_group_uuid_pru(session: Session, master_key: str):
     )
 
     with patch("services.crypto_transaction.get_crypto_info", return_value=("Bitcoin", Decimal("40000"))):
-        summary = get_crypto_account_summary(session, account, master_key)
+        summary = _crypto_summary(session, account.uuid, master_key)
 
     btc = next(p for p in summary.positions if p.symbol == "BTC")
     assert btc.total_amount == Decimal("0.1")

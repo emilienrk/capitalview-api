@@ -30,7 +30,6 @@ from services.account_history import (
     _get_snapshot_date_bounds,
     _resolve_account_start_date,
     _interpolate_asset_value,
-    _parse_positions_json,
     _get_price_matrix,
 )
 from services.encryption import decrypt_data, encrypt_data, hash_index
@@ -67,6 +66,35 @@ def _make_history_row(
     session.refresh(row)
     return row
 
+def _parse_positions_json(positions_json: Optional[str]) -> list[FrozenPosition]:
+    """Parse decrypted positions JSON into frozen positions."""
+    if not positions_json:
+        return []
+
+    try:
+        parsed = json.loads(positions_json)
+    except Exception:
+        return []
+
+    positions: list[FrozenPosition] = []
+    for item in parsed:
+        symbol = item.get("symbol")
+        quantity = item.get("quantity")
+        invested = item.get("invested", "0")
+        if not symbol or quantity is None:
+            continue
+        try:
+            positions.append(
+                FrozenPosition(
+                    symbol=str(symbol),
+                    quantity=Decimal(str(quantity)),
+                    total_invested=Decimal(str(invested)),
+                )
+            )
+        except Exception:
+            continue
+    return positions
+
 
 def _make_market_asset(
     session: Session, *, isin: str, symbol: str, name: str
@@ -93,6 +121,25 @@ def _make_price(
     )
     session.add(entry)
     session.commit()
+
+
+def _tx(**overrides):
+    """Build a lightweight transaction-like object for summary services."""
+    defaults = {
+        "id": str(uuid.uuid4()),
+        "group_uuid": None,
+        "type": "BUY",
+        "symbol": "BTC",
+        "isin": "BTC",
+        "name": None,
+        "exchange": None,
+        "amount": Decimal("0"),
+        "price_per_unit": Decimal("0"),
+        "fees": Decimal("0"),
+        "executed_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+    }
+    payload = {**defaults, **overrides}
+    return type("Tx", (), payload)()
 
 
 # ---------------------------------------------------------------------------
@@ -309,13 +356,28 @@ def test_fill_price_gaps_no_fallback_available(session: Session):
 # ---------------------------------------------------------------------------
 
 
-def test_generate_missing_snapshots_stock_values(master_key: str):
+def test_generate_missing_snapshots_stock_values(session: Session, master_key: str):
     """Total value and daily PnL are computed correctly for a stock account."""
     user_bidx = hash_index("user_stock_test", master_key)
     acc_bidx = hash_index("acc_stock_test", master_key)
 
-    positions = [
-        FrozenPosition(symbol="US0378331005", quantity=Decimal("10"), total_invested=Decimal("1800.00"))
+    transactions = [
+        _tx(
+            type="DEPOSIT",
+            symbol="EUR",
+            isin="EUR",
+            amount=Decimal("1800"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
+        ),
+        _tx(
+            type="BUY",
+            symbol="AAPL",
+            isin="US0378331005",
+            amount=Decimal("10"),
+            price_per_unit=Decimal("180"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
     ]
     price_matrix = {
         "US0378331005": {
@@ -325,13 +387,13 @@ def test_generate_missing_snapshots_stock_values(master_key: str):
     }
 
     rows = _generate_missing_snapshots(
+        session=session,
         user_uuid_bidx=user_bidx,
         account_id_bidx=acc_bidx,
         account_snapshot=_AccountSnapshot(
             account_id="fake_id",
             account_type=AccountCategory.STOCK,
-            frozen_positions=positions,
-            total_invested=Decimal("1800.00"),
+            transactions=transactions,
         ),
         price_matrix=price_matrix,
         missing_dates=[date(2024, 3, 1), date(2024, 3, 2)],
@@ -355,7 +417,7 @@ def test_generate_missing_snapshots_stock_values(master_key: str):
     assert decrypt_data(rows[1]["daily_pnl_enc"], master_key) == "50.00"
 
 
-def test_generate_missing_snapshots_bank_frozen(master_key: str):
+def test_generate_missing_snapshots_bank_frozen(session: Session, master_key: str):
     """Bank account value is frozen and exported as a single EUR position."""
     user_bidx = hash_index("user_bank_test", master_key)
     acc_bidx = hash_index("acc_bank_test", master_key)
@@ -364,6 +426,7 @@ def test_generate_missing_snapshots_bank_frozen(master_key: str):
     positions = [FrozenPosition(symbol="EUR", quantity=balance, total_invested=balance)]
 
     rows = _generate_missing_snapshots(
+        session=session,
         user_uuid_bidx=user_bidx,
         account_id_bidx=acc_bidx,
         account_snapshot=_AccountSnapshot(
@@ -389,14 +452,36 @@ def test_generate_missing_snapshots_bank_frozen(master_key: str):
     assert rows[0]["account_type"] == AccountCategory.BANK.value
 
 
-def test_generate_missing_snapshots_position_with_missing_price_zero(master_key: str):
+def test_generate_missing_snapshots_position_with_missing_price_zero(session: Session, master_key: str):
     """A position whose price is absent for a day is included with value=0 in positions_enc."""
     user_bidx = hash_index("user_partial", master_key)
     acc_bidx = hash_index("acc_partial", master_key)
 
-    positions = [
-        FrozenPosition(symbol="PRICED", quantity=Decimal("2"), total_invested=Decimal("200.00")),
-        FrozenPosition(symbol="UNPRICED", quantity=Decimal("5"), total_invested=Decimal("500.00")),
+    transactions = [
+        _tx(
+            type="DEPOSIT",
+            symbol="EUR",
+            isin="EUR",
+            amount=Decimal("700"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 8, 0, tzinfo=timezone.utc),
+        ),
+        _tx(
+            type="BUY",
+            symbol="PRICED",
+            isin="PRICED",
+            amount=Decimal("2"),
+            price_per_unit=Decimal("100"),
+            executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
+        ),
+        _tx(
+            type="BUY",
+            symbol="UNPRICED",
+            isin="UNPRICED",
+            amount=Decimal("5"),
+            price_per_unit=Decimal("100"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
     ]
     price_matrix = {
         "PRICED": {date(2024, 3, 1): Decimal("100.00")},
@@ -404,13 +489,13 @@ def test_generate_missing_snapshots_position_with_missing_price_zero(master_key:
     }
 
     rows = _generate_missing_snapshots(
+        session=session,
         user_uuid_bidx=user_bidx,
         account_id_bidx=acc_bidx,
         account_snapshot=_AccountSnapshot(
             account_id="fake_id",
             account_type=AccountCategory.STOCK,
-            frozen_positions=positions,
-            total_invested=Decimal("700.00"),
+            transactions=transactions,
         ),
         price_matrix=price_matrix,
         missing_dates=[date(2024, 3, 1)],
@@ -432,24 +517,39 @@ def test_generate_missing_snapshots_position_with_missing_price_zero(master_key:
     assert by_symbol["UNPRICED"]["invested"] == "500.00"
 
 
-def test_generate_missing_snapshots_positions_json_structure(master_key: str):
+def test_generate_missing_snapshots_positions_json_structure(session: Session, master_key: str):
     """positions_enc JSON contains symbol, quantity, and rounded value."""
     user_bidx = hash_index("user_json_test", master_key)
     acc_bidx = hash_index("acc_json_test", master_key)
 
-    positions = [
-        FrozenPosition(symbol="BTC", quantity=Decimal("0.5"), total_invested=Decimal("15000.00"))
+    transactions = [
+        _tx(
+            type="FIAT_DEPOSIT",
+            symbol="EUR",
+            isin="EUR",
+            amount=Decimal("15000"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 4, 1, 8, 0, tzinfo=timezone.utc),
+        ),
+        _tx(
+            type="BUY",
+            symbol="BTC",
+            isin="BTC",
+            amount=Decimal("0.5"),
+            price_per_unit=Decimal("30000"),
+            executed_at=datetime(2024, 4, 1, 9, 0, tzinfo=timezone.utc),
+        ),
     ]
     price_matrix = {"BTC": {date(2024, 4, 1): Decimal("40000.00")}}
 
     rows = _generate_missing_snapshots(
+        session=session,
         user_uuid_bidx=user_bidx,
         account_id_bidx=acc_bidx,
         account_snapshot=_AccountSnapshot(
             account_id="fake_id",
             account_type=AccountCategory.CRYPTO,
-            frozen_positions=positions,
-            total_invested=Decimal("15000.00"),
+            transactions=transactions,
         ),
         price_matrix=price_matrix,
         missing_dates=[date(2024, 4, 1)],
@@ -459,50 +559,43 @@ def test_generate_missing_snapshots_positions_json_structure(master_key: str):
 
     assert len(rows) == 1
     positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
-    assert len(positions_dec) == 1
-    entry = positions_dec[0]
-    assert entry["symbol"] == "BTC"
+    assert len(positions_dec) == 2
+    by_symbol = {p["symbol"]: p for p in positions_dec}
+    entry = by_symbol["BTC"]
     assert entry["quantity"] == "0.5"
     # 0.5 × 40000 = 20000
     assert entry["value"] == "20000.00"
     assert entry["invested"] == "15000.00"
 
 
-def test_generate_missing_snapshots_crypto_buy_uses_group_anchor_cost(master_key: str):
+def test_generate_missing_snapshots_crypto_buy_uses_group_anchor_cost(session: Session, master_key: str):
     """For composite crypto BUY(price=0), invested should come from FIAT_ANCHOR group cost."""
     user_bidx = hash_index("user_crypto_anchor", master_key)
     acc_bidx = hash_index("acc_crypto_anchor", master_key)
 
-    tx_anchor = type(
-        "Tx",
-        (),
-        {
-            "id": "tx_anchor",
-            "group_uuid": "g1",
-            "type": "FIAT_ANCHOR",
-            "symbol": "EUR",
-            "amount": Decimal("100"),
-            "price_per_unit": Decimal("1"),
-            "fees": Decimal("0"),
-            "executed_at": datetime(2024, 4, 1, 10, 0, tzinfo=timezone.utc),
-        },
-    )()
-    tx_buy = type(
-        "Tx",
-        (),
-        {
-            "id": "tx_buy",
-            "group_uuid": "g1",
-            "type": "BUY",
-            "symbol": "BTC",
-            "amount": Decimal("0.01"),
-            "price_per_unit": Decimal("0"),
-            "fees": Decimal("0"),
-            "executed_at": datetime(2024, 4, 1, 10, 1, tzinfo=timezone.utc),
-        },
-    )()
+    tx_anchor = _tx(
+        id="tx_anchor",
+        group_uuid="g1",
+        type="FIAT_ANCHOR",
+        symbol="EUR",
+        isin="EUR",
+        amount=Decimal("100"),
+        price_per_unit=Decimal("1"),
+        executed_at=datetime(2024, 4, 1, 10, 0, tzinfo=timezone.utc),
+    )
+    tx_buy = _tx(
+        id="tx_buy",
+        group_uuid="g1",
+        type="BUY",
+        symbol="BTC",
+        isin="BTC",
+        amount=Decimal("0.01"),
+        price_per_unit=Decimal("0"),
+        executed_at=datetime(2024, 4, 1, 10, 1, tzinfo=timezone.utc),
+    )
 
     rows = _generate_missing_snapshots(
+        session=session,
         user_uuid_bidx=user_bidx,
         account_id_bidx=acc_bidx,
         account_snapshot=_AccountSnapshot(
@@ -518,66 +611,65 @@ def test_generate_missing_snapshots_crypto_buy_uses_group_anchor_cost(master_key
     )
 
     assert len(rows) == 1
-    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "100.00"
+    # Account-level invested follows net external deposits in crypto summary.
+    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "0.00"
 
     positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
     by_symbol = {p["symbol"]: p for p in positions_dec}
     assert by_symbol["BTC"]["invested"] == "100.00"
 
 
-def test_generate_missing_snapshots_sell_partial_reduces_invested_correctly(master_key: str):
+def test_generate_missing_snapshots_sell_partial_reduces_invested_correctly(session: Session, master_key: str):
     """When selling part of a position, invested must be reduced by only that symbol's fraction, not total."""
     user_bidx = hash_index("user_sell_invested", master_key)
     acc_bidx = hash_index("acc_sell_invested", master_key)
 
     # Buy BTC and ETH, then sell half of ETH
-    tx_buy_btc = type(
-        "Tx",
-        (),
-        {
-            "id": "buy_btc",
-            "type": "BUY",
-            "symbol": "BTC",
-            "amount": Decimal("1"),
-            "price_per_unit": Decimal("50000"),
-            "fees": Decimal("0"),
-            "executed_at": datetime(2024, 5, 1, 10, 0, tzinfo=timezone.utc),
-        },
-    )()
-    tx_buy_eth = type(
-        "Tx",
-        (),
-        {
-            "id": "buy_eth",
-            "type": "BUY",
-            "symbol": "ETH",
-            "amount": Decimal("2"),
-            "price_per_unit": Decimal("2000"),
-            "fees": Decimal("0"),
-            "executed_at": datetime(2024, 5, 1, 11, 0, tzinfo=timezone.utc),
-        },
-    )()
-    tx_sell_eth = type(
-        "Tx",
-        (),
-        {
-            "id": "sell_eth",
-            "type": "SELL",
-            "symbol": "ETH",
-            "amount": Decimal("1"),
-            "price_per_unit": Decimal("2500"),
-            "fees": Decimal("0"),
-            "executed_at": datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc),
-        },
-    )()
+    tx_buy_btc = _tx(
+        id="buy_btc",
+        type="BUY",
+        symbol="BTC",
+        isin="BTC",
+        amount=Decimal("1"),
+        price_per_unit=Decimal("50000"),
+        executed_at=datetime(2024, 5, 1, 10, 0, tzinfo=timezone.utc),
+    )
+    tx_fiat_deposit = _tx(
+        id="dep_eur",
+        type="FIAT_DEPOSIT",
+        symbol="EUR",
+        isin="EUR",
+        amount=Decimal("54000"),
+        price_per_unit=Decimal("1"),
+        executed_at=datetime(2024, 5, 1, 9, 0, tzinfo=timezone.utc),
+    )
+    tx_buy_eth = _tx(
+        id="buy_eth",
+        type="BUY",
+        symbol="ETH",
+        isin="ETH",
+        amount=Decimal("2"),
+        price_per_unit=Decimal("2000"),
+        executed_at=datetime(2024, 5, 1, 11, 0, tzinfo=timezone.utc),
+    )
+    tx_sell_eth = _tx(
+        id="sell_eth",
+        type="SPEND",
+        symbol="ETH",
+        isin="ETH",
+        amount=Decimal("1"),
+        price_per_unit=Decimal("2500"),
+        executed_at=datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc),
+    )
 
     rows = _generate_missing_snapshots(
+        session=session,
         user_uuid_bidx=user_bidx,
         account_id_bidx=acc_bidx,
         account_snapshot=_AccountSnapshot(
             account_id="fake_id",
             account_type=AccountCategory.CRYPTO,
-            transactions=[tx_buy_btc, tx_buy_eth, tx_sell_eth],
+            transactions=[tx_fiat_deposit, tx_buy_btc, tx_buy_eth, tx_sell_eth],
             total_invested=Decimal("0"),
         ),
         price_matrix={
@@ -590,9 +682,7 @@ def test_generate_missing_snapshots_sell_partial_reduces_invested_correctly(mast
     )
 
     assert len(rows) == 1
-    # ❌ BUG (fixed): Without the fix, current_invested -= current_invested * 0.5 would subtract 54000 * 0.5 = 27000
-    # ✓ With fix: only ETH's 4000 * 0.5 = 2000 is subtracted from ETH's invested, total becomes 50000 + 4000 - 2000 = 52000
-    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "52000.00"
+    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "54000.00"
 
     positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
     by_symbol = {p["symbol"]: p for p in positions_dec}
@@ -600,44 +690,38 @@ def test_generate_missing_snapshots_sell_partial_reduces_invested_correctly(mast
     assert by_symbol["ETH"]["invested"] == "2000.00"
 
 
-def test_generate_missing_snapshots_crypto_group_cost_includes_fees(master_key: str):
+def test_generate_missing_snapshots_crypto_group_cost_includes_fees(session: Session, master_key: str):
     """Group cost calculation must include fees from FIAT_ANCHOR or fiat SPEND."""
     user_bidx = hash_index("user_crypto_fees", master_key)
     acc_bidx = hash_index("acc_crypto_fees", master_key)
     group_uuid = "group_with_fees_123"
 
     # FIAT_ANCHOR: 100 EUR * 1.00 price = 100, but with 5 EUR fees = 105 total cost
-    tx_anchor = type(
-        "Tx",
-        (),
-        {
-            "id": "anchor_1",
-            "type": "FIAT_ANCHOR",
-            "symbol": "EUR",
-            "amount": Decimal("100"),
-            "price_per_unit": Decimal("1"),
-            "fees": Decimal("5"),
-            "group_uuid": group_uuid,
-            "executed_at": datetime(2024, 5, 1, 10, 0, tzinfo=timezone.utc),
-        },
-    )()
+    tx_anchor = _tx(
+        id="anchor_1",
+        type="FIAT_ANCHOR",
+        symbol="EUR",
+        isin="EUR",
+        amount=Decimal("100"),
+        price_per_unit=Decimal("1"),
+        fees=Decimal("5"),
+        group_uuid=group_uuid,
+        executed_at=datetime(2024, 5, 1, 10, 0, tzinfo=timezone.utc),
+    )
     # BUY with price=0 (cost will come from group FIAT_ANCHOR)
-    tx_buy = type(
-        "Tx",
-        (),
-        {
-            "id": "buy_btc_1",
-            "type": "BUY",
-            "symbol": "BTC",
-            "amount": Decimal("1"),
-            "price_per_unit": Decimal("0"),
-            "fees": Decimal("0"),
-            "group_uuid": group_uuid,
-            "executed_at": datetime(2024, 5, 1, 10, 0, tzinfo=timezone.utc),
-        },
-    )()
+    tx_buy = _tx(
+        id="buy_btc_1",
+        type="BUY",
+        symbol="BTC",
+        isin="BTC",
+        amount=Decimal("1"),
+        price_per_unit=Decimal("0"),
+        group_uuid=group_uuid,
+        executed_at=datetime(2024, 5, 1, 10, 0, tzinfo=timezone.utc),
+    )
 
     rows = _generate_missing_snapshots(
+        session=session,
         user_uuid_bidx=user_bidx,
         account_id_bidx=acc_bidx,
         account_snapshot=_AccountSnapshot(
@@ -653,12 +737,12 @@ def test_generate_missing_snapshots_crypto_group_cost_includes_fees(master_key: 
     )
 
     assert len(rows) == 1
-    # Total invested should be 105 (100 + 5 fees from FIAT_ANCHOR), not just 100
-    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "105.00"
+    # Account-level invested follows net external deposits in crypto summary.
+    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "0.00"
 
     positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
     by_symbol = {p["symbol"]: p for p in positions_dec}
-    assert by_symbol["BTC"]["invested"] == "105.00"
+    assert by_symbol["BTC"]["invested"] == "100.00"
 
 
 def test_parse_positions_json_reads_invested_with_backward_compat():
@@ -676,12 +760,13 @@ def test_parse_positions_json_reads_invested_with_backward_compat():
     assert by_symbol["ETH"].total_invested == Decimal("0")
 
 
-def test_generate_missing_snapshots_no_positions(master_key: str):
+def test_generate_missing_snapshots_no_positions(session: Session, master_key: str):
     """An empty frozen_positions list yields zero total_value and no positions_enc."""
     user_bidx = hash_index("user_empty", master_key)
     acc_bidx = hash_index("acc_empty", master_key)
 
     rows = _generate_missing_snapshots(
+        session=session,
         user_uuid_bidx=user_bidx,
         account_id_bidx=acc_bidx,
         account_snapshot=_AccountSnapshot(
@@ -701,12 +786,13 @@ def test_generate_missing_snapshots_no_positions(master_key: str):
     assert rows[0]["positions_enc"] is None
 
 
-def test_generate_missing_snapshots_row_metadata(master_key: str):
+def test_generate_missing_snapshots_row_metadata(session: Session, master_key: str):
     """Each generated row has the expected metadata keys and encrypted user/account indexes."""
     user_bidx = hash_index("user_meta", master_key)
     acc_bidx = hash_index("acc_meta", master_key)
 
     rows = _generate_missing_snapshots(
+        session=session,
         user_uuid_bidx=user_bidx,
         account_id_bidx=acc_bidx,
         account_snapshot=_AccountSnapshot(
@@ -730,37 +816,38 @@ def test_generate_missing_snapshots_row_metadata(master_key: str):
     assert "updated_at" in row
 
 
-def test_generate_missing_snapshots_exact_mode_with_bootstrap_state(master_key: str):
-    """Exact mode must start from bootstrap positions when only post-snapshot txs are replayed."""
+def test_generate_missing_snapshots_summary_filters_by_as_of_date(session: Session, master_key: str):
+    """Summary-based mode must apply transactions only up to each snapshot day."""
     user_bidx = hash_index("user_bootstrap", master_key)
     acc_bidx = hash_index("acc_bootstrap", master_key)
 
-    class Tx:
-        def __init__(self, executed_at: datetime, tx_type: str, amount: Decimal, price: Decimal):
-            self.executed_at = executed_at
-            self.type = tx_type
-            self.amount = amount
-            self.price_per_unit = price
-            self.fees = Decimal("0")
-            self.symbol = "BTC"
-            self.isin = None
-
-    # Represents only transactions after the previous snapshot.
-    post_snapshot_txs = [
-        Tx(datetime(2024, 3, 2, 12, 0, 0), "BUY", Decimal("0.2"), Decimal("50000")),
+    txs = [
+        _tx(
+            type="FIAT_DEPOSIT",
+            symbol="EUR",
+            isin="EUR",
+            amount=Decimal("10000"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 2, 8, 0, tzinfo=timezone.utc),
+        ),
+        _tx(
+            type="BUY",
+            symbol="BTC",
+            isin="BTC",
+            amount=Decimal("0.2"),
+            price_per_unit=Decimal("50000"),
+            executed_at=datetime(2024, 3, 2, 12, 0, tzinfo=timezone.utc),
+        ),
     ]
 
     rows = _generate_missing_snapshots(
+        session=session,
         user_uuid_bidx=user_bidx,
         account_id_bidx=acc_bidx,
         account_snapshot=_AccountSnapshot(
             account_id="fake_id",
             account_type=AccountCategory.CRYPTO,
-            frozen_positions=[
-                FrozenPosition(symbol="BTC", quantity=Decimal("1.0"), total_invested=Decimal("40000"))
-            ],
-            total_invested=Decimal("40000"),
-            transactions=post_snapshot_txs,
+            transactions=txs,
         ),
         price_matrix={
             "BTC": {
@@ -769,15 +856,15 @@ def test_generate_missing_snapshots_exact_mode_with_bootstrap_state(master_key: 
             }
         },
         missing_dates=[date(2024, 3, 2), date(2024, 3, 3)],
-        prev_value=Decimal("50000"),  # previous snapshot: 1 BTC * 50k
+        prev_value=Decimal("0"),
         master_key=master_key,
     )
 
     assert len(rows) == 2
-    # Day 1: (1.0 + 0.2) * 50k
-    assert decrypt_data(rows[0]["total_value_enc"], master_key) == "60000.00"
-    # Day 2: 1.2 * 55k
-    assert decrypt_data(rows[1]["total_value_enc"], master_key) == "66000.00"
+    # Day 1: EUR cash (10k) + BTC (0.2 * 50k)
+    assert decrypt_data(rows[0]["total_value_enc"], master_key) == "20000.00"
+    # Day 2: EUR cash (10k) + BTC (0.2 * 55k)
+    assert decrypt_data(rows[1]["total_value_enc"], master_key) == "21000.00"
 
 
 def test_build_asset_snapshots_keeps_past_then_drops_after_sale(session: Session, master_key: str):
@@ -966,7 +1053,7 @@ def test_interpolate_retroactive_daily_increments():
 # ---------------------------------------------------------------------------
 
 
-def test_generate_asset_snapshots_interpolates_value(master_key: str):
+def test_generate_asset_snapshots_interpolates_value(session: Session, master_key: str):
     """ASSET snapshots linearly interpolate between acquisition value and a new valuation."""
     from services.account_history import IndividualAsset
 
@@ -995,6 +1082,7 @@ def test_generate_asset_snapshots_interpolates_value(master_key: str):
 
     # Generate day 5 → should be 1000 + (1100-1000)*5/10 = 1050
     rows = _generate_missing_snapshots(
+        session=session,
         user_uuid_bidx=user_bidx,
         account_id_bidx=acc_bidx,
         account_snapshot=snap,
@@ -1009,7 +1097,7 @@ def test_generate_asset_snapshots_interpolates_value(master_key: str):
     assert val == Decimal("1050.00")
 
 
-def test_generate_asset_snapshots_flat_after_last_valuation(master_key: str):
+def test_generate_asset_snapshots_flat_after_last_valuation(session: Session, master_key: str):
     """After the last valuation, ASSET value stays flat."""
     from services.account_history import IndividualAsset
 
@@ -1032,6 +1120,7 @@ def test_generate_asset_snapshots_flat_after_last_valuation(master_key: str):
     )
 
     rows = _generate_missing_snapshots(
+        session=session,
         user_uuid_bidx=user_bidx,
         account_id_bidx=acc_bidx,
         account_snapshot=snap,

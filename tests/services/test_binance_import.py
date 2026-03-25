@@ -25,6 +25,7 @@ from services.imports.binance import (
     execute_import,
 )
 from services.crypto_transaction import get_crypto_account_summary
+from services.crypto_transaction import get_account_transactions
 from models.enums import CryptoTransactionType
 from models.crypto import CryptoAccount
 from dtos.crypto import BinanceImportGroupPreview, BinanceImportRowPreview
@@ -559,6 +560,10 @@ class TestPRUAfterImport:
         session.commit()
         return account
 
+    def _summary(self, session: Session, master_key: str, account_id: str):
+        txs = get_account_transactions(session, account_id, master_key)
+        return get_crypto_account_summary(session, txs)
+
     @patch("services.crypto_transaction.get_crypto_info")
     def test_buy_with_eur_pru(self, mock_info, session: Session, master_key: str):
         """
@@ -587,7 +592,7 @@ class TestPRUAfterImport:
         )
 
         execute_import(session, "acc_pru", [group], master_key)
-        summary = get_crypto_account_summary(session, account, master_key)
+        summary = self._summary(session, master_key, account.uuid)
 
         btc = next(p for p in summary.positions if p.symbol == "BTC")
         assert btc.total_amount == Decimal("0.1")
@@ -623,7 +628,7 @@ class TestPRUAfterImport:
         )
 
         execute_import(session, "acc_pru2", [group], master_key)
-        summary = get_crypto_account_summary(session, account, master_key)
+        summary = self._summary(session, master_key, account.uuid)
 
         btc = next(p for p in summary.positions if p.symbol == "BTC")
         assert btc.total_amount == Decimal("0.1")
@@ -651,7 +656,7 @@ class TestPRUAfterImport:
         )
 
         execute_import(session, "acc_pru3", [group], master_key)
-        summary = get_crypto_account_summary(session, account, master_key)
+        summary = self._summary(session, master_key, account.uuid)
 
         eth = next(p for p in summary.positions if p.symbol == "ETH")
         assert eth.total_amount == Decimal("0.5")
@@ -697,7 +702,7 @@ class TestPRUAfterImport:
         )
 
         execute_import(session, "acc_pru4", [buy_group, sell_group], master_key)
-        summary = get_crypto_account_summary(session, account, master_key)
+        summary = self._summary(session, master_key, account.uuid)
 
         btc = next(p for p in summary.positions if p.symbol == "BTC")
         assert btc.total_amount == Decimal("0.5")
@@ -730,7 +735,7 @@ class TestPRUAfterImport:
         )
 
         execute_import(session, "acc_pru5", [group], master_key)
-        summary = get_crypto_account_summary(session, account, master_key)
+        summary = self._summary(session, master_key, account.uuid)
 
         # SPEND EUR in a buy-group is excluded from net_external_deposits
         # So account total_invested = 0 (no standalone wire deposit recorded)
@@ -757,7 +762,7 @@ class TestPRUAfterImport:
         )
 
         execute_import(session, "acc_pru6", [group], master_key)
-        summary = get_crypto_account_summary(session, account, master_key)
+        summary = self._summary(session, master_key, account.uuid)
 
         # Standalone EUR deposit should add to net_external_deposits
         assert summary.total_invested == Decimal("5000.00")

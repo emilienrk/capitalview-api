@@ -9,7 +9,7 @@ from sqlmodel import Session, select
 
 from database import get_session
 from models import User, StockAccount, CryptoAccount
-from dtos import PortfolioResponse
+from dtos import PortfolioResponse, PortfolioAccountSummaryResponse
 from dtos.dashboard import (
     DashboardStatisticsResponse,
     DashboardSummaryResponse,
@@ -18,11 +18,11 @@ from dtos.dashboard import (
     WealthBreakdown,
 )
 from services.auth import get_current_user, get_master_key
-from services.encryption import hash_index
+from services.encryption import hash_index, decrypt_data
 from services.market import get_exchange_rate
 from services.settings import get_or_create_settings
-from services.stock_transaction import get_stock_account_summary
-from services.crypto_transaction import get_crypto_account_summary
+from services.stock_transaction import get_stock_account_summary, get_account_transactions as get_stock_transactions
+from services.crypto_transaction import get_crypto_account_summary, get_account_transactions as get_crypto_transactions
 from services.bank import get_user_bank_accounts, get_all_bank_accounts_history
 from services.asset import get_user_assets, get_asset_portfolio_history
 from services.stock_account import get_all_stock_accounts_history
@@ -151,14 +151,32 @@ def get_my_portfolio(
     accounts = []
     
     for acc in stock_models:
-        summary = get_stock_account_summary(session, acc, master_key, db_only=db_only)
-        accounts.append(summary)
+        transactions = get_stock_transactions(session, acc.uuid, master_key)
+
+        summary = get_stock_account_summary(session, transactions, db_only=db_only)
+        accounts.append(
+            PortfolioAccountSummaryResponse(
+                account_id=acc.uuid,
+                account_name=decrypt_data(acc.name_enc, master_key),
+                account_type=decrypt_data(acc.account_type_enc, master_key),
+                **summary.model_dump(),
+            )
+        )
     
     # Convert crypto accounts — prices are now stored in EUR in market_price_history
     settings = get_or_create_settings(session, current_user.uuid, master_key)
     for acc in crypto_models:
-        summary = get_crypto_account_summary(session, acc, master_key, settings.crypto_show_negative_positions, db_only=db_only)
-        accounts.append(summary)
+        transactions = get_crypto_transactions(session, acc.uuid, master_key)
+
+        summary = get_crypto_account_summary(session, transactions, settings.crypto_show_negative_positions, db_only=db_only)
+        accounts.append(
+            PortfolioAccountSummaryResponse(
+                account_id=acc.uuid,
+                account_name=decrypt_data(acc.name_enc, master_key),
+                account_type="CRYPTO",
+                **summary.model_dump(),
+            )
+        )
     
     total_invested = sum(a.total_invested for a in accounts)
     total_fees = sum(a.total_fees for a in accounts)
@@ -204,7 +222,9 @@ def get_dashboard_statistics(
     stock_invested = Decimal(0)
     stock_current_value = Decimal(0)
     for acc in stock_models:
-        summary = get_stock_account_summary(session, acc, master_key, db_only=db_only)
+        transactions = get_stock_transactions(session, acc.uuid, master_key)
+        summary = get_stock_account_summary(session, transactions, db_only=db_only)
+
         stock_invested += summary.total_invested
         if summary.current_value:
             stock_current_value += summary.current_value
@@ -218,7 +238,9 @@ def get_dashboard_statistics(
     crypto_invested = Decimal(0)
     crypto_current_value = Decimal(0)
     for acc in crypto_models:
-        summary = get_crypto_account_summary(session, acc, master_key, settings.crypto_show_negative_positions, db_only=db_only)
+        transactions = get_crypto_transactions(session, acc.uuid, master_key)
+
+        summary = get_crypto_account_summary(session, transactions, settings.crypto_show_negative_positions, db_only=db_only)
         crypto_invested += summary.total_invested
         if summary.current_value:
             crypto_current_value += summary.current_value

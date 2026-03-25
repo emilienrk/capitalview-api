@@ -113,7 +113,9 @@ def get_default_account(
     """
     settings = get_or_create_settings(session, current_user.uuid, master_key)
     account_model = get_or_create_default_account(session, current_user.uuid, master_key)
-    summary = get_crypto_account_summary(session, account_model, master_key, settings.crypto_show_negative_positions)
+
+    transactions = get_account_transactions(session, account_model.uuid, master_key)
+    summary = get_crypto_account_summary(session, transactions, settings.crypto_show_negative_positions)
     return summary
 
 
@@ -142,7 +144,9 @@ def get_account(
 
     account_model = session.get(CryptoAccount, account_id)
     settings = get_or_create_settings(session, current_user.uuid, master_key)
-    summary = get_crypto_account_summary(session, account_model, master_key, settings.crypto_show_negative_positions, db_only=db_only)
+
+    transactions = get_account_transactions(session, account_model.uuid, master_key)
+    summary = get_crypto_account_summary(session, transactions, settings.crypto_show_negative_positions, db_only=db_only)
     return summary
 
 

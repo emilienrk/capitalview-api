@@ -140,8 +140,12 @@ def get_account(
         raise HTTPException(status_code=404, detail="Account not found")
         
     account_model = session.get(StockAccount, account_id)
+
+    #acc_resp = _map_account_to_response(account_model, master_key)
+
+    transactions = get_account_transactions(session, account_model.uuid, master_key)
     
-    return get_stock_account_summary(session, account_model, master_key, db_only=db_only)
+    return get_stock_account_summary(session, transactions, db_only=db_only)
 
 
 @router.get("/accounts/{account_id}/history", response_model=list[AccountHistorySnapshotResponse])

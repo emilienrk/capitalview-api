@@ -179,6 +179,22 @@ def _get_latest_price_entry(session: Session, asset_id: int) -> Optional[MarketP
     ).first()
 
 
+def _get_latest_price_entry_as_of(
+    session: Session,
+    asset_id: int,
+    as_of: date,
+) -> Optional[MarketPriceHistory]:
+    """Return the latest price row with price_date <= as_of."""
+    return session.exec(
+        select(MarketPriceHistory)
+        .where(
+            MarketPriceHistory.market_asset_id == asset_id,
+            MarketPriceHistory.price_date <= as_of,
+        )
+        .order_by(MarketPriceHistory.price_date.desc())
+    ).first()
+
+
 def _upsert_price(session: Session, asset_id: int, price: Decimal) -> None:
     """Insert or update today's price for an asset."""
     today = date.today()
@@ -406,28 +422,57 @@ def get_assets_bulk_info(session: Session, symbols: list[str], asset_type: Asset
     return data
 
 
-def get_stock_price(session: Session, isin: str, db_only: bool = False) -> Optional[Decimal]:
+def get_stock_price(
+    session: Session,
+    isin: str,
+    db_only: bool = False,
+    as_of: Optional[date] = None,
+) -> Optional[Decimal]:
     """Get current market price for a Stock (lookup by ISIN)."""
-    _, price = _get_market_info_internal(session, isin, AssetType.STOCK, db_only=db_only)
+    _, price = _get_market_info_internal(
+        session,
+        isin,
+        AssetType.STOCK,
+        db_only=db_only,
+        as_of=as_of,
+    )
     return price
 
 
-def get_crypto_price(session: Session, symbol: str, db_only: bool = False) -> Optional[Decimal]:
+def get_crypto_price(
+    session: Session,
+    symbol: str,
+    db_only: bool = False,
+    as_of: Optional[date] = None,
+) -> Optional[Decimal]:
     """Get current market price for a Crypto (lookup by Symbol)."""
-    _, price = _get_market_info_internal(session, symbol, AssetType.CRYPTO, db_only=db_only)
+    _, price = _get_market_info_internal(
+        session,
+        symbol,
+        AssetType.CRYPTO,
+        db_only=db_only,
+        as_of=as_of,
+    )
     return price
 
 
 def _get_market_info_internal(
-    session: Session, lookup_key: str, asset_type: AssetType, db_only: bool = False
+    session: Session,
+    lookup_key: str,
+    asset_type: AssetType,
+    db_only: bool = False,
+    as_of: Optional[date] = None,
 ) -> Tuple[Optional[str], Optional[Decimal]]:
     """Shared logic for fetching info. Auto-creates missing entries."""
+    target_date = as_of or date.today()
+    today = date.today()
+
     cached = session.exec(
         select(MarketAsset).where(MarketAsset.isin == lookup_key)
     ).first()
 
     if not cached:
-        if db_only:
+        if db_only or target_date < today:
             # Asset unknown → nothing in DB, return empty immediately (no API call)
             return None, None
         cached = _create_market_asset_entry(session, lookup_key, asset_type)
@@ -435,8 +480,13 @@ def _get_market_info_internal(
             return None, None
 
     if db_only:
-        # Return the most recent price we have, regardless of freshness
-        latest = _get_latest_price_entry(session, cached.id)
+        # Return latest cached price up to target_date (no API call).
+        latest = _get_latest_price_entry_as_of(session, cached.id, target_date)
+        return cached.name, (latest.price if latest else None)
+
+    # Historical valuation mode: never call live API for past dates.
+    if target_date < today:
+        latest = _get_latest_price_entry_as_of(session, cached.id, target_date)
         return cached.name, (latest.price if latest else None)
 
     today_entry = _get_today_price(session, cached.id)
@@ -451,14 +501,36 @@ def _get_market_info_internal(
     return cached.name, (latest.price if latest else None)
 
 
-def get_stock_info(session: Session, isin: str, db_only: bool = False) -> Tuple[Optional[str], Optional[Decimal]]:
+def get_stock_info(
+    session: Session,
+    isin: str,
+    db_only: bool = False,
+    as_of: Optional[date] = None,
+) -> Tuple[Optional[str], Optional[Decimal]]:
     """Get (Name, Price) for a Stock."""
-    return _get_market_info_internal(session, isin, AssetType.STOCK, db_only=db_only)
+    return _get_market_info_internal(
+        session,
+        isin,
+        AssetType.STOCK,
+        db_only=db_only,
+        as_of=as_of,
+    )
 
 
-def get_crypto_info(session: Session, symbol: str, db_only: bool = False) -> Tuple[Optional[str], Optional[Decimal]]:
+def get_crypto_info(
+    session: Session,
+    symbol: str,
+    db_only: bool = False,
+    as_of: Optional[date] = None,
+) -> Tuple[Optional[str], Optional[Decimal]]:
     """Get (Name, Price) for a Crypto."""
-    return _get_market_info_internal(session, symbol, AssetType.CRYPTO, db_only=db_only)
+    return _get_market_info_internal(
+        session,
+        symbol,
+        AssetType.CRYPTO,
+        db_only=db_only,
+        as_of=as_of,
+    )
 
 
 # ---------------------------------------------------------------------------

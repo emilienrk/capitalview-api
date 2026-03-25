@@ -54,9 +54,6 @@ class PositionResponse(BaseModel):
 
 class AccountSummaryResponse(BaseModel):
     """Summary of an account with all positions."""
-    account_id: str
-    account_name: str
-    account_type: str
     total_invested: Decimal
     total_deposits: Decimal = Decimal("0")
     total_fees: Decimal
@@ -68,6 +65,13 @@ class AccountSummaryResponse(BaseModel):
     positions: list[PositionResponse]
 
 
+class PortfolioAccountSummaryResponse(AccountSummaryResponse):
+    """Account summary enriched with portfolio-level account metadata."""
+    account_id: str
+    account_name: str
+    account_type: str
+
+
 class PortfolioResponse(BaseModel):
     """Global portfolio summary."""
     total_invested: Decimal
@@ -75,7 +79,7 @@ class PortfolioResponse(BaseModel):
     current_value: Optional[Decimal] = None
     profit_loss: Optional[Decimal] = None
     profit_loss_percentage: Optional[Decimal] = None
-    accounts: list[AccountSummaryResponse]
+    accounts: list[PortfolioAccountSummaryResponse]
 
 
 class AccountHistoryPosition(BaseModel):

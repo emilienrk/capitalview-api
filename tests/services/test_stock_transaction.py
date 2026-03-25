@@ -20,6 +20,11 @@ from models.market import MarketAsset
 from services.encryption import hash_index, encrypt_data, decrypt_data
 
 
+def _stock_summary(session: Session, account_id: str, master_key: str):
+    txs = get_account_transactions(session, account_id, master_key)
+    return get_stock_account_summary(session, txs)
+
+
 def test_create_stock_transaction(session: Session, master_key: str):
     data = StockTransactionCreate(
         account_id="acc_123",
@@ -181,7 +186,7 @@ def test_get_account_transactions(session: Session, master_key: str):
 @patch("services.stock_transaction.get_stock_info")
 def test_get_stock_account_summary(mock_market, session: Session, master_key: str):
     # Side effect now receives (session, isin)
-    mock_market.side_effect = lambda s, isin, db_only=False: {
+    mock_market.side_effect = lambda s, isin, db_only=False, as_of=None: {
         "ISIN_AAPL": ("Apple Inc.", Decimal("180.0")),
         "ISIN_MSFT": ("Microsoft", Decimal("300.0")),
         "ISIN_SOLD": ("Sold Stock", Decimal("10.0")),
@@ -213,8 +218,7 @@ def test_get_stock_account_summary(mock_market, session: Session, master_key: st
     create_stock_transaction(session, StockTransactionCreate(
         account_id="acc_main", symbol="SOLD", isin="ISIN_SOLD", type=StockTransactionType.SELL, amount=Decimal("10"), price_per_unit=Decimal("12"), fees=Decimal("1"), executed_at=datetime(2023, 1, 6)
     ), master_key)
-    summary = get_stock_account_summary(session, account, master_key)
-    assert summary.account_name == "My PEA"
+    summary = _stock_summary(session, account.uuid, master_key)
     pos_aapl = next(p for p in summary.positions if p.symbol == "AAPL")
     assert pos_aapl.total_amount == Decimal("15")
     assert pos_aapl.total_invested == Decimal("2307")
@@ -233,7 +237,7 @@ def test_get_stock_account_summary(mock_market, session: Session, master_key: st
 @patch("services.stock_transaction.get_stock_info")
 def test_position_currency_always_eur(mock_market, session: Session, master_key: str):
     """All positions must surface currency='EUR' since prices are stored in EUR."""
-    mock_market.side_effect = lambda s, isin, db_only=False: {
+    mock_market.side_effect = lambda s, isin, db_only=False, as_of=None: {
         "ISIN_AAPL": ("Apple Inc.", Decimal("200.0")),
         "ISIN_LVMH": ("LVMH", Decimal("500.0")),
     }.get(isin, (None, None))
@@ -275,7 +279,7 @@ def test_position_currency_always_eur(mock_market, session: Session, master_key:
         executed_at=datetime(2024, 1, 2),
     ), master_key)
 
-    summary = get_stock_account_summary(session, account, master_key)
+    summary = _stock_summary(session, account.uuid, master_key)
     pos_aapl = next(p for p in summary.positions if p.symbol == "AAPL")
     pos_lvmh = next(p for p in summary.positions if p.symbol == "MC")
 
@@ -306,7 +310,7 @@ def test_position_currency_defaults_to_eur(mock_market, session: Session, master
         executed_at=datetime(2024, 1, 1),
     ), master_key)
 
-    summary = get_stock_account_summary(session, account, master_key)
+    summary = _stock_summary(session, account.uuid, master_key)
     pos = next(p for p in summary.positions if p.isin == "ISIN_XYZ")
     assert pos.currency == "EUR"
 

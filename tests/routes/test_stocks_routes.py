@@ -102,7 +102,7 @@ def test_account_summary_with_market(mock_market, session, master_key):
     r2 = client.get(f"/stocks/accounts/{account_id}")
     assert r2.status_code == 200
     summary = r2.json()
-    assert summary["account_name"] in ("Sum Account", "Sum Account")
+    assert Decimal(str(summary["total_invested"])) == Decimal("100")
     pos = next(p for p in summary["positions"] if p["symbol"] == "AAPL")
     assert Decimal(str(pos["total_amount"])) == Decimal("1")
     assert Decimal(str(pos["current_price"])) == Decimal("200")

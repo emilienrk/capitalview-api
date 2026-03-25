@@ -21,7 +21,6 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 import uuid
-import copy
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -30,7 +29,6 @@ from sqlmodel import Session, select
 from database import get_engine
 from models.account_history import AccountHistory
 from models.asset import Asset, AssetValuation
-from dtos.crypto import FIAT_SYMBOLS
 from models.enums import AccountCategory, AssetType
 from models.market import MarketAsset, MarketPriceHistory
 from models import BankAccount, CryptoAccount, StockAccount
@@ -78,6 +76,7 @@ class _AccountSnapshot:
 
     # Exact mode for Stocks and Crypto
     transactions: list = field(default_factory=list)
+    show_negative_positions: bool = False
 
     physical_assets: list[IndividualAsset] = field(default_factory=list)
 
@@ -126,36 +125,6 @@ def _interpolate_asset_value(
 
     # d is before the first anchor — return invested as safe fallback
     return invested
-
-
-def _parse_positions_json(positions_json: Optional[str]) -> list[FrozenPosition]:
-    """Parse decrypted positions JSON into frozen positions."""
-    if not positions_json:
-        return []
-
-    try:
-        parsed = json.loads(positions_json)
-    except Exception:
-        return []
-
-    positions: list[FrozenPosition] = []
-    for item in parsed:
-        symbol = item.get("symbol")
-        quantity = item.get("quantity")
-        invested = item.get("invested", "0")
-        if not symbol or quantity is None:
-            continue
-        try:
-            positions.append(
-                FrozenPosition(
-                    symbol=str(symbol),
-                    quantity=Decimal(str(quantity)),
-                    total_invested=Decimal(str(invested)),
-                )
-            )
-        except Exception:
-            continue
-    return positions
 
 
 # ---------------------------------------------------------------------------
@@ -243,13 +212,22 @@ def _fill_price_gaps(
     session: Session,
 ) -> dict[str, dict[date, Decimal]]:
     """
-    For each symbol and each missing date, ensure a price exists by falling back
-    to the most recent known price before that date.
-    Mutates and returns the matrix.
+    Ensure every symbol has a price for every date in missing_dates via forward-fill.
+    For symbols with no price at or before missing_dates[0], a SQL fallback fetches
+    the most recent known price before the range to seed the forward-fill.
     """
-    symbols_needing_fallback = [s for s in symbols if not matrix.get(s)]
+    if not missing_dates:
+        return matrix
 
-    if symbols_needing_fallback:
+    first_date = missing_dates[0]
+
+    # Seed needed: no data at all, OR earliest entry is after first_date
+    symbols_needing_seed = [
+        s for s in symbols
+        if not matrix.get(s) or min(matrix[s].keys()) > first_date
+    ]
+
+    if symbols_needing_seed:
         subq = (
             sa.select(
                 MarketAsset.isin.label("isin"),
@@ -257,8 +235,8 @@ def _fill_price_gaps(
             )
             .join(MarketAsset, MarketPriceHistory.market_asset_id == MarketAsset.id)
             .where(
-                MarketAsset.isin.in_(symbols_needing_fallback),
-                MarketPriceHistory.price_date < missing_dates[0],
+                MarketAsset.isin.in_(symbols_needing_seed),
+                MarketPriceHistory.price_date < first_date,
             )
             .group_by(MarketAsset.isin)
             .subquery()
@@ -277,19 +255,76 @@ def _fill_price_gaps(
         ).all()
 
         for isin, price in fallback_rows:
-            matrix.setdefault(isin, {})[missing_dates[0]] = price
+            matrix.setdefault(isin, {})[first_date] = price
 
+    # Forward-fill across all missing_dates for every symbol
     for symbol in symbols:
-        prices_for_symbol = matrix.get(symbol, {})
+        prices_for_symbol = matrix.setdefault(symbol, {})
         last_price: Optional[Decimal] = None
         for d in missing_dates:
             if d in prices_for_symbol:
                 last_price = prices_for_symbol[d]
             elif last_price is not None:
                 prices_for_symbol[d] = last_price
-        matrix[symbol] = prices_for_symbol
 
     return matrix
+
+
+def _build_positions_from_summary(
+    summary,
+) -> tuple[Decimal, Decimal, Optional[str]]:
+    """Convert AccountSummaryResponse into snapshot payload fields."""
+    computed_total = Decimal("0")
+    temp_positions: list[dict] = []
+
+    for pos in summary.positions:
+        qty = Decimal(pos.total_amount)
+        if qty == Decimal("0"):
+            continue
+
+        price = Decimal(pos.current_price) if pos.current_price is not None else None
+        invested = Decimal(pos.total_invested)
+        if pos.current_value is not None:
+            value = Decimal(pos.current_value)
+        elif price is not None:
+            value = qty * price
+        else:
+            value = Decimal("0")
+
+        computed_total += value
+        temp_positions.append(
+            {
+                "symbol": pos.symbol,
+                "quantity": qty,
+                "value": value,
+                "price": price,
+                "invested": invested,
+            }
+        )
+
+    total_value = Decimal(summary.current_value) if summary.current_value is not None else computed_total
+    current_invested = Decimal(summary.total_invested)
+
+    snapshot_positions = []
+    for p in temp_positions:
+        if total_value > Decimal("0"):
+            percentage = (p["value"] / total_value) * Decimal("100")
+        else:
+            percentage = Decimal("0")
+
+        snapshot_positions.append(
+            {
+                "symbol": p["symbol"],
+                "quantity": str(p["quantity"]),
+                "value": str(round(p["value"], 2)),
+                "price": str(round(p["price"], 2)) if p["price"] is not None else None,
+                "invested": str(round(p["invested"], 2)),
+                "percentage": str(round(percentage, 2)),
+            }
+        )
+
+    positions_json = json.dumps(snapshot_positions) if snapshot_positions else None
+    return total_value, current_invested, positions_json
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +333,7 @@ def _fill_price_gaps(
 
 
 def _generate_missing_snapshots(
+    session: Session,
     user_uuid_bidx: str,
     account_id_bidx: str,
     account_snapshot: _AccountSnapshot,
@@ -314,134 +350,16 @@ def _generate_missing_snapshots(
     now = datetime.now(timezone.utc)
     rows: list[dict] = []
 
-    # State for exact mode (replay)
-    is_exact_mode = bool(account_snapshot.transactions)
-    tx_idx = 0
-    txs = account_snapshot.transactions
-
-    # For crypto composite groups, BUY rows often carry price=0 and the true
-    # EUR cost sits in FIAT_ANCHOR (or fiat SPEND). Build a lookup once so
-    # invested basis is not lost in snapshots.
-    buy_group_cost_by_tx_id: dict[str, Decimal] = {}
-    if is_exact_mode and account_snapshot.account_type == AccountCategory.CRYPTO:
-        anchor_by_group: dict[str, Decimal] = {}
-        fiat_spend_by_group: dict[str, Decimal] = {}
-
-        for tx in txs:
-            group_uuid = getattr(tx, "group_uuid", None)
-            if not group_uuid:
-                continue
-
-            tx_type = getattr(tx, "type", "")
-            sym = (getattr(tx, "isin", None) or getattr(tx, "symbol", None) or "").upper()
-            amount = getattr(tx, "amount", Decimal("0"))
-            price_per_unit = getattr(tx, "price_per_unit", Decimal("0"))
-            fees = getattr(tx, "fees", Decimal("0"))
-            row_cost = (amount * price_per_unit) + fees
-
-            if tx_type == "FIAT_ANCHOR":
-                anchor_by_group.setdefault(group_uuid, Decimal("0"))
-                anchor_by_group[group_uuid] += row_cost
-            elif tx_type == "SPEND" and sym in FIAT_SYMBOLS:
-                fiat_spend_by_group.setdefault(group_uuid, Decimal("0"))
-                fiat_spend_by_group[group_uuid] += row_cost
-
-        for tx in txs:
-            if getattr(tx, "type", "") != "BUY":
-                continue
-            group_uuid = getattr(tx, "group_uuid", None)
-            tx_id = str(getattr(tx, "id", ""))
-            if not group_uuid or not tx_id:
-                continue
-
-            if group_uuid in anchor_by_group:
-                buy_group_cost_by_tx_id[tx_id] = anchor_by_group[group_uuid]
-            elif group_uuid in fiat_spend_by_group:
-                buy_group_cost_by_tx_id[tx_id] = fiat_spend_by_group[group_uuid]
-
-    # Dict: symbol -> {"quantity": Decimal, "invested": Decimal}
-    current_positions = {}
-    current_invested = account_snapshot.total_invested
-
-    # Seed current positions from frozen state
-    for p in account_snapshot.frozen_positions:
-        current_positions[p.symbol] = {"quantity": p.quantity, "invested": p.total_invested}
-
-    # Keep a EUR cash bucket available so replay is order-independent.
-    if "EUR" not in current_positions:
-        current_positions["EUR"] = {"quantity": Decimal("0"), "invested": Decimal("0")}
+    from services.crypto_transaction import get_crypto_account_summary
+    from services.stock_transaction import get_stock_account_summary
 
     for day_index, d in enumerate(missing_dates):
-        # Phase A: Replay transactions up to day `d` if exact mode
-        if is_exact_mode:
-            while tx_idx < len(txs) and getattr(txs[tx_idx], "executed_at").date() <= d:
-                tx = txs[tx_idx]
-                sym = getattr(tx, "isin", None) or getattr(tx, "symbol", None)
-                tx_type = getattr(tx, "type", "")
-                amount = getattr(tx, "amount", Decimal("0"))
-                price_per_unit = getattr(tx, "price_per_unit", Decimal("0"))
-                fees = getattr(tx, "fees", Decimal("0"))
-                tx_id = str(getattr(tx, "id", ""))
-                
-                # Skip non-position types; allow FIAT_DEPOSIT only when it's EUR cash (crypto)
-                if tx_type in ("FIAT_ANCHOR", "FEE", "EXIT", "TRANSFER") or not sym:
-                    tx_idx += 1
-                    continue
-                if tx_type == "FIAT_DEPOSIT" and sym != "EUR":
-                    tx_idx += 1
-                    continue
+        current_invested = account_snapshot.total_invested
 
-                if sym not in current_positions:
-                    current_positions[sym] = {"quantity": Decimal("0"), "invested": Decimal("0")}
-
-                is_eur_deposit = tx_type in ("DEPOSIT", "FIAT_DEPOSIT") and sym == "EUR"
-
-                if tx_type in ("BUY", "REWARD"):
-                    tx_cost = (amount * price_per_unit) + fees
-                    if tx_type == "BUY":
-                        tx_cost = buy_group_cost_by_tx_id.get(tx_id, tx_cost)
-
-                    current_positions[sym]["quantity"] += amount
-                    current_positions[sym]["invested"] += tx_cost
-                    current_invested += tx_cost
-
-                    # Any stock/crypto acquisition consumes EUR cash.
-                    if sym != "EUR":
-                        current_positions["EUR"]["quantity"] -= tx_cost
-
-                elif tx_type == "DIVIDEND":
-                    # Cash dividend: proceeds go to EUR cash, position quantity unchanged.
-                    proceeds = (amount * price_per_unit) - fees
-                    current_positions["EUR"]["quantity"] += proceeds
-
-                elif is_eur_deposit:
-                    # EUR cash only: track quantity, not invested capital.
-                    current_positions["EUR"]["quantity"] += (amount - fees)
-                elif tx_type in ("SELL", "SPEND"):
-                    if current_positions[sym]["quantity"] > 0:
-                        fraction = min(amount / current_positions[sym]["quantity"], Decimal("1"))
-                        current_positions[sym]["quantity"] -= amount
-                        if sym != "EUR":  # EUR cash is not invested capital
-                            deduction_invested = current_positions[sym]["invested"] * fraction
-                            current_positions[sym]["invested"] -= deduction_invested
-                            current_invested -= deduction_invested
-
-                    # SELL returns EUR cash.
-                    if tx_type == "SELL" and sym != "EUR":
-                        proceeds = (amount * price_per_unit) - fees
-                        current_positions["EUR"]["quantity"] += proceeds
-
-                tx_idx += 1
-
-        # Phase B: calculate the day's value
         if account_snapshot.account_type == AccountCategory.BANK:
             # Bank balance doesn't fluctuate with the market — keep it frozen
-            if is_exact_mode:
-                qty = current_positions.get("EUR", {}).get("quantity", Decimal("0"))
-                invested = current_positions.get("EUR", {}).get("invested", Decimal("0"))
-            else:
-                qty = account_snapshot.frozen_positions[0].quantity if account_snapshot.frozen_positions else Decimal("0")
-                invested = account_snapshot.frozen_positions[0].total_invested if account_snapshot.frozen_positions else Decimal("0")
+            qty = account_snapshot.frozen_positions[0].quantity if account_snapshot.frozen_positions else Decimal("0")
+            invested = account_snapshot.frozen_positions[0].total_invested if account_snapshot.frozen_positions else Decimal("0")
 
             total_value = qty
 
@@ -456,8 +374,6 @@ def _generate_missing_snapshots(
                     "percentage": "100.00"
                 })
             positions_json = json.dumps(snapshot_positions) if snapshot_positions else None
-
-
         elif account_snapshot.account_type == AccountCategory.ASSET:
             total_value = Decimal("0")
             current_invested = Decimal("0")
@@ -499,61 +415,41 @@ def _generate_missing_snapshots(
                 })
 
             positions_json = json.dumps(snapshot_positions) if snapshot_positions else None
-        else:
-            total_value = Decimal("0")
-            snapshot_positions = []
-            temp_positions = []
-            
-            for sym, pos_data in current_positions.items():
-                qty = pos_data["quantity"]
-                # Clamp EUR quantity to 0 (can go negative from BUY deductions)
-                if sym == "EUR":
-                    qty = max(qty, Decimal("0"))
-                if qty <= Decimal("0"):
-                    continue
+        elif account_snapshot.account_type == AccountCategory.STOCK:
+            preloaded_prices: dict[str, Decimal] = {}
+            for tx in account_snapshot.transactions:
+                isin = getattr(tx, "isin", None)
+                if isin and isin != "EUR":
+                    price = price_matrix.get(isin, {}).get(d)
+                    if price is not None:
+                        preloaded_prices[isin] = price
 
-                # EUR cash: price is always 1, no market lookup needed
-                if sym == "EUR":
-                    price = Decimal("1")
-                else:
-                    price = price_matrix.get(sym, {}).get(d)
-                
-                # Fallback: if market price is strictly unknown, assume its price is the last stored
-                if price is None and qty > Decimal("0"):
-                    if pos_data["invested"] > Decimal("0") and sym in FIAT_SYMBOLS:
-                        price = pos_data["invested"] / qty
-                
-                if price is not None:
-                    value = qty * price
-                    total_value += value
-                else:
-                    value = Decimal("0")
-                temp_positions.append(
-                    {
-                        "symbol": sym,
-                        "quantity": qty,
-                        "value": value,
-                        "price": price,
-                        "invested": pos_data["invested"],
-                    }
-                )
-            for p in temp_positions:
-                if total_value > Decimal("0"):
-                    percentage = (p["value"] / total_value) * Decimal("100")
-                else:
-                    percentage = Decimal("0")
+            summary = get_stock_account_summary(
+                session=session,
+                transactions=list(account_snapshot.transactions),
+                as_of=d,
+                db_only=True,
+                preloaded_prices=preloaded_prices,
+            )
+            total_value, current_invested, positions_json = _build_positions_from_summary(summary)
+        else:  # AccountCategory.CRYPTO
+            preloaded_prices = {}
+            for tx in account_snapshot.transactions:
+                symbol = getattr(tx, "symbol", None)
+                if symbol and symbol != "EUR":
+                    price = price_matrix.get(symbol, {}).get(d)
+                    if price is not None:
+                        preloaded_prices[symbol] = price
 
-                snapshot_positions.append(
-                    {
-                        "symbol": p["symbol"],
-                        "quantity": str(p["quantity"]),
-                        "value": str(round(p["value"], 2)),
-                        "price": str(round(p["price"], 2)) if p["price"] is not None else None,
-                        "invested": str(round(p["invested"], 2)),
-                        "percentage": str(round(percentage, 2))
-                    }
-                )
-            positions_json = json.dumps(snapshot_positions) if snapshot_positions else None
+            summary = get_crypto_account_summary(
+                session=session,
+                transactions=list(account_snapshot.transactions),
+                show_negative_positions=account_snapshot.show_negative_positions,
+                as_of=d,
+                db_only=True,
+                preloaded_prices=preloaded_prices,
+            )
+            total_value, current_invested, positions_json = _build_positions_from_summary(summary)
 
         if day_index == 0 and not has_previous_snapshot:
             # First snapshot has no prior day reference; avoid artificial spike vs zero.
@@ -599,7 +495,6 @@ def _build_stock_snapshots(
 
     result: list[_AccountSnapshot] = []
     for acc in accounts:
-        # Recupere directement les transactions pour le mode exact.
         txs = get_account_transactions(session, acc.uuid, master_key)
         txs.sort(key=lambda x: x.executed_at)
         account_start_date = _resolve_account_start_date(
@@ -648,7 +543,8 @@ def _build_crypto_snapshots(
                 account_id=acc.uuid,
                 account_type=AccountCategory.CRYPTO,
                 account_created_at=account_start_date,
-                transactions=txs
+                transactions=txs,
+                show_negative_positions=show_negative,
             )
         )
     return result
@@ -673,7 +569,11 @@ def _build_bank_snapshots(
                 account_type=AccountCategory.BANK,
                 frozen_positions=[FrozenPosition(symbol="EUR", quantity=balance, total_invested=balance)],
                 total_invested=balance,
-                account_created_at=acc.created_at.date(),
+                account_created_at=_resolve_account_start_date(
+                    default_created_at=acc.created_at.date(),
+                    opened_at=getattr(acc, "opened_at", None),
+                    txs=None,
+                ),
             )
         )
     return result
@@ -758,7 +658,7 @@ def _build_asset_snapshots(
             account_type=AccountCategory.ASSET,
             account_created_at=account_start_date or min(a.created_at.date() for a in assets),
             physical_assets=physical_assets,
-            total_invested=Decimal("0"),
+            total_invested=sum(a.invested for a in physical_assets),
         )
     ]
 
@@ -842,6 +742,7 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
                             AccountHistory.account_id_bidx == account_id_bidx,
                         )
                     )
+                    session.commit()
                     first_and_last = None
 
             last_date = first_and_last[1] if first_and_last is not None else None
@@ -943,43 +844,11 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
             else:
                 prev_value = Decimal("0")
 
-            # For exact-mode accounts, bootstrap from the previous snapshot to
-            # avoid replaying the full transaction history on each login.
-            effective_snapshot = acc_snap
-            if (
-                last_row
-                and acc_snap.account_type in (AccountCategory.STOCK, AccountCategory.CRYPTO)
-            ):
-                bootstrap_positions: list[FrozenPosition] = []
-                if last_row.positions_enc:
-                    try:
-                        positions_raw = decrypt_data(last_row.positions_enc, master_key)
-                        bootstrap_positions = _parse_positions_json(positions_raw)
-                    except Exception:
-                        bootstrap_positions = []
-
-                bootstrap_invested = acc_snap.total_invested
-                try:
-                    bootstrap_invested = Decimal(decrypt_data(last_row.total_invested_enc, master_key))
-                except Exception:
-                    pass
-
-                start_date = missing_dates[0]
-                filtered_txs = [
-                    tx
-                    for tx in acc_snap.transactions
-                    if getattr(tx, "executed_at").date() >= start_date
-                ]
-
-                effective_snapshot = copy.copy(acc_snap)
-                effective_snapshot.frozen_positions = bootstrap_positions
-                effective_snapshot.total_invested = bootstrap_invested
-                effective_snapshot.transactions = filtered_txs
-
             rows = _generate_missing_snapshots(
+                session=session,
                 user_uuid_bidx=user_uuid_bidx,
                 account_id_bidx=account_id_bidx,
-                account_snapshot=effective_snapshot,
+                account_snapshot=acc_snap,
                 price_matrix=price_matrix,
                 missing_dates=missing_dates,
                 prev_value=prev_value,
@@ -1049,7 +918,6 @@ def rebuild_account_history_from_date(
                 AccountHistory.snapshot_date >= from_date,
             )
         )
-        session.commit()
         logger.info(
             "account_history: invalidated %d snapshot(s) from %s for account_bidx=%s",
             deleted.rowcount,
@@ -1060,7 +928,7 @@ def rebuild_account_history_from_date(
         if symbols and asset_type is not None:
             for symbol in symbols:
                 ensure_price_history(session, symbol, asset_type, from_date)
-
+        session.commit()
     run_lazy_catchup(user_uuid, master_key)
 
 

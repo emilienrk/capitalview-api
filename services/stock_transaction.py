@@ -1,7 +1,7 @@
 """Stock transaction services."""
 
 from decimal import Decimal
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, date
 from typing import Optional
 
 from sqlmodel import Session, select
@@ -18,7 +18,6 @@ from dtos import (
 )
 from services.encryption import encrypt_data, decrypt_data, hash_index
 from services.market import get_stock_info, get_or_create_market_asset
-from services.stock_account import _map_account_to_response
 
 
 def _decrypt_transaction(tx: StockTransaction, master_key: str) -> TransactionResponse:
@@ -410,14 +409,16 @@ def get_account_transactions(
 
 def get_stock_account_summary(
     session: Session,
-    account: StockAccount,
-    master_key: str,
+    transactions: list[TransactionResponse],
+    as_of: date = None,
     db_only: bool = False,
+    preloaded_prices: dict[str, Decimal] = None,
 ) -> AccountSummaryResponse:
-    acc_resp = _map_account_to_response(account, master_key)
+    if as_of is None:
+        as_of = date.today()
 
-    transactions = get_account_transactions(session, account.uuid, master_key)
     transactions.sort(key=lambda x: x.executed_at)
+    transactions = [tx for tx in transactions if tx.executed_at.date() <= as_of]
 
     total_deposits_acc = Decimal("0")
 
@@ -453,7 +454,6 @@ def get_stock_account_summary(
 
         pos = positions_map[position_key]
 
-        # Enrich metadata from first transaction that has it
         if tx.symbol and not pos["symbol"]:
             pos["symbol"] = tx.symbol
         if tx.name and not pos["name"]:
@@ -520,10 +520,17 @@ def get_stock_account_summary(
 
         total_invested = data["total_cost"]
         avg_price = total_invested / data["total_amount"] if data["total_amount"] > 0 else Decimal("0")
-        # fees_percentage only counts buy fees against buy cost (excludes sell/dividend fees)
         fees_pct = (data["total_buy_fees"] / total_invested * 100) if total_invested > 0 else Decimal("0")
 
-        market_name, current_price = get_stock_info(session, isin, db_only=db_only) if isin else (None, None)
+        if preloaded_prices is not None:
+            market_name = data.get("name") or isin
+            current_price = preloaded_prices.get(isin)
+        else:
+            market_name, current_price = (
+                get_stock_info(session, isin, db_only=db_only, as_of=as_of)
+                if isin
+                else (None, None)
+            )
 
         current_value = profit_loss = profit_loss_pct = None
         if current_price is not None:
@@ -561,15 +568,11 @@ def get_stock_account_summary(
         if total_invested_acc > 0:
             profit_loss_pct_acc = (profit_loss_acc / total_invested_acc * 100)
 
-    # Sum dividends from positions_map directly to include dividends on fully-sold positions
     total_dividends_acc = sum(
         v["total_dividends"] for k, v in positions_map.items() if k != "EUR"
     )
 
     return AccountSummaryResponse(
-        account_id=acc_resp.id,
-        account_name=acc_resp.name,
-        account_type=acc_resp.account_type.value,
         total_invested=round(total_invested_acc, 2),
         total_deposits=round(total_deposits_acc, 2),
         total_fees=round(total_fees_acc, 2),
