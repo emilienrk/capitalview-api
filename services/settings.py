@@ -2,10 +2,12 @@
 
 from decimal import Decimal
 from sqlmodel import Session, select
+from fastapi import HTTPException
 
-from models import UserSettings
+from models import UserSettings, CryptoAccount
 from dtos.settings import UserSettingsUpdate, UserSettingsResponse
 from services.encryption import encrypt_data, decrypt_data, hash_index
+
 
 
 def _map_settings_to_response(settings: UserSettings, master_key: str) -> UserSettingsResponse:
@@ -72,6 +74,19 @@ def update_settings(
 ) -> UserSettingsResponse:
     """Update user settings."""
     settings = get_or_create_settings(session, user_uuid, master_key)
+
+    # Validate SINGLE mode transition: max 1 account allowed
+    if data.crypto_mode == "SINGLE":
+        user_bidx = hash_index(user_uuid, master_key)
+        account_count = session.exec(
+            select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
+        ).all()
+        
+        if len(account_count) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Vous avez {len(account_count)} compte(s) crypto. Vous devez en avoir 0 ou 1 pour activer le mode Patrimoine Global. Supprimez d'abord les comptes excédentaires.",
+            )
 
     if data.objectives is not None:
         settings.objectives_enc = encrypt_data(data.objectives, master_key)

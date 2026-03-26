@@ -25,6 +25,7 @@ from dtos import (
     CryptoTransactionUpdate,
     CryptoTransactionBasicResponse,
     AccountSummaryResponse,
+    PortfolioAccountSummaryResponse,
     AccountHistorySnapshotResponse,
     TransactionResponse,
     AssetSearchResult,
@@ -101,7 +102,7 @@ def list_accounts(
     return get_user_crypto_accounts(session, current_user.uuid, master_key)
 
 
-@router.get("/accounts/default", response_model=AccountSummaryResponse)
+@router.get("/accounts/default", response_model=PortfolioAccountSummaryResponse)
 def get_default_account(
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
@@ -116,7 +117,17 @@ def get_default_account(
 
     transactions = get_account_transactions(session, account_model.uuid, master_key)
     summary = get_crypto_account_summary(session, transactions, settings.crypto_show_negative_positions)
-    return summary
+    
+    # Decrypt account name
+    account_name = decrypt_data(account_model.name_enc, master_key)
+    
+    # Create PortfolioAccountSummaryResponse with account metadata
+    return PortfolioAccountSummaryResponse(
+        account_id=account_model.uuid,
+        account_name=account_name,
+        account_type="CRYPTO",
+        **summary.model_dump()
+    )
 
 
 @router.get("/history", response_model=list[AccountHistorySnapshotResponse])
