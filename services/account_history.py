@@ -34,6 +34,7 @@ from models.market import MarketAsset, MarketPriceHistory
 from models import BankAccount, CryptoAccount, StockAccount
 from services.encryption import decrypt_data, encrypt_data, hash_index
 from services.settings import get_or_create_settings
+from models.enums import CryptoTransactionType, StockTransactionType
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,21 @@ logger = logging.getLogger(__name__)
 # Internal data structures
 # ---------------------------------------------------------------------------
 
+_ZERO = Decimal("0")
+_CASH_IN_TYPES = frozenset({
+    StockTransactionType.DEPOSIT,
+    StockTransactionType.DIVIDEND,
+    StockTransactionType.SELL,
+    CryptoTransactionType.FIAT_DEPOSIT,
+    CryptoTransactionType.REWARD,
+})
+
+_CASH_OUT_TYPES = frozenset({
+    StockTransactionType.BUY,
+    # StockTransactionType.WITHDRAWAL,
+    CryptoTransactionType.EXIT,
+    CryptoTransactionType.SPEND,
+})
 
 @dataclass
 class FrozenPosition:
@@ -72,7 +88,7 @@ class _AccountSnapshot:
 
     # Fallback / Bank mode
     frozen_positions: list[FrozenPosition] = field(default_factory=list)
-    total_invested: Decimal = Decimal("0")  # EUR
+    total_invested: Decimal = _ZERO  # EUR
 
     # Exact mode for Stocks and Crypto
     transactions: list = field(default_factory=list)
@@ -87,6 +103,18 @@ def _parse_iso_date(value: str) -> Optional[date]:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
     except Exception:
         return None
+
+
+def _to_decimal(value: object) -> Decimal:
+    """Best-effort Decimal conversion; returns 0 on failure."""
+    if value is None:
+        return _ZERO
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return _ZERO
 
 
 def _interpolate_asset_value(
@@ -269,17 +297,55 @@ def _fill_price_gaps(
 
     return matrix
 
+def _compute_daily_net_flow(
+    account_snapshot: _AccountSnapshot,
+    d: date,
+) -> Decimal:
+    """Signed net cash flow for day d."""
+    if account_snapshot.account_type not in (AccountCategory.STOCK, AccountCategory.CRYPTO):
+        return _ZERO
+
+    net_flow = _ZERO
+
+    for tx in account_snapshot.transactions or []:
+        executed_at = getattr(tx, "executed_at", None)
+        if executed_at is None:
+            continue
+        try:
+            if executed_at.date() != d:
+                continue
+        except Exception:
+            continue
+
+        tx_type = str(getattr(tx, "type", "") or "").upper()
+
+        cash = _ZERO
+        for field in ("total_eur", "total", "invested", "amount"):
+            v = _to_decimal(getattr(tx, field, None))  # ← _to_decimal
+            if v != _ZERO:
+                cash = v.copy_abs()
+                break
+
+        if tx_type in _CASH_IN_TYPES:
+            net_flow += cash
+        elif tx_type in _CASH_OUT_TYPES:
+            net_flow -= cash
+
+        fees = _to_decimal(getattr(tx, "fees", None))  # ← _to_decimal
+        net_flow -= fees if fees > _ZERO else _to_decimal(getattr(tx, "fee", None))  # ← _to_decimal
+
+    return net_flow
 
 def _build_positions_from_summary(
     summary,
 ) -> tuple[Decimal, Decimal, Optional[str]]:
     """Convert AccountSummaryResponse into snapshot payload fields."""
-    computed_total = Decimal("0")
+    computed_total = _ZERO
     temp_positions: list[dict] = []
 
     for pos in summary.positions:
         qty = Decimal(pos.total_amount)
-        if qty == Decimal("0"):
+        if qty == _ZERO:
             continue
 
         price = Decimal(pos.current_price) if pos.current_price is not None else None
@@ -289,7 +355,7 @@ def _build_positions_from_summary(
         elif price is not None:
             value = qty * price
         else:
-            value = Decimal("0")
+            value = _ZERO
 
         computed_total += value
         temp_positions.append(
@@ -307,10 +373,10 @@ def _build_positions_from_summary(
 
     snapshot_positions = []
     for p in temp_positions:
-        if total_value > Decimal("0"):
+        if total_value > _ZERO:
             percentage = (p["value"] / total_value) * Decimal("100")
         else:
-            percentage = Decimal("0")
+            percentage = _ZERO
 
         snapshot_positions.append(
             {
@@ -358,13 +424,13 @@ def _generate_missing_snapshots(
 
         if account_snapshot.account_type == AccountCategory.BANK:
             # Bank balance doesn't fluctuate with the market — keep it frozen
-            qty = account_snapshot.frozen_positions[0].quantity if account_snapshot.frozen_positions else Decimal("0")
-            invested = account_snapshot.frozen_positions[0].total_invested if account_snapshot.frozen_positions else Decimal("0")
+            qty = account_snapshot.frozen_positions[0].quantity if account_snapshot.frozen_positions else _ZERO
+            invested = account_snapshot.frozen_positions[0].total_invested if account_snapshot.frozen_positions else _ZERO
 
             total_value = qty
 
             snapshot_positions = []
-            if total_value > Decimal("0"):
+            if total_value > _ZERO:
                 snapshot_positions.append({
                     "symbol": "EUR",
                     "quantity": str(qty),
@@ -375,8 +441,8 @@ def _generate_missing_snapshots(
                 })
             positions_json = json.dumps(snapshot_positions) if snapshot_positions else None
         elif account_snapshot.account_type == AccountCategory.ASSET:
-            total_value = Decimal("0")
-            current_invested = Decimal("0")
+            total_value = _ZERO
+            current_invested = _ZERO
             temp_positions = []
 
             for asset in account_snapshot.physical_assets:
@@ -404,7 +470,7 @@ def _generate_missing_snapshots(
 
             snapshot_positions = []
             for p in temp_positions:
-                percentage = (p["value"] / total_value) * Decimal("100") if total_value > Decimal("0") else Decimal("0")
+                percentage = (p["value"] / total_value) * Decimal("100") if total_value > _ZERO else _ZERO
                 snapshot_positions.append({
                     "symbol": p["symbol"],
                     "quantity": str(p["quantity"]),
@@ -453,9 +519,10 @@ def _generate_missing_snapshots(
 
         if day_index == 0 and not has_previous_snapshot:
             # First snapshot has no prior day reference; avoid artificial spike vs zero.
-            daily_pnl = Decimal("0")
+            daily_pnl = _ZERO
         else:
-            daily_pnl = total_value - prev_value
+            net_flow = _compute_daily_net_flow(account_snapshot, d)
+            daily_pnl = total_value - prev_value - net_flow
 
         row: dict = {
             "uuid": uuid.uuid7(),
@@ -606,11 +673,8 @@ def _build_asset_snapshots(
         valued_at = _parse_iso_date(valued_at_raw)
         if valued_at is None:
             continue
-        try:
-            value = Decimal(decrypt_data(valuation.estimated_value_enc, master_key))
-            valuations_by_asset.setdefault(valuation.asset_uuid, []).append((valued_at, value))
-        except Exception:
-            continue
+        value = _to_decimal(decrypt_data(valuation.estimated_value_enc, master_key))
+        valuations_by_asset.setdefault(valuation.asset_uuid, []).append((valued_at, value))
 
     account_start_date: Optional[date] = None
     physical_assets: list[IndividualAsset] = []
@@ -621,10 +685,7 @@ def _build_asset_snapshots(
         except Exception:
             name = "Actif inconnu"
 
-        try:
-            invested = Decimal(decrypt_data(asset.purchase_price_enc, master_key))
-        except Exception:
-            invested = Decimal("0")
+        invested = _to_decimal(decrypt_data(asset.purchase_price_enc, master_key))
 
         acquired_at = asset.created_at.date()
         if asset.acquisition_date_enc:
@@ -837,12 +898,9 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
             ).first()
 
             if last_row:
-                try:
-                    prev_value = Decimal(decrypt_data(last_row.total_value_enc, master_key))
-                except Exception:
-                    prev_value = Decimal("0")
+                prev_value = _to_decimal(decrypt_data(last_row.total_value_enc, master_key))
             else:
-                prev_value = Decimal("0")
+                prev_value = _ZERO
 
             rows = _generate_missing_snapshots(
                 session=session,
