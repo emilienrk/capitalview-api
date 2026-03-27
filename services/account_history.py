@@ -45,18 +45,18 @@ logger = logging.getLogger(__name__)
 
 _ZERO = Decimal("0")
 _CASH_IN_TYPES = frozenset({
-    StockTransactionType.DEPOSIT,
-    StockTransactionType.DIVIDEND,
-    StockTransactionType.SELL,
-    CryptoTransactionType.FIAT_DEPOSIT,
-    CryptoTransactionType.REWARD,
+    StockTransactionType.DEPOSIT.value,
+    StockTransactionType.DIVIDEND.value,
+    StockTransactionType.SELL.value,
+    CryptoTransactionType.FIAT_DEPOSIT.value,
+    CryptoTransactionType.REWARD.value,
 })
 
 _CASH_OUT_TYPES = frozenset({
-    StockTransactionType.BUY,
+    StockTransactionType.BUY.value,
     # StockTransactionType.WITHDRAWAL,
-    CryptoTransactionType.EXIT,
-    CryptoTransactionType.SPEND,
+    CryptoTransactionType.EXIT.value,
+    CryptoTransactionType.SPEND.value,
 })
 
 @dataclass
@@ -320,19 +320,33 @@ def _compute_daily_net_flow(
         tx_type = str(getattr(tx, "type", "") or "").upper()
 
         cash = _ZERO
-        for field in ("total_eur", "total", "invested", "amount"):
-            v = _to_decimal(getattr(tx, field, None))  # ← _to_decimal
+
+        # Prefer explicit EUR totals when available.
+        for field in ("total_eur", "total", "total_cost", "invested"):
+            v = _to_decimal(getattr(tx, field, None))
             if v != _ZERO:
                 cash = v.copy_abs()
                 break
+
+        # Fallback: rebuild EUR notional from amount * unit price.
+        if cash == _ZERO:
+            amount = _to_decimal(getattr(tx, "amount", None))
+            price_per_unit = _to_decimal(getattr(tx, "price_per_unit", None))
+            if amount != _ZERO and price_per_unit != _ZERO:
+                cash = (amount * price_per_unit).copy_abs()
+            elif amount != _ZERO:
+                cash = amount.copy_abs()
 
         if tx_type in _CASH_IN_TYPES:
             net_flow += cash
         elif tx_type in _CASH_OUT_TYPES:
             net_flow -= cash
 
-        fees = _to_decimal(getattr(tx, "fees", None))  # ← _to_decimal
-        net_flow -= fees if fees > _ZERO else _to_decimal(getattr(tx, "fee", None))  # ← _to_decimal
+        fees = _to_decimal(getattr(tx, "fees", None))
+        if fees <= _ZERO:
+            fees = _to_decimal(getattr(tx, "fee", None))
+        if fees > _ZERO:
+            net_flow -= fees
 
     return net_flow
 
@@ -685,7 +699,10 @@ def _build_asset_snapshots(
         except Exception:
             name = "Actif inconnu"
 
-        invested = _to_decimal(decrypt_data(asset.purchase_price_enc, master_key))
+        invested = _ZERO
+        purchase_price_enc = getattr(asset, "purchase_price_enc", None)
+        if purchase_price_enc:
+            invested = _to_decimal(decrypt_data(purchase_price_enc, master_key))
 
         acquired_at = asset.created_at.date()
         if asset.acquisition_date_enc:
