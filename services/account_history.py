@@ -31,6 +31,7 @@ from models.asset import Asset, AssetValuation
 from models.enums import AccountCategory, AssetType
 from models.market import MarketAsset, MarketPriceHistory
 from models import BankAccount, CryptoAccount, StockAccount
+from dtos.crypto import FIAT_SYMBOLS
 from services.encryption import decrypt_data, encrypt_data, hash_index
 from services.settings import get_or_create_settings
 from models.enums import CryptoTransactionType, StockTransactionType
@@ -303,7 +304,23 @@ def _compute_daily_net_flow(
     if account_snapshot.account_type not in (AccountCategory.STOCK, AccountCategory.CRYPTO):
         return _ZERO
 
-    net_flow = _ZERO
+    def _tx_type_str(tx) -> str:
+        value = getattr(tx, "type", None)
+        if value is None:
+            return ""
+        enum_value = getattr(value, "value", None)
+        return str(enum_value if enum_value is not None else value)
+
+    def _tx_notional_eur(tx) -> Decimal:
+        # Prefer explicit EUR totals when present in DTO/fixtures.
+        for attr in ("total_eur", "total", "total_cost", "invested"):
+            raw = getattr(tx, attr, None)
+            if raw is None:
+                continue
+            val = _to_decimal(raw)
+            if val != _ZERO:
+                return val
+        return _to_decimal(getattr(tx, "amount", _ZERO)) * _to_decimal(getattr(tx, "price_per_unit", _ZERO))
 
     day_transactions: list = []
     for tx in account_snapshot.transactions or []:
@@ -313,12 +330,52 @@ def _compute_daily_net_flow(
         if executed_at.date() == d:
             day_transactions.append(tx)
 
+    if not day_transactions:
+        return _ZERO
+
+    net_flow = _ZERO
+
+    if account_snapshot.account_type == AccountCategory.STOCK:
+        for tx in day_transactions:
+            tx_type = _tx_type_str(tx)
+            isin = str(getattr(tx, "isin", "") or "").upper()
+            symbol = str(getattr(tx, "symbol", "") or "").upper()
+            is_fiat = isin == "EUR" or symbol == "EUR"
+            if tx_type == "DEPOSIT" and is_fiat:
+                net_flow += _tx_notional_eur(tx)
+            elif tx_type in {"WITHDRAW", "WITHDRAWAL", "TRANSFER"} and is_fiat:
+                net_flow -= _tx_notional_eur(tx)
+        return net_flow
+
+    groups_with_crypto_buy: set[str] = set()
+    groups_with_crypto_spend: set[str] = set()
     for tx in day_transactions:
-        tx_type = getattr(tx, "type", None)
-        if tx_type in _CASH_IN_TYPES:
-            net_flow += getattr(tx, "total_cost", _ZERO) or _ZERO
-        elif tx_type in _CASH_OUT_TYPES:
-            net_flow -= getattr(tx, "total_cost", _ZERO) or _ZERO
+        group_uuid = getattr(tx, "group_uuid", None)
+        if not group_uuid:
+            continue
+        tx_type = _tx_type_str(tx)
+        symbol = str(getattr(tx, "symbol", "") or "").upper()
+        if tx_type == "BUY" and symbol not in FIAT_SYMBOLS:
+            groups_with_crypto_buy.add(group_uuid)
+        elif tx_type == "SPEND" and symbol not in FIAT_SYMBOLS:
+            groups_with_crypto_spend.add(group_uuid)
+
+    for tx in day_transactions:
+        tx_type = _tx_type_str(tx)
+        symbol = str(getattr(tx, "symbol", "") or "").upper()
+        if symbol not in FIAT_SYMBOLS:
+            continue
+
+        group_uuid = getattr(tx, "group_uuid", None)
+        if tx_type == "DEPOSIT":
+            if not group_uuid or group_uuid not in groups_with_crypto_spend:
+                net_flow += _tx_notional_eur(tx)
+        elif tx_type == "SPEND":
+            if not group_uuid or group_uuid not in groups_with_crypto_buy:
+                net_flow -= _tx_notional_eur(tx)
+        elif tx_type in {"WITHDRAW", "TRANSFER"}:
+            net_flow -= _tx_notional_eur(tx)
+
     return net_flow
 
 def _build_positions_from_summary(

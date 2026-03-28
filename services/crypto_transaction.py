@@ -759,6 +759,9 @@ def get_crypto_account_summary(
     for symbol, data in positions_map.items():
         if data["total_amount"] == Decimal("0"):
             continue
+        if symbol not in FIAT_SYMBOLS and data["total_amount"] < Decimal("0"):
+            # Keep fiat cash lines, but drop overspent crypto symbols from summary positions.
+            continue
 
         total_invested = data["cost_basis"]
         fees_eur = data["fees_eur"]
@@ -802,18 +805,28 @@ def get_crypto_account_summary(
         )
 
     net_external_deposits = Decimal("0")
+    has_explicit_external_flow = False
+    has_fiat_buy_legs = False
+    has_crypto_activity = False
     for tx in transactions:
+        if tx.symbol not in FIAT_SYMBOLS and tx.type != "ANCHOR":
+            has_crypto_activity = True
         if tx.type == "DEPOSIT" and tx.symbol in FIAT_SYMBOLS:
             # External wire IN — only if NOT part of a crypto-sale (SELL_TO_FIAT) group
             if not tx.group_uuid or tx.group_uuid not in groups_with_crypto_spend:
                 net_external_deposits += tx.amount * tx.price_per_unit
+                has_explicit_external_flow = True
         elif tx.type == "SPEND" and tx.symbol in FIAT_SYMBOLS:
+            if tx.group_uuid and tx.group_uuid in groups_with_crypto_buy:
+                has_fiat_buy_legs = True
             # External withdrawal OUT — only if NOT part of a crypto-buy group
             if not tx.group_uuid or tx.group_uuid not in groups_with_crypto_buy:
                 net_external_deposits -= tx.amount * tx.price_per_unit
+                has_explicit_external_flow = True
         elif tx.type == "WITHDRAW" and tx.symbol in FIAT_SYMBOLS:
             # Direct withdrawal of fiat — always reduces net deposits
             net_external_deposits -= tx.amount * tx.price_per_unit
+            has_explicit_external_flow = True
 
     crypto_positions = [p for p in positions if p.symbol not in FIAT_SYMBOLS]
 
@@ -822,17 +835,26 @@ def get_crypto_account_summary(
     current_value_acc_list = [p.current_value for p in positions if p.current_value is not None]
     current_value_acc = sum(current_value_acc_list) if current_value_acc_list else None
 
+    # Account-level invested follows external fiat flows when explicitly tracked.
+    # For legacy ledgers with only BUY+SPEND fiat legs (no external deposit rows),
+    # keep the historical fallback to crypto cost basis.
+    if not has_crypto_activity:
+        total_invested_account = Decimal("0")
+    elif has_explicit_external_flow:
+        total_invested_account = net_external_deposits
+    elif has_fiat_buy_legs:
+        total_invested_account = total_invested_acc
+    else:
+        total_invested_account = Decimal("0")
+
     profit_loss_acc = profit_loss_pct_acc = None
-    if any(p.current_value is not None for p in crypto_positions):
-        crypto_value = sum(
-            p.current_value for p in crypto_positions if p.current_value is not None
-        )
-        profit_loss_acc = crypto_value - total_invested_acc
-        if total_invested_acc > 0:
-            profit_loss_pct_acc = (profit_loss_acc / total_invested_acc * 100)
+    if has_crypto_activity and current_value_acc is not None:
+        profit_loss_acc = current_value_acc - total_invested_account
+        if total_invested_account > 0:
+            profit_loss_pct_acc = (profit_loss_acc / total_invested_account * 100)
 
     return AccountSummaryResponse(
-        total_invested=round(total_invested_acc, 2),
+        total_invested=round(total_invested_account, 2),
         total_deposits=round(net_external_deposits, 2),
         total_fees=round(total_fees_acc, 2),
         currency="EUR",
