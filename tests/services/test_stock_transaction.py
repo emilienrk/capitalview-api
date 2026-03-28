@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlmodel import Session, select
 
 from services.stock_transaction import (
+    create_eur_deposit,
     create_stock_transaction,
     get_stock_transaction,
     update_stock_transaction,
@@ -181,6 +182,41 @@ def test_get_account_transactions(session: Session, master_key: str):
     non_eur_2 = [t for t in txs_2 if t.isin != "EUR"]
     assert len(non_eur_2) == 1
     assert non_eur_2[0].symbol == "C"
+
+
+def test_auto_fund_uses_eur_balance_as_of_buy_date(session: Session, master_key: str):
+    acc = "acc_as_of"
+
+    # Future deposit must not be considered when creating an earlier BUY.
+    create_eur_deposit(
+        session,
+        account_uuid=acc,
+        amount=Decimal("200"),
+        executed_at=datetime(2023, 1, 10, 12, 0, 0),
+        master_key=master_key,
+    )
+
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id=acc,
+        symbol="AIR",
+        isin="ISIN_AIR",
+        type=StockTransactionType.BUY,
+        amount=Decimal("1"),
+        price_per_unit=Decimal("80"),
+        fees=Decimal("0"),
+        executed_at=datetime(2023, 1, 5, 12, 0, 0),
+    ), master_key)
+
+    txs = get_account_transactions(session, acc, master_key)
+    auto_deposits = [
+        tx for tx in txs
+        if tx.type == "DEPOSIT"
+        and tx.isin == "EUR"
+        and tx.notes == "Provision automatique"
+    ]
+    assert len(auto_deposits) == 1
+    assert auto_deposits[0].amount == Decimal("80")
+    assert auto_deposits[0].executed_at == datetime(2023, 1, 5, 11, 59, 59)
 
 
 @patch("services.stock_transaction.get_stock_info")

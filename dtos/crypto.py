@@ -99,9 +99,13 @@ class CryptoCompositeTransactionResponse(BaseModel):
     ``warning`` is set when one or more debited symbols end up with a
     negative balance after the operation (non-blocking — the transaction
     was still persisted).
+
+    ``info`` is an optional informational message for UX hints
+    (for example: existing negative EUR balance before a fiat deposit).
     """
     rows: list[CryptoTransactionBasicResponse]
     warning: str | None = None
+    info: str | None = None
 
 
 FIAT_SYMBOLS: frozenset[str] = frozenset(

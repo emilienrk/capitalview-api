@@ -660,7 +660,6 @@ def get_account_transactions(
 def get_crypto_account_summary(
     session: Session,
     transactions: list[TransactionResponse],
-    show_negative_positions: bool = False,
     as_of: date = None,
     db_only: bool = False,
     preloaded_prices: dict[str, Decimal] = None,
@@ -760,8 +759,6 @@ def get_crypto_account_summary(
     for symbol, data in positions_map.items():
         if data["total_amount"] == Decimal("0"):
             continue
-        if not show_negative_positions and data["total_amount"] < Decimal("0"):
-            continue
 
         total_invested = data["cost_basis"]
         fees_eur = data["fees_eur"]
@@ -798,9 +795,9 @@ def get_crypto_account_summary(
                 fees_percentage=round(fees_pct, 2),
                 currency="EUR",
                 current_price=current_price,
-                current_value=round(current_value, 2) if current_value else None,
-                profit_loss=round(profit_loss, 2) if profit_loss else None,
-                profit_loss_percentage=round(profit_loss_pct, 2) if profit_loss_pct else None,
+                current_value=round(current_value, 2) if current_value is not None else None,
+                profit_loss=round(profit_loss, 2) if profit_loss is not None else None,
+                profit_loss_percentage=round(profit_loss_pct, 2) if profit_loss_pct is not None else None,
             )
         )
 
@@ -839,9 +836,9 @@ def get_crypto_account_summary(
         total_deposits=round(net_external_deposits, 2),
         total_fees=round(total_fees_acc, 2),
         currency="EUR",
-        current_value=round(current_value_acc, 2) if current_value_acc else None,
-        profit_loss=round(profit_loss_acc, 2) if profit_loss_acc else None,
-        profit_loss_percentage=round(profit_loss_pct_acc, 2) if profit_loss_pct_acc else None,
+        current_value=round(current_value_acc, 2) if current_value_acc is not None else None,
+        profit_loss=round(profit_loss_acc, 2) if profit_loss_acc is not None else None,
+        profit_loss_percentage=round(profit_loss_pct_acc, 2) if profit_loss_pct_acc is not None else None,
         positions=positions,
     )
 

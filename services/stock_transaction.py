@@ -107,8 +107,15 @@ def create_eur_deposit(
     )
 
 
-def _compute_eur_balance(session: Session, account_uuid: str, master_key: str) -> Decimal:
+def _compute_eur_balance(
+    session: Session,
+    account_uuid: str,
+    master_key: str,
+    as_of: datetime | None = None,
+) -> Decimal:
     txs = get_account_transactions(session, account_uuid, master_key)
+    if as_of is not None:
+        txs = [tx for tx in txs if tx.executed_at <= as_of]
     txs.sort(key=lambda x: x.executed_at)
     eur = Decimal("0")
     for tx in txs:
@@ -191,7 +198,15 @@ def create_stock_transaction(
     # Auto-fund EUR balance for BUY transactions if needed
     if data.type.value == "BUY" and data.isin != "EUR":
         cost = (data.amount * data.price_per_unit) + data.fees
-        current_eur = max(_compute_eur_balance(session, data.account_id, master_key), Decimal("0"))
+        current_eur = max(
+            _compute_eur_balance(
+                session,
+                data.account_id,
+                master_key,
+                as_of=data.executed_at,
+            ),
+            Decimal("0"),
+        )
         shortage = cost - current_eur
         if shortage > Decimal("0"):
             # Auto-deposit happens 1 second before the BUY so it's replayed first
@@ -493,8 +508,10 @@ def get_stock_account_summary(
         isin = data.get("isin")
 
         if isin == "EUR":
-            eur_amount = max(data["total_amount"], Decimal("0"))
-            if eur_amount <= 0:
+            # Keep EUR cash even when negative so account valuation reflects
+            # temporary cash deficit created by transaction ordering.
+            eur_amount = data["total_amount"]
+            if eur_amount == 0:
                 continue
             positions.append(PositionResponse(
                 symbol="EUR",

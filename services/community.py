@@ -372,7 +372,7 @@ def _compute_crypto_pru_for_symbols(
 
     all_decrypted.sort(key=lambda t: t["created_at"])
 
-    # Build group-level anchor costs (same logic as get_crypto_account_summary)
+    # Build group-level anchor costs
     anchor_by_group: dict[str, Decimal] = {}
     fiat_spend_by_group: dict[str, Decimal] = {}
     for tx in all_decrypted:

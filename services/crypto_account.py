@@ -82,8 +82,7 @@ def get_or_create_default_account(
     """
     Get the existing single account for a SINGLE-mode user,
     or transparently create one if none exists yet.
-    Returns the raw CryptoAccount model (not the DTO) so the caller
-    can pass it to get_crypto_account_summary.
+    Returns the raw CryptoAccount model
     """
     user_bidx = hash_index(user_uuid, master_key)
 

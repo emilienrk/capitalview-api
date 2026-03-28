@@ -3,6 +3,7 @@
 from typing import Annotated
 
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlmodel import Session, select
@@ -10,7 +11,7 @@ from sqlmodel import Session, select
 from database import get_session
 from models import User, CryptoAccount, CryptoTransaction
 from services.auth import get_current_user, get_master_key
-from models.enums import CryptoTransactionType, AssetType
+from models.enums import CryptoCompositeTransactionType, CryptoTransactionType, AssetType
 from dtos import (
     CryptoAccountCreate,
     CryptoAccountUpdate,
@@ -55,6 +56,7 @@ from services.crypto_transaction import (
     create_composite_crypto_transaction,
     create_cross_account_transfer,
     create_crypto_transaction,
+    get_symbol_balance,
     get_crypto_transaction,
     get_account_transactions,
     update_crypto_transaction,
@@ -112,11 +114,10 @@ def get_default_account(
     Get (or transparently create) the single default account for SINGLE-mode users.
     Returns the full account summary with positions and calculated values.
     """
-    settings = get_or_create_settings(session, current_user.uuid, master_key)
     account_model = get_or_create_default_account(session, current_user.uuid, master_key)
 
     transactions = get_account_transactions(session, account_model.uuid, master_key)
-    summary = get_crypto_account_summary(session, transactions, settings.crypto_show_negative_positions)
+    summary = get_crypto_account_summary(session, transactions)
     
     # Decrypt account name
     account_name = decrypt_data(account_model.name_enc, master_key)
@@ -154,10 +155,9 @@ def get_account(
         raise HTTPException(status_code=404, detail="Account not found")
 
     account_model = session.get(CryptoAccount, account_id)
-    settings = get_or_create_settings(session, current_user.uuid, master_key)
 
     transactions = get_account_transactions(session, account_model.uuid, master_key)
-    summary = get_crypto_account_summary(session, transactions, settings.crypto_show_negative_positions, db_only=db_only)
+    summary = get_crypto_account_summary(session, transactions, db_only=db_only)
     return summary
 
 
@@ -271,6 +271,17 @@ def create_composite_transaction(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    info: str | None = None
+    composite_type = CryptoCompositeTransactionType.normalize(data.type)
+    if composite_type == CryptoCompositeTransactionType.FIAT_DEPOSIT:
+        eur_balance_before = get_symbol_balance(session, data.account_id, "EUR", master_key)
+        if eur_balance_before < 0:
+            negative_eur = abs(eur_balance_before).quantize(Decimal("0.01"))
+            info = (
+                "Info: votre solde EUR était négatif avant ce dépôt "
+                f"({negative_eur} EUR)."
+            )
+
     created = create_composite_crypto_transaction(session, data, master_key)
 
     rows = [
@@ -303,7 +314,7 @@ def create_composite_transaction(
         affected_assets=[tx.symbol for tx in created]
     )
 
-    return CryptoCompositeTransactionResponse(rows=rows, warning=warning)
+    return CryptoCompositeTransactionResponse(rows=rows, warning=warning, info=info)
 
 
 @router.post("/transactions/cross-account-transfer", response_model=CryptoCompositeTransactionResponse, status_code=201)

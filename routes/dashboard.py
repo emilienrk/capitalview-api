@@ -163,12 +163,10 @@ def get_my_portfolio(
             )
         )
     
-    # Convert crypto accounts — prices are now stored in EUR in market_price_history
-    settings = get_or_create_settings(session, current_user.uuid, master_key)
     for acc in crypto_models:
         transactions = get_crypto_transactions(session, acc.uuid, master_key)
 
-        summary = get_crypto_account_summary(session, transactions, settings.crypto_show_negative_positions, db_only=db_only)
+        summary = get_crypto_account_summary(session, transactions, db_only=db_only)
         accounts.append(
             PortfolioAccountSummaryResponse(
                 account_id=acc.uuid,
@@ -240,7 +238,7 @@ def get_dashboard_statistics(
     for acc in crypto_models:
         transactions = get_crypto_transactions(session, acc.uuid, master_key)
 
-        summary = get_crypto_account_summary(session, transactions, settings.crypto_show_negative_positions, db_only=db_only)
+        summary = get_crypto_account_summary(session, transactions, db_only=db_only)
         crypto_invested += summary.total_invested
         if summary.current_value:
             crypto_current_value += summary.current_value

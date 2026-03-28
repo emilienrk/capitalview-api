@@ -495,7 +495,6 @@ def _generate_missing_snapshots(
             summary = get_crypto_account_summary(
                 session=session,
                 transactions=list(account_snapshot.transactions),
-                show_negative_positions=account_snapshot.show_negative_positions,
                 as_of=d,
                 db_only=True,
                 preloaded_prices=preloaded_prices,
