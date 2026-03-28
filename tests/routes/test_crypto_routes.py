@@ -545,14 +545,17 @@ def test_account_pl_eur_cash_not_profit(mock_get_info, session, master_key):
 
     summary = client.get(f"/crypto/accounts/{account_id}").json()
 
-    assert Decimal(str(summary["total_invested"])) == Decimal("10000"), (
-        "total_invested must equal the EUR wired in, not the crypto cost_basis"
+    # total_invested = crypto cost basis (BTC only, not EUR cash)
+    assert Decimal(str(summary["total_invested"])) == Decimal("8000"), (
+        "total_invested must be the crypto cost basis, not the EUR wired in"
     )
+    # total_deposits = net external EUR wired in
+    assert Decimal(str(summary["total_deposits"])) == Decimal("10000")
     assert Decimal(str(summary["current_value"])) == Decimal("9000"), (
         "current_value must include both BTC (7 000) and EUR cash (2 000)"
     )
     assert Decimal(str(summary["profit_loss"])) == Decimal("-1000"), (
-        "profit_loss = 9 000 - 10 000 = -1 000 (EUR cash must NOT be counted as profit)"
+        "profit_loss = current_value (9 000) - deposits (10 000) = -1 000"
     )
 
 
@@ -610,10 +613,12 @@ def test_account_pl_exit_does_not_inflate_invested(mock_get_info, session, maste
 
     summary = client.get(f"/crypto/accounts/{account_id}").json()
 
-    assert Decimal(str(summary["total_invested"])) == Decimal("10000"), (
-        "Selling crypto (SELL_TO_FIAT) must NOT increase total_invested — "
-        "the received EUR is not a new bank wire"
+    # total_invested = crypto cost basis (no open crypto positions after sell)
+    assert Decimal(str(summary["total_invested"])) == Decimal("0"), (
+        "total_invested must be 0 when all crypto is sold"
     )
+    # total_deposits = net external EUR wired in (not inflated by SELL_TO_FIAT proceeds)
+    assert Decimal(str(summary["total_deposits"])) == Decimal("10000")
     # Only EUR remains: 2 000 + 7 000 = 9 000
     assert Decimal(str(summary["current_value"])) == Decimal("9000")
     assert Decimal(str(summary["profit_loss"])) == Decimal("-1000")

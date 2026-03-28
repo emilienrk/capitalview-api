@@ -60,7 +60,7 @@ def test_dashboard_portfolio(mock_rate, mock_crypto, mock_stock, session, master
     client.post("/crypto/transactions/composite", json={
         "account_id": cacc_id,
         "symbol": "EUR",
-        "type": "DEPOSIT",
+        "type": "FIAT_DEPOSIT",
         "amount": "30000",
         "executed_at": "2023-01-01T11:00:00",
     }, headers=headers)
@@ -84,7 +84,7 @@ def test_dashboard_portfolio(mock_rate, mock_crypto, mock_stock, session, master
     # Verify crypto account was converted to EUR
     crypto_acc = next(a for a in summary["accounts"] if a["account_type"] == "CRYPTO")
     assert crypto_acc["currency"] == "EUR"
-    # BTC invested = 30000 EUR (cost basis is in EUR; only market prices are converted)
+    # total_invested = net external deposits = 30000 EUR wired in
     assert Decimal(str(crypto_acc["total_invested"])) == Decimal("30000")
 
     stock_acc = next(a for a in summary["accounts"] if a["account_type"] != "CRYPTO")

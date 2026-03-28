@@ -757,7 +757,7 @@ def get_crypto_account_summary(
 
     positions = []
     for symbol, data in positions_map.items():
-        if data["total_amount"] == Decimal("0"):
+        if data["total_amount"] <= Decimal("0"):
             continue
 
         total_invested = data["cost_basis"]
@@ -823,13 +823,9 @@ def get_crypto_account_summary(
     current_value_acc = sum(current_value_acc_list) if current_value_acc_list else None
 
     profit_loss_acc = profit_loss_pct_acc = None
-    if any(p.current_value is not None for p in crypto_positions):
-        crypto_value = sum(
-            p.current_value for p in crypto_positions if p.current_value is not None
-        )
-        profit_loss_acc = crypto_value - total_invested_acc
-        if total_invested_acc > 0:
-            profit_loss_pct_acc = (profit_loss_acc / total_invested_acc * 100)
+    if current_value_acc is not None and net_external_deposits > 0:
+        profit_loss_acc = current_value_acc - net_external_deposits
+        profit_loss_pct_acc = (profit_loss_acc / net_external_deposits * 100)
 
     return AccountSummaryResponse(
         total_invested=round(total_invested_acc, 2),

@@ -660,8 +660,8 @@ def test_generate_missing_snapshots_crypto_buy_uses_group_anchor_cost(session: S
     )
 
     assert len(rows) == 1
-    # Account-level invested follows net external deposits in crypto summary.
-    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "0.00"
+    # Account-level invested = crypto cost basis (BTC position = 100 from ANCHOR)
+    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "100.00"
 
     positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
     by_symbol = {p["symbol"]: p for p in positions_dec}
@@ -731,7 +731,8 @@ def test_generate_missing_snapshots_sell_partial_reduces_invested_correctly(sess
     )
 
     assert len(rows) == 1
-    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "54000.00"
+    # Account-level invested = sum of crypto cost bases: BTC 50000 + ETH 2000 after partial sell
+    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "52000.00"
 
     positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
     by_symbol = {p["symbol"]: p for p in positions_dec}
@@ -786,8 +787,8 @@ def test_generate_missing_snapshots_crypto_group_cost_includes_fees(session: Ses
     )
 
     assert len(rows) == 1
-    # Account-level invested follows net external deposits in crypto summary.
-    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "0.00"
+    # Account-level invested = crypto cost basis (BTC position cost from ANCHOR = 100)
+    assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "100.00"
 
     positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
     by_symbol = {p["symbol"]: p for p in positions_dec}
