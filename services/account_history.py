@@ -314,9 +314,9 @@ def _compute_daily_net_flow(
                 continue
             amount = _to_decimal(getattr(tx, "amount", _ZERO))
             match _type(tx):
-                case StockTransactionType.DEPOSIT:
+                case "DEPOSIT":
                     net_flow += amount
-                case StockTransactionType.WITHDRAW:
+                case "WITHDRAW":
                     net_flow -= amount
         return net_flow
 
@@ -325,7 +325,7 @@ def _compute_daily_net_flow(
         tx.group_uuid
         for tx in day_txs
         if getattr(tx, "group_uuid", None)
-        and _type(tx) == CryptoTransactionType.SPEND
+        and _type(tx) == "SPEND"
         and str(getattr(tx, "symbol", "") or "").upper() not in FIAT_SYMBOLS
     }
 
@@ -337,12 +337,12 @@ def _compute_daily_net_flow(
 
         if symbol in FIAT_SYMBOLS:
             match tx_type:
-                case CryptoTransactionType.DEPOSIT:
+                case "DEPOSIT":
                     if not group_uuid or group_uuid not in groups_with_crypto_spend:
                         net_flow += amount
-                case CryptoTransactionType.WITHDRAW:
+                case "WITHDRAW":
                     net_flow -= amount
-        elif tx_type == CryptoTransactionType.TRANSFER:
+        elif tx_type == "TRANSFER":
             day_price = (price_matrix or {}).get(symbol, {}).get(d, _ZERO)
             net_flow -= amount * day_price
 
@@ -533,7 +533,7 @@ def _generate_missing_snapshots(
         elif day_index == 0 and not has_previous_snapshot:
             daily_pnl = _ZERO
         else:
-            net_flow = _compute_daily_net_flow(account_snapshot, d)
+            net_flow = _compute_daily_net_flow(account_snapshot, d, price_matrix)
             daily_pnl = total_value - prev_value - net_flow
 
         row: dict = {
