@@ -44,16 +44,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _ZERO = Decimal("0")
-_CASH_IN_TYPES = frozenset({
-    StockTransactionType.DEPOSIT,
-    CryptoTransactionType.DEPOSIT,
-})
-
-_CASH_OUT_TYPES = frozenset({
-    # StockTransactionType.WITHDRAWAL,
-    CryptoTransactionType.WITHDRAW,
-    CryptoTransactionType.TRANSFER,
-})
 
 @dataclass
 class FrozenPosition:
@@ -296,85 +286,65 @@ def _fill_price_gaps(
 def _compute_daily_net_flow(
     account_snapshot: _AccountSnapshot,
     d: date,
+    price_matrix: dict[str, dict[date, Decimal]] | None = None,
 ) -> Decimal:
-    """Signed external cash flow for day d.
-
-    Internal reallocations (e.g. STOCK BUY/SELL inside the account) are ignored.
-    """
+    """Signed external cash flow for day d."""
     if account_snapshot.account_type not in (AccountCategory.STOCK, AccountCategory.CRYPTO):
         return _ZERO
 
-    def _tx_type_str(tx) -> str:
-        value = getattr(tx, "type", None)
-        if value is None:
-            return ""
-        enum_value = getattr(value, "value", None)
-        return str(enum_value if enum_value is not None else value)
+    def _type(tx) -> str:
+        v = getattr(tx, "type", None)
+        return str(getattr(v, "value", v) or "")
 
-    def _tx_notional_eur(tx) -> Decimal:
-        # Prefer explicit EUR totals when present in DTO/fixtures.
-        for attr in ("total_eur", "total", "total_cost", "invested"):
-            raw = getattr(tx, attr, None)
-            if raw is None:
-                continue
-            val = _to_decimal(raw)
-            if val != _ZERO:
-                return val
-        return _to_decimal(getattr(tx, "amount", _ZERO)) * _to_decimal(getattr(tx, "price_per_unit", _ZERO))
-
-    day_transactions: list = []
-    for tx in account_snapshot.transactions or []:
-        executed_at = getattr(tx, "executed_at", None)
-        if executed_at is None:
-            continue
-        if executed_at.date() == d:
-            day_transactions.append(tx)
-
-    if not day_transactions:
+    day_txs = [
+        tx for tx in (account_snapshot.transactions or [])
+        if getattr(tx, "executed_at", None) is not None
+        and tx.executed_at.date() == d
+    ]
+    if not day_txs:
         return _ZERO
 
     net_flow = _ZERO
 
     if account_snapshot.account_type == AccountCategory.STOCK:
-        for tx in day_transactions:
-            tx_type = _tx_type_str(tx)
+        for tx in day_txs:
             isin = str(getattr(tx, "isin", "") or "").upper()
             symbol = str(getattr(tx, "symbol", "") or "").upper()
-            is_fiat = isin == "EUR" or symbol == "EUR"
-            if tx_type == "DEPOSIT" and is_fiat:
-                net_flow += _tx_notional_eur(tx)
-            elif tx_type in {"WITHDRAW", "WITHDRAWAL", "TRANSFER"} and is_fiat:
-                net_flow -= _tx_notional_eur(tx)
+            if isin != "EUR" and symbol != "EUR":
+                continue
+            amount = _to_decimal(getattr(tx, "amount", _ZERO))
+            match _type(tx):
+                case StockTransactionType.DEPOSIT:
+                    net_flow += amount
+                case StockTransactionType.WITHDRAW:
+                    net_flow -= amount
         return net_flow
 
-    groups_with_crypto_buy: set[str] = set()
-    groups_with_crypto_spend: set[str] = set()
-    for tx in day_transactions:
-        group_uuid = getattr(tx, "group_uuid", None)
-        if not group_uuid:
-            continue
-        tx_type = _tx_type_str(tx)
-        symbol = str(getattr(tx, "symbol", "") or "").upper()
-        if tx_type == "BUY" and symbol not in FIAT_SYMBOLS:
-            groups_with_crypto_buy.add(group_uuid)
-        elif tx_type == "SPEND" and symbol not in FIAT_SYMBOLS:
-            groups_with_crypto_spend.add(group_uuid)
+    # CRYPTO
+    groups_with_crypto_spend: set[str] = {
+        tx.group_uuid
+        for tx in day_txs
+        if getattr(tx, "group_uuid", None)
+        and _type(tx) == CryptoTransactionType.SPEND
+        and str(getattr(tx, "symbol", "") or "").upper() not in FIAT_SYMBOLS
+    }
 
-    for tx in day_transactions:
-        tx_type = _tx_type_str(tx)
+    for tx in day_txs:
+        tx_type = _type(tx)
         symbol = str(getattr(tx, "symbol", "") or "").upper()
-        if symbol not in FIAT_SYMBOLS:
-            continue
-
+        amount = _to_decimal(getattr(tx, "amount", _ZERO))
         group_uuid = getattr(tx, "group_uuid", None)
-        if tx_type == "DEPOSIT":
-            if not group_uuid or group_uuid not in groups_with_crypto_spend:
-                net_flow += _tx_notional_eur(tx)
-        elif tx_type == "SPEND":
-            if not group_uuid or group_uuid not in groups_with_crypto_buy:
-                net_flow -= _tx_notional_eur(tx)
-        elif tx_type in {"WITHDRAW", "TRANSFER"}:
-            net_flow -= _tx_notional_eur(tx)
+
+        if symbol in FIAT_SYMBOLS:
+            match tx_type:
+                case CryptoTransactionType.DEPOSIT:
+                    if not group_uuid or group_uuid not in groups_with_crypto_spend:
+                        net_flow += amount
+                case CryptoTransactionType.WITHDRAW:
+                    net_flow -= amount
+        elif tx_type == CryptoTransactionType.TRANSFER:
+            day_price = (price_matrix or {}).get(symbol, {}).get(d, _ZERO)
+            net_flow -= amount * day_price
 
     return net_flow
 
@@ -558,8 +528,9 @@ def _generate_missing_snapshots(
             )
             total_value, current_invested, positions_json = _build_positions_from_summary(summary)
 
-        if day_index == 0 and not has_previous_snapshot:
-            # First snapshot has no prior day reference; avoid artificial spike vs zero.
+        if total_value == _ZERO and prev_value > _ZERO:
+            daily_pnl = _ZERO
+        elif day_index == 0 and not has_previous_snapshot:
             daily_pnl = _ZERO
         else:
             net_flow = _compute_daily_net_flow(account_snapshot, d)
