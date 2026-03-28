@@ -3,7 +3,6 @@
 import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Dict, List, Optional
 
 import requests
 
@@ -42,7 +41,7 @@ class CoinGeckoProvider(MarketDataProvider):
             h["x-cg-demo-apikey"] = self.settings.coingecko_api_key
         return h
 
-    def _get(self, path: str, params: dict | None = None) -> Optional[dict]:
+    def _get(self, path: str, params: dict | None = None) -> dict | None:
         try:
             resp = requests.get(
                 f"{self._base}{path}",
@@ -59,7 +58,7 @@ class CoinGeckoProvider(MarketDataProvider):
             print(f"CoinGeckoProvider error on {path}: {exc}")
             return None
 
-    def _resolve_id(self, symbol: str) -> Optional[str]:
+    def _resolve_id(self, symbol: str) -> str | None:
         """Resolve a ticker symbol (e.g. 'BTC') to a CoinGecko coin ID (e.g. 'bitcoin')."""
         upper = symbol.upper()
         if upper in _SYMBOL_ID_CACHE:
@@ -80,10 +79,10 @@ class CoinGeckoProvider(MarketDataProvider):
     # MarketDataProvider interface
     # ------------------------------------------------------------------
 
-    def type_assets(self) -> List[AssetType]:
+    def type_assets(self) -> list[AssetType]:
         return [AssetType.CRYPTO]
 
-    def get_info(self, symbol: str, asset_type: Optional[AssetType] = None) -> Optional[dict]:
+    def get_info(self, symbol: str, asset_type: AssetType | None = None) -> dict | None:
         if not symbol or not symbol.strip():
             return None
 
@@ -136,7 +135,7 @@ class CoinGeckoProvider(MarketDataProvider):
             "symbol": upper,
         }
 
-    def search(self, query: str, asset_type: Optional[AssetType] = None) -> list[dict]:
+    def search(self, query: str, asset_type: AssetType | None = None) -> list[dict]:
         if not query or not query.strip():
             return []
 
@@ -156,7 +155,7 @@ class CoinGeckoProvider(MarketDataProvider):
             if c.get("symbol")
         ]
 
-    def get_bulk_info(self, symbols: list[str], asset_type: Optional[AssetType] = None) -> dict[str, dict]:
+    def get_bulk_info(self, symbols: list[str], asset_type: AssetType | None = None) -> dict[str, dict]:
         if not symbols:
             return {}
 
@@ -181,7 +180,7 @@ class CoinGeckoProvider(MarketDataProvider):
         if not data:
             return {}
 
-        results: Dict[str, Dict] = {}
+        results: dict[str, dict] = {}
         for coin_id, sym in id_to_symbol.items():
             price = data.get(coin_id, {}).get("usd")
             if price and price > 0:
@@ -193,7 +192,7 @@ class CoinGeckoProvider(MarketDataProvider):
         return results
 
     def get_historical_prices(
-        self, symbol: str, from_date: date, to_date: date, asset_type: Optional[AssetType] = None
+        self, symbol: str, from_date: date, to_date: date, asset_type: AssetType | None = None
     ) -> dict[date, Decimal]:
         """
         Fetch daily closing prices from CoinGecko for the given range.

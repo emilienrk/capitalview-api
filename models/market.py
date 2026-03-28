@@ -6,8 +6,6 @@ MarketPriceHistory stores one price per asset per day.
 """
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
-
 import sqlalchemy as sa
 from sqlmodel import Column, Field, SQLModel, UniqueConstraint
 
@@ -20,13 +18,13 @@ class MarketAsset(SQLModel, table=True):
     __tablename__ = "market_assets"
     __table_args__ = {"extend_existing": True}
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     isin: str = Field(index=True, unique=True, default=None)
-    symbol: Optional[str] = Field(index=True)
-    exchange: Optional[str] = Field(default=None)
-    name: Optional[str] = Field(default=None)
-    sector: Optional[str] = Field(default=None)
-    asset_type: Optional[AssetType] = Field(default=None, index=True)
+    symbol: str | None = Field(index=True)
+    exchange: str | None = Field(default=None)
+    name: str | None = Field(default=None)
+    sector: str | None = Field(default=None)
+    asset_type: AssetType | None = Field(default=None, index=True)
 
 
 class MarketPriceHistory(SQLModel, table=True):
@@ -37,8 +35,15 @@ class MarketPriceHistory(SQLModel, table=True):
         {"extend_existing": True},
     )
 
-    id: Optional[int] = Field(default=None, primary_key=True)
-    market_asset_id: int = Field(foreign_key="market_assets.id", index=True, nullable=False)
+    id: int | None = Field(default=None, primary_key=True)
+    market_asset_id: int = Field(
+        sa_column=Column(
+            sa.Integer,
+            sa.ForeignKey("market_assets.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
     price: Decimal = Field(max_digits=20, decimal_places=8, nullable=False)
     price_date: date = Field(
         sa_column=Column("date", sa.Date, nullable=False),

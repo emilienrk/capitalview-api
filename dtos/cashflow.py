@@ -2,7 +2,6 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -17,18 +16,18 @@ class CashflowCreate(BaseModel):
     amount: Decimal
     frequency: Frequency
     transaction_date: date
-    bank_account_id: Optional[str] = None
+    bank_account_id: str | None = None
 
 
 class CashflowUpdate(BaseModel):
     """Update a cashflow."""
-    name: Optional[str] = None
-    flow_type: Optional[FlowType] = None
-    category: Optional[str] = None
-    amount: Optional[Decimal] = None
-    frequency: Optional[Frequency] = None
-    transaction_date: Optional[date] = None
-    bank_account_id: Optional[str] = None
+    name: str | None = None
+    flow_type: FlowType | None = None
+    category: str | None = None
+    amount: Decimal | None = None
+    frequency: Frequency | None = None
+    transaction_date: date | None = None
+    bank_account_id: str | None = None
 
 
 class CashflowResponse(BaseModel):
@@ -44,7 +43,7 @@ class CashflowResponse(BaseModel):
     updated_at: datetime
 
     monthly_amount: Decimal  # Amount normalized to monthly
-    bank_account_id: Optional[str] = None  # Linked bank account UUID
+    bank_account_id: str | None = None  # Linked bank account UUID
 
 
 class CashflowCategoryResponse(BaseModel):
@@ -72,6 +71,6 @@ class CashflowBalanceResponse(BaseModel):
     monthly_outflows: Decimal
     net_balance: Decimal
     monthly_balance: Decimal
-    savings_rate: Optional[Decimal] = None  # (inflows - outflows) / inflows * 100
+    savings_rate: Decimal | None = None  # (inflows - outflows) / inflows * 100
     inflows: CashflowSummaryResponse
     outflows: CashflowSummaryResponse

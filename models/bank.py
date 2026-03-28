@@ -1,7 +1,6 @@
 """
 BankAccount model (standard bank accounts).
 """
-from typing import Optional
 from datetime import datetime, date
 from sqlmodel import SQLModel, Field
 import sqlalchemy as sa
@@ -16,8 +15,8 @@ class BankAccount(SQLModel, table=True):
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
     name_enc: str = Field(sa_column=Column(TEXT, nullable=False))
-    institution_name_enc: Optional[str] = Field(sa_column=Column(TEXT))
-    identifier_enc: Optional[str] = Field(sa_column=Column(TEXT))
+    institution_name_enc: str | None = Field(sa_column=Column(TEXT))
+    identifier_enc: str | None = Field(sa_column=Column(TEXT))
     balance_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     account_type_enc: str = Field(sa_column=Column(TEXT, nullable=False))
 
@@ -35,12 +34,12 @@ class BankAccount(SQLModel, table=True):
         )
     )
     # Last date the balance was automatically updated via linked cashflows
-    balance_updated_at: Optional[date] = Field(
+    balance_updated_at: date | None = Field(
         default=None,
         sa_column=Column(sa.Date, nullable=True),
     )
     # Date the bank account was actually opened (user-supplied)
-    opened_at: Optional[date] = Field(
+    opened_at: date | None = Field(
         default=None,
         sa_column=Column(sa.Date, nullable=True),
     )

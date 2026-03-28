@@ -1,7 +1,6 @@
 """   
 StockAccount and StockTransaction models.
 """
-from typing import Optional
 from datetime import datetime, date
 from sqlmodel import SQLModel, Field
 import sqlalchemy as sa
@@ -17,12 +16,12 @@ class StockAccount(SQLModel, table=True):
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
     name_enc: str = Field(sa_column=Column(TEXT, nullable=False))
-    institution_name_enc: Optional[str] = Field(sa_column=Column(TEXT))
-    identifier_enc: Optional[str] = Field(sa_column=Column(TEXT))
+    institution_name_enc: str | None = Field(sa_column=Column(TEXT))
+    identifier_enc: str | None = Field(sa_column=Column(TEXT))
     account_type_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     
     # Date the stock account was actually opened (user-supplied)
-    opened_at: Optional[date] = Field(
+    opened_at: date | None = Field(
         default=None,
         sa_column=Column(sa.Date, nullable=True),
     )
@@ -54,7 +53,7 @@ class StockTransaction(SQLModel, table=True):
     price_per_unit_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     fees_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     executed_at_enc: str = Field(sa_column=Column(TEXT, nullable=False))
-    notes_enc: Optional[str] = Field(sa_column=Column(TEXT))
+    notes_enc: str | None = Field(sa_column=Column(TEXT))
 
     created_at: datetime = Field(
         default=sa.func.now(),

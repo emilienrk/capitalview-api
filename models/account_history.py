@@ -6,10 +6,9 @@ Blind indexes allow server-side filtering without exposing plaintext identifiers
 """
 
 from datetime import date, datetime
-from typing import Optional
 
 import sqlalchemy as sa
-from sqlalchemy import Column, TEXT, UniqueConstraint
+from sqlalchemy import Column, Index, TEXT, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 import uuid
@@ -23,12 +22,13 @@ class AccountHistory(SQLModel, table=True):
     __tablename__ = "account_history"
     __table_args__ = (
         UniqueConstraint("account_id_bidx", "snapshot_date", name="uq_account_history_account_date"),
+        Index("ix_account_history_account_date", "account_id_bidx", "snapshot_date"),
         {"extend_existing": True},
     )
 
     uuid: str = Field(
         default_factory=lambda: str(uuid.uuid4()),
-        primary_key=True,
+        sa_column=Column(TEXT, primary_key=True, nullable=False),
     )
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
     account_id_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
@@ -36,8 +36,8 @@ class AccountHistory(SQLModel, table=True):
     snapshot_date: date = Field(sa_column=Column(sa.Date, nullable=False))
     total_value_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     total_invested_enc: str = Field(sa_column=Column(TEXT, nullable=False))
-    daily_pnl_enc: Optional[str] = Field(default=None, sa_column=Column(TEXT))
-    positions_enc: Optional[str] = Field(default=None, sa_column=Column(TEXT))
+    daily_pnl_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    positions_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     created_at: datetime = Field(
         default=sa.func.now(),
         sa_column=Column(

@@ -2,14 +2,13 @@
 
 from decimal import Decimal
 from datetime import datetime, date
-from typing import List, Optional
 from uuid import uuid4
 
 from sqlmodel import Session, select
 
-from models import CryptoAccount, CryptoTransaction
+from models import CryptoTransaction
 from models.market import MarketAsset
-from models.enums import CryptoTransactionType, AssetType
+from models.enums import CryptoCompositeTransactionType, CryptoTransactionType, AssetType
 from dtos import (
     CryptoTransactionCreate,
     CryptoTransactionUpdate,
@@ -20,10 +19,8 @@ from dtos import (
 from dtos.crypto import CryptoCompositeTransactionCreate, CrossAccountTransferCreate, FIAT_SYMBOLS
 from services.encryption import encrypt_data, decrypt_data, hash_index
 from services.market import get_crypto_info
-from services.crypto_account import _map_account_to_response
 
-
-def _upsert_market_cache(session: Session, symbol: str, name: Optional[str]) -> None:
+def _upsert_market_cache(session: Session, symbol: str, name: str | None) -> None:
     market_asset = session.exec(
         select(MarketAsset).where(MarketAsset.isin == symbol.upper())
     ).first()
@@ -78,7 +75,7 @@ def create_crypto_transaction(
     session: Session,
     data: CryptoTransactionCreate,
     master_key: str,
-    group_uuid: Optional[str] = None,
+    group_uuid: str | None = None,
 ) -> TransactionResponse:
     if data.name and data.symbol:
         _upsert_market_cache(session, data.symbol, data.name)
@@ -117,17 +114,18 @@ def create_composite_crypto_transaction(
     session: Session,
     data: CryptoCompositeTransactionCreate,
     master_key: str,
-) -> List[TransactionResponse]:
+) -> list[TransactionResponse]:
     group = str(uuid4())
-    rows: List[TransactionResponse] = []
+    rows: list[TransactionResponse] = []
+    composite_type = CryptoCompositeTransactionType.normalize(data.type)
 
-    if data.type == "CRYPTO_DEPOSIT":
+    if composite_type == CryptoCompositeTransactionType.CRYPTO_DEPOSIT:
         eur_amount = data.eur_amount or Decimal("0")
 
         fiat_deposit = CryptoTransactionCreate(
             account_id=data.account_id,
             symbol="EUR",
-            type=CryptoTransactionType.FIAT_DEPOSIT,
+            type=CryptoTransactionType.DEPOSIT,
             amount=eur_amount,
             price_per_unit=Decimal("1"),
             executed_at=data.executed_at,
@@ -160,8 +158,48 @@ def create_composite_crypto_transaction(
         rows.append(create_crypto_transaction(session, spend_eur, master_key, group_uuid=group))
         return rows
 
-    if data.type == "EXIT":
-        spend = CryptoTransactionCreate(
+    if composite_type in (
+        CryptoCompositeTransactionType.FIAT_WITHDRAW, 
+        CryptoCompositeTransactionType.FIAT_DEPOSIT
+    ):
+        withdraw = CryptoTransactionCreate(
+            account_id=data.account_id,
+            symbol="EUR",
+            name=data.name,
+            type=CryptoTransactionType.WITHDRAW if composite_type == CryptoCompositeTransactionType.FIAT_WITHDRAW else CryptoTransactionType.DEPOSIT,
+            amount=data.amount,
+            price_per_unit=Decimal("1"),
+            executed_at=data.executed_at,
+            tx_hash=data.tx_hash,
+            notes=data.notes,
+        )
+        rows.append(create_crypto_transaction(session, withdraw, master_key, group_uuid=group))
+        return rows
+    
+
+    if composite_type in (
+        CryptoCompositeTransactionType.REWARD,
+        CryptoCompositeTransactionType.TRANSFER,
+    ):
+        single = CryptoTransactionCreate(
+            account_id=data.account_id,
+            symbol=data.symbol,
+            name=data.name,
+            type=CryptoTransactionType.REWARD if composite_type == CryptoCompositeTransactionType.REWARD else CryptoTransactionType.TRANSFER,
+            amount=data.amount,
+            price_per_unit=Decimal("0"),
+            executed_at=data.executed_at,
+            tx_hash=data.tx_hash,
+            notes=data.notes,
+        )
+        rows.append(create_crypto_transaction(session, single, master_key, group_uuid=group))
+        return rows
+
+    if composite_type == CryptoCompositeTransactionType.SELL_TO_FIAT:
+        fiat_symbol = (data.quote_symbol or "EUR").upper()
+        fiat_amount = data.eur_amount or data.quote_amount or Decimal("0")
+
+        spend_crypto = CryptoTransactionCreate(
             account_id=data.account_id,
             symbol=data.symbol,
             name=data.name,
@@ -172,39 +210,39 @@ def create_composite_crypto_transaction(
             tx_hash=data.tx_hash,
             notes=data.notes,
         )
-        rows.append(create_crypto_transaction(session, spend, master_key, group_uuid=group))
+        rows.append(create_crypto_transaction(session, spend_crypto, master_key, group_uuid=group))
 
-        eur_received = data.eur_amount or Decimal("0")
-        if eur_received > 0:
-            fiat = CryptoTransactionCreate(
+        if fiat_amount > 0:
+            deposit_fiat = CryptoTransactionCreate(
                 account_id=data.account_id,
-                symbol="EUR",
-                type=CryptoTransactionType.FIAT_DEPOSIT,
-                amount=eur_received,
+                symbol=fiat_symbol,
+                type=CryptoTransactionType.DEPOSIT,
+                amount=fiat_amount,
                 price_per_unit=Decimal("1"),
                 executed_at=data.executed_at,
+                tx_hash=data.tx_hash,
                 notes=data.notes,
             )
-            rows.append(create_crypto_transaction(session, fiat, master_key, group_uuid=group))
+            rows.append(create_crypto_transaction(session, deposit_fiat, master_key, group_uuid=group))
+
+        fee_sym = (data.fee_symbol or "").upper()
+        fee_qty = data.fee_amount or Decimal("0")
+        if fee_sym and fee_sym not in FIAT_SYMBOLS and fee_qty > 0:
+            fee_row = CryptoTransactionCreate(
+                account_id=data.account_id,
+                symbol=fee_sym,
+                type=CryptoTransactionType.FEE,
+                amount=fee_qty,
+                price_per_unit=Decimal("0"),
+                executed_at=data.executed_at,
+                tx_hash=data.tx_hash,
+                notes=data.notes,
+            )
+            rows.append(create_crypto_transaction(session, fee_row, master_key, group_uuid=group))
+
         return rows
 
-    if data.type in ("REWARD", "FIAT_DEPOSIT", "TRANSFER"):
-        atomic_price = Decimal("1") if data.type == "FIAT_DEPOSIT" else Decimal("0")
-
-        single = CryptoTransactionCreate(
-            account_id=data.account_id,
-            symbol=data.symbol,
-            name=data.name,
-            type=CryptoTransactionType(data.type),
-            amount=data.amount,
-            price_per_unit=atomic_price,
-            executed_at=data.executed_at,
-            tx_hash=data.tx_hash,
-            notes=data.notes,
-        )
-        rows.append(create_crypto_transaction(session, single, master_key, group_uuid=group))
-        return rows
-    if data.type == "GAS_FEE":
+    if composite_type == CryptoCompositeTransactionType.FEE:
         fee_row = CryptoTransactionCreate(
             account_id=data.account_id,
             symbol=data.symbol,
@@ -219,21 +257,7 @@ def create_composite_crypto_transaction(
         rows.append(create_crypto_transaction(session, fee_row, master_key, group_uuid=group))
         return rows
 
-    if data.type == "FIAT_WITHDRAW":
-        withdraw = CryptoTransactionCreate(
-            account_id=data.account_id,
-            symbol="EUR",
-            type=CryptoTransactionType.SPEND,
-            amount=data.amount,
-            price_per_unit=Decimal("1"),
-            executed_at=data.executed_at,
-            tx_hash=data.tx_hash,
-            notes=data.notes,
-        )
-        rows.append(create_crypto_transaction(session, withdraw, master_key, group_uuid=group))
-        return rows
-
-    if data.type == "NON_TAXABLE_EXIT":
+    if composite_type == CryptoCompositeTransactionType.NON_TAXABLE_EXIT:
         transfer = CryptoTransactionCreate(
             account_id=data.account_id,
             symbol=data.symbol,
@@ -322,7 +346,7 @@ def create_composite_crypto_transaction(
         anchor = CryptoTransactionCreate(
             account_id=data.account_id,
             symbol="EUR",
-            type=CryptoTransactionType.FIAT_ANCHOR,
+            type=CryptoTransactionType.ANCHOR,
             amount=total_cost_eur,
             price_per_unit=Decimal("1"),
             executed_at=data.executed_at,
@@ -365,22 +389,22 @@ def _compute_symbol_pru(
     transactions = [_decrypt_transaction(tx, master_key) for tx in raw_txs]
     transactions.sort(key=lambda x: x.executed_at)
 
-    # Build group-level anchor costs (FIAT_ANCHOR + fiat SPEND) to attribute
+    # Build group-level anchor costs (ANCHOR + fiat SPEND) to attribute
     # to BUY rows — same logic as get_crypto_account_summary.
     anchor_by_group: dict[str, Decimal] = {}
     fiat_spend_by_group: dict[str, Decimal] = {}
     for tx in transactions:
         if tx.group_uuid:
-            if tx.type == "FIAT_ANCHOR":
+            if tx.type == CryptoTransactionType.ANCHOR.value:
                 anchor_by_group.setdefault(tx.group_uuid, Decimal("0"))
                 anchor_by_group[tx.group_uuid] += tx.amount * tx.price_per_unit
-            elif tx.type == "SPEND" and tx.symbol in FIAT_SYMBOLS:
+            elif tx.type == CryptoTransactionType.SPEND.value and tx.symbol in FIAT_SYMBOLS:
                 fiat_spend_by_group.setdefault(tx.group_uuid, Decimal("0"))
                 fiat_spend_by_group[tx.group_uuid] += tx.amount * tx.price_per_unit
 
     buy_group_cost: dict[str, Decimal] = {}
     for tx in transactions:
-        if tx.type == "BUY" and tx.group_uuid:
+        if tx.type == CryptoTransactionType.BUY.value and tx.group_uuid:
             if tx.group_uuid in anchor_by_group:
                 buy_group_cost[tx.id] = anchor_by_group[tx.group_uuid]
             elif tx.group_uuid in fiat_spend_by_group:
@@ -395,7 +419,7 @@ def _compute_symbol_pru(
         if tx.symbol != symbol_up:
             continue
         match tx.type:
-            case "BUY":
+            case CryptoTransactionType.BUY.value:
                 group_cost = buy_group_cost.get(tx.id, tx.amount * tx.price_per_unit)
                 prev = total_amount
                 total_amount += tx.amount
@@ -404,9 +428,9 @@ def _compute_symbol_pru(
                     cost_basis += group_cost * (surviving / tx.amount)
                 else:
                     cost_basis += group_cost
-            case "REWARD" | "FIAT_DEPOSIT":
+            case CryptoTransactionType.REWARD.value | CryptoTransactionType.DEPOSIT.value:
                 total_amount += tx.amount
-            case "SPEND" | "TRANSFER":
+            case CryptoTransactionType.SPEND.value | CryptoTransactionType.TRANSFER.value:
                 if total_amount > 0:
                     fraction = min(tx.amount / total_amount, Decimal("1"))
                     cost_basis -= cost_basis * fraction
@@ -415,7 +439,7 @@ def _compute_symbol_pru(
                 # Always subtract quantity — allows negative balance when SPEND
                 # precedes BUY, so subsequent BUY correctly nets the position.
                 total_amount -= tx.amount
-            case "FEE":
+            case CryptoTransactionType.FEE.value:
                 total_amount -= tx.amount
 
     if total_amount <= 0:
@@ -428,12 +452,12 @@ def create_cross_account_transfer(
     data: "CrossAccountTransferCreate",
     user_uuid: str,
     master_key: str,
-) -> List[TransactionResponse]:
+) -> list[TransactionResponse]:
     """
     Create a cross-account crypto transfer.
     Emits:
       - TRANSFER row (outbound, neutral) in the source account.
-      - FIAT_ANCHOR + BUY rows in the destination account (= CRYPTO_DEPOSIT
+      - ANCHOR + BUY rows in the destination account (= CRYPTO_DEPOSIT
         pattern), anchored to the book value leaving the source account
         (quantity × PRU of source), so cost basis carries over correctly.
       - Optional FEE row in the source account for on-chain / gas fees.
@@ -456,7 +480,7 @@ def create_cross_account_transfer(
     book_value = (data.amount * pru).quantize(Decimal("0.01"))
 
     group = str(uuid4())
-    rows: List[TransactionResponse] = []
+    rows: list[TransactionResponse] = []
 
     # 1. Outbound TRANSFER in source account
     tx_out = CryptoTransactionCreate(
@@ -472,13 +496,13 @@ def create_cross_account_transfer(
     )
     rows.append(create_crypto_transaction(session, tx_out, master_key, group_uuid=group))
 
-    # 2a. FIAT_ANCHOR in destination — establishes cost basis equal to the
+    # 2a. ANCHOR in destination — establishes cost basis equal to the
     #     book value that left the source account (quantity × PRU_source).
     if book_value > 0:
         anchor_in = CryptoTransactionCreate(
             account_id=data.to_account_id,
             symbol="EUR",
-            type=CryptoTransactionType.FIAT_ANCHOR,
+            type=CryptoTransactionType.ANCHOR,
             amount=book_value,
             price_per_unit=Decimal("1"),
             executed_at=data.executed_at,
@@ -523,7 +547,7 @@ def get_crypto_transaction(
     session: Session,
     transaction_uuid: str,
     master_key: str,
-) -> Optional[TransactionResponse]:
+) -> TransactionResponse | None:
     transaction = session.get(CryptoTransaction, transaction_uuid)
     if not transaction:
         return None
@@ -577,7 +601,18 @@ def delete_crypto_transaction(session: Session, transaction_uuid: str) -> bool:
     transaction = session.get(CryptoTransaction, transaction_uuid)
     if not transaction:
         return False
-    session.delete(transaction)
+
+    if transaction.group_uuid:
+        grouped_transactions = session.exec(
+            select(CryptoTransaction).where(
+                CryptoTransaction.group_uuid == transaction.group_uuid,
+            )
+        ).all()
+        for grouped_transaction in grouped_transactions:
+            session.delete(grouped_transaction)
+    else:
+        session.delete(transaction)
+
     session.commit()
     return True
 
@@ -586,7 +621,7 @@ def get_account_transactions(
     session: Session,
     account_uuid: str,
     master_key: str,
-) -> List[TransactionResponse]:
+) -> list[TransactionResponse]:
     account_bidx = hash_index(account_uuid, master_key)
 
     transactions = session.exec(
@@ -610,7 +645,7 @@ def get_account_transactions(
 
     for tx in decoded:
         info = market_map.get(tx.symbol)
-        if info and tx.type != "FIAT_ANCHOR":
+        if info and tx.type != "ANCHOR":
             tx.name = info["name"]
             tx.current_price = info["current_price"]
             if tx.current_price and tx.amount:
@@ -643,7 +678,7 @@ def get_crypto_account_summary(
     groups_with_crypto_buy: set[str] = set()
     for tx in transactions:
         if tx.group_uuid:
-            if tx.type == "FIAT_ANCHOR":
+            if tx.type == "ANCHOR":
                 anchor_by_group.setdefault(tx.group_uuid, Decimal("0"))
                 anchor_by_group[tx.group_uuid] += tx.amount * tx.price_per_unit
             elif tx.type == "SPEND" and tx.symbol in FIAT_SYMBOLS:
@@ -687,11 +722,11 @@ def get_crypto_account_summary(
                     pos["cost_basis"] += group_cost * (surviving / tx.amount)
                 else:
                     pos["cost_basis"] += group_cost
-            case "REWARD" | "FIAT_DEPOSIT":
+            case "REWARD" | "DEPOSIT":
                 pos["total_amount"] += tx.amount
-            case "FIAT_ANCHOR":
+            case "ANCHOR":
                 pass
-            case "SPEND" | "TRANSFER" | "EXIT":
+            case "SPEND" | "TRANSFER":
                 if pos["total_amount"] > 0:
                     # Normal case: reduce cost basis proportionally
                     fraction = tx.amount / pos["total_amount"]
@@ -704,6 +739,20 @@ def get_crypto_account_summary(
             case "FEE":
                 pos["total_amount"] -= tx.amount
                 pos["fees_eur"] += tx_cost
+            case "WITHDRAW":
+                if tx.symbol in FIAT_SYMBOLS:
+                    # Fiat withdrawal (exchange -> bank): no crypto cost-basis impact.
+                    pos["total_amount"] -= tx.amount
+                else:
+                    # Taxable outbound crypto: remove cost basis proportionally.
+                    if pos["total_amount"] > 0:
+                        fraction = tx.amount / pos["total_amount"]
+                        if fraction > Decimal("1"):
+                            fraction = Decimal("1")
+                        pos["cost_basis"] -= pos["cost_basis"] * fraction
+                        if pos["cost_basis"] < 0:
+                            pos["cost_basis"] = Decimal("0")
+                    pos["total_amount"] -= tx.amount
             case _:
                 pass
 
@@ -757,28 +806,37 @@ def get_crypto_account_summary(
 
     net_external_deposits = Decimal("0")
     for tx in transactions:
-        if tx.type == "FIAT_DEPOSIT" and tx.symbol in FIAT_SYMBOLS:
-            # External wire IN — only if NOT part of a crypto-sale (EXIT) group
+        if tx.type == "DEPOSIT" and tx.symbol in FIAT_SYMBOLS:
+            # External wire IN — only if NOT part of a crypto-sale (SELL_TO_FIAT) group
             if not tx.group_uuid or tx.group_uuid not in groups_with_crypto_spend:
                 net_external_deposits += tx.amount * tx.price_per_unit
         elif tx.type == "SPEND" and tx.symbol in FIAT_SYMBOLS:
             # External withdrawal OUT — only if NOT part of a crypto-buy group
             if not tx.group_uuid or tx.group_uuid not in groups_with_crypto_buy:
                 net_external_deposits -= tx.amount * tx.price_per_unit
+        elif tx.type == "WITHDRAW" and tx.symbol in FIAT_SYMBOLS:
+            # Direct withdrawal of fiat — always reduces net deposits
+            net_external_deposits -= tx.amount * tx.price_per_unit
 
-    total_invested_acc = net_external_deposits
-    total_fees_acc = sum(p.total_fees for p in positions)
+    crypto_positions = [p for p in positions if p.symbol not in FIAT_SYMBOLS]
+
+    total_invested_acc = sum(p.total_invested for p in crypto_positions)
+    total_fees_acc = sum(p.total_fees for p in crypto_positions)
     current_value_acc_list = [p.current_value for p in positions if p.current_value is not None]
     current_value_acc = sum(current_value_acc_list) if current_value_acc_list else None
 
     profit_loss_acc = profit_loss_pct_acc = None
-    if current_value_acc is not None:
-        profit_loss_acc = current_value_acc - total_invested_acc
+    if any(p.current_value is not None for p in crypto_positions):
+        crypto_value = sum(
+            p.current_value for p in crypto_positions if p.current_value is not None
+        )
+        profit_loss_acc = crypto_value - total_invested_acc
         if total_invested_acc > 0:
             profit_loss_pct_acc = (profit_loss_acc / total_invested_acc * 100)
 
     return AccountSummaryResponse(
         total_invested=round(total_invested_acc, 2),
+        total_deposits=round(net_external_deposits, 2),
         total_fees=round(total_fees_acc, 2),
         currency="EUR",
         current_value=round(current_value_acc, 2) if current_value_acc else None,
@@ -790,27 +848,21 @@ def get_crypto_account_summary(
 
 # ── Balance helpers ──────────────────────────────────────────────────────────
 
-# Types that increase a symbol's holding
-_CREDIT_TYPES: frozenset[str] = frozenset({"BUY", "REWARD", "FIAT_DEPOSIT"})
-# Types that decrease a symbol's holding
-_DEBIT_TYPES: frozenset[str] = frozenset(
-    {"SPEND", "TRANSFER", "EXIT", "FEE", "NON_TAXABLE_EXIT", "GAS_FEE", "FIAT_WITHDRAW"}
-)
-
 
 def get_symbol_balance(
     session: Session,
     account_uuid: str,
     symbol: str,
     master_key: str,
+    transactions: list[CryptoTransaction] | None = None,
 ) -> Decimal:
     """
     Compute the current net holding of *symbol* in the given account.
 
-    Credits (BUY, REWARD, FIAT_DEPOSIT) add to the balance.
-    Debits  (SPEND, TRANSFER, EXIT, FEE, NON_TAXABLE_EXIT, GAS_FEE,
-             FIAT_WITHDRAW) subtract from the balance.
-    FIAT_ANCHOR rows are skipped (accounting reference, not a real cash flow).
+    Credits (BUY, REWARD, DEPOSIT) add to the balance.
+    Debits  (SPEND, TRANSFER, WITHDRAW, FEE)
+    subtract from the balance.
+    ANCHOR rows are skipped (accounting reference, not a real cash flow).
     """
     account_bidx = hash_index(account_uuid, master_key)
     transactions = session.exec(
@@ -825,11 +877,11 @@ def get_symbol_balance(
             continue
         type_str = decrypt_data(tx.type_enc, master_key)
         amount = Decimal(decrypt_data(tx.amount_enc, master_key))
-        if type_str in _CREDIT_TYPES:
+        if type_str in CryptoTransactionType.credit_types():
             balance += amount
-        elif type_str in _DEBIT_TYPES:
+        elif type_str in CryptoTransactionType.debit_types():
             balance -= amount
-        # FIAT_ANCHOR and unknown types: ignored
+        # ANCHOR and unknown types: ignored
 
     return balance
 
@@ -851,7 +903,7 @@ def compute_balance_warning(
     to_check: dict[str, str] = {}
     for row in created_rows:
         type_str = row.type if isinstance(row.type, str) else row.type.value
-        if type_str not in _DEBIT_TYPES:
+        if type_str not in CryptoTransactionType.debit_types():
             continue
         sym = (row.symbol or "").upper()
         if not sym or sym in FIAT_SYMBOLS:

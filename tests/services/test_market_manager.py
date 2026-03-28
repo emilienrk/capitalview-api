@@ -1,7 +1,6 @@
 import pytest
 from unittest.mock import MagicMock
 from decimal import Decimal
-from typing import List, Dict
 
 from services.market_data.manager import MarketDataManager
 from services.market_data.providers.base import MarketDataProvider
@@ -12,10 +11,10 @@ class MockProvider(MarketDataProvider):
         self.data = data or {}
         self.supported_types = supported_types or [AssetType.STOCK, AssetType.CRYPTO]
 
-    def type_assets(self) -> List[AssetType]:
+    def type_assets(self) -> list[AssetType]:
         return self.supported_types
 
-    def get_info(self, symbol: str, asset_type: AssetType = None) -> Dict:
+    def get_info(self, symbol: str, asset_type: AssetType = None) -> dict | None:
         if self.data and symbol in self.data:
             return self.data[symbol]
         return None
@@ -24,10 +23,10 @@ class MockProvider(MarketDataProvider):
         info = self.get_info(symbol)
         return info["price"] if info else None
 
-    def search(self, query: str, asset_type: AssetType = None) -> List[Dict]:
+    def search(self, query: str, asset_type: AssetType = None) -> list[dict]:
         return []
 
-    def get_bulk_info(self, symbols: List[str], asset_type: AssetType = None) -> Dict[str, Dict]:
+    def get_bulk_info(self, symbols: list[str], asset_type: AssetType = None) -> dict[str, dict]:
         return {s: self.data.get(s) for s in symbols if s in self.data}
 
 def test_manager_get_info_success_first_provider():

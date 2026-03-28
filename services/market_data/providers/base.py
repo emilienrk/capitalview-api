@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from datetime import date
 from decimal import Decimal
-from typing import List, Optional
 
 from models.enums import AssetType
 
@@ -12,7 +11,7 @@ class MarketDataProvider(ABC):
     """
 
     @abstractmethod
-    def type_assets(self) -> List[AssetType]:
+    def type_assets(self) -> list[AssetType]:
         """
         Return type of supprted assets.
             
@@ -22,13 +21,14 @@ class MarketDataProvider(ABC):
         pass
 
     @abstractmethod
-    def get_info(self, symbol: str, asset_type: Optional[AssetType] = None) -> Optional[dict]:
+    def get_info(self, symbol: str, asset_type: AssetType | None = None) -> dict | None:
         """
         Fetch detailed information for a symbol.
         
         Args:
             symbol: The symbol symbol.
-            
+            asset_type: The type of the asset.
+
         Returns:
             dict: A dictionary containing at least:
                 - 'name': str
@@ -39,7 +39,7 @@ class MarketDataProvider(ABC):
         pass
 
     @abstractmethod
-    def search(self, query: str, asset_type: Optional[AssetType] = None) -> list[dict]:
+    def search(self, query: str, asset_type: AssetType | None = None) -> list[dict]:
         """
         Search for assets matching a query string.
         
@@ -57,13 +57,14 @@ class MarketDataProvider(ABC):
         pass
 
     @abstractmethod
-    def get_bulk_info(self, symbols: list[str], asset_type: Optional[AssetType] = None) -> dict[str, dict]:
+    def get_bulk_info(self, symbols: list[str], asset_type: AssetType | None = None) -> dict[str, dict]:
         """
         Fetch information for multiple symbols in a single batch operation.
         
         Args:
             symbols: A list of symbol symbols.
-            
+            asset_type: The type of the assets.
+
         Returns:
             dict[str, dict]: A mapping of symbol -> info dict (same structure as get_info).
                              Symbols that fail to fetch are excluded from the result.
@@ -85,7 +86,7 @@ class MarketDataProvider(ABC):
         return self._exchange_codes.get(code, code) or None
 
     def get_historical_prices(
-        self, symbol: str, from_date: date, to_date: date, asset_type: Optional[AssetType] = None
+        self, symbol: str, from_date: date, to_date: date, asset_type: AssetType | None = None
     ) -> dict[date, Decimal]:
         """
         Fetch daily closing prices for a symbol over a date range.

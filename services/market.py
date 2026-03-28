@@ -5,7 +5,6 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from functools import lru_cache
-from typing import Optional, Tuple
 
 import exchange_calendars as ec
 import pandas as pd
@@ -51,7 +50,7 @@ def _is_market_open(mic: str) -> bool:
         return True
 
 
-def _last_market_close(mic: str) -> Optional[datetime]:
+def _last_market_close(mic: str) -> datetime | None:
     """Return the UTC datetime of the most recent session close for a MIC code."""
     cal = _get_calendar(mic)
     if cal is None:
@@ -66,7 +65,7 @@ def _last_market_close(mic: str) -> Optional[datetime]:
 def _is_cache_fresh(
     asset: MarketAsset,
     price_entry: MarketPriceHistory,
-    _now: Optional[datetime] = None,
+    _now: datetime | None = None,
 ) -> bool:
     """
     Decide whether a cached price is fresh enough to skip an API call.
@@ -159,7 +158,7 @@ def _ensure_asset_type(asset: MarketAsset, asset_type: AssetType) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _get_today_price(session: Session, asset_id: int) -> Optional[MarketPriceHistory]:
+def _get_today_price(session: Session, asset_id: int) -> MarketPriceHistory | None:
     """Return today's price row for an asset (if it exists)."""
     today = date.today()
     return session.exec(
@@ -170,7 +169,7 @@ def _get_today_price(session: Session, asset_id: int) -> Optional[MarketPriceHis
     ).first()
 
 
-def _get_latest_price_entry(session: Session, asset_id: int) -> Optional[MarketPriceHistory]:
+def _get_latest_price_entry(session: Session, asset_id: int) -> MarketPriceHistory | None:
     """Return the most recent price row regardless of date."""
     return session.exec(
         select(MarketPriceHistory)
@@ -183,7 +182,7 @@ def _get_latest_price_entry_as_of(
     session: Session,
     asset_id: int,
     as_of: date,
-) -> Optional[MarketPriceHistory]:
+) -> MarketPriceHistory | None:
     """Return the latest price row with price_date <= as_of."""
     return session.exec(
         select(MarketPriceHistory)
@@ -238,7 +237,7 @@ def _upsert_price(session: Session, asset_id: int, price: Decimal) -> None:
             session.add(entry)
 
 
-def get_latest_price(session: Session, asset_id: int) -> Optional[Decimal]:
+def get_latest_price(session: Session, asset_id: int) -> Decimal | None:
     """Public helper: return the most recent price for a MarketAsset id."""
     entry = _get_latest_price_entry(session, asset_id)
     return entry.price if entry else None
@@ -249,7 +248,7 @@ def get_latest_price(session: Session, asset_id: int) -> Optional[Decimal]:
 # ---------------------------------------------------------------------------
 
 
-def _update_cache(session: Session, entry: MarketAsset, asset_type: AssetType) -> Optional[dict]:
+def _update_cache(session: Session, entry: MarketAsset, asset_type: AssetType) -> dict | None:
     """Fetch live data from external API, upsert today's price (in EUR), update asset metadata."""
     if not entry.symbol:
         return None
@@ -276,8 +275,8 @@ def get_or_create_market_asset(
     session: Session,
     lookup_key: str,
     asset_type: AssetType,
-    symbol_hint: Optional[str] = None,
-) -> Optional[MarketAsset]:
+    symbol_hint: str | None = None,
+) -> MarketAsset | None:
     """
     Public entry-point: find or auto-create a MarketAsset for a given key.
 
@@ -300,8 +299,8 @@ def get_or_create_market_asset(
 
 
 def _create_market_asset_entry(
-    session: Session, lookup_key: str, asset_type: AssetType, symbol_hint: Optional[str] = None
-) -> Optional[MarketAsset]:
+    session: Session, lookup_key: str, asset_type: AssetType, symbol_hint: str | None = None
+) -> MarketAsset | None:
     """Auto-create a MarketAsset entry (+ initial price) when it doesn't exist."""
     market_info = None
 
@@ -426,8 +425,8 @@ def get_stock_price(
     session: Session,
     isin: str,
     db_only: bool = False,
-    as_of: Optional[date] = None,
-) -> Optional[Decimal]:
+    as_of: date | None = None,
+) -> Decimal | None:
     """Get current market price for a Stock (lookup by ISIN)."""
     _, price = _get_market_info_internal(
         session,
@@ -443,8 +442,8 @@ def get_crypto_price(
     session: Session,
     symbol: str,
     db_only: bool = False,
-    as_of: Optional[date] = None,
-) -> Optional[Decimal]:
+    as_of: date | None = None,
+) -> Decimal | None:
     """Get current market price for a Crypto (lookup by Symbol)."""
     _, price = _get_market_info_internal(
         session,
@@ -461,8 +460,8 @@ def _get_market_info_internal(
     lookup_key: str,
     asset_type: AssetType,
     db_only: bool = False,
-    as_of: Optional[date] = None,
-) -> Tuple[Optional[str], Optional[Decimal]]:
+    as_of: date | None = None,
+) -> tuple[str | None, Decimal | None]:
     """Shared logic for fetching info. Auto-creates missing entries."""
     target_date = as_of or date.today()
     today = date.today()
@@ -505,8 +504,8 @@ def get_stock_info(
     session: Session,
     isin: str,
     db_only: bool = False,
-    as_of: Optional[date] = None,
-) -> Tuple[Optional[str], Optional[Decimal]]:
+    as_of: date | None = None,
+) -> tuple[str | None, Decimal | None]:
     """Get (Name, Price) for a Stock."""
     return _get_market_info_internal(
         session,
@@ -521,8 +520,8 @@ def get_crypto_info(
     session: Session,
     symbol: str,
     db_only: bool = False,
-    as_of: Optional[date] = None,
-) -> Tuple[Optional[str], Optional[Decimal]]:
+    as_of: date | None = None,
+) -> tuple[str | None, Decimal | None]:
     """Get (Name, Price) for a Crypto."""
     return _get_market_info_internal(
         session,

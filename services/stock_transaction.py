@@ -2,7 +2,6 @@
 
 from decimal import Decimal
 from datetime import datetime, timedelta, date
-from typing import Optional
 
 from sqlmodel import Session, select
 
@@ -68,7 +67,7 @@ def create_eur_deposit(
     amount: Decimal,
     executed_at: datetime,
     master_key: str,
-    notes: Optional[str] = None,
+    notes: str | None = None,
     fees: Decimal = Decimal("0"),
 ) -> TransactionResponse:
     """Record a EUR cash deposit into a stock account.
@@ -140,7 +139,7 @@ def _compute_held_quantity(session: Session, account_uuid: str, isin: str, maste
 
 def _compute_held_quantity_by_bidx(
     session: Session, account_id_bidx: str, isin: str, master_key: str,
-    exclude_tx_uuid: Optional[str] = None,
+    exclude_tx_uuid: str | None = None,
 ) -> Decimal:
     """Same as _compute_held_quantity but works directly from the stored bidx.
     
@@ -278,7 +277,7 @@ def get_stock_transaction(
     session: Session,
     transaction_uuid: str,
     master_key: str,
-) -> Optional[TransactionResponse]:
+) -> TransactionResponse | None:
     """Get a single transaction by UUID."""
     transaction = session.get(StockTransaction, transaction_uuid)
     if not transaction:

@@ -1,5 +1,4 @@
 from decimal import Decimal
-from typing import Optional, Dict, List
 from datetime import datetime, timedelta
 
 from models.enums import AssetType
@@ -15,13 +14,13 @@ class CoinMarketCapProvider(MarketDataProvider):
         self.api_url = self.settings.cmc_api_url
         self.api_key = self.settings.cmc_api_key
         
-        self._map_cache: List[Dict] = []
-        self._map_cache_expiry: Optional[datetime] = None
+        self._map_cache: list[dict] = []
+        self._map_cache_expiry: datetime | None = None
 
-    def type_assets(self) -> List[AssetType]:
+    def type_assets(self) -> list[AssetType]:
         return [AssetType.CRYPTO]
 
-    def get_info(self, symbol: str, asset_type: Optional[AssetType] = None) -> Optional[Dict]:
+    def get_info(self, symbol: str, asset_type: AssetType | None = None) -> dict | None:
         if not symbol or not symbol.strip() or not self.api_key:
             return None
             
@@ -65,7 +64,7 @@ class CoinMarketCapProvider(MarketDataProvider):
             print(f"CMC get_info error: {e}")
             return None
 
-    def _get_map(self) -> List[Dict]:
+    def _get_map(self) -> list[dict]:
         """Fetch and cache the crypto map (top 2000 by rank)."""
         if not self.api_key:
             return []
@@ -114,7 +113,7 @@ class CoinMarketCapProvider(MarketDataProvider):
             print(f"Error fetching CMC map (Parsing): {e}")
             return self._map_cache
 
-    def search(self, query: str, asset_type: Optional[AssetType] = None) -> List[Dict]:
+    def search(self, query: str, asset_type: AssetType | None = None) -> list[dict]:
         if not query or not query.strip():
             return []
             
@@ -132,7 +131,7 @@ class CoinMarketCapProvider(MarketDataProvider):
                 
         return results
 
-    def get_bulk_info(self, symbols: List[str], asset_type: Optional[AssetType] = None) -> Dict[str, Dict]:
+    def get_bulk_info(self, symbols: list[str], asset_type: AssetType | None = None) -> dict[str, dict]:
         if not symbols or not self.api_key:
             return {}
         

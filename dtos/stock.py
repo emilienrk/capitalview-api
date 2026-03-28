@@ -2,7 +2,6 @@
 
 from datetime import datetime, date
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -13,17 +12,17 @@ class StockAccountCreate(BaseModel):
     """Create a stock account."""
     name: str
     account_type: StockAccountType
-    institution_name: Optional[str] = None
-    identifier: Optional[str] = None
-    opened_at: Optional[date] = None
+    institution_name: str | None = None
+    identifier: str | None = None
+    opened_at: date | None = None
 
 
 class StockAccountUpdate(BaseModel):
     """Update a stock account."""
-    name: Optional[str] = None
-    institution_name: Optional[str] = None
-    identifier: Optional[str] = None
-    opened_at: Optional[date] = None
+    name: str | None = None
+    institution_name: str | None = None
+    identifier: str | None = None
+    opened_at: date | None = None
 
 
 class StockAccountBasicResponse(BaseModel):
@@ -31,9 +30,9 @@ class StockAccountBasicResponse(BaseModel):
     id: str
     name: str
     account_type: StockAccountType
-    institution_name: Optional[str] = None
-    identifier: Optional[str] = None
-    opened_at: Optional[date] = None
+    institution_name: str | None = None
+    identifier: str | None = None
+    opened_at: date | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -43,36 +42,36 @@ class EurDepositCreate(BaseModel):
     amount: Decimal = Field(gt=0)
     fees: Decimal = Field(default=Decimal("0"), ge=0)
     executed_at: datetime
-    notes: Optional[str] = None
+    notes: str | None = None
 
 
 class StockTransactionCreate(BaseModel):
     """Create a stock transaction."""
     account_id: str
-    symbol: Optional[str] = None
-    isin: Optional[str] = None
-    name: Optional[str] = None
-    exchange: Optional[str] = None
+    symbol: str | None = None
+    isin: str | None = None
+    name: str | None = None
+    exchange: str | None = None
     type: StockTransactionType
     amount: Decimal = Field(gt=0)
     price_per_unit: Decimal = Field(ge=0)
     fees: Decimal = Field(default=Decimal("0"), ge=0)
     executed_at: datetime
-    notes: Optional[str] = None
+    notes: str | None = None
 
 
 class StockTransactionUpdate(BaseModel):
     """Update a stock transaction."""
-    symbol: Optional[str] = None
-    isin: Optional[str] = None
-    name: Optional[str] = None
-    exchange: Optional[str] = None
-    type: Optional[StockTransactionType] = None
-    amount: Optional[Decimal] = Field(None, gt=0)
-    price_per_unit: Optional[Decimal] = Field(None, ge=0)
-    fees: Optional[Decimal] = Field(None, ge=0)
-    executed_at: Optional[datetime] = None
-    notes: Optional[str] = None
+    symbol: str | None = None
+    isin: str | None = None
+    name: str | None = None
+    exchange: str | None = None
+    type: StockTransactionType | None = None
+    amount: Decimal | None = Field(None, gt=0)
+    price_per_unit: Decimal | None = Field(None, ge=0)
+    fees: Decimal | None = Field(None, ge=0)
+    executed_at: datetime | None = None
+    notes: str | None = None
 
 
 class StockTransactionBulkCreate(BaseModel):
@@ -85,7 +84,7 @@ class StockTransactionBulkCreate(BaseModel):
     price_per_unit: Decimal = Field(ge=0)
     fees: Decimal = Field(default=Decimal("0"), ge=0)
     executed_at: datetime
-    notes: Optional[str] = None
+    notes: str | None = None
 
 
 class StockBulkImportRequest(BaseModel):
@@ -104,35 +103,35 @@ class StockTransactionBasicResponse(BaseModel):
     """Basic stock transaction response."""
     id: str
     account_id: str
-    symbol: Optional[str] = None
-    isin: Optional[str] = None
-    name: Optional[str] = None
-    exchange: Optional[str] = None
+    symbol: str | None = None
+    isin: str | None = None
+    name: str | None = None
+    exchange: str | None = None
     type: StockTransactionType
     amount: Decimal
     price_per_unit: Decimal
     fees: Decimal
     executed_at: datetime
-    notes: Optional[str] = None
+    notes: str | None = None
 
 
 class AssetSearchResult(BaseModel):
     """Result of an asset search."""
     symbol: str
-    isin: Optional[str] = None
-    name: Optional[str] = None
-    exchange: Optional[str] = None
-    type: Optional[str] = None
-    currency: Optional[str] = None
+    isin: str | None = None
+    name: str | None = None
+    exchange: str | None = None
+    type: str | None = None
+    currency: str | None = None
 
 
 class AssetInfoResponse(BaseModel):
     """Detailed info for an asset."""
     symbol: str
-    isin: Optional[str] = None
-    name: Optional[str] = None
-    price: Optional[Decimal] = None
-    currency: Optional[str] = None
-    exchange: Optional[str] = None
-    type: Optional[str] = None
-    change_percent: Optional[float] = None  # 24h or daily change
+    isin: str | None = None
+    name: str | None = None
+    price: Decimal | None = None
+    currency: str | None = None
+    exchange: str | None = None
+    type: str | None = None
+    change_percent: float | None = None  # 24h or daily change

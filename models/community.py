@@ -9,7 +9,6 @@ Privacy modes:
 - is_private=True: profile appears only when the exact username is searched.
   Investments are visible only if both users follow each other (mutual follow).
 """
-from typing import Optional
 from datetime import datetime
 
 from sqlmodel import SQLModel, Field
@@ -31,12 +30,26 @@ class CommunityProfile(SQLModel, table=True):
             sa.ForeignKey("users.uuid", ondelete="CASCADE"),
             primary_key=True,
             nullable=False,
+            index=True,
         )
     )
     is_active: bool = Field(default=False, nullable=False)
     is_private: bool = Field(default=True, nullable=False)
-    display_name: Optional[str] = Field(default=None, sa_column=Column(sa.String(100), nullable=True))
-    bio: Optional[str] = Field(default=None, sa_column=Column(sa.Text, nullable=True))
+    display_name: str | None = Field(default=None, sa_column=Column(sa.String(100), nullable=True))
+    bio: str | None = Field(default=None, sa_column=Column(sa.Text, nullable=True))
+    created_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    )
+    updated_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            onupdate=sa.func.now(),
+            nullable=False,
+        ),
+    )
 
 
 class CommunityFollow(SQLModel, table=True):
@@ -51,7 +64,7 @@ class CommunityFollow(SQLModel, table=True):
         {"extend_existing": True},
     )
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     follower_id: str = Field(
         sa_column=Column(
             sa.String,
@@ -85,7 +98,7 @@ class CommunityPosition(SQLModel, table=True):
     __tablename__ = "community_positions"
     __table_args__ = {"extend_existing": True}
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     profile_user_id: str = Field(
         sa_column=Column(
             sa.String,
@@ -125,7 +138,7 @@ class CommunityPick(SQLModel, table=True):
         {"extend_existing": True},
     )
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     user_id: str = Field(
         sa_column=Column(
             sa.String,
@@ -136,8 +149,8 @@ class CommunityPick(SQLModel, table=True):
     )
     symbol: str = Field(sa_column=Column(sa.String(30), nullable=False))
     asset_type: str = Field(sa_column=Column(sa.String(10), nullable=False))
-    comment: Optional[str] = Field(default=None, sa_column=Column(sa.Text, nullable=True))
-    target_price: Optional[float] = Field(default=None, sa_column=Column(sa.Float, nullable=True))
+    comment: str | None = Field(default=None, sa_column=Column(sa.Text, nullable=True))
+    target_price: float | None = Field(default=None, sa_column=Column(sa.Float, nullable=True))
     created_at: datetime = Field(
         default=sa.func.now(),
         sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),

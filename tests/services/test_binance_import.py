@@ -5,7 +5,7 @@ Covers:
   - CSV parsing (_parse_csv)
   - Row mapping (_map_row) for every supported operation
   - Preview generation (generate_preview): grouping, EUR detection, needs_eur_input
-  - Import execution (execute_import): correct atomic rows & FIAT_ANCHOR injection
+  - Import execution (execute_import): correct atomic rows & ANCHOR injection
   - PRU compatibility: verifies cost basis is correctly computed after import
 """
 
@@ -130,7 +130,7 @@ class TestMapRow:
     def test_deposit_eur(self):
         row = _make_row("Deposit", "EUR", "1000")
         t, sym, amt, price = _map_row(row)
-        assert t == CryptoTransactionType.FIAT_DEPOSIT
+        assert t == CryptoTransactionType.DEPOSIT
         assert sym == "EUR"
         assert price == Decimal("1")
 
@@ -176,7 +176,7 @@ class TestMapRow:
     def test_binance_convert_incoming_eur(self):
         row = _make_row("Binance Convert", "EUR", "3000")  # receiving EUR
         t, sym, amt, price = _map_row(row)
-        assert t == CryptoTransactionType.FIAT_DEPOSIT
+        assert t == CryptoTransactionType.DEPOSIT
         assert price == Decimal("1")
 
     def test_binance_convert_outgoing_crypto(self):
@@ -227,10 +227,10 @@ class TestMapRow:
         assert price == Decimal("0")
 
     def test_transaction_revenue_eur(self):
-        """Receiving EUR from a sale = FIAT_DEPOSIT at price=1."""
+        """Receiving EUR from a sale = DEPOSIT at price=1."""
         row = _make_row("Transaction Revenue", "EUR", "3000")
         t, sym, amt, price = _map_row(row)
-        assert t == CryptoTransactionType.FIAT_DEPOSIT
+        assert t == CryptoTransactionType.DEPOSIT
         assert price == Decimal("1")
 
     def test_transaction_revenue_crypto(self):
@@ -341,7 +341,7 @@ class TestGeneratePreview:
 # ── Import Execution ───────────────────────────────────────────
 
 class TestExecuteImport:
-    """execute_import creates atomic rows correctly and adds FIAT_ANCHOR when needed."""
+    """execute_import creates atomic rows correctly and adds ANCHOR when needed."""
 
     def _make_account(self, session: Session, master_key: str, account_id: str = "acc_test") -> CryptoAccount:
         account = CryptoAccount(
@@ -377,7 +377,7 @@ class TestExecuteImport:
     def test_buy_btc_with_eur_creates_two_rows(self, session: Session, master_key: str):
         """
         Buy BTC with EUR → BUY BTC (price=0) + SPEND EUR (price=1).
-        No FIAT_ANCHOR added (EUR is already the anchor via SPEND EUR).
+        No ANCHOR added (EUR is already the anchor via SPEND EUR).
         """
         self._make_account(session, master_key)
 
@@ -398,8 +398,8 @@ class TestExecuteImport:
 
     def test_crypto_swap_adds_fiat_anchor(self, session: Session, master_key: str):
         """
-        BTC→USDC swap with user-provided EUR amount: adds FIAT_ANCHOR row.
-        Total rows = BUY + SPEND + FIAT_ANCHOR = 3.
+        BTC→USDC swap with user-provided EUR amount: adds ANCHOR row.
+        Total rows = BUY + SPEND + ANCHOR = 3.
         """
         self._make_account(session, master_key)
 
@@ -416,11 +416,11 @@ class TestExecuteImport:
         )
 
         result = execute_import(session, "acc_test", [group], master_key)
-        assert result.imported_count == 3  # BUY + SPEND + FIAT_ANCHOR
+        assert result.imported_count == 3  # BUY + SPEND + ANCHOR
 
     def test_no_anchor_when_no_eur_amount(self, session: Session, master_key: str):
         """
-        Crypto swap but user did NOT provide EUR amount → no FIAT_ANCHOR added.
+        Crypto swap but user did NOT provide EUR amount → no ANCHOR added.
         """
         self._make_account(session, master_key)
 
@@ -436,7 +436,7 @@ class TestExecuteImport:
         )
 
         result = execute_import(session, "acc_test", [group], master_key)
-        assert result.imported_count == 2  # no FIAT_ANCHOR
+        assert result.imported_count == 2  # no ANCHOR
 
     def test_reward_creates_one_row(self, session: Session, master_key: str):
         """Crypto Box → single REWARD row (price=0)."""
@@ -454,7 +454,7 @@ class TestExecuteImport:
 
     def test_sell_btc_for_eur_creates_two_rows(self, session: Session, master_key: str):
         """
-        Sell BTC for EUR: SPEND BTC (price=0) + FIAT_DEPOSIT EUR (price=1).
+        Sell BTC for EUR: SPEND BTC (price=0) + DEPOSIT EUR (price=1).
         No anchor needed.
         """
         self._make_account(session, master_key)
@@ -464,7 +464,7 @@ class TestExecuteImport:
                 dict(operation="Transaction Sold", coin="BTC", change=-0.1,
                      mapped_type="SPEND", mapped_symbol="BTC", mapped_amount=0.1, mapped_price=0.0),
                 dict(operation="Transaction Revenue", coin="EUR", change=3000,
-                     mapped_type="FIAT_DEPOSIT", mapped_symbol="EUR", mapped_amount=3000.0, mapped_price=1.0),
+                     mapped_type="DEPOSIT", mapped_symbol="EUR", mapped_amount=3000.0, mapped_price=1.0),
             ],
             has_eur=True,
             needs_eur_input=False,
@@ -546,7 +546,7 @@ class TestPRUAfterImport:
     computes cost basis (PRU) from the stored atomic rows.
 
     PRU rule (from CRYPTO_ACCOUNTING.md):
-      group_cost = FIAT_ANCHOR.amount  OR  SPEND_EUR.amount
+      group_cost = ANCHOR.amount  OR  SPEND_EUR.amount
       PRU = group_cost / BUY.amount
     """
 
@@ -602,7 +602,7 @@ class TestPRUAfterImport:
     @patch("services.crypto_transaction.get_crypto_info")
     def test_crypto_swap_with_anchor_pru(self, mock_info, session: Session, master_key: str):
         """
-        Swap USDC→BTC with FIAT_ANCHOR 2760 EUR.
+        Swap USDC→BTC with ANCHOR 2760 EUR.
         PRU = 2760 / 0.1 = 27600.
         """
         mock_info.return_value = ("Bitcoin", Decimal("35000"))
@@ -695,7 +695,7 @@ class TestPRUAfterImport:
                 ),
                 BinanceImportRowPreview(
                     operation="Transaction Revenue", coin="EUR", change=17500,
-                    mapped_type="FIAT_DEPOSIT", mapped_symbol="EUR", mapped_amount=17500.0, mapped_price=1.0,
+                    mapped_type="DEPOSIT", mapped_symbol="EUR", mapped_amount=17500.0, mapped_price=1.0,
                 ),
             ],
             summary="BTC→EUR", has_eur=True, needs_eur_input=False,
@@ -713,8 +713,8 @@ class TestPRUAfterImport:
         """
         Buy BTC with EUR: SPEND EUR is inside a crypto-buy group →
         net_external_deposits should NOT double-count the EUR as a withdrawal.
-        Account-level total_invested = EUR deposited externally (0 in this case
-        since euros entered via the exchange directly as a buy, not a wire).
+        Account-level total_invested follows open crypto position cost basis.
+        Net fiat flows are exposed via total_deposits.
         """
         mock_info.return_value = ("Bitcoin", Decimal("35000"))
         account = self._make_account(session, master_key, "acc_pru5")
@@ -737,15 +737,16 @@ class TestPRUAfterImport:
         execute_import(session, "acc_pru5", [group], master_key)
         summary = self._summary(session, master_key, account.uuid)
 
-        # SPEND EUR in a buy-group is excluded from net_external_deposits
-        # So account total_invested = 0 (no standalone wire deposit recorded)
-        assert summary.total_invested == Decimal("0.00")
+        # Open BTC position has a 3000 EUR cost basis.
+        assert summary.total_invested == Decimal("3000.00")
+        # SPEND EUR in a buy-group is excluded from net_external_deposits.
+        assert summary.total_deposits == Decimal("0.00")
 
     @patch("services.crypto_transaction.get_crypto_info")
     def test_fiat_deposit_counts_as_external(self, mock_info, session: Session, master_key: str):
         """
-        Standalone EUR Deposit (wire transfer): FIAT_DEPOSIT EUR NOT in a
-        trade group. Total invested = amount.
+        Standalone EUR Deposit (wire transfer): DEPOSIT EUR NOT in a
+        trade group. It must count as external fiat flow, not as crypto invested.
         """
         mock_info.return_value = ("Bitcoin", Decimal("35000"))
         account = self._make_account(session, master_key, "acc_pru6")
@@ -755,7 +756,7 @@ class TestPRUAfterImport:
             rows=[
                 BinanceImportRowPreview(
                     operation="Deposit", coin="EUR", change=5000,
-                    mapped_type="FIAT_DEPOSIT", mapped_symbol="EUR", mapped_amount=5000.0, mapped_price=1.0,
+                    mapped_type="DEPOSIT", mapped_symbol="EUR", mapped_amount=5000.0, mapped_price=1.0,
                 ),
             ],
             summary="EUR Deposit", has_eur=True, needs_eur_input=False,
@@ -764,5 +765,7 @@ class TestPRUAfterImport:
         execute_import(session, "acc_pru6", [group], master_key)
         summary = self._summary(session, master_key, account.uuid)
 
-        # Standalone EUR deposit should add to net_external_deposits
-        assert summary.total_invested == Decimal("5000.00")
+        # Standalone EUR deposit should add to net_external_deposits.
+        assert summary.total_deposits == Decimal("5000.00")
+        # No crypto position => no crypto invested.
+        assert summary.total_invested == Decimal("0.00")

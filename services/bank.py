@@ -4,7 +4,6 @@ import json
 import uuid
 from decimal import Decimal
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -226,7 +225,7 @@ def get_bank_account(
     account_uuid: str,
     user_uuid: str,
     master_key: str
-) -> Optional[BankAccountResponse]:
+) -> BankAccountResponse | None:
     """Get a single bank account if it belongs to the user."""
     account = session.get(BankAccount, account_uuid)
     if not account:
@@ -365,7 +364,7 @@ def import_bank_account_history(
         total_value = last_value
         daily_pnl = total_value - prev_value
 
-        positions_json: Optional[str] = None
+        positions_json: str | None = None
         if total_value > Decimal("0"):
             positions_json = json.dumps([{
                 "symbol": "EUR",

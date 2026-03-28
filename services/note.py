@@ -1,6 +1,5 @@
 """Note service."""
 
-from typing import List, Optional
 from sqlmodel import Session, select
 
 from models import Note
@@ -94,7 +93,7 @@ def get_note(
     note_uuid: str,
     user_uuid: str,
     master_key: str
-) -> Optional[NoteResponse]:
+) -> NoteResponse | None:
     """Get a single note."""
     note = session.get(Note, note_uuid)
     if not note:
@@ -111,7 +110,7 @@ def get_user_notes(
     session: Session, 
     user_uuid: str, 
     master_key: str
-) -> List[NoteResponse]:
+) -> list[NoteResponse]:
     """Get all notes for a user, ordered by position."""
     user_bidx = hash_index(user_uuid, master_key)
     
@@ -124,10 +123,10 @@ def get_user_notes(
 
 def reorder_notes(
     session: Session,
-    note_ids: List[str],
+    note_ids: list[str],
     user_uuid: str,
     master_key: str,
-) -> List[NoteResponse]:
+) -> list[NoteResponse]:
     """Reorder notes by updating position based on provided order."""
     user_bidx = hash_index(user_uuid, master_key)
 

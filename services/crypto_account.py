@@ -2,7 +2,6 @@
 
 import json
 from decimal import Decimal
-from typing import List, Optional
 
 import sqlalchemy as sa
 from sqlmodel import Session, select
@@ -110,7 +109,7 @@ def get_user_crypto_accounts(
     session: Session, 
     user_uuid: str, 
     master_key: str
-) -> List[CryptoAccountBasicResponse]:
+) -> list[CryptoAccountBasicResponse]:
     """List all crypto accounts for a user."""
     user_bidx = hash_index(user_uuid, master_key)
     
@@ -126,7 +125,7 @@ def get_crypto_account(
     account_uuid: str,
     user_uuid: str,
     master_key: str
-) -> Optional[CryptoAccountBasicResponse]:
+) -> CryptoAccountBasicResponse | None:
     """Get a single crypto account if it belongs to the user."""
     account = session.get(CryptoAccount, account_uuid)
     if not account:

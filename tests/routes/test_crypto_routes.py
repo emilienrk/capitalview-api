@@ -188,6 +188,39 @@ def test_bulk_import_with_group_uuid(session, master_key):
     assert Decimal(str(btc["average_buy_price"])) == Decimal("30000.0000")
 
 
+def test_delete_transaction_deletes_whole_group(session, master_key):
+    client = TestClient(app)
+    racc = client.post("/crypto/accounts", json={"name": "DeleteGroupWallet"})
+    assert racc.status_code == 201
+    account_id = racc.json()["id"]
+
+    payload = {
+        "account_id": account_id,
+        "symbol": "BTC",
+        "type": "BUY",
+        "amount": "0.1",
+        "eur_amount": "3000",
+        "executed_at": "2024-01-01T12:00:00",
+        "quote_symbol": "EUR",
+        "quote_amount": "3000",
+    }
+    created = client.post("/crypto/transactions/composite", json=payload)
+    assert created.status_code == 201
+    rows = created.json()["rows"]
+    assert len(rows) == 2
+
+    first_id = rows[0]["id"]
+    all_ids = {row["id"] for row in rows}
+
+    deleted = client.delete(f"/crypto/transactions/{first_id}")
+    assert deleted.status_code == 204
+
+    remaining = client.get(f"/crypto/transactions/account/{account_id}")
+    assert remaining.status_code == 200
+    remaining_ids = {tx["id"] for tx in remaining.json()}
+    assert all_ids.isdisjoint(remaining_ids)
+
+
 def test_create_crypto_transaction_negative_validation(session, master_key):
     client = TestClient(app)
     
@@ -263,7 +296,7 @@ def test_bulk_composite_import_eur_buy(mock_info, session, master_key):
 def test_bulk_composite_import_crypto_swap_with_eur_anchor(mock_info, session, master_key):
     """
     Bulk-composite: swap USDC→BTC with eur_amount.
-    Creates BUY BTC + SPEND USDC + FIAT_ANCHOR → 3 atomic rows.
+    Creates BUY BTC + SPEND USDC + ANCHOR → 3 atomic rows.
     PRU = 2760/0.1 = 27 600.
     """
     mock_info.return_value = ("Bitcoin", Decimal("35000"))
@@ -290,7 +323,7 @@ def test_bulk_composite_import_crypto_swap_with_eur_anchor(mock_info, session, m
     assert r.status_code == 201
     body = r.json()
     assert body["groups_count"] == 1
-    assert body["imported_count"] == 3  # BUY + SPEND + FIAT_ANCHOR
+    assert body["imported_count"] == 3  # BUY + SPEND + ANCHOR
 
     summary = client.get(f"/crypto/accounts/{account_id}").json()
     btc = next(p for p in summary["positions"] if p["symbol"] == "BTC")
@@ -303,7 +336,7 @@ def test_bulk_composite_import_reward_and_crypto_deposit(mock_info, session, mas
     """
     Bulk-composite: REWARD (cost=0) + CRYPTO_DEPOSIT with eur_amount.
     - REWARD → 1 row, total_invested = 0
-    - CRYPTO_DEPOSIT → 2 rows (FIAT_ANCHOR + BUY), cost = 15000
+    - CRYPTO_DEPOSIT → 2 rows (ANCHOR + BUY), cost = 15000
     """
     mock_info.side_effect = lambda s, symbol, db_only=False, as_of=None: {
         "ETH": ("Ethereum", Decimal("3000")),
@@ -337,7 +370,7 @@ def test_bulk_composite_import_reward_and_crypto_deposit(mock_info, session, mas
     assert r.status_code == 201
     body = r.json()
     assert body["groups_count"] == 2
-    assert body["imported_count"] == 4  # 1 REWARD + 3 (FIAT_DEPOSIT + BUY + SPEND)
+    assert body["imported_count"] == 4  # 1 REWARD + 3 (DEPOSIT + BUY + SPEND)
 
     summary = client.get(f"/crypto/accounts/{account_id}").json()
 
@@ -435,7 +468,7 @@ def test_composite_transaction_eur(session, master_key):
 
 def test_composite_transaction_crypto_quote(session, master_key):
     """Swapping USDC for BTC via composite endpoint returns 3 rows.
-    FIAT_ANCHOR carries the EUR value."""
+    ANCHOR carries the EUR value."""
     client = TestClient(app)
     resp = client.post("/crypto/accounts", json={"name": "Swap Wallet"})
     account_id = resp.json()["id"]
@@ -456,9 +489,9 @@ def test_composite_transaction_crypto_quote(session, master_key):
     assert "rows" in data
     rows = data["rows"]
     # USDC balance goes negative on first purchase — warning is expected here
-    assert len(rows) == 3  # BUY + SPEND + FIAT_ANCHOR
+    assert len(rows) == 3  # BUY + SPEND + ANCHOR
     types = {row["type"] for row in rows}
-    assert types == {"BUY", "SPEND", "FIAT_ANCHOR"}
+    assert types == {"BUY", "SPEND", "ANCHOR"}
     # All rows share the same group_uuid
     assert len({row["group_uuid"] for row in rows}) == 1
 
@@ -471,7 +504,7 @@ def test_account_pl_eur_cash_not_profit(mock_get_info, session, master_key):
 
     Scenario
     --------
-    1. User wires 10 000 € from bank → exchange  (FIAT_DEPOSIT)
+    1. User wires 10 000 € from bank → exchange  (DEPOSIT)
     2. Buys 1 BTC at 8 000 €                      (BUY + SPEND EUR, same group)
     3. BTC current price = 7 000 €
 
@@ -526,14 +559,14 @@ def test_account_pl_eur_cash_not_profit(mock_get_info, session, master_key):
 @patch("services.crypto_transaction.get_crypto_info")
 def test_account_pl_exit_does_not_inflate_invested(mock_get_info, session, master_key):
     """
-    Selling crypto for EUR (EXIT) moves value back to EUR cash but must NOT
+    Selling crypto for EUR (SELL_TO_FIAT) moves value back to EUR cash but must NOT
     inflate total_invested (the EUR received is NOT a new bank wire).
 
     Scenario
     --------
     1. Wire 10 000 €                  FIAT_DEPOSIT  → net_invested = 10 000
     2. Buy 1 BTC at 8 000 €           BUY + SPEND   → net_invested = 10 000
-    3. Sell 1 BTC at 7 000 € (EXIT)   SPEND + FIAT_DEPOSIT → net_invested must stay 10 000
+    3. Sell 1 BTC at 7 000 € (SELL_TO_FIAT)   SPEND + DEPOSIT → net_invested must stay 10 000
 
     After sell: EUR cash = 2 000 + 7 000 = 9 000, no BTC.
     profit_loss = 9 000 - 10 000 = -1 000
@@ -541,7 +574,7 @@ def test_account_pl_exit_does_not_inflate_invested(mock_get_info, session, maste
     mock_get_info.return_value = ("Bitcoin", Decimal("7000"))
 
     client = TestClient(app)
-    acc = client.post("/crypto/accounts", json={"name": "EXIT PL Wallet"}).json()
+    acc = client.post("/crypto/accounts", json={"name": "SELL_TO_FIAT PL Wallet"}).json()
     account_id = acc["id"]
 
     # 1. Wire 10 000 €
@@ -565,11 +598,11 @@ def test_account_pl_exit_does_not_inflate_invested(mock_get_info, session, maste
         "executed_at": "2024-01-02T10:00:00",
     }).status_code == 201
 
-    # 3. Sell 1 BTC at 7 000 € (EXIT)
+    # 3. Sell 1 BTC at 7 000 € (SELL_TO_FIAT)
     assert client.post("/crypto/transactions/composite", json={
         "account_id": account_id,
         "symbol": "BTC",
-        "type": "EXIT",
+        "type": "SELL_TO_FIAT",
         "amount": "1",
         "eur_amount": "7000",
         "executed_at": "2024-01-03T10:00:00",
@@ -578,7 +611,7 @@ def test_account_pl_exit_does_not_inflate_invested(mock_get_info, session, maste
     summary = client.get(f"/crypto/accounts/{account_id}").json()
 
     assert Decimal(str(summary["total_invested"])) == Decimal("10000"), (
-        "Selling crypto (EXIT) must NOT increase total_invested — "
+        "Selling crypto (SELL_TO_FIAT) must NOT increase total_invested — "
         "the received EUR is not a new bank wire"
     )
     # Only EUR remains: 2 000 + 7 000 = 9 000

@@ -1,6 +1,5 @@
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Optional, Dict, List
 
 from models.enums import AssetType
 import requests
@@ -74,10 +73,10 @@ class YahooProvider(MarketDataProvider):
         self.settings = get_settings()
         self.search_url = self.settings.yahoo_api_url
 
-    def type_assets(self) -> List[AssetType]:
+    def type_assets(self) -> list[AssetType]:
         return [AssetType.STOCK, AssetType.FIAT]
 
-    def get_info(self, symbol: str, asset_type: Optional[AssetType] = None) -> Optional[Dict]:
+    def get_info(self, symbol: str, asset_type: AssetType | None = None) -> dict | None:
         if not symbol or not symbol.strip():
             return None
             
@@ -125,7 +124,7 @@ class YahooProvider(MarketDataProvider):
             print(f"YahooProvider unexpected error for {symbol}: {e}")
             return None
 
-    def search(self, query: str, asset_type: Optional[AssetType] = None) -> List[Dict]:
+    def search(self, query: str, asset_type: AssetType | None = None) -> list[dict]:
         if not query or not query.strip():
             return []
             
@@ -170,7 +169,7 @@ class YahooProvider(MarketDataProvider):
             print(f"YahooProvider search error: {e}")
             return []
 
-    def get_bulk_info(self, symbols: List[str], asset_type: Optional[AssetType] = None) -> Dict[str, Dict]:
+    def get_bulk_info(self, symbols: list[str], asset_type: AssetType | None = None) -> dict[str, dict]:
         if not symbols:
             return {}
         
@@ -246,7 +245,7 @@ class YahooProvider(MarketDataProvider):
             return {}
 
     def get_historical_prices(
-        self, symbol: str, from_date: date, to_date: date, asset_type: Optional[AssetType] = None
+        self, symbol: str, from_date: date, to_date: date, asset_type: AssetType | None = None
     ) -> dict[date, Decimal]:
         if not symbol or not symbol.strip():
             return {}

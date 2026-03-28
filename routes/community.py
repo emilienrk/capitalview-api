@@ -10,7 +10,7 @@ Search & privacy rules:
 - DELETE /community/follow/{username} : unfollow a user
 """
 
-from typing import Annotated, List
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session
@@ -48,7 +48,7 @@ from services.community import (
 router = APIRouter(prefix="/community", tags=["Community"])
 
 
-@router.get("/search", response_model=List[CommunitySearchResult])
+@router.get("/search", response_model=list[CommunitySearchResult])
 def search(
     q: str,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -62,7 +62,7 @@ def search(
     return search_profiles(session, q, current_user.uuid)
 
 
-@router.get("/profiles", response_model=List[CommunityProfileListItem])
+@router.get("/profiles", response_model=list[CommunityProfileListItem])
 def list_profiles(
     current_user: Annotated[User, Depends(get_current_user)],
     session: Session = Depends(get_session),
@@ -146,7 +146,7 @@ def get_available(
 
 # ── Picks (likes) ──────────────────────────────────────────────
 
-@router.get("/picks/me", response_model=List[PickResponse])
+@router.get("/picks/me", response_model=list[PickResponse])
 def my_picks(
     current_user: Annotated[User, Depends(get_current_user)],
     session: Session = Depends(get_session),

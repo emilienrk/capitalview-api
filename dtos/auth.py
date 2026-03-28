@@ -2,7 +2,6 @@
 
 import re
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
 
@@ -53,7 +52,7 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
-    master_key: Optional[str] = Field(
+    master_key: str | None = Field(
         default=None,
         description="Base64-encoded Master Key for data encryption. "
                     "Only returned on login/register. Use via X-Master-Key header for automation."
@@ -67,7 +66,7 @@ class UserResponse(BaseModel):
     username: str
     email: str
     is_active: bool
-    last_login: Optional[datetime] = None
+    last_login: datetime | None = None
     created_at: datetime
 
 

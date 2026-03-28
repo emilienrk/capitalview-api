@@ -10,7 +10,6 @@ Responsibilities:
 """
 
 from decimal import Decimal
-from typing import List, Optional
 
 import sqlalchemy as sa
 from sqlmodel import Session, select, func
@@ -239,7 +238,7 @@ def delete_pick(session: Session, user_uuid: str, pick_id: int) -> None:
     session.commit()
 
 
-def get_user_picks(session: Session, user_uuid: str) -> List[PickResponse]:
+def get_user_picks(session: Session, user_uuid: str) -> list[PickResponse]:
     """Return all picks for a given user, newest first."""
     user = session.get(User, user_uuid)
     if not user:
@@ -252,7 +251,7 @@ def get_user_picks(session: Session, user_uuid: str) -> List[PickResponse]:
     return [_pick_to_response(p, user.username) for p in picks]
 
 
-def get_picks_for_profile(session: Session, target_user_uuid: str, target_username: str) -> List[PickResponse]:
+def get_picks_for_profile(session: Session, target_user_uuid: str, target_username: str) -> list[PickResponse]:
     """Return all picks for a target user — used when building public profile."""
     picks = session.exec(
         select(CommunityPick)
@@ -266,7 +265,7 @@ def _compute_stock_pru_for_isins(
     session: Session,
     user_uuid: str,
     master_key: str,
-    isins: List[str],
+    isins: list[str],
 ) -> dict[str, Decimal]:
     """Compute PRU for a list of stock ISINs using the user's encrypted transactions.
 
@@ -327,7 +326,7 @@ def _compute_crypto_pru_for_symbols(
     session: Session,
     user_uuid: str,
     master_key: str,
-    symbols: List[str],
+    symbols: list[str],
 ) -> dict[str, Decimal]:
     """Compute PRU for a list of crypto symbols using the user's encrypted transactions.
 
@@ -346,7 +345,7 @@ def _compute_crypto_pru_for_symbols(
     ).all()
 
     # We need to replay ALL transactions because PRU depends on group logic
-    # (FIAT_ANCHOR / SPEND in EUR determine the cost basis of BUY rows).
+    # (ANCHOR / SPEND in EUR determine the cost basis of BUY rows).
     all_decrypted: list[dict] = []
 
     for account in accounts:
@@ -379,7 +378,7 @@ def _compute_crypto_pru_for_symbols(
     for tx in all_decrypted:
         g = tx["group_uuid"]
         if g:
-            if tx["type"] == "FIAT_ANCHOR":
+            if tx["type"] == "ANCHOR":
                 anchor_by_group.setdefault(g, Decimal("0"))
                 anchor_by_group[g] += tx["amount"] * tx["price"]
             elif tx["type"] == "SPEND" and tx["symbol"] in FIAT_SYMBOLS:
@@ -419,9 +418,9 @@ def _compute_crypto_pru_for_symbols(
                     pos["cost_basis"] += group_cost * (surviving / tx["amount"])
                 else:
                     pos["cost_basis"] += group_cost
-            case "REWARD" | "FIAT_DEPOSIT":
+            case "REWARD" | "DEPOSIT":
                 pos["amount"] += tx["amount"]
-            case "SPEND" | "TRANSFER" | "EXIT":
+            case "SPEND" | "TRANSFER" | "WITHDRAW":
                 if pos["amount"] > 0:
                     fraction = min(tx["amount"] / pos["amount"], Decimal("1"))
                     pos["cost_basis"] -= pos["cost_basis"] * fraction
@@ -580,7 +579,7 @@ def search_profiles(
     session: Session,
     query: str,
     current_user_uuid: str,
-) -> List[CommunitySearchResult]:
+) -> list[CommunitySearchResult]:
     """Search for community profiles by username.
 
     - Public profiles (is_private=False): appear if the query partially matches.
@@ -633,7 +632,7 @@ def search_profiles(
     return results
 
 
-def list_active_profiles(session: Session, current_user_uuid: str) -> List[CommunityProfileListItem]:
+def list_active_profiles(session: Session, current_user_uuid: str) -> list[CommunityProfileListItem]:
     """Return active community profiles visible to the current user.
 
     Visible profiles:
@@ -691,7 +690,7 @@ def get_public_profile(
     session: Session,
     username: str,
     current_user_uuid: str,
-) -> Optional[CommunityProfileResponse]:
+) -> CommunityProfileResponse | None:
     """Build the public profile for *username*.
 
     Privacy rules:
@@ -724,7 +723,7 @@ def get_public_profile(
     can_view_positions = not profile.is_private or state["is_mutual"] or user.uuid == current_user_uuid
 
     response_positions: list[CommunityPositionResponse] = []
-    global_pnl: Optional[float] = None
+    global_pnl: float | None = None
 
     if can_view_positions:
         positions = session.exec(
@@ -739,14 +738,14 @@ def get_public_profile(
             pru = Decimal(community_decrypt(pos.pru_encrypted))
             asset_type = pos.asset_type
 
-            current_price: Optional[Decimal] = None
-            asset_name: Optional[str] = None
+            current_price: Decimal | None = None
+            asset_name: str | None = None
             if asset_type == AssetType.STOCK.value:
                 asset_name, current_price = get_stock_info(session, symbol)
             elif asset_type == AssetType.CRYPTO.value:
                 asset_name, current_price = get_crypto_info(session, symbol)
 
-            pnl_pct: Optional[float] = None
+            pnl_pct: float | None = None
             # current_price == 0 is a sentinel for "no market data" (see market.py)
             if current_price is not None and current_price > 0 and pru > 0:
                 pnl_pct = float(((current_price - pru) / pru) * 100)
@@ -898,13 +897,13 @@ def get_available_positions(
             tx_type = decrypt_data(tx.type_enc, master_key)
             amount = Decimal(decrypt_data(tx.amount_enc, master_key))
             # Skip fiat and anchor rows
-            if symbol in FIAT_SYMBOLS or tx_type == "FIAT_ANCHOR":
+            if symbol in FIAT_SYMBOLS or tx_type == "ANCHOR":
                 continue
             if symbol not in crypto_agg:
                 crypto_agg[symbol] = Decimal("0")
-            if tx_type in ("BUY", "REWARD", "FIAT_DEPOSIT"):
+            if tx_type in ("BUY", "REWARD", "DEPOSIT"):
                 crypto_agg[symbol] += amount
-            elif tx_type in ("SPEND", "TRANSFER", "EXIT", "FEE"):
+            elif tx_type in ("SPEND", "TRANSFER", "WITHDRAW", "FEE"):
                 crypto_agg[symbol] -= amount
 
     # Only positive positions — no negative crypto sharing

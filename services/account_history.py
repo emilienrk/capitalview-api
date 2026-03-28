@@ -19,7 +19,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Optional
 import uuid
 
 import sqlalchemy as sa
@@ -45,18 +44,14 @@ logger = logging.getLogger(__name__)
 
 _ZERO = Decimal("0")
 _CASH_IN_TYPES = frozenset({
-    StockTransactionType.DEPOSIT.value,
-    StockTransactionType.DIVIDEND.value,
-    StockTransactionType.SELL.value,
-    CryptoTransactionType.FIAT_DEPOSIT.value,
-    CryptoTransactionType.REWARD.value,
+    StockTransactionType.DEPOSIT,
+    CryptoTransactionType.DEPOSIT,
 })
 
 _CASH_OUT_TYPES = frozenset({
-    StockTransactionType.BUY.value,
     # StockTransactionType.WITHDRAWAL,
-    CryptoTransactionType.EXIT.value,
-    CryptoTransactionType.SPEND.value,
+    CryptoTransactionType.WITHDRAW,
+    CryptoTransactionType.TRANSFER,
 })
 
 @dataclass
@@ -73,7 +68,7 @@ class IndividualAsset:
     """Représente un actif physique unique et son historique de prix."""
     name: str
     acquired_at: date
-    sold_at: Optional[date]
+    sold_at: date | None
     invested: Decimal
     valuations: list[tuple[date, Decimal]]
 
@@ -97,7 +92,7 @@ class _AccountSnapshot:
     physical_assets: list[IndividualAsset] = field(default_factory=list)
 
 
-def _parse_iso_date(value: str) -> Optional[date]:
+def _parse_iso_date(value: str) -> date | None:
     """Parse an ISO-like string into a date. Return None when invalid."""
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
@@ -182,8 +177,8 @@ def _get_snapshot_date_bounds(session: Session, user_uuid_bidx: str) -> dict[str
 
 def _resolve_account_start_date(
     default_created_at: date,
-    opened_at: Optional[date],
-    txs: Optional[list],
+    opened_at: date | None,
+    txs: list | None = None,
 ) -> date:
     """Pick the earliest known business start date for an account."""
     candidates: list[date] = [default_created_at]
@@ -288,7 +283,7 @@ def _fill_price_gaps(
     # Forward-fill across all missing_dates for every symbol
     for symbol in symbols:
         prices_for_symbol = matrix.setdefault(symbol, {})
-        last_price: Optional[Decimal] = None
+        last_price: Decimal | None = None
         for d in missing_dates:
             if d in prices_for_symbol:
                 last_price = prices_for_symbol[d]
@@ -301,58 +296,34 @@ def _compute_daily_net_flow(
     account_snapshot: _AccountSnapshot,
     d: date,
 ) -> Decimal:
-    """Signed net cash flow for day d."""
+    """Signed external cash flow for day d.
+
+    Internal reallocations (e.g. STOCK BUY/SELL inside the account) are ignored.
+    """
     if account_snapshot.account_type not in (AccountCategory.STOCK, AccountCategory.CRYPTO):
         return _ZERO
 
     net_flow = _ZERO
 
+    day_transactions: list = []
     for tx in account_snapshot.transactions or []:
         executed_at = getattr(tx, "executed_at", None)
         if executed_at is None:
             continue
-        try:
-            if executed_at.date() != d:
-                continue
-        except Exception:
-            continue
+        if executed_at.date() == d:
+            day_transactions.append(tx)
 
-        tx_type = str(getattr(tx, "type", "") or "").upper()
-
-        cash = _ZERO
-
-        # Prefer explicit EUR totals when available.
-        for field in ("total_eur", "total", "total_cost", "invested"):
-            v = _to_decimal(getattr(tx, field, None))
-            if v != _ZERO:
-                cash = v.copy_abs()
-                break
-
-        # Fallback: rebuild EUR notional from amount * unit price.
-        if cash == _ZERO:
-            amount = _to_decimal(getattr(tx, "amount", None))
-            price_per_unit = _to_decimal(getattr(tx, "price_per_unit", None))
-            if amount != _ZERO and price_per_unit != _ZERO:
-                cash = (amount * price_per_unit).copy_abs()
-            elif amount != _ZERO:
-                cash = amount.copy_abs()
-
+    for tx in day_transactions:
+        tx_type = getattr(tx, "type", None)
         if tx_type in _CASH_IN_TYPES:
-            net_flow += cash
+            net_flow += getattr(tx, "total_cost", _ZERO) or _ZERO
         elif tx_type in _CASH_OUT_TYPES:
-            net_flow -= cash
-
-        fees = _to_decimal(getattr(tx, "fees", None))
-        if fees <= _ZERO:
-            fees = _to_decimal(getattr(tx, "fee", None))
-        if fees > _ZERO:
-            net_flow -= fees
-
+            net_flow -= getattr(tx, "total_cost", _ZERO) or _ZERO
     return net_flow
 
 def _build_positions_from_summary(
     summary,
-) -> tuple[Decimal, Decimal, Optional[str]]:
+) -> tuple[Decimal, Decimal, str | None]:
     """Convert AccountSummaryResponse into snapshot payload fields."""
     computed_total = _ZERO
     temp_positions: list[dict] = []
@@ -690,7 +661,7 @@ def _build_asset_snapshots(
         value = _to_decimal(decrypt_data(valuation.estimated_value_enc, master_key))
         valuations_by_asset.setdefault(valuation.asset_uuid, []).append((valued_at, value))
 
-    account_start_date: Optional[date] = None
+    account_start_date: date | None = None
     physical_assets: list[IndividualAsset] = []
 
     for asset in assets:
@@ -714,7 +685,7 @@ def _build_asset_snapshots(
         if account_start_date is None or acquired_at < account_start_date:
             account_start_date = acquired_at
 
-        sold_at: Optional[date] = None
+        sold_at: date | None = None
         if asset.sold_at_enc:
             sold_at_raw = decrypt_data(asset.sold_at_enc, master_key)
             sold_at = _parse_iso_date(sold_at_raw)
@@ -867,7 +838,7 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
             if acc_snap.transactions:
                 for tx in acc_snap.transactions:
                     sym = getattr(tx, "isin", None) or getattr(tx, "symbol", None)
-                    if sym and getattr(tx, "type", "") not in ("FIAT_DEPOSIT", "FIAT_ANCHOR") and sym != "EUR":
+                    if sym and getattr(tx, "type", "") not in ("DEPOSIT", "ANCHOR") and sym != "EUR":
                         symbols.add(sym)
 
             # Include bootstrap-held symbols (important when no new txs).
@@ -971,8 +942,8 @@ def rebuild_account_history_from_date(
     account_id_bidx: str,
     from_date: date,
     master_key: str,
-    symbols: Optional[list[str]] = None,
-    asset_type: Optional[AssetType] = None,
+    symbols: list[str] | None = None,
+    asset_type: AssetType | None = None,
 ) -> None:
     """
     Delete all AccountHistory rows for *account_id_bidx* from *from_date* onwards,
@@ -1013,10 +984,10 @@ def trigger_post_transaction_updates(
     user_uuid: str,
     master_key: str,
     asset_type: AssetType,
-    affected_dates: list[Optional[date]],
-    affected_assets: list[Optional[str]],
-    account_id: Optional[str] = None,
-    account_id_bidx: Optional[str] = None,
+    affected_dates: list[date | None],
+    affected_assets: list[str | None],
+    account_id: str | None = None,
+    account_id_bidx: str | None = None,
 ) -> None:
     """
     Centralize post-transaction business orchestration:

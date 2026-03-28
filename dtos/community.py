@@ -9,7 +9,6 @@ Privacy model:
 """
 
 from datetime import datetime
-from typing import List, Optional
 from pydantic import BaseModel
 
 
@@ -17,42 +16,42 @@ class CommunitySettingsUpdate(BaseModel):
     """Payload for PUT /community/settings."""
     is_active: bool
     is_private: bool = True
-    display_name: Optional[str] = None
-    bio: Optional[str] = None
-    shared_stock_isins: List[str] = []
-    shared_crypto_symbols: List[str] = []
+    display_name: str | None = None
+    bio: str | None = None
+    shared_stock_isins: list[str] = []
+    shared_crypto_symbols: list[str] = []
 
 
 class CommunityPositionResponse(BaseModel):
     """A single shared position — only symbol, name, type, and PnL %."""
     symbol: str
-    name: Optional[str] = None  # Human-readable name (e.g. "Apple Inc." instead of ISIN)
+    name: str | None = None  # Human-readable name (e.g. "Apple Inc." instead of ISIN)
     asset_type: str  # "CRYPTO" | "STOCK"
-    pnl_percentage: Optional[float] = None  # None if market price unavailable
+    pnl_percentage: str | None = None  # None if market price unavailable
 
 
 class CommunityProfileResponse(BaseModel):
     """Public profile returned by GET /community/profiles/{username}."""
     username: str
-    display_name: Optional[str] = None
-    bio: Optional[str] = None
+    display_name: str | None = None
+    bio: str | None = None
     is_private: bool = True
     is_following: bool = False
     is_followed_by: bool = False
     is_mutual: bool = False
-    positions: List[CommunityPositionResponse] = []
-    picks: List["PickResponse"] = []
-    global_pnl_percentage: Optional[float] = None
+    positions: list[CommunityPositionResponse] = []
+    picks: list["PickResponse"] = []
+    global_pnl_percentage: float | None = None
     followers_count: int = 0
     following_count: int = 0
-    created_at: Optional[datetime] = None  # Account creation date
+    created_at: datetime | None = None  # Account creation date
 
 
 class CommunityProfileListItem(BaseModel):
     """Lightweight item for the profile listing endpoint."""
     username: str
-    display_name: Optional[str] = None
-    bio: Optional[str] = None
+    display_name: str | None = None
+    bio: str | None = None
     is_private: bool = True
     is_following: bool = False
     is_followed_by: bool = False
@@ -63,18 +62,18 @@ class CommunitySettingsResponse(BaseModel):
     """Response after updating community settings."""
     is_active: bool
     is_private: bool = True
-    display_name: Optional[str] = None
-    bio: Optional[str] = None
-    shared_stock_isins: List[str] = []
-    shared_crypto_symbols: List[str] = []
+    display_name: str | None = None
+    bio: str | None = None
+    shared_stock_isins: list[str] = []
+    shared_crypto_symbols: list[str] = []
     positions_count: int = 0
 
 
 class CommunitySearchResult(BaseModel):
     """Result from user search."""
     username: str
-    display_name: Optional[str] = None
-    bio: Optional[str] = None
+    display_name: str | None = None
+    bio: str | None = None
     is_private: bool = True
     is_following: bool = False
     is_followed_by: bool = False
@@ -97,13 +96,13 @@ class AvailablePosition(BaseModel):
     """A single position the user can choose to share."""
     symbol: str
     asset_type: str  # "CRYPTO" | "STOCK"
-    name: Optional[str] = None  # Human-readable name (ticker name for stocks)
+    name: str | None = None  # Human-readable name (ticker name for stocks)
 
 
 class AvailablePositionsResponse(BaseModel):
     """All shareable positions for the authenticated user."""
-    stocks: List[AvailablePosition] = []
-    crypto: List[AvailablePosition] = []
+    stocks: list[AvailablePosition] = []
+    crypto: list[AvailablePosition] = []
 
 
 # ── Picks (likes) ────────────────────────────────────────────
@@ -113,14 +112,14 @@ class PickCreate(BaseModel):
     """Payload for POST /community/picks."""
     symbol: str
     asset_type: str  # "CRYPTO" | "STOCK"
-    comment: Optional[str] = None
-    target_price: Optional[float] = None
+    comment: str | None = None
+    target_price: float | None = None
 
 
 class PickUpdate(BaseModel):
     """Payload for PUT /community/picks/{pick_id}."""
-    comment: Optional[str] = None
-    target_price: Optional[float] = None
+    comment: str | None = None
+    target_price: float | None = None
 
 
 class PickResponse(BaseModel):
@@ -129,7 +128,7 @@ class PickResponse(BaseModel):
     username: str
     symbol: str
     asset_type: str
-    comment: Optional[str] = None
-    target_price: Optional[float] = None
+    comment: str | None = None
+    target_price: float | None = None
     created_at: str
     updated_at: str

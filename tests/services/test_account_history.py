@@ -24,6 +24,7 @@ from models.market import MarketAsset, MarketPriceHistory
 from services.account_history import (
     _AccountSnapshot,
     FrozenPosition,
+    _compute_daily_net_flow,
     _build_asset_snapshots,
     _fill_price_gaps,
     _generate_missing_snapshots,
@@ -66,7 +67,7 @@ def _make_history_row(
     session.refresh(row)
     return row
 
-def _parse_positions_json(positions_json: Optional[str]) -> list[FrozenPosition]:
+def _parse_positions_json(positions_json: str | None) -> list[FrozenPosition]:
     """Parse decrypted positions JSON into frozen positions."""
     if not positions_json:
         return []
@@ -407,14 +408,62 @@ def test_generate_missing_snapshots_stock_values(session: Session, master_key: s
     assert rows[0]["snapshot_date"] == date(2024, 3, 1)
     assert decrypt_data(rows[0]["total_value_enc"], master_key) == "1800.00"
     assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "1800.00"
-    # PnL = 1800 - 0 (prev_value) = 1800
-    assert decrypt_data(rows[0]["daily_pnl_enc"], master_key) == "1800.00"
+    # PnL excludes external deposits: 1800 - 0 - 1800 = 0
+    assert decrypt_data(rows[0]["daily_pnl_enc"], master_key) == "0.00"
 
     # Day 2: 10 × 185 = 1 850
     assert rows[1]["snapshot_date"] == date(2024, 3, 2)
     assert decrypt_data(rows[1]["total_value_enc"], master_key) == "1850.00"
     # PnL = 1850 - 1800 = 50
     assert decrypt_data(rows[1]["daily_pnl_enc"], master_key) == "50.00"
+
+
+def test_compute_daily_net_flow_crypto_ignores_internal_swap_fiat_legs():
+    """EUR legs tied to a crypto BUY group are internal and must not affect net flow."""
+    d = date(2024, 3, 1)
+    txs = [
+        _tx(
+            id="tx_spend",
+            group_uuid="g_swap",
+            type="SPEND",
+            symbol="EUR",
+            isin="EUR",
+            amount=Decimal("1000"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
+        _tx(
+            id="tx_buy",
+            group_uuid="g_swap",
+            type="BUY",
+            symbol="BTC",
+            isin="BTC",
+            amount=Decimal("0.02"),
+            price_per_unit=Decimal("0"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
+        _tx(
+            id="tx_anchor",
+            group_uuid="g_swap",
+            type="ANCHOR",
+            symbol="EUR",
+            isin="EUR",
+            amount=Decimal("1000"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    net_flow = _compute_daily_net_flow(
+        _AccountSnapshot(
+            account_id="acc_crypto",
+            account_type=AccountCategory.CRYPTO,
+            transactions=txs,
+        ),
+        d,
+    )
+
+    assert net_flow == Decimal("0")
 
 
 def test_generate_missing_snapshots_bank_frozen(session: Session, master_key: str):
@@ -524,7 +573,7 @@ def test_generate_missing_snapshots_positions_json_structure(session: Session, m
 
     transactions = [
         _tx(
-            type="FIAT_DEPOSIT",
+            type="DEPOSIT",
             symbol="EUR",
             isin="EUR",
             amount=Decimal("15000"),
@@ -569,14 +618,14 @@ def test_generate_missing_snapshots_positions_json_structure(session: Session, m
 
 
 def test_generate_missing_snapshots_crypto_buy_uses_group_anchor_cost(session: Session, master_key: str):
-    """For composite crypto BUY(price=0), invested should come from FIAT_ANCHOR group cost."""
+    """For composite crypto BUY(price=0), invested should come from ANCHOR group cost."""
     user_bidx = hash_index("user_crypto_anchor", master_key)
     acc_bidx = hash_index("acc_crypto_anchor", master_key)
 
     tx_anchor = _tx(
         id="tx_anchor",
         group_uuid="g1",
-        type="FIAT_ANCHOR",
+        type="ANCHOR",
         symbol="EUR",
         isin="EUR",
         amount=Decimal("100"),
@@ -636,7 +685,7 @@ def test_generate_missing_snapshots_sell_partial_reduces_invested_correctly(sess
     )
     tx_fiat_deposit = _tx(
         id="dep_eur",
-        type="FIAT_DEPOSIT",
+        type="DEPOSIT",
         symbol="EUR",
         isin="EUR",
         amount=Decimal("54000"),
@@ -691,15 +740,15 @@ def test_generate_missing_snapshots_sell_partial_reduces_invested_correctly(sess
 
 
 def test_generate_missing_snapshots_crypto_group_cost_includes_fees(session: Session, master_key: str):
-    """Group cost calculation must include fees from FIAT_ANCHOR or fiat SPEND."""
+    """Group cost calculation must include fees from ANCHOR or fiat SPEND."""
     user_bidx = hash_index("user_crypto_fees", master_key)
     acc_bidx = hash_index("acc_crypto_fees", master_key)
     group_uuid = "group_with_fees_123"
 
-    # FIAT_ANCHOR: 100 EUR * 1.00 price = 100, but with 5 EUR fees = 105 total cost
+    # ANCHOR: 100 EUR * 1.00 price = 100, but with 5 EUR fees = 105 total cost
     tx_anchor = _tx(
         id="anchor_1",
-        type="FIAT_ANCHOR",
+        type="ANCHOR",
         symbol="EUR",
         isin="EUR",
         amount=Decimal("100"),
@@ -708,7 +757,7 @@ def test_generate_missing_snapshots_crypto_group_cost_includes_fees(session: Ses
         group_uuid=group_uuid,
         executed_at=datetime(2024, 5, 1, 10, 0, tzinfo=timezone.utc),
     )
-    # BUY with price=0 (cost will come from group FIAT_ANCHOR)
+    # BUY with price=0 (cost will come from group ANCHOR)
     tx_buy = _tx(
         id="buy_btc_1",
         type="BUY",
@@ -823,7 +872,7 @@ def test_generate_missing_snapshots_summary_filters_by_as_of_date(session: Sessi
 
     txs = [
         _tx(
-            type="FIAT_DEPOSIT",
+            type="DEPOSIT",
             symbol="EUR",
             isin="EUR",
             amount=Decimal("10000"),

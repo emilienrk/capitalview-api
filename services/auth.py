@@ -3,7 +3,7 @@
 import base64
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Optional
+from typing import Annotated
 
 import jwt
 import nacl.pwhash
@@ -36,7 +36,7 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
         return False
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
     """
     Create a JWT access token.
     
@@ -96,7 +96,7 @@ def decode_access_token(token: str) -> dict:
         raise
 
 
-def authenticate_user(session: Session, email: str, password: str) -> Optional[User]:
+def authenticate_user(session: Session, email: str, password: str) -> User | None:
     """
     Authenticate a user by email and password.
     
@@ -126,7 +126,7 @@ def create_refresh_token_db(
     session: Session,
     user_uuid: str,
     token: str,
-    expires_delta: Optional[timedelta] = None
+    expires_delta: timedelta | None = None
 ) -> RefreshToken:
     """
     Create and store a refresh token in the database.
@@ -160,7 +160,7 @@ def create_refresh_token_db(
     return refresh_token
 
 
-def verify_refresh_token(session: Session, token: str) -> Optional[RefreshToken]:
+def verify_refresh_token(session: Session, token: str) -> RefreshToken | None:
     """
     Verify a refresh token is valid and not expired/revoked.
     

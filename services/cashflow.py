@@ -4,7 +4,6 @@ import calendar
 from decimal import Decimal
 from datetime import date, timedelta
 from collections import defaultdict
-from typing import Optional, List
 
 from sqlmodel import Session, select
 
@@ -36,7 +35,7 @@ def get_monthly_amount(amount: Decimal, frequency: Frequency) -> Decimal:
 def _map_cashflow_to_response(
     cashflow: Cashflow,
     master_key: str,
-    bank_bidx_map: Optional[dict] = None,
+    bank_bidx_map: dict | None = None,
 ) -> CashflowResponse:
     """Decrypt and map Cashflow to response DTO.
 
@@ -167,7 +166,7 @@ def get_cashflow(
     cashflow_uuid: str,
     user_uuid: str,
     master_key: str
-) -> Optional[CashflowResponse]:
+) -> CashflowResponse | None:
     """Get a single cashflow."""
     cashflow = session.get(Cashflow, cashflow_uuid)
     if not cashflow:
@@ -217,7 +216,7 @@ def get_all_user_cashflows(
     session: Session, 
     user_uuid: str, 
     master_key: str
-) -> List[CashflowResponse]:
+) -> list[CashflowResponse]:
     """Get all cashflows for a user, decrypted."""
     user_bidx = hash_index(user_uuid, master_key)
     cashflows = session.exec(

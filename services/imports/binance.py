@@ -18,7 +18,6 @@ import io
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
-from typing import Optional
 from uuid import uuid4
 
 from sqlmodel import Session
@@ -120,7 +119,7 @@ def _map_row(row: _BinanceRow) -> tuple[CryptoTransactionType, str, Decimal, Dec
     # ── Deposit ───────────────────────────────────────────
     if op == "Deposit":
         if is_eur:
-            return CryptoTransactionType.FIAT_DEPOSIT, coin, amount, Decimal("1")
+            return CryptoTransactionType.DEPOSIT, coin, amount, Decimal("1")
         return CryptoTransactionType.BUY, coin, amount, Decimal("0")
 
     # ── Withdraw ──────────────────────────────────────────
@@ -141,7 +140,7 @@ def _map_row(row: _BinanceRow) -> tuple[CryptoTransactionType, str, Decimal, Dec
     if op == "Binance Convert":
         if positive:
             if is_eur:
-                return CryptoTransactionType.FIAT_DEPOSIT, coin, amount, Decimal("1")
+                return CryptoTransactionType.DEPOSIT, coin, amount, Decimal("1")
             return CryptoTransactionType.BUY, coin, amount, Decimal("0")
         else:
             if is_eur:
@@ -169,7 +168,7 @@ def _map_row(row: _BinanceRow) -> tuple[CryptoTransactionType, str, Decimal, Dec
     # ── Transaction Revenue ───────────────────────────────
     if op == "Transaction Revenue":
         if is_eur:
-            return CryptoTransactionType.FIAT_DEPOSIT, coin, amount, Decimal("1")
+            return CryptoTransactionType.DEPOSIT, coin, amount, Decimal("1")
         return CryptoTransactionType.BUY, coin, amount, Decimal("0")
 
     # ── Fallback (unknown operation) ──────────────────────
@@ -270,7 +269,7 @@ def generate_preview(csv_content: str) -> BinanceImportPreviewResponse:
                 has_trade = True
 
         # Sort mapped rows: BUY first, then SPEND, then FEE, then others
-        _TYPE_ORDER = {"BUY": 0, "FIAT_DEPOSIT": 1, "REWARD": 1, "SPEND": 2, "EXIT": 3, "FEE": 4, "FIAT_ANCHOR": 5, "TRANSFER": 6}
+        _TYPE_ORDER = {"BUY": 0, "DEPOSIT": 1, "REWARD": 1, "SPEND": 2, "WITHDRAW": 3, "FEE": 4, "ANCHOR": 5, "TRANSFER": 6}
         mapped.sort(key=lambda m: _TYPE_ORDER.get(m.mapped_type, 99))
 
         # Determine EUR anchor status
@@ -316,7 +315,7 @@ def execute_import(
     Create all atomic transaction rows from the confirmed import groups.
 
     For groups that ``needs_eur_input`` and have a non-zero ``eur_amount``,
-    an additional FIAT_ANCHOR EUR row is inserted.
+    an additional ANCHOR EUR row is inserted.
     """
     total_imported = 0
 
@@ -341,12 +340,12 @@ def execute_import(
             create_crypto_transaction(session, tx, master_key, group_uuid=group_uuid)
             total_imported += 1
 
-        # Add FIAT_ANCHOR if group needs EUR and user provided an amount > 0
+        # Add ANCHOR if group needs EUR and user provided an amount > 0
         if group.needs_eur_input and group.eur_amount is not None and group.eur_amount > 0:
             anchor = CryptoTransactionCreate(
                 account_id=account_id,
                 symbol="EUR",
-                type=CryptoTransactionType.FIAT_ANCHOR,
+                type=CryptoTransactionType.ANCHOR,
                 amount=Decimal(str(group.eur_amount)),
                 price_per_unit=Decimal("1"),
                 executed_at=timestamp,

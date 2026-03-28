@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlmodel import Session, select
@@ -479,10 +479,37 @@ def delete_transaction(
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
-    # Capture account and date before deleting.
+    # Capture impacted account/date/assets before deleting.
     tx_model = session.get(CryptoTransaction, transaction_id)
     account_id_bidx = tx_model.account_id_bidx if tx_model else None
-    executed_date = tx.executed_at.date() if tx.executed_at and hasattr(tx.executed_at, "date") else None
+
+    group_models: list[CryptoTransaction] = []
+    if tx_model and tx_model.group_uuid:
+        group_models = session.exec(
+            select(CryptoTransaction).where(
+                CryptoTransaction.group_uuid == tx_model.group_uuid,
+            )
+        ).all()
+    elif tx_model:
+        group_models = [tx_model]
+
+    affected_dates: list[date] = []
+    affected_assets: set[str] = set()
+    for grouped_tx in group_models:
+        try:
+            executed_at = datetime.fromisoformat(
+                decrypt_data(grouped_tx.executed_at_enc, master_key).replace("Z", "+00:00")
+            )
+            affected_dates.append(executed_at.date())
+        except Exception:
+            affected_dates.append(grouped_tx.created_at.date())
+
+        try:
+            symbol = decrypt_data(grouped_tx.symbol_enc, master_key)
+            if symbol not in FIAT_SYMBOLS:
+                affected_assets.add(symbol)
+        except Exception:
+            pass
 
     delete_crypto_transaction(session, transaction_id)
     
@@ -493,8 +520,8 @@ def delete_transaction(
         master_key=master_key,
         account_id_bidx=account_id_bidx,
         asset_type=AssetType.CRYPTO,
-        affected_dates=[executed_date],
-        affected_assets=[tx.symbol] if tx.symbol not in FIAT_SYMBOLS else []
+        affected_dates=list(dict.fromkeys(affected_dates)) if affected_dates else [],
+        affected_assets=sorted(affected_assets)
     )
     
     return None

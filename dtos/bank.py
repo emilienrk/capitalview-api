@@ -2,7 +2,6 @@
 
 from datetime import datetime, date
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -13,33 +12,33 @@ class BankAccountCreate(BaseModel):
     """Create a bank account."""
     name: str
     account_type: BankAccountType
-    institution_name: Optional[str] = None
-    identifier: Optional[str] = None
+    institution_name: str | None = None
+    identifier: str | None = None
     balance: Decimal = Decimal("0")
-    opened_at: Optional[date] = None
+    opened_at: date | None = None
 
 
 class BankAccountUpdate(BaseModel):
     """Update a bank account."""
-    name: Optional[str] = None
-    institution_name: Optional[str] = None
-    identifier: Optional[str] = None
-    balance: Optional[Decimal] = None
-    opened_at: Optional[date] = None
+    name: str | None = None
+    institution_name: str | None = None
+    identifier: str | None = None
+    balance: Decimal | None = None
+    opened_at: date | None = None
 
 
 class BankAccountResponse(BaseModel):
     """Bank account response."""
     id: str
     name: str
-    institution_name: Optional[str] = None
+    institution_name: str | None = None
     balance: Decimal
     account_type: BankAccountType
-    identifier: Optional[str] = None
-    opened_at: Optional[date] = None
+    identifier: str | None = None
+    opened_at: date | None = None
     created_at: datetime
     updated_at: datetime
-    balance_updated_at: Optional[date] = None  # Last auto-sync date from cashflows
+    balance_updated_at: date | None = None  # Last auto-sync date from cashflows
 
 
 class BankSummaryResponse(BaseModel):

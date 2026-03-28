@@ -2,7 +2,6 @@
 
 import json
 from decimal import Decimal
-from typing import List, Optional
 
 import sqlalchemy as sa
 from sqlmodel import Session, select
@@ -83,7 +82,7 @@ def get_user_stock_accounts(
     session: Session, 
     user_uuid: str, 
     master_key: str
-) -> List[StockAccountBasicResponse]:
+) -> list[StockAccountBasicResponse]:
     """List all stock accounts for a user."""
     user_bidx = hash_index(user_uuid, master_key)
     
@@ -99,7 +98,7 @@ def get_stock_account(
     account_uuid: str,
     user_uuid: str,
     master_key: str
-) -> Optional[StockAccountBasicResponse]:
+) -> StockAccountBasicResponse | None:
     """Get a single stock account if it belongs to the user."""
     account = session.get(StockAccount, account_uuid)
     if not account:

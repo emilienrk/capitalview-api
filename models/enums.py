@@ -55,6 +55,15 @@ class StockTransactionType(str, Enum):
     SELL = "SELL"
     DEPOSIT = "DEPOSIT"
     DIVIDEND = "DIVIDEND"
+    WITHDRAW = "WITHDRAW"
+
+    @classmethod
+    def credit_types(cls) -> frozenset:
+        return frozenset({cls.BUY, cls.DEPOSIT, cls.DIVIDEND})
+
+    @classmethod
+    def debit_types(cls) -> frozenset:
+        return frozenset({cls.SELL, cls.WITHDRAW})
 
 class CryptoAccountType(str, Enum):
     """Type factorisé de compte d'investissement crypto."""
@@ -71,17 +80,48 @@ class CryptoTransactionType(str, Enum):
     SPEND        — Negative leg: asset ceded in a trade or payment.
     FEE          — On-chain / exchange fee deducted in crypto.
     REWARD       — Staking / airdrop income; cost basis = 0.
-    FIAT_DEPOSIT — Direct EUR entry (wire transfer, exchange deposit).
-    FIAT_ANCHOR  — Virtual EUR cost anchor for a crypto deposit group; never
+    DEPOSIT      — Direct EUR entry (wire transfer, exchange deposit).
+    ANCHOR       — Virtual EUR cost anchor for a crypto deposit group; never
                    counted in balance — only used to carry PRU cost in a group.
     TRANSFER     — Neutral outbound to own wallet (no tax event).
-    EXIT         — Taxable outbound (cash-out, payment, donation).
+    WITHDRAW     — Taxable outbound (cash-out, payment, donation).
     """
     BUY          = "BUY"
     SPEND        = "SPEND"
     FEE          = "FEE"
     REWARD       = "REWARD"
-    FIAT_DEPOSIT = "FIAT_DEPOSIT"
-    FIAT_ANCHOR  = "FIAT_ANCHOR"
+    DEPOSIT      = "DEPOSIT"
+    ANCHOR       = "ANCHOR"
     TRANSFER     = "TRANSFER"
-    EXIT         = "EXIT"
+    WITHDRAW     = "WITHDRAW"
+
+    @classmethod
+    def credit_types(cls) -> frozenset:
+        return frozenset({cls.BUY, cls.REWARD, cls.DEPOSIT})
+
+    @classmethod
+    def debit_types(cls) -> frozenset:
+        return frozenset({cls.SPEND, cls.TRANSFER, cls.WITHDRAW, cls.FEE})
+
+
+class CryptoCompositeTransactionType(str, Enum):
+    """User-facing composite actions accepted by the composite crypto endpoints.
+
+    These actions are decomposed server-side into one or more
+    ``CryptoTransactionType`` atomic rows.
+    """
+
+    BUY = "BUY"
+    REWARD = "REWARD"
+    FIAT_DEPOSIT = "FIAT_DEPOSIT"
+    CRYPTO_DEPOSIT = "CRYPTO_DEPOSIT"
+    TRANSFER = "TRANSFER"
+    FIAT_WITHDRAW = "FIAT_WITHDRAW"
+    SELL_TO_FIAT = "SELL_TO_FIAT"
+    FEE = "FEE"
+    NON_TAXABLE_EXIT = "NON_TAXABLE_EXIT"
+
+    @classmethod
+    def normalize(cls, value: "CryptoCompositeTransactionType") -> "CryptoCompositeTransactionType":
+        """Return a canonical composite action."""
+        return value

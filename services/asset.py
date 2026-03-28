@@ -4,7 +4,6 @@ import json
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Optional
 
 from sqlmodel import Session, select
 
@@ -34,7 +33,7 @@ def _valuation_sort_key(v: AssetValuation, master_key: str) -> tuple[date, datet
 def _pick_latest_valuation(
     valuations: list[AssetValuation],
     master_key: str,
-) -> Optional[AssetValuation]:
+) -> AssetValuation | None:
     """Return the latest valuation using valued_at then created_at ordering."""
     if not valuations:
         return None
@@ -69,7 +68,7 @@ def _latest_valuations_by_asset(
 
 def _resolve_asset_estimated_value(
     asset: Asset,
-    latest_valuation: Optional[AssetValuation],
+    latest_valuation: AssetValuation | None,
     master_key: str,
 ) -> Decimal:
     """Resolve current asset value from latest valuation with safe fallbacks."""
@@ -97,7 +96,7 @@ def _resolve_asset_estimated_value(
 def _map_asset_to_response(
     asset: Asset,
     master_key: str,
-    latest_valuation: Optional[AssetValuation] = None,
+    latest_valuation: AssetValuation | None = None,
 ) -> AssetResponse:
     """Decrypt and map an Asset to the response DTO."""
     name = decrypt_data(asset.name_enc, master_key)
@@ -108,7 +107,7 @@ def _map_asset_to_response(
     if asset.description_enc:
         description = decrypt_data(asset.description_enc, master_key)
 
-    purchase_price: Optional[Decimal] = None
+    purchase_price: Decimal | None = None
     if asset.purchase_price_enc:
         purchase_price = Decimal(decrypt_data(asset.purchase_price_enc, master_key))
 
@@ -117,16 +116,16 @@ def _map_asset_to_response(
         acquisition_date = decrypt_data(asset.acquisition_date_enc, master_key)
 
     # Sold fields
-    sold_price: Optional[Decimal] = None
+    sold_price: Decimal | None = None
     if asset.sold_price_enc:
         sold_price = Decimal(decrypt_data(asset.sold_price_enc, master_key))
 
-    sold_at: Optional[str] = None
+    sold_at: str | None = None
     if asset.sold_at_enc:
         sold_at = decrypt_data(asset.sold_at_enc, master_key)
 
     # Get last valuation date
-    last_valuation_date: Optional[str] = None
+    last_valuation_date: str | None = None
     if latest_valuation:
         try:
             last_valuation_date = decrypt_data(latest_valuation.valued_at_enc, master_key)
@@ -134,7 +133,7 @@ def _map_asset_to_response(
             pass
 
     # Compute profit/loss
-    profit_loss: Optional[Decimal] = None
+    profit_loss: Decimal | None = None
     if purchase_price is not None and purchase_price > 0:
         profit_loss = estimated_value - purchase_price
 
@@ -183,8 +182,8 @@ def _create_valuation_row(
     estimated_value: Decimal,
     valued_at: str,
     master_key: str,
-    note: Optional[str] = None,
-    source: Optional[str] = None,
+    note: str | None = None,
+    source: str | None = None,
 ) -> AssetValuation:
     """Create and stage a valuation row (caller controls commit)."""
     note_enc = encrypt_data(note, master_key) if note else None
@@ -416,7 +415,7 @@ def get_user_assets(
     total_estimated = sum(a.estimated_value for a in responses)
     total_purchase = sum(a.purchase_price for a in responses if a.purchase_price is not None)
 
-    total_pl: Optional[Decimal] = None
+    total_pl: Decimal | None = None
     if total_purchase > 0:
         total_pl = total_estimated - total_purchase
 
@@ -449,7 +448,7 @@ def get_asset(
     asset_uuid: str,
     user_uuid: str,
     master_key: str,
-) -> Optional[AssetResponse]:
+) -> AssetResponse | None:
     """Get a single asset if it belongs to the user."""
     asset = session.get(Asset, asset_uuid)
     if not asset:
@@ -581,7 +580,7 @@ def get_asset_rebuild_start_date(
         select(AssetValuation).where(AssetValuation.asset_uuid == asset_uuid)
     ).all()
 
-    prev_date: Optional[date] = None
+    prev_date: date | None = None
     for v in valuations:
         try:
             raw = _decrypt_valued_at(v.valued_at_enc, master_key)
@@ -613,7 +612,7 @@ def get_asset_rebuild_start_date(
 # ---------------------------------------------------------------------------
 
 
-def _parse_date_str(value: str) -> Optional[date]:
+def _parse_date_str(value: str) -> date | None:
     """Parse an ISO-like string to a date. Returns None on failure."""
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
@@ -621,7 +620,7 @@ def _parse_date_str(value: str) -> Optional[date]:
         return None
 
 
-def _decrypt_valued_at(valued_at_enc: str, master_key: str) -> Optional[date]:
+def _decrypt_valued_at(valued_at_enc: str, master_key: str) -> date | None:
     """Decrypt a valued_at field and return as a date. Returns None on failure."""
     try:
         raw = decrypt_data(valued_at_enc, master_key)

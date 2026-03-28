@@ -60,7 +60,7 @@ def test_dashboard_portfolio(mock_rate, mock_crypto, mock_stock, session, master
     client.post("/crypto/transactions/composite", json={
         "account_id": cacc_id,
         "symbol": "EUR",
-        "type": "FIAT_DEPOSIT",
+        "type": "DEPOSIT",
         "amount": "30000",
         "executed_at": "2023-01-01T11:00:00",
     }, headers=headers)
@@ -148,7 +148,7 @@ def test_dashboard_statistics(
     client.post("/crypto/transactions/composite", json={
         "account_id": cacc_id,
         "symbol": "EUR",
-        "type": "FIAT_DEPOSIT",
+        "type": "DEPOSIT",
         "amount": "20000",
         "executed_at": "2024-01-01T11:00:00",
     }, headers=headers)

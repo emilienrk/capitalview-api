@@ -121,6 +121,40 @@ def test_delete_crypto_transaction(session: Session, master_key: str):
     assert delete_crypto_transaction(session, "non_existent") is False
 
 
+def test_delete_crypto_transaction_deletes_group(session: Session, master_key: str):
+    group_uuid = "group-delete-test"
+    first = create_crypto_transaction(
+        session,
+        CryptoTransactionCreate(
+            account_id="acc_crypto",
+            symbol="BTC",
+            type=CryptoTransactionType.BUY,
+            amount=Decimal("1"),
+            price_per_unit=Decimal("0"),
+            executed_at=datetime.now(),
+        ),
+        master_key,
+        group_uuid=group_uuid,
+    )
+    second = create_crypto_transaction(
+        session,
+        CryptoTransactionCreate(
+            account_id="acc_crypto",
+            symbol="EUR",
+            type=CryptoTransactionType.SPEND,
+            amount=Decimal("30000"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime.now(),
+        ),
+        master_key,
+        group_uuid=group_uuid,
+    )
+
+    assert delete_crypto_transaction(session, first.id) is True
+    assert session.get(CryptoTransaction, first.id) is None
+    assert session.get(CryptoTransaction, second.id) is None
+
+
 def test_get_account_transactions(session: Session, master_key: str):
     acc1 = "acc_c1"
     create_crypto_transaction(session, CryptoTransactionCreate(
@@ -180,6 +214,7 @@ def test_get_crypto_account_summary(mock_info, session: Session, master_key: str
     assert pos_eth.total_amount == Decimal("10")
     assert pos_eth.total_invested == Decimal("20000")
     assert pos_eth.current_value == Decimal("30000")
+    assert summary.total_invested == Decimal("35000")
 
     # Over-spend safety: ETH position should be filtered out
     create_crypto_transaction(session, CryptoTransactionCreate(
@@ -193,7 +228,7 @@ def test_get_crypto_account_summary(mock_info, session: Session, master_key: str
 
 def test_create_composite_transaction_eur_only(session: Session, master_key: str):
     """BUY BTC with EUR (fees included): BUY BTC(price=0) + SPEND EUR(price=1).
-    No FIAT_ANCHOR needed — SPEND EUR is the cost anchor."""
+    No ANCHOR needed — SPEND EUR is the cost anchor."""
     account = CryptoAccount(uuid="acc_comp_eur", user_uuid_bidx=hash_index("u_comp", master_key), name_enc=encrypt_data("Comp", master_key))
     session.add(account)
     session.commit()
@@ -223,8 +258,8 @@ def test_create_composite_transaction_eur_only(session: Session, master_key: str
 
 
 def test_create_composite_transaction_with_crypto_quote(session: Session, master_key: str):
-    """BUY BTC with USDC: BUY(price=0) + SPEND USDC(price=0) + FIAT_ANCHOR(EUR).
-    FIAT_ANCHOR carries the EUR value of the trade."""
+    """BUY BTC with USDC: BUY(price=0) + SPEND USDC(price=0) + ANCHOR(EUR).
+    ANCHOR carries the EUR value of the trade."""
     account = CryptoAccount(uuid="acc_comp_swap", user_uuid_bidx=hash_index("u_swap", master_key), name_enc=encrypt_data("Swap", master_key))
     session.add(account)
     session.commit()
@@ -240,12 +275,12 @@ def test_create_composite_transaction_with_crypto_quote(session: Session, master
         fee_included=True,
     )
     rows = create_composite_crypto_transaction(session, data, master_key)
-    assert len(rows) == 3  # BUY BTC + SPEND USDC + FIAT_ANCHOR EUR
+    assert len(rows) == 3  # BUY BTC + SPEND USDC + ANCHOR EUR
     types = {r.type for r in rows}
-    assert types == {"BUY", "SPEND", "FIAT_ANCHOR"}
+    assert types == {"BUY", "SPEND", "ANCHOR"}
     buy_row = next(r for r in rows if r.type == "BUY")
     spend_row = next(r for r in rows if r.type == "SPEND")
-    anchor_row = next(r for r in rows if r.type == "FIAT_ANCHOR")
+    anchor_row = next(r for r in rows if r.type == "ANCHOR")
     assert buy_row.price_per_unit == Decimal("0")  # crypto → price = 0
     assert spend_row.symbol == "USDC"
     assert spend_row.price_per_unit == Decimal("0")  # crypto → price = 0
@@ -256,7 +291,7 @@ def test_create_composite_transaction_with_crypto_quote(session: Session, master
 
 def test_create_composite_transaction_with_eur_fee_not_included(session: Session, master_key: str):
     """BUY BTC with EUR, external EUR fee → 2 rows: BUY BTC(price=0) + SPEND EUR (fee merged).
-    SPEND EUR carries 3000 + 3.1 = 3003.1 (total cost). No FIAT_ANCHOR needed."""
+    SPEND EUR carries 3000 + 3.1 = 3003.1 (total cost). No ANCHOR needed."""
     account = CryptoAccount(uuid="acc_comp_fee", user_uuid_bidx=hash_index("u_fee", master_key), name_enc=encrypt_data("Fee", master_key))
     session.add(account)
     session.commit()
@@ -286,8 +321,8 @@ def test_create_composite_transaction_with_eur_fee_not_included(session: Session
 
 
 def test_create_composite_transaction_crypto_quote_with_external_fee(session: Session, master_key: str):
-    """BUY BTC with USDC + EUR fee (not included) → 3 rows: BUY + SPEND(USDC) + FIAT_ANCHOR(EUR).
-    FIAT_ANCHOR carries total cost: 2760 + 3.1 = 2763.1."""
+    """BUY BTC with USDC + EUR fee (not included) → 3 rows: BUY + SPEND(USDC) + ANCHOR(EUR).
+    ANCHOR carries total cost: 2760 + 3.1 = 2763.1."""
     account = CryptoAccount(uuid="acc_comp_full", user_uuid_bidx=hash_index("u_full", master_key), name_enc=encrypt_data("Full", master_key))
     session.add(account)
     session.commit()
@@ -304,14 +339,14 @@ def test_create_composite_transaction_crypto_quote_with_external_fee(session: Se
         fee_eur=Decimal("3.1"),
     )
     rows = create_composite_crypto_transaction(session, data, master_key)
-    assert len(rows) == 3  # BUY + SPEND(USDC) + FIAT_ANCHOR(EUR)
+    assert len(rows) == 3  # BUY + SPEND(USDC) + ANCHOR(EUR)
     group_ids = {r.group_uuid for r in rows}
     assert len(group_ids) == 1
     type_counts = {r.type: r for r in rows}
     assert "BUY" in type_counts
     assert "SPEND" in type_counts
-    assert "FIAT_ANCHOR" in type_counts
-    anchor = type_counts["FIAT_ANCHOR"]
+    assert "ANCHOR" in type_counts
+    anchor = type_counts["ANCHOR"]
     assert anchor.symbol == "EUR"
     assert anchor.amount == Decimal("2763.1")  # total cost: 2760 + 3.1
     assert type_counts["BUY"].price_per_unit == Decimal("0")  # crypto → 0
@@ -384,15 +419,15 @@ def test_get_crypto_account_summary_empty(session: Session, master_key: str):
 
 @patch("services.crypto_transaction.get_crypto_info")
 def test_group_based_pru(mock_info, session: Session, master_key: str):
-    """FIAT_ANCHOR is the authoritative EUR cost for a BUY group.
+    """ANCHOR is the authoritative EUR cost for a BUY group.
 
     Scenario:
       BUY 0.5 BTC (price=0)           (group_A)
       SPEND 20 ETH (price=0)          (group_A) → balance update only
       FEE 0.005 BNB (price=0)         (group_A) → balance update only
-      FIAT_ANCHOR EUR 30002 (price=1)  (group_A) → cost anchor
+      ANCHOR EUR 30002 (price=1)  (group_A) → cost anchor
 
-      ACB = FIAT_ANCHOR.amount = 30002 EUR
+      ACB = ANCHOR.amount = 30002 EUR
       average_buy_price = 30002 / 0.5 = 60004 EUR/BTC
     """
     mock_info.return_value = ("Bitcoin", Decimal("70000"))
@@ -423,7 +458,7 @@ def test_group_based_pru(mock_info, session: Session, master_key: str):
         executed_at=datetime(2024, 1, 1),
     ), master_key, group_uuid=group_a)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_group_pru", symbol="EUR", type=CryptoTransactionType.FIAT_ANCHOR,
+        account_id="acc_group_pru", symbol="EUR", type=CryptoTransactionType.ANCHOR,
         amount=Decimal("30002"), price_per_unit=Decimal("1"),
         executed_at=datetime(2024, 1, 1),
     ), master_key, group_uuid=group_a)
@@ -431,13 +466,13 @@ def test_group_based_pru(mock_info, session: Session, master_key: str):
     summary = _crypto_summary(session, account.uuid, master_key)
     pos_btc = next(p for p in summary.positions if p.symbol == "BTC")
 
-    # ACB = FIAT_ANCHOR.amount = 30002
+    # ACB = ANCHOR.amount = 30002
     assert pos_btc.average_buy_price == Decimal("60004")
     assert pos_btc.total_invested == Decimal("30002")
 
 
 def test_crypto_deposit_creates_fiat_anchor_and_buy(session: Session, master_key: str):
-    """CRYPTO_DEPOSIT creates a FIAT_DEPOSIT(EUR) + BUY + SPEND(EUR) sharing the same group."""
+    """CRYPTO_DEPOSIT creates a DEPOSIT(EUR) + BUY + SPEND(EUR) sharing the same group."""
     account = CryptoAccount(
         uuid="acc_cdeposit",
         user_uuid_bidx=hash_index("u_cd", master_key),
@@ -458,8 +493,8 @@ def test_crypto_deposit_creates_fiat_anchor_and_buy(session: Session, master_key
     rows = create_composite_crypto_transaction(session, data, master_key)
     assert len(rows) == 3
     types = {r.type for r in rows}
-    assert types == {"FIAT_DEPOSIT", "BUY", "SPEND"}
-    fiat_dep = next(r for r in rows if r.type == "FIAT_DEPOSIT")
+    assert types == {"DEPOSIT", "BUY", "SPEND"}
+    fiat_dep = next(r for r in rows if r.type == "DEPOSIT")
     buy = next(r for r in rows if r.type == "BUY")
     spend = next(r for r in rows if r.type == "SPEND")
     assert fiat_dep.symbol == "EUR"
@@ -473,7 +508,7 @@ def test_crypto_deposit_creates_fiat_anchor_and_buy(session: Session, master_key
 
 
 def test_crypto_deposit_with_external_fee_inflates_anchor(session: Session, master_key: str):
-    """CRYPTO_DEPOSIT creates FIAT_DEPOSIT(EUR) + BUY + SPEND(EUR) all at eur_amount (fees ignored)."""
+    """CRYPTO_DEPOSIT creates DEPOSIT(EUR) + BUY + SPEND(EUR) all at eur_amount (fees ignored)."""
     account = CryptoAccount(
         uuid="acc_cdfee",
         user_uuid_bidx=hash_index("u_cdf", master_key),
@@ -494,7 +529,7 @@ def test_crypto_deposit_with_external_fee_inflates_anchor(session: Session, mast
     )
     rows = create_composite_crypto_transaction(session, data, master_key)
     assert len(rows) == 3
-    fiat_dep = next(r for r in rows if r.type == "FIAT_DEPOSIT")
+    fiat_dep = next(r for r in rows if r.type == "DEPOSIT")
     buy = next(r for r in rows if r.type == "BUY")
     spend = next(r for r in rows if r.type == "SPEND")
     # eur_amount only — fee_eur is not added
@@ -505,7 +540,7 @@ def test_crypto_deposit_with_external_fee_inflates_anchor(session: Session, mast
 
 @patch("services.crypto_transaction.get_crypto_info")
 def test_fiat_anchor_not_counted_in_positions(mock_info, session: Session, master_key: str):
-    """FIAT_ANCHOR rows are not counted in any position's balance."""
+    """ANCHOR rows are not counted in any position's balance."""
     mock_info.return_value = ("Bitcoin", Decimal("30000"))
     account = CryptoAccount(
         uuid="acc_anchor_pos",
@@ -532,7 +567,7 @@ def test_fiat_anchor_not_counted_in_positions(mock_info, session: Session, maste
     pos = summary.positions[0]
     assert pos.symbol == "BTC"
     assert pos.total_amount == Decimal("1")
-    # cost_basis comes from group PRU (FIAT_ANCHOR is cost leg)
+    # cost_basis comes from group PRU (ANCHOR is cost leg)
     assert pos.total_invested == Decimal("25000")
 
 
@@ -572,7 +607,7 @@ def test_transfer_neutral_proportional_removal(mock_info, session: Session, mast
 
 @patch("services.crypto_transaction.get_crypto_info")
 def test_exit_proportional_removal(mock_info, session: Session, master_key: str):
-    """EXIT reduces amount + cost_basis proportionally (taxable outbound)."""
+    """SELL_TO_FIAT reduces amount + cost_basis proportionally (taxable outbound)."""
     mock_info.return_value = ("Bitcoin", Decimal("40000"))
     account = CryptoAccount(
         uuid="acc_exit",
@@ -591,9 +626,9 @@ def test_exit_proportional_removal(mock_info, session: Session, master_key: str)
         account_id="acc_exit", symbol="EUR", type=CryptoTransactionType.SPEND,
         amount=Decimal("30000"), price_per_unit=Decimal("1"), executed_at=datetime(2024, 1, 1)
     ), master_key, group_uuid=g)
-    # EXIT keeps its price (fiat-type, taxable)
+    # SELL_TO_FIAT keeps its price (fiat-type, taxable)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_exit", symbol="BTC", type=CryptoTransactionType.EXIT,
+        account_id="acc_exit", symbol="BTC", type=CryptoTransactionType.WITHDRAW,
         amount=Decimal("0.5"), price_per_unit=Decimal("40000"), executed_at=datetime(2024, 1, 2)
     ), master_key)
 
@@ -628,7 +663,7 @@ def test_composite_transfer_single_row(session: Session, master_key: str):
 
 
 def test_composite_fiat_deposit_single_row(session: Session, master_key: str):
-    """Composite FIAT_DEPOSIT creates exactly one FIAT_DEPOSIT atomic row."""
+    """Composite DEPOSIT creates exactly one DEPOSIT atomic row."""
     account = CryptoAccount(
         uuid="acc_cfiat",
         user_uuid_bidx=hash_index("u_cf", master_key),
@@ -646,7 +681,7 @@ def test_composite_fiat_deposit_single_row(session: Session, master_key: str):
     )
     rows = create_composite_crypto_transaction(session, data, master_key)
     assert len(rows) == 1
-    assert rows[0].type == "FIAT_DEPOSIT"
+    assert rows[0].type == "DEPOSIT"
 
 
 def test_composite_reward_single_row(session: Session, master_key: str):
@@ -678,7 +713,7 @@ def test_eur_quote_crypto_fee_included(session: Session, master_key: str):
     """BUY BTC with EUR, fee paid in BNB (fee_included=True).
 
     eur_amount=3000. FEE row price=0 (balance-only). BUY price=0.
-    SPEND EUR stays at face value. No FIAT_ANCHOR (fee_included + EUR quote).
+    SPEND EUR stays at face value. No ANCHOR (fee_included + EUR quote).
     """
     account = CryptoAccount(
         uuid="acc_cfi_1",
@@ -730,7 +765,7 @@ def test_eur_quote_crypto_fee_not_included_percentage(session: Session, master_k
     """BUY BTC with EUR, fee in BNB (fee_included=False, fee_percentage=0.1%).
 
     eur_amount=3000. fee_eur = 3000 × 0.1% = 3 EUR.
-    FIAT_ANCHOR carries total cost: 3000 + 3 = 3003.
+    ANCHOR carries total cost: 3000 + 3 = 3003.
     FEE BNB price=0. BUY price=0. SPEND EUR at face value.
     """
     account = CryptoAccount(
@@ -756,14 +791,14 @@ def test_eur_quote_crypto_fee_not_included_percentage(session: Session, master_k
         fee_amount=Decimal("0.01"),
     )
     rows = create_composite_crypto_transaction(session, data, master_key)
-    assert len(rows) == 4  # BUY + SPEND EUR + FIAT_ANCHOR + FEE BNB
+    assert len(rows) == 4  # BUY + SPEND EUR + ANCHOR + FEE BNB
     types = {r.type for r in rows}
-    assert types == {"BUY", "SPEND", "FIAT_ANCHOR", "FEE"}
+    assert types == {"BUY", "SPEND", "ANCHOR", "FEE"}
 
     buy_row = next(r for r in rows if r.type == "BUY")
     spend_row = next(r for r in rows if r.type == "SPEND")
     fee_row = next(r for r in rows if r.type == "FEE")
-    anchor_row = next(r for r in rows if r.type == "FIAT_ANCHOR")
+    anchor_row = next(r for r in rows if r.type == "ANCHOR")
 
     assert fee_row.symbol == "BNB"
     assert fee_row.price_per_unit == Decimal("0")  # crypto → price = 0
@@ -783,7 +818,7 @@ def test_crypto_quote_crypto_fee_not_included_percentage(session: Session, maste
     """BUY BTC with USDC, fee in BNB (fee_included=False, fee_percentage=0.1%).
 
     eur_amount=2760. fee_eur = 2760 × 0.1% = 2.76.
-    FIAT_ANCHOR EUR = 2760 + 2.76 = 2762.76 (total cost).
+    ANCHOR EUR = 2760 + 2.76 = 2762.76 (total cost).
     All crypto rows price=0.
     """
     account = CryptoAccount(
@@ -809,14 +844,14 @@ def test_crypto_quote_crypto_fee_not_included_percentage(session: Session, maste
         fee_amount=Decimal("0.01"),
     )
     rows = create_composite_crypto_transaction(session, data, master_key)
-    assert len(rows) == 4  # BUY + SPEND(USDC) + FIAT_ANCHOR + FEE(BNB)
+    assert len(rows) == 4  # BUY + SPEND(USDC) + ANCHOR + FEE(BNB)
     types = {r.type for r in rows}
-    assert types == {"BUY", "SPEND", "FIAT_ANCHOR", "FEE"}
+    assert types == {"BUY", "SPEND", "ANCHOR", "FEE"}
 
     buy_row = next(r for r in rows if r.type == "BUY")
     spend_row = next(r for r in rows if r.type == "SPEND")
     fee_row = next(r for r in rows if r.type == "FEE")
-    anchor_row = next(r for r in rows if r.type == "FIAT_ANCHOR")
+    anchor_row = next(r for r in rows if r.type == "ANCHOR")
 
     assert fee_row.symbol == "BNB"
     assert fee_row.price_per_unit == Decimal("0")  # crypto → price = 0
@@ -835,7 +870,7 @@ def test_crypto_quote_crypto_fee_not_included_percentage(session: Session, maste
 
 def test_crypto_fee_explicit_eur_takes_priority_over_percentage(session: Session, master_key: str):
     """When both fee_eur and fee_percentage are provided, fee_eur wins.
-    FIAT_ANCHOR carries total cost (base 3000 + fee 5 = 3005)."""
+    ANCHOR carries total cost (base 3000 + fee 5 = 3005)."""
     account = CryptoAccount(
         uuid="acc_fee_prio",
         user_uuid_bidx=hash_index("u_fp", master_key),
@@ -860,14 +895,14 @@ def test_crypto_fee_explicit_eur_takes_priority_over_percentage(session: Session
         fee_amount=Decimal("0.01"),
     )
     rows = create_composite_crypto_transaction(session, data, master_key)
-    assert len(rows) == 4  # BUY + SPEND EUR + FIAT_ANCHOR + FEE BNB
+    assert len(rows) == 4  # BUY + SPEND EUR + ANCHOR + FEE BNB
     types = {r.type for r in rows}
-    assert types == {"BUY", "SPEND", "FIAT_ANCHOR", "FEE"}
+    assert types == {"BUY", "SPEND", "ANCHOR", "FEE"}
 
     fee_row = next(r for r in rows if r.type == "FEE")
     assert fee_row.price_per_unit == Decimal("0")  # crypto → price = 0
 
-    anchor_row = next(r for r in rows if r.type == "FIAT_ANCHOR")
+    anchor_row = next(r for r in rows if r.type == "ANCHOR")
     assert anchor_row.amount == Decimal("3005")  # 3000 + 5 (fee_eur wins)
 
     buy_row = next(r for r in rows if r.type == "BUY")
