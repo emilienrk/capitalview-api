@@ -242,30 +242,45 @@ def _prefill_eur_amounts(session: Session, groups: list[BinanceImportGroupPrevie
     if not to_fill:
         return
 
-    # Ensure historical prices are in DB for every unique symbol
+    # Compute min date per symbol across all groups
     symbol_min_dates: dict[str, date] = {}
     for _, symbol, _, tx_date in to_fill:
         if symbol not in symbol_min_dates or tx_date < symbol_min_dates[symbol]:
             symbol_min_dates[symbol] = tx_date
 
-    for symbol, min_date in symbol_min_dates.items():
+    all_symbols = list(symbol_min_dates.keys())
+
+    # Query DB first — prices may already be there from a previous import
+    def _fetch_matrix(symbols: list[str]) -> dict[str, dict[date, Decimal]]:
+        if not symbols:
+            return {}
+        db_rows = session.exec(
+            select(MarketAsset.isin, MarketPriceHistory.price_date, MarketPriceHistory.price)
+            .join(MarketAsset, MarketPriceHistory.market_asset_id == MarketAsset.id)
+            .where(MarketAsset.isin.in_(symbols))
+        ).all()
+        result: dict[str, dict[date, Decimal]] = {}
+        for isin, price_date, price in db_rows:
+            result.setdefault(isin, {})[price_date] = price
+        return result
+
+    matrix = _fetch_matrix(all_symbols)
+
+    # Only call ensure_price_history for symbols that have no price data in DB yet
+    symbols_needing_backfill = [
+        symbol for symbol in all_symbols if symbol not in matrix
+    ]
+    for symbol in symbols_needing_backfill:
+        min_date = symbol_min_dates[symbol]
         try:
             ensure_price_history(session, symbol, AssetType.CRYPTO, min_date)
         except Exception as exc:
             logger.debug("_prefill_eur_amounts: ensure_price_history failed for %s: %s", symbol, exc)
 
-    # Batch-fetch all prices for the relevant symbols in a single query
-    all_symbols = list(symbol_min_dates.keys())
-    rows = session.exec(
-        select(MarketAsset.isin, MarketPriceHistory.price_date, MarketPriceHistory.price)
-        .join(MarketAsset, MarketPriceHistory.market_asset_id == MarketAsset.id)
-        .where(MarketAsset.isin.in_(all_symbols))
-    ).all()
-
-    # Build {symbol: {date: price}} matrix
-    matrix: dict[str, dict[date, Decimal]] = {}
-    for isin, price_date, price in rows:
-        matrix.setdefault(isin, {})[price_date] = price
+    # Re-fetch only for the symbols that just got backfilled
+    if symbols_needing_backfill:
+        new_entries = _fetch_matrix(symbols_needing_backfill)
+        matrix.update(new_entries)
 
     # Fill eur_amount for each group needing it
     for group, symbol, total_amount, tx_date in to_fill:
