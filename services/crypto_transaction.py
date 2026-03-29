@@ -757,7 +757,9 @@ def get_crypto_account_summary(
 
     positions = []
     for symbol, data in positions_map.items():
-        if data["total_amount"] <= Decimal("0") and symbol not in FIAT_SYMBOLS:
+        if data["total_amount"] < Decimal("0") and symbol in FIAT_SYMBOLS:
+            pass
+        elif data["total_amount"] <= Decimal("0"):
             continue
 
         total_invested = data["cost_basis"]
