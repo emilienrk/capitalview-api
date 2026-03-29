@@ -734,6 +734,7 @@ def get_crypto_assets_info(
 def preview_binance_import(
     data: BinanceImportPreviewRequest,
     current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session),
 ):
     """
     Parse a Binance CSV and return a preview of grouped transactions.
@@ -741,8 +742,9 @@ def preview_binance_import(
     Groups sharing the same UTC second receive a common group.
     Groups that need a manual EUR anchor are flagged with
     ``needs_eur_input = true``.
+    EUR amounts are pre-filled from historical market prices when available.
     """
-    return generate_preview(data.csv_content)
+    return generate_preview(data.csv_content, session=session)
 
 
 @router.post("/import/binance/confirm", response_model=BinanceImportConfirmResponse, status_code=201)

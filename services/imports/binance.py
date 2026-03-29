@@ -15,14 +15,17 @@ Supported operations:
 
 import csv
 import io
+import logging
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from datetime import datetime
+from datetime import date, datetime
 from uuid import uuid4
 
-from sqlmodel import Session
+import sqlalchemy as sa
+from sqlmodel import Session, select
 
-from models.enums import CryptoTransactionType
+from models.enums import AssetType, CryptoTransactionType
+from models.market import MarketAsset, MarketPriceHistory
 from dtos.crypto import (
     BinanceImportRowPreview,
     BinanceImportGroupPreview,
@@ -31,6 +34,8 @@ from dtos.crypto import (
     CryptoTransactionCreate,
 )
 from services.crypto_transaction import create_crypto_transaction
+
+logger = logging.getLogger(__name__)
 
 
 # ── Constants ─────────────────────────────────────────────────
@@ -197,9 +202,85 @@ def _group_summary(rows: list[_BinanceRow]) -> str:
     return ", ".join({r.operation for r in rows})
 
 
-# ── Preview ───────────────────────────────────────────────────
+# ── Historical price pre-fill ────────────────────────────────────────────────
 
-def generate_preview(csv_content: str) -> BinanceImportPreviewResponse:
+def _prefill_eur_amounts(session: Session, groups: list[BinanceImportGroupPreview]) -> None:
+    """
+    For groups that need manual EUR input and have no eur_amount yet,
+    look up the historical CRYPTO→EUR price at the transaction date and
+    pre-fill eur_amount = total_buy_quantity × price.
+    """
+    from services.market import ensure_price_history
+
+    # Collect groups to fill and their main buy symbol
+    to_fill: list[tuple[BinanceImportGroupPreview, str, float, date]] = []
+
+    for group in groups:
+        if not group.needs_eur_input or group.eur_amount is not None:
+            continue
+
+        buy_rows = [r for r in group.rows if r.mapped_type == "BUY"]
+        if not buy_rows:
+            continue
+
+        # Pick primary symbol: prefer non-stablecoin, non-EUR
+        primary_row = next(
+            (r for r in buy_rows if r.mapped_symbol not in STABLECOIN_SYMBOLS and r.mapped_symbol != "EUR"),
+            buy_rows[0],
+        )
+        symbol = primary_row.mapped_symbol
+        total_amount = sum(r.mapped_amount for r in buy_rows if r.mapped_symbol == symbol)
+
+        tx_date = datetime.fromisoformat(group.timestamp).date()
+        to_fill.append((group, symbol, total_amount, tx_date))
+
+    if not to_fill:
+        return
+
+    # Ensure historical prices are in DB for every unique symbol
+    symbol_min_dates: dict[str, date] = {}
+    for _, symbol, _, tx_date in to_fill:
+        if symbol not in symbol_min_dates or tx_date < symbol_min_dates[symbol]:
+            symbol_min_dates[symbol] = tx_date
+
+    for symbol, min_date in symbol_min_dates.items():
+        try:
+            ensure_price_history(session, symbol, AssetType.CRYPTO, min_date)
+        except Exception as exc:
+            logger.debug("_prefill_eur_amounts: ensure_price_history failed for %s: %s", symbol, exc)
+
+    # Batch-fetch all prices for the relevant symbols in a single query
+    all_symbols = list(symbol_min_dates.keys())
+    rows = session.exec(
+        select(MarketAsset.isin, MarketPriceHistory.price_date, MarketPriceHistory.price)
+        .join(MarketAsset, MarketPriceHistory.market_asset_id == MarketAsset.id)
+        .where(MarketAsset.isin.in_(all_symbols))
+    ).all()
+
+    # Build {symbol: {date: price}} matrix
+    matrix: dict[str, dict[date, Decimal]] = {}
+    for isin, price_date, price in rows:
+        matrix.setdefault(isin, {})[price_date] = price
+
+    # Fill eur_amount for each group needing it
+    for group, symbol, total_amount, tx_date in to_fill:
+        price_map = matrix.get(symbol, {})
+        if not price_map:
+            continue
+
+        # Closest price on or before tx_date; fall back to earliest known
+        candidates = [(d, p) for d, p in price_map.items() if d <= tx_date]
+        if candidates:
+            _, best_price = max(candidates, key=lambda x: x[0])
+        else:
+            _, best_price = min(price_map.items(), key=lambda x: x[0])
+
+        group.eur_amount = round(float(Decimal(str(total_amount)) * best_price), 2)
+
+
+# ── Preview ───────────────────────────────────────────────────────────────────
+
+def generate_preview(csv_content: str, session: Session | None = None) -> BinanceImportPreviewResponse:
     """
     Parse a Binance CSV and return a preview of all groups
     with their mapped atomic rows, indicating which groups
@@ -294,6 +375,12 @@ def generate_preview(csv_content: str) -> BinanceImportPreviewResponse:
             hint_usdc_amount=float(usdc_total) if usdc_total > 0 and needs_eur else None,
             eur_amount=auto_eur if has_eur else None,
         ))
+
+    if session is not None:
+        try:
+            _prefill_eur_amounts(session, groups)
+        except Exception as exc:
+            logger.warning("generate_preview: _prefill_eur_amounts failed: %s", exc)
 
     return BinanceImportPreviewResponse(
         total_groups=len(groups),
