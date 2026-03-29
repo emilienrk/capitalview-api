@@ -770,6 +770,14 @@ def _backfill_stock_prices(
         return 0, 0
 
     existing_dates = _existing_dates_in_range(session, asset.id, from_date, to_date)
+
+    # Skip API call if all calendar days up to yesterday are already in DB
+    yesterday = to_date - timedelta(days=1)
+    if yesterday >= from_date:
+        expected_dates = set(_date_range(from_date, yesterday))
+        if expected_dates.issubset(existing_dates):
+            return 0, len(existing_dates)
+
     prices = market_data_manager.get_historical_prices(
         asset.symbol, AssetType.STOCK, from_date, to_date
     )
@@ -819,6 +827,14 @@ def _backfill_crypto_prices(
         return 0, 0
 
     existing_dates = _existing_dates_in_range(session, asset.id, from_date, to_date)
+
+    # Skip API call if all calendar days up to yesterday are already in DB
+    yesterday = to_date - timedelta(days=1)
+    if yesterday >= from_date:
+        expected_dates = set(_date_range(from_date, yesterday))
+        if expected_dates.issubset(existing_dates):
+            return 0, len(existing_dates)
+
     prices = market_data_manager.get_historical_prices(
         asset.symbol, AssetType.CRYPTO, from_date, to_date
     )

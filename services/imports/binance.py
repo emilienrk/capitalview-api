@@ -80,9 +80,14 @@ def _parse_csv(content: str) -> list[_BinanceRow]:
         account = (line.get("Account") or line.get("account") or "").strip()
         remark = (line.get("Remark") or line.get("remark") or "").strip()
 
-        # Parse timestamp
+        # Parse timestamp — handles both YYYY-MM-DD and YY-MM-DD (Binance 2-digit year export)
         try:
-            utc_time = datetime.fromisoformat(utc_str.replace(" ", "T"))
+            normalized = utc_str.replace(" ", "T")
+            # 2-digit year: "26-01-01T..." → "2026-01-01T..."
+            parts = normalized.split("-", 1)
+            if len(parts[0]) == 2:
+                normalized = "20" + normalized
+            utc_time = datetime.fromisoformat(normalized)
         except (ValueError, AttributeError):
             continue
 
