@@ -78,6 +78,7 @@ class CryptoTransactionType(str, Enum):
     ------------
     BUY          — Primary positive leg: asset acquired (cost basis in EUR).
     SPEND        — Negative leg: asset ceded in a trade or payment.
+                   covers EUR cash-out AND crypto-to-crypto outbound leg (no SELL type)
     FEE          — On-chain / exchange fee deducted in crypto.
     REWARD       — Staking / airdrop income; cost basis = 0.
     DEPOSIT      — Direct EUR entry (wire transfer, exchange deposit).
@@ -119,7 +120,7 @@ class CryptoCompositeTransactionType(str, Enum):
     FIAT_WITHDRAW = "FIAT_WITHDRAW"
     SELL_TO_FIAT = "SELL_TO_FIAT"
     FEE = "FEE"
-    NON_TAXABLE_EXIT = "NON_TAXABLE_EXIT"
+    EXIT = "EXIT"
 
     @classmethod
     def normalize(cls, value: "CryptoCompositeTransactionType") -> "CryptoCompositeTransactionType":

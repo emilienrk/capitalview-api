@@ -257,7 +257,7 @@ def create_composite_crypto_transaction(
         rows.append(create_crypto_transaction(session, fee_row, master_key, group_uuid=group))
         return rows
 
-    if composite_type == CryptoCompositeTransactionType.NON_TAXABLE_EXIT:
+    if composite_type == CryptoCompositeTransactionType.EXIT:
         transfer = CryptoTransactionCreate(
             account_id=data.account_id,
             symbol=data.symbol,
