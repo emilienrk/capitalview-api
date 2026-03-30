@@ -35,15 +35,15 @@ def test_manual_search_evolution():
                     atype = res.get('type', 'N/A')
                     
                     # Check if we got ISIN from bulk info
-                    isin = res.get('isin')
-                    if not isin and symbol in bulk_info:
-                        isin = bulk_info[symbol].get('isin')
-                        if isin:
-                            res['isin'] = isin # Update result for display
-                            print(f"    -> Found ISIN for {symbol}: {isin}")
+                    asset_key = res.get('isin')
+                    if not asset_key and symbol in bulk_info:
+                        asset_key = bulk_info[symbol].get('isin')
+                        if asset_key:
+                            res['isin'] = asset_key # Update result for display
+                            print(f"    -> Found ISIN for {symbol}: {asset_key}")
                     
-                    isin_display = isin if isin else "N/A"
-                    print(f"  {i+1}. Symbol: {symbol:<10} | Name: {name:<30} | ISIN: {isin_display:<15} | Exch: {exchange:<10} | Type: {atype}")
+                    asset_key_display = asset_key if asset_key else "N/A"
+                    print(f"  {i+1}. Symbol: {symbol:<10} | Name: {name:<30} | ISIN: {asset_key_display:<15} | Exch: {exchange:<10} | Type: {atype}")
             except Exception as e:
                 print(f"Error searching for '{query}': {e}")
 

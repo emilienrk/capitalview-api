@@ -109,7 +109,7 @@ class TestCommunitySettings:
         assert data["is_active"] is False
         assert data["is_private"] is True
         assert data["display_name"] is None
-        assert data["shared_stock_isins"] == []
+        assert data["shared_stock_asset_keys"] == []
         assert data["shared_crypto_symbols"] == []
         assert data["positions_count"] == 0
 
@@ -121,7 +121,7 @@ class TestCommunitySettings:
             "is_private": False,
             "display_name": "Alice D.",
             "bio": "Investor since 2020",
-            "shared_stock_isins": [],
+            "shared_stock_asset_keys": [],
             "shared_crypto_symbols": [],
         })
         assert r.status_code == 200
@@ -139,7 +139,7 @@ class TestCommunitySettings:
             "is_private": True,
             "display_name": "Alice",
             "bio": "My bio",
-            "shared_stock_isins": [],
+            "shared_stock_asset_keys": [],
             "shared_crypto_symbols": [],
         })
         r = client.get("/community/settings")
@@ -155,12 +155,12 @@ class TestCommunitySettings:
         # Activate first
         client.put("/community/settings", json={
             "is_active": True, "is_private": False,
-            "shared_stock_isins": [], "shared_crypto_symbols": [],
+            "shared_stock_asset_keys": [], "shared_crypto_symbols": [],
         })
         # Deactivate
         r = client.put("/community/settings", json={
             "is_active": False, "is_private": False,
-            "shared_stock_isins": [], "shared_crypto_symbols": [],
+            "shared_stock_asset_keys": [], "shared_crypto_symbols": [],
         })
         assert r.status_code == 200
         assert r.json()["is_active"] is False
@@ -515,8 +515,8 @@ class TestProfileDetail:
         pos = CommunityPosition(
             profile_user_id="user_2",
             asset_type="STOCK",
-            symbol_encrypted=community_encrypt("AAPL"),
-            pru_encrypted=community_encrypt("150.0"),
+            asset_key_enc=community_encrypt("AAPL"),
+            pru_enc=community_encrypt("150.0"),
         )
         session.add(pos)
         session.flush()
@@ -542,8 +542,8 @@ class TestProfileDetail:
         pos = CommunityPosition(
             profile_user_id="user_2",
             asset_type="STOCK",
-            symbol_encrypted=community_encrypt("AAPL"),
-            pru_encrypted=community_encrypt("150.0"),
+            asset_key_enc=community_encrypt("AAPL"),
+            pru_enc=community_encrypt("150.0"),
         )
         session.add(pos)
         session.flush()

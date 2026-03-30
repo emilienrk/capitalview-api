@@ -93,7 +93,7 @@ def test_crypto_summary(mock_rate, mock_get_info, session, master_key):
     assert r.status_code == 200
     summary = r.json()
 
-    pos = next(p for p in summary["positions"] if p["symbol"] == "BTC")
+    pos = next(p for p in summary["positions"] if p["asset_key"] == "BTC")
     assert Decimal(str(pos["total_amount"])) == Decimal("1")
     assert Decimal(str(pos["current_price"])) == Decimal("40000")
     # BTC current value = 40 000, wired in = 30 000 → P/L = +10 000

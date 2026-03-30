@@ -91,7 +91,7 @@ class CommunityPosition(SQLModel, table=True):
     """
     A single asset line shared on a community profile.
 
-    symbol_encrypted / pru_encrypted are encrypted with COMMUNITY_ENCRYPTION_KEY
+    asset_key_enc / pru_enc are encrypted with COMMUNITY_ENCRYPTION_KEY
     (server-side AES-256-GCM) so the server can decrypt them when another
     authenticated user views the profile.
     """
@@ -108,8 +108,8 @@ class CommunityPosition(SQLModel, table=True):
         )
     )
     asset_type: str = Field(nullable=False)  # "CRYPTO" or "STOCK"
-    symbol_encrypted: str = Field(sa_column=Column(TEXT, nullable=False))
-    pru_encrypted: str = Field(sa_column=Column(TEXT, nullable=False))
+    asset_key_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    pru_enc: str = Field(sa_column=Column(TEXT, nullable=False))
 
     created_at: datetime = Field(
         default=sa.func.now(),

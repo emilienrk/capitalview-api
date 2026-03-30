@@ -49,6 +49,7 @@ class MarketDataProvider(ABC):
         Returns:
             list[dict]: A list of results, each containing:
                 - 'symbol': str
+                - 'isin': str (optional)
                 - 'name': str
                 - 'exchange': str (optional)
                 - 'type': str (optional)

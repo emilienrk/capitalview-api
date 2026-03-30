@@ -21,9 +21,9 @@ def mock_exchange_rate_neutral():
         yield
 
 
-def _make_asset(session, *, isin, symbol, name, asset_type=None):
+def _make_asset(session, *, asset_key, symbol, name, asset_type=None):
     """Helper: create a MarketAsset and return it."""
-    ma = MarketAsset(isin=isin, symbol=symbol, name=name, asset_type=asset_type)
+    ma = MarketAsset(asset_key=asset_key, symbol=symbol, name=name, asset_type=asset_type)
     session.add(ma)
     session.commit()
     session.refresh(ma)
@@ -48,12 +48,12 @@ def _make_price(session, asset_id, price, *, updated_at=None):
 
 def test_get_stock_price_cache_hit(session: Session, mock_market_manager):
     """Test retrieving stock price from valid cache using ISIN."""
-    isin = "US1234567890"
+    asset_key = "US1234567890"
     price = Decimal("50000.0")
     now = datetime.now(timezone.utc)
-    ma = _make_asset(session, isin=isin, symbol="BTC-USD", name="Bitcoin")
+    ma = _make_asset(session, asset_key=asset_key, symbol="BTC-USD", name="Bitcoin")
     _make_price(session, ma.id, price, updated_at=now)
-    result = get_stock_price(session, isin)
+    result = get_stock_price(session, asset_key)
     assert result == price
     mock_market_manager.get_info.assert_not_called()
 
@@ -62,7 +62,7 @@ def test_get_crypto_price_cache_hit(session: Session, mock_market_manager):
     symbol = "BTC"
     price = Decimal("40000.0")
     now = datetime.now(timezone.utc)
-    ma = _make_asset(session, isin=symbol, symbol=symbol, name="Bitcoin")
+    ma = _make_asset(session, asset_key=symbol, symbol=symbol, name="Bitcoin")
     _make_price(session, ma.id, price, updated_at=now)
     result = get_crypto_price(session, symbol)
     assert result == price
@@ -70,11 +70,11 @@ def test_get_crypto_price_cache_hit(session: Session, mock_market_manager):
 
 
 def test_get_stock_price_stale_refresh_repairs_missing_asset_type_on_legacy_row(session: Session, mock_market_manager, mock_exchange_rate_neutral):
-    isin = "USLEGACY0001"
+    asset_key = "USLEGACY0001"
     old_price = Decimal("120.00")
     new_price = Decimal("123.45")
     expired_time = datetime.now(timezone.utc) - CACHE_DURATION - timedelta(minutes=1)
-    ma = _make_asset(session, isin=isin, symbol="LEG", name="Legacy", asset_type=None)
+    ma = _make_asset(session, asset_key=asset_key, symbol="LEG", name="Legacy", asset_type=None)
     _make_price(session, ma.id, old_price, updated_at=expired_time)
 
     mock_market_manager.get_info.return_value = {
@@ -84,7 +84,7 @@ def test_get_stock_price_stale_refresh_repairs_missing_asset_type_on_legacy_row(
         "symbol": "LEG",
     }
 
-    result = get_stock_price(session, isin)
+    result = get_stock_price(session, asset_key)
 
     session.refresh(ma)
     assert result == new_price
@@ -95,7 +95,7 @@ def test_get_stock_price_stale_refresh_repairs_missing_asset_type_on_legacy_row(
 def test_backfill_price_history_repairs_missing_asset_type_on_legacy_row(session: Session):
     symbol = "LEGCOIN"
     from_date = date.today() - timedelta(days=2)
-    ma = _make_asset(session, isin=symbol, symbol=symbol, name="Legacy Coin", asset_type=None)
+    ma = _make_asset(session, asset_key=symbol, symbol=symbol, name="Legacy Coin", asset_type=None)
 
     with patch("services.market._backfill_crypto_prices", return_value=(0, 0)):
         from services.market import backfill_price_history
@@ -106,16 +106,16 @@ def test_backfill_price_history_repairs_missing_asset_type_on_legacy_row(session
 
 def test_get_stock_price_no_cache_no_search_results(session: Session, mock_market_manager):
     """Test fetching price when no cache exists and search returns nothing."""
-    isin = "US9999999999"
+    asset_key = "US9999999999"
     mock_market_manager.search.return_value = []
-    result = get_stock_price(session, isin)
+    result = get_stock_price(session, asset_key)
     assert result is None
-    mock_market_manager.search.assert_called_once_with(isin, AssetType.STOCK)
+    mock_market_manager.search.assert_called_once_with(asset_key, AssetType.STOCK)
 
 
 def test_get_stock_price_no_cache_auto_creates(session: Session, mock_market_manager, mock_exchange_rate_neutral):
     """Test auto-creation of MarketAsset entry when cache doesn't exist but search succeeds."""
-    isin = "US9999999999"
+    asset_key = "US9999999999"
     mock_market_manager.search.return_value = [
         {"symbol": "AAPL", "name": "Apple Inc.", "exchange": "NMS", "currency": "USD"}
     ]
@@ -123,9 +123,9 @@ def test_get_stock_price_no_cache_auto_creates(session: Session, mock_market_man
         "name": "Apple Inc.", "price": Decimal("150.0"), "currency": "USD",
         "symbol": "AAPL", "exchange": "NMS"
     }
-    result = get_stock_price(session, isin)
+    result = get_stock_price(session, asset_key)
     assert result == Decimal("150.0")
-    entry = session.exec(select(MarketAsset).where(MarketAsset.isin == isin)).first()
+    entry = session.exec(select(MarketAsset).where(MarketAsset.asset_key == asset_key)).first()
     assert entry is not None
     assert entry.symbol == "AAPL"
     assert entry.name == "Apple Inc."
@@ -140,23 +140,23 @@ def test_get_crypto_price_no_cache_auto_creates(session: Session, mock_market_ma
     }
     result = get_crypto_price(session, symbol)
     assert result == Decimal("100.0")
-    entry = session.exec(select(MarketAsset).where(MarketAsset.isin == symbol)).first()
+    entry = session.exec(select(MarketAsset).where(MarketAsset.asset_key == symbol)).first()
     assert entry is not None
     assert entry.symbol == "SOL"
     assert entry.name == "Solana"
 
 def test_get_stock_price_expired_cache(session: Session, mock_market_manager, mock_exchange_rate_neutral):
     """Test refreshing price when cache is expired."""
-    isin = "US8888888888"
+    asset_key = "US8888888888"
     old_price = Decimal("20.0")
     new_price = Decimal("25.0")
     expired_time = datetime.now(timezone.utc) - CACHE_DURATION - timedelta(minutes=1)
-    ma = _make_asset(session, isin=isin, symbol="SOL-USD", name="Solana")
+    ma = _make_asset(session, asset_key=asset_key, symbol="SOL-USD", name="Solana")
     _make_price(session, ma.id, old_price, updated_at=expired_time)
 
     mock_market_manager.get_info.return_value = {"name": "Solana", "price": new_price, "currency": "USD"}
 
-    result = get_stock_price(session, isin)
+    result = get_stock_price(session, asset_key)
     assert result == new_price
     mock_market_manager.get_info.assert_called_once_with("SOL-USD", AssetType.STOCK)
 
@@ -166,7 +166,7 @@ def test_get_crypto_price_expired_cache(session: Session, mock_market_manager, m
     old_price = Decimal("2000.0")
     new_price = Decimal("2100.0")
     expired_time = datetime.now(timezone.utc) - CACHE_DURATION - timedelta(minutes=1)
-    ma = _make_asset(session, isin=symbol, symbol=symbol, name="Ethereum")
+    ma = _make_asset(session, asset_key=symbol, symbol=symbol, name="Ethereum")
     _make_price(session, ma.id, old_price, updated_at=expired_time)
 
     mock_market_manager.get_info.return_value = {"name": "Ethereum", "price": new_price, "currency": "USD"}
@@ -176,55 +176,55 @@ def test_get_crypto_price_expired_cache(session: Session, mock_market_manager, m
     mock_market_manager.get_info.assert_called_once_with(symbol, AssetType.CRYPTO)
 
 def test_get_stock_price_fetch_fail_expired_cache(session: Session, mock_market_manager):
-    isin = "US7777777777"
+    asset_key = "US7777777777"
     price = Decimal("100.0")
     expired_time = datetime.now(timezone.utc) - CACHE_DURATION - timedelta(minutes=10)
-    ma = _make_asset(session, isin=isin, symbol="STALE-USD", name="Stale Coin")
+    ma = _make_asset(session, asset_key=asset_key, symbol="STALE-USD", name="Stale Coin")
     _make_price(session, ma.id, price, updated_at=expired_time)
 
     mock_market_manager.get_info.return_value = None
-    result = get_stock_price(session, isin)
+    result = get_stock_price(session, asset_key)
     assert result == price
     mock_market_manager.get_info.assert_called_once()
 
 def test_get_stock_info_cache_hit(session: Session, mock_market_manager):
-    isin = "US6666666666"
+    asset_key = "US6666666666"
     name = "Bitcoin"
     price = Decimal("1.0")
     now = datetime.now(timezone.utc)
-    ma = _make_asset(session, isin=isin, symbol="BTC", name=name)
+    ma = _make_asset(session, asset_key=asset_key, symbol="BTC", name=name)
     _make_price(session, ma.id, price, updated_at=now)
-    n, p = get_stock_info(session, isin)
+    n, p = get_stock_info(session, asset_key)
     assert n == name
     assert p == price
     mock_market_manager.get_info.assert_not_called()
 
 def test_get_stock_info_fetch_fail_no_cache(session: Session, mock_market_manager):
-    isin = "US_MISSING"
+    asset_key = "US_MISSING"
     mock_market_manager.search.return_value = []
     mock_market_manager.get_info.return_value = None
-    n, p = get_stock_info(session, isin)
+    n, p = get_stock_info(session, asset_key)
     assert n is None
     assert p is None
 
 def test_get_stock_info_fetch_fail_expired(session: Session, mock_market_manager):
-    isin = "US5555555555"
+    asset_key = "US5555555555"
     expired_time = datetime.now(timezone.utc) - timedelta(days=1)
-    ma = _make_asset(session, isin=isin, symbol="EXP", name="Expired")
+    ma = _make_asset(session, asset_key=asset_key, symbol="EXP", name="Expired")
     _make_price(session, ma.id, Decimal("5.0"), updated_at=expired_time)
     mock_market_manager.get_info.return_value = None
-    n, p = get_stock_info(session, isin)
+    n, p = get_stock_info(session, asset_key)
     assert n == "Expired"
     assert p == Decimal("5.0")
 
 def test_get_stock_price_cache_hit_naive_datetime(session: Session, mock_market_manager):
     """Test retrieving price from cache with naive datetime (simulating some DB drivers)."""
-    isin = "US4444444444"
+    asset_key = "US4444444444"
     price = Decimal("10.0")
     now_naive = datetime.now()
-    ma = _make_asset(session, isin=isin, symbol="NAIVE", name="Naive Coin")
+    ma = _make_asset(session, asset_key=asset_key, symbol="NAIVE", name="Naive Coin")
     _make_price(session, ma.id, price, updated_at=now_naive)
-    result = get_stock_price(session, isin)
+    result = get_stock_price(session, asset_key)
     assert result == price
 
 
@@ -259,7 +259,7 @@ def test_get_historical_exchange_rates_db_stores_fetched_rates(session: Session)
     assert result[date(2024, 1, 4)] == Decimal("0.93")
 
     # Verify rates were persisted: a FIAT MarketAsset must exist
-    asset = session.exec(select(MarketAsset).where(MarketAsset.isin == "USD")).first()
+    asset = session.exec(select(MarketAsset).where(MarketAsset.asset_key == "USD")).first()
     assert asset is not None
     assert asset.asset_type == AssetType.FIAT
 

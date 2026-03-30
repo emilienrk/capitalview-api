@@ -1,7 +1,7 @@
 """
 MarketAsset and MarketPriceHistory models.
 
-MarketAsset holds asset metadata (isin, symbol, name, currency …).
+MarketAsset holds asset metadata (asset_key, symbol, name, currency …).
 MarketPriceHistory stores one price per asset per day.
 """
 from datetime import date, datetime
@@ -19,7 +19,7 @@ class MarketAsset(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
-    isin: str = Field(index=True, unique=True, default=None)
+    asset_key: str = Field(index=True, unique=True, default=None)
     symbol: str | None = Field(index=True)
     exchange: str | None = Field(default=None)
     name: str | None = Field(default=None)

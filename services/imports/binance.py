@@ -255,13 +255,13 @@ def _prefill_eur_amounts(session: Session, groups: list[BinanceImportGroupPrevie
         if not symbols:
             return {}
         db_rows = session.exec(
-            select(MarketAsset.isin, MarketPriceHistory.price_date, MarketPriceHistory.price)
+            select(MarketAsset.asset_key, MarketPriceHistory.price_date, MarketPriceHistory.price)
             .join(MarketAsset, MarketPriceHistory.market_asset_id == MarketAsset.id)
-            .where(MarketAsset.isin.in_(symbols))
+            .where(MarketAsset.asset_key.in_(symbols))
         ).all()
         result: dict[str, dict[date, Decimal]] = {}
-        for isin, price_date, price in db_rows:
-            result.setdefault(isin, {})[price_date] = price
+        for asset_key, price_date, price in db_rows:
+            result.setdefault(asset_key, {})[price_date] = price
         return result
 
     matrix = _fetch_matrix(all_symbols)

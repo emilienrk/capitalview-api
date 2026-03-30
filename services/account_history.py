@@ -5,7 +5,7 @@ On every login, a BackgroundTask calls `run_lazy_catchup` which:
   1. Finds the last snapshot date for the user.
   2. Builds the list of missing dates (last+1 .. yesterday).
   3. Reads current positions ONCE per account (frozen bag).
-  4. Downloads the historical price matrix ONCE for all symbols.
+  4. Downloads the historical price matrix ONCE for all asset_keys.
   5. Loops over missing dates × accounts in RAM to generate snapshots.
   6. Bulk-upserts the rows into `account_history`.
 
@@ -49,7 +49,7 @@ _ZERO = Decimal("0")
 class FrozenPosition:
     """A single asset position at the moment the snapshot is taken."""
 
-    symbol: str
+    asset_key: str
     quantity: Decimal
     total_invested: Decimal  # already in EUR
 
@@ -189,45 +189,45 @@ def _resolve_account_start_date(
 
 def _get_price_matrix(
     session: Session,
-    symbols: list[str],
+    asset_keys: list[str],
     from_date: date,
     to_date: date,
 ) -> dict[str, dict[date, Decimal]]:
     """
-    Return {symbol: {date: price}} for every (symbol, date) pair in the range.
+    Return {asset_key: {date: price}} for every (asset_key, date) pair in the range.
 
     Uses a single JOIN query. For dates where a price is missing, the matrix
     is left sparse — callers must handle gaps (use the nearest earlier price).
     """
-    if not symbols:
+    if not asset_keys:
         return {}
 
     rows = session.exec(
-        select(MarketAsset.isin, MarketPriceHistory.price_date, MarketPriceHistory.price)
+        select(MarketAsset.asset_key, MarketPriceHistory.price_date, MarketPriceHistory.price)
         .join(MarketAsset, MarketPriceHistory.market_asset_id == MarketAsset.id)
         .where(
-            MarketAsset.isin.in_(symbols),
+            MarketAsset.asset_key.in_(asset_keys),
             MarketPriceHistory.price_date >= from_date,
             MarketPriceHistory.price_date <= to_date,
         )
     ).all()
 
     matrix: dict[str, dict[date, Decimal]] = {}
-    for isin, price_date, price in rows:
-        matrix.setdefault(isin, {})[price_date] = price
+    for asset_key, price_date, price in rows:
+        matrix.setdefault(asset_key, {})[price_date] = price
 
     return matrix
 
 
 def _fill_price_gaps(
     matrix: dict[str, dict[date, Decimal]],
-    symbols: list[str],
+    asset_keys: list[str],
     missing_dates: list[date],
     session: Session,
 ) -> dict[str, dict[date, Decimal]]:
     """
-    Ensure every symbol has a price for every date in missing_dates via forward-fill.
-    For symbols with no price at or before missing_dates[0], a SQL fallback fetches
+    Ensure every asset_key has a price for every date in missing_dates via forward-fill.
+    For asset_keys with no price at or before missing_dates[0], a SQL fallback fetches
     the most recent known price before the range to seed the forward-fill.
     """
     if not missing_dates:
@@ -236,50 +236,50 @@ def _fill_price_gaps(
     first_date = missing_dates[0]
 
     # Seed needed: no data at all, OR earliest entry is after first_date
-    symbols_needing_seed = [
-        s for s in symbols
+    asset_keys_needing_seed = [
+        s for s in asset_keys
         if not matrix.get(s) or min(matrix[s].keys()) > first_date
     ]
 
-    if symbols_needing_seed:
+    if asset_keys_needing_seed:
         subq = (
             sa.select(
-                MarketAsset.isin.label("isin"),
+                MarketAsset.asset_key.label("asset_key"),
                 sa.func.max(MarketPriceHistory.price_date).label("max_date"),
             )
             .join(MarketAsset, MarketPriceHistory.market_asset_id == MarketAsset.id)
             .where(
-                MarketAsset.isin.in_(symbols_needing_seed),
+                MarketAsset.asset_key.in_(asset_keys_needing_seed),
                 MarketPriceHistory.price_date < first_date,
             )
-            .group_by(MarketAsset.isin)
+            .group_by(MarketAsset.asset_key)
             .subquery()
         )
 
         fallback_rows = session.exec(
-            sa.select(MarketAsset.isin, MarketPriceHistory.price)
+            sa.select(MarketAsset.asset_key, MarketPriceHistory.price)
             .join(MarketAsset, MarketPriceHistory.market_asset_id == MarketAsset.id)
             .join(
                 subq,
                 sa.and_(
-                    MarketAsset.isin == subq.c.isin,
+                    MarketAsset.asset_key == subq.c.asset_key,
                     MarketPriceHistory.price_date == subq.c.max_date,
                 ),
             )
         ).all()
 
-        for isin, price in fallback_rows:
-            matrix.setdefault(isin, {})[first_date] = price
+        for asset_key, price in fallback_rows:
+            matrix.setdefault(asset_key, {})[first_date] = price
 
-    # Forward-fill across all missing_dates for every symbol
-    for symbol in symbols:
-        prices_for_symbol = matrix.setdefault(symbol, {})
+    # Forward-fill across all missing_dates for every asset_key
+    for asset_key in asset_keys:
+        prices_for_asset_key = matrix.setdefault(asset_key, {})
         last_price: Decimal | None = None
         for d in missing_dates:
-            if d in prices_for_symbol:
-                last_price = prices_for_symbol[d]
+            if d in prices_for_asset_key:
+                last_price = prices_for_asset_key[d]
             elif last_price is not None:
-                prices_for_symbol[d] = last_price
+                prices_for_asset_key[d] = last_price
 
     return matrix
 
@@ -308,9 +308,8 @@ def _compute_daily_net_flow(
 
     if account_snapshot.account_type == AccountCategory.STOCK:
         for tx in day_txs:
-            isin = str(getattr(tx, "isin", "") or "").upper()
-            symbol = str(getattr(tx, "symbol", "") or "").upper()
-            if isin != "EUR" and symbol != "EUR":
+            asset_key = str(getattr(tx, "asset_key", "") or "").upper()
+            if asset_key != "EUR":
                 continue
             amount = _to_decimal(getattr(tx, "amount", _ZERO))
             match _type(tx):
@@ -326,16 +325,16 @@ def _compute_daily_net_flow(
         for tx in day_txs
         if getattr(tx, "group_uuid", None)
         and _type(tx) == "SPEND"
-        and str(getattr(tx, "symbol", "") or "").upper() not in FIAT_SYMBOLS
+        and str(getattr(tx, "asset_key", "") or "").upper() not in FIAT_SYMBOLS
     }
 
     for tx in day_txs:
         tx_type = _type(tx)
-        symbol = str(getattr(tx, "symbol", "") or "").upper()
+        asset_key = str(getattr(tx, "asset_key", "") or "").upper()
         amount = _to_decimal(getattr(tx, "amount", _ZERO))
         group_uuid = getattr(tx, "group_uuid", None)
 
-        if symbol in FIAT_SYMBOLS:
+        if asset_key in FIAT_SYMBOLS:
             match tx_type:
                 case "DEPOSIT":
                     if not group_uuid or group_uuid not in groups_with_crypto_spend:
@@ -343,7 +342,7 @@ def _compute_daily_net_flow(
                 case "WITHDRAW":
                     net_flow -= amount
         elif tx_type == "TRANSFER":
-            day_price = (price_matrix or {}).get(symbol, {}).get(d, _ZERO)
+            day_price = (price_matrix or {}).get(asset_key, {}).get(d, _ZERO)
             net_flow -= amount * day_price
 
     return net_flow
@@ -372,7 +371,7 @@ def _build_positions_from_summary(
         computed_total += value
         temp_positions.append(
             {
-                "symbol": pos.symbol,
+                "asset_key": pos.asset_key,
                 "quantity": qty,
                 "value": value,
                 "price": price,
@@ -392,7 +391,7 @@ def _build_positions_from_summary(
 
         snapshot_positions.append(
             {
-                "symbol": p["symbol"],
+                "asset_key": p["asset_key"],
                 "quantity": str(p["quantity"]),
                 "value": str(round(p["value"], 2)),
                 "price": str(round(p["price"], 2)) if p["price"] is not None else None,
@@ -444,7 +443,7 @@ def _generate_missing_snapshots(
             snapshot_positions = []
             if total_value > _ZERO:
                 snapshot_positions.append({
-                    "symbol": "EUR",
+                    "asset_key": "EUR",
                     "quantity": str(qty),
                     "value": str(round(total_value, 2)),
                     "price": "1.00",
@@ -473,7 +472,7 @@ def _generate_missing_snapshots(
                 current_invested += asset.invested
 
                 temp_positions.append({
-                    "symbol": asset.name,
+                    "asset_key": asset.name,
                     "quantity": Decimal("1"),
                     "value": current_val,
                     "price": current_val,
@@ -484,7 +483,7 @@ def _generate_missing_snapshots(
             for p in temp_positions:
                 percentage = (p["value"] / total_value) * Decimal("100") if total_value > _ZERO else _ZERO
                 snapshot_positions.append({
-                    "symbol": p["symbol"],
+                    "asset_key": p["asset_key"],
                     "quantity": str(p["quantity"]),
                     "value": str(round(p["value"], 2)),
                     "price": str(round(p["price"], 2)),
@@ -496,11 +495,11 @@ def _generate_missing_snapshots(
         elif account_snapshot.account_type == AccountCategory.STOCK:
             preloaded_prices: dict[str, Decimal] = {}
             for tx in account_snapshot.transactions:
-                isin = getattr(tx, "isin", None)
-                if isin and isin != "EUR":
-                    price = price_matrix.get(isin, {}).get(d)
+                asset_key = getattr(tx, "asset_key", None)
+                if asset_key and asset_key != "EUR":
+                    price = price_matrix.get(asset_key, {}).get(d)
                     if price is not None:
-                        preloaded_prices[isin] = price
+                        preloaded_prices[asset_key] = price
 
             summary = get_stock_account_summary(
                 session=session,
@@ -513,11 +512,11 @@ def _generate_missing_snapshots(
         else:  # AccountCategory.CRYPTO
             preloaded_prices = {}
             for tx in account_snapshot.transactions:
-                symbol = getattr(tx, "symbol", None)
-                if symbol and symbol != "EUR":
-                    price = price_matrix.get(symbol, {}).get(d)
+                asset_key = getattr(tx, "asset_key", None)
+                if asset_key and asset_key != "EUR":
+                    price = price_matrix.get(asset_key, {}).get(d)
                     if price is not None:
-                        preloaded_prices[symbol] = price
+                        preloaded_prices[asset_key] = price
 
             summary = get_crypto_account_summary(
                 session=session,
@@ -646,7 +645,7 @@ def _build_bank_snapshots(
             _AccountSnapshot(
                 account_id=acc.uuid,
                 account_type=AccountCategory.BANK,
-                frozen_positions=[FrozenPosition(symbol="EUR", quantity=balance, total_invested=balance)],
+                frozen_positions=[FrozenPosition(asset_key="EUR", quantity=balance, total_invested=balance)],
                 total_invested=balance,
                 account_created_at=_resolve_account_start_date(
                     default_created_at=acc.created_at.date(),
@@ -843,14 +842,14 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
         if not accounts_to_process:
             return
 
-        # ── 4b. Ensure historical market prices exist for all affected symbols ──
+        # ── 4b. Ensure historical market prices exist for all affected asset_keys ──
         # Delegated to services/market.py which is the single owner of price data.
         from services.market import ensure_price_history
 
         earliest_date = min(d for _, dates in accounts_to_process for d in dates)
 
-        # Build once: symbol -> set(asset_type), then reuse for both steps below.
-        symbol_types_map: dict[str, set[AssetType]] = {}
+        # Build once: asset_key -> set(asset_type), then reuse for both steps below.
+        asset_key_types_map: dict[str, set[AssetType]] = {}
         for acc_snap, _ in accounts_to_process:
             if acc_snap.account_type not in (AccountCategory.STOCK, AccountCategory.CRYPTO):
                 continue
@@ -861,27 +860,27 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
                 else AssetType.CRYPTO
             )
 
-            symbols: set[str] = set()
+            asset_keys: set[str] = set()
             if acc_snap.transactions:
                 for tx in acc_snap.transactions:
-                    sym = getattr(tx, "isin", None) or getattr(tx, "symbol", None)
+                    sym = getattr(tx, "asset_key", None)
                     if sym and getattr(tx, "type", "") not in ("DEPOSIT", "ANCHOR") and sym != "EUR":
-                        symbols.add(sym)
+                        asset_keys.add(sym)
 
-            # Include bootstrap-held symbols (important when no new txs).
+            # Include bootstrap-held asset_keys (important when no new txs).
             for pos in acc_snap.frozen_positions:
-                if pos.symbol != "EUR":  # EUR price is always 1, no market fetch needed
-                    symbols.add(pos.symbol)
+                if pos.asset_key != "EUR":  # EUR price is always 1, no market fetch needed
+                    asset_keys.add(pos.asset_key)
 
-            for symbol in symbols:
-                symbol_types_map.setdefault(symbol, set()).add(atype)
+            for asset_key in asset_keys:
+                asset_key_types_map.setdefault(asset_key, set()).add(atype)
 
-        for symbol, asset_types in symbol_types_map.items():
+        for asset_key, asset_types in asset_key_types_map.items():
             for atype in asset_types:
-                ensure_price_history(session, symbol, atype, earliest_date)
+                ensure_price_history(session, asset_key, atype, earliest_date)
 
         # ── 5. Build price matrix (union of all per-account date ranges) ───────
-        all_symbols = list(symbol_types_map.keys())
+        all_asset_keys = list(asset_key_types_map.keys())
 
         # Collect the full date span needed across all accounts
         all_missing_dates_sorted = sorted({
@@ -891,13 +890,13 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
         })
 
         price_matrix: dict[str, dict[date, Decimal]] = {}
-        if all_symbols and all_missing_dates_sorted:
+        if all_asset_keys and all_missing_dates_sorted:
             price_matrix = _get_price_matrix(
-                session, all_symbols,
+                session, all_asset_keys,
                 all_missing_dates_sorted[0],
                 all_missing_dates_sorted[-1],
             )
-            price_matrix = _fill_price_gaps(price_matrix, all_symbols, all_missing_dates_sorted, session)
+            price_matrix = _fill_price_gaps(price_matrix, all_asset_keys, all_missing_dates_sorted, session)
 
         # ── 6. Generate rows for every account × its own missing dates ─────────
         all_rows: list[dict] = []
@@ -969,12 +968,12 @@ def rebuild_account_history_from_date(
     account_id_bidx: str,
     from_date: date,
     master_key: str,
-    symbols: list[str] | None = None,
+    asset_keys: list[str] | None = None,
     asset_type: AssetType | None = None,
 ) -> None:
     """
     Delete all AccountHistory rows for *account_id_bidx* from *from_date* onwards,
-    backfill missing market price history for the affected symbols, then re-run
+    backfill missing market price history for the affected asset_keys, then re-run
     a full lazy catchup so the cleared range is rebuilt with real daily prices.
 
     Designed to be called as a FastAPI BackgroundTask whenever a transaction is
@@ -998,9 +997,9 @@ def rebuild_account_history_from_date(
             account_id_bidx[:8] + "…",
         )
 
-        if symbols and asset_type is not None:
-            for symbol in symbols:
-                ensure_price_history(session, symbol, asset_type, from_date)
+        if asset_keys and asset_type is not None:
+            for asset_key in asset_keys:
+                ensure_price_history(session, asset_key, asset_type, from_date)
         session.commit()
     run_lazy_catchup(user_uuid, master_key)
 

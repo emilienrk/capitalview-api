@@ -1,3 +1,4 @@
+from models.market import MarketAsset
 import pytest
 from decimal import Decimal
 from datetime import date, datetime
@@ -85,6 +86,11 @@ def test_update_stock_account(session: Session, master_key: str):
 
 def test_delete_stock_account(session: Session, master_key: str):
     user_uuid = "user_1"
+    asset_key = "US0000000000"
+    ma = MarketAsset(asset_key=asset_key, symbol="TEST", name="Test Asset", asset_type="STOCK")
+    session.add(ma)
+    session.commit()
+    session.refresh(ma)
     data = StockAccountCreate(name="To Delete", account_type=StockAccountType.PEA)
     created = create_stock_account(session, data, user_uuid, master_key)
     assert delete_stock_account(session, created.id, master_key) is True
@@ -95,8 +101,7 @@ def test_delete_stock_account(session: Session, master_key: str):
     from dtos.stock import StockTransactionCreate
     tx_data = StockTransactionCreate(
         account_id=acc_tx.id,
-        symbol="TEST",
-        isin="US0000000000",
+        asset_key="US0000000000",
         type=StockTransactionType.BUY,
         amount=Decimal(1),
         price_per_unit=Decimal(1),

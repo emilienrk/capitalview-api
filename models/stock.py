@@ -47,7 +47,7 @@ class StockTransaction(SQLModel, table=True):
 
     uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     account_id_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
-    isin_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    asset_key_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     type_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     amount_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     price_per_unit_enc: str = Field(sa_column=Column(TEXT, nullable=False))

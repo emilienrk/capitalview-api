@@ -41,8 +41,8 @@ from services.market import (
 # ---------------------------------------------------------------------------
 
 
-def _make_asset(session, *, isin, symbol, name, asset_type=AssetType.STOCK, exchange=None):
-    ma = MarketAsset(isin=isin, symbol=symbol, name=name, asset_type=asset_type, exchange=exchange)
+def _make_asset(session, *, asset_key, symbol, name, asset_type=AssetType.STOCK, exchange=None):
+    ma = MarketAsset(asset_key=asset_key, symbol=symbol, name=name, asset_type=asset_type, exchange=exchange)
     session.add(ma)
     session.commit()
     session.refresh(ma)
@@ -174,7 +174,7 @@ class TestIsPriceStillValidCrypto:
 
     def _asset(self, session):
         return _make_asset(
-            session, isin="BTC", symbol="BTC", name="Bitcoin", asset_type=AssetType.CRYPTO, exchange=None
+            session, asset_key="BTC", symbol="BTC", name="Bitcoin", asset_type=AssetType.CRYPTO, exchange=None
         )
 
     def test_fresh_cache_valid(self, session: Session):
@@ -193,7 +193,7 @@ class TestIsPriceStillValidFiat:
 
     def _asset(self, session):
         return _make_asset(
-            session, isin="USD", symbol="USD", name="Dollar", asset_type=AssetType.FIAT, exchange=None
+            session, asset_key="USD", symbol="USD", name="Dollar", asset_type=AssetType.FIAT, exchange=None
         )
 
     def test_fresh_weekday_valid(self, session: Session):
@@ -231,7 +231,7 @@ class TestIsPriceStillValidStock:
 
     def _asset(self, session, exchange="XPAR"):
         return _make_asset(
-            session, isin="FR0000131104", symbol="BNP.PA", name="BNP Paribas",
+            session, asset_key="FR0000131104", symbol="BNP.PA", name="BNP Paribas",
             asset_type=AssetType.STOCK, exchange=exchange,
         )
 
@@ -282,7 +282,7 @@ class TestIsPriceStillValidStock:
     def test_unknown_exchange_falls_back_to_hourly(self, session: Session):
         """Asset with no exchange field → behaves like crypto (hourly TTL)."""
         ma = _make_asset(
-            session, isin="XX0000000000", symbol="XX", name="Unknown",
+            session, asset_key="XX0000000000", symbol="XX", name="Unknown",
             asset_type=AssetType.STOCK, exchange=None,
         )
         entry_fresh = _price_entry(session, ma.id, Decimal("100"), _NOW - timedelta(minutes=5))
@@ -313,7 +313,7 @@ class TestGetStockPriceMarketClosedIntegration:
         updated_after_close = last_close + timedelta(hours=1)
 
         ma = _make_asset(
-            session, isin="FR0000131104", symbol="BNP.PA", name="BNP Paribas",
+            session, asset_key="FR0000131104", symbol="BNP.PA", name="BNP Paribas",
             asset_type=AssetType.STOCK, exchange="XPAR",
         )
         _make_price(session, ma.id, Decimal("60.00"), updated_at=updated_after_close)
@@ -337,7 +337,7 @@ class TestGetStockPriceMarketClosedIntegration:
         new_price = Decimal("61.50")
 
         ma = _make_asset(
-            session, isin="FR0000131105", symbol="BNP.PA", name="BNP Paribas",
+            session, asset_key="FR0000131105", symbol="BNP.PA", name="BNP Paribas",
             asset_type=AssetType.STOCK, exchange="XPAR",
         )
         _make_price(session, ma.id, Decimal("60.00"), updated_at=updated_before_close)
@@ -365,7 +365,7 @@ class TestGetStockPriceMarketClosedIntegration:
         new_price = Decimal("62.00")
 
         ma = _make_asset(
-            session, isin="FR0000131106", symbol="BNP.PA", name="BNP Paribas",
+            session, asset_key="FR0000131106", symbol="BNP.PA", name="BNP Paribas",
             asset_type=AssetType.STOCK, exchange="XPAR",
         )
         _make_price(session, ma.id, Decimal("60.00"), updated_at=stale_time)

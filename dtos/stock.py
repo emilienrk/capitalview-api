@@ -48,10 +48,7 @@ class EurDepositCreate(BaseModel):
 class StockTransactionCreate(BaseModel):
     """Create a stock transaction."""
     account_id: str
-    symbol: str | None = None
-    isin: str | None = None
-    name: str | None = None
-    exchange: str | None = None
+    asset_key: str | None = None
     type: StockTransactionType
     amount: Decimal = Field(gt=0)
     price_per_unit: Decimal = Field(ge=0)
@@ -62,10 +59,7 @@ class StockTransactionCreate(BaseModel):
 
 class StockTransactionUpdate(BaseModel):
     """Update a stock transaction."""
-    symbol: str | None = None
-    isin: str | None = None
-    name: str | None = None
-    exchange: str | None = None
+    asset_key: str | None = None
     type: StockTransactionType | None = None
     amount: Decimal | None = Field(None, gt=0)
     price_per_unit: Decimal | None = Field(None, ge=0)
@@ -76,9 +70,9 @@ class StockTransactionUpdate(BaseModel):
 
 class StockTransactionBulkCreate(BaseModel):
     """Create a stock transaction (without account_id, used in bulk import).
-    Only DB-stored fields: isin, type, amount, price_per_unit, fees, executed_at, notes.
+    Only DB-stored fields: asset_key (isin), type, amount, price_per_unit, fees, executed_at, notes.
     symbol/name/exchange are resolved automatically via market_prices API."""
-    isin: str
+    asset_key: str
     type: StockTransactionType
     amount: Decimal = Field(gt=0)
     price_per_unit: Decimal = Field(ge=0)
@@ -103,10 +97,7 @@ class StockTransactionBasicResponse(BaseModel):
     """Basic stock transaction response."""
     id: str
     account_id: str
-    symbol: str | None = None
-    isin: str | None = None
-    name: str | None = None
-    exchange: str | None = None
+    asset_key: str
     type: StockTransactionType
     amount: Decimal
     price_per_unit: Decimal
@@ -118,7 +109,7 @@ class StockTransactionBasicResponse(BaseModel):
 class AssetSearchResult(BaseModel):
     """Result of an asset search."""
     symbol: str
-    isin: str | None = None
+    asset_key: str | None = None
     name: str | None = None
     exchange: str | None = None
     type: str | None = None
@@ -128,7 +119,7 @@ class AssetSearchResult(BaseModel):
 class AssetInfoResponse(BaseModel):
     """Detailed info for an asset."""
     symbol: str
-    isin: str | None = None
+    asset_key: str
     name: str | None = None
     price: Decimal | None = None
     currency: str | None = None

@@ -79,15 +79,15 @@ def _parse_positions_json(positions_json: str | None) -> list[FrozenPosition]:
 
     positions: list[FrozenPosition] = []
     for item in parsed:
-        symbol = item.get("symbol")
+        asset_key = item.get("asset_key")
         quantity = item.get("quantity")
         invested = item.get("invested", "0")
-        if not symbol or quantity is None:
+        if not asset_key or quantity is None:
             continue
         try:
             positions.append(
                 FrozenPosition(
-                    symbol=str(symbol),
+                    asset_key=str(asset_key),
                     quantity=Decimal(str(quantity)),
                     total_invested=Decimal(str(invested)),
                 )
@@ -98,10 +98,10 @@ def _parse_positions_json(positions_json: str | None) -> list[FrozenPosition]:
 
 
 def _make_market_asset(
-    session: Session, *, isin: str, symbol: str, name: str
+    session: Session, *, asset_key: str, symbol: str, name: str
 ) -> MarketAsset:
     """Insert a MarketAsset and return it."""
-    asset = MarketAsset(isin=isin, symbol=symbol, name=name)
+    asset = MarketAsset(asset_key=asset_key, symbol=symbol, name=name)
     session.add(asset)
     session.commit()
     session.refresh(asset)
@@ -130,8 +130,7 @@ def _tx(**overrides):
         "id": str(uuid.uuid4()),
         "group_uuid": None,
         "type": "BUY",
-        "symbol": "BTC",
-        "isin": "BTC",
+        "asset_key": "BTC",
         "name": None,
         "exchange": None,
         "amount": Decimal("0"),
@@ -224,15 +223,15 @@ def test_resolve_account_start_date_prefers_earliest_known_business_date():
 # ---------------------------------------------------------------------------
 
 
-def test_get_price_matrix_empty_symbols(session: Session):
-    """Returns empty dict immediately when the symbols list is empty."""
+def test_get_price_matrix_empty_asset_keys(session: Session):
+    """Returns empty dict immediately when the asset_keys list is empty."""
     result = _get_price_matrix(session, [], date(2024, 1, 1), date(2024, 1, 7))
     assert result == {}
 
 
 def test_get_price_matrix_basic(session: Session):
-    """Returns prices indexed by (isin, date) for a simple case."""
-    asset = _make_market_asset(session, isin="US_AAPL_TEST", symbol="AAPL", name="Apple Inc.")
+    """Returns prices indexed by (asset_key, date) for a simple case."""
+    asset = _make_market_asset(session, asset_key="US_AAPL_TEST", symbol="AAPL", name="Apple Inc.")
     _make_price(session, asset.id, Decimal("180.00"), date(2024, 1, 2))
     _make_price(session, asset.id, Decimal("182.50"), date(2024, 1, 3))
 
@@ -247,7 +246,7 @@ def test_get_price_matrix_basic(session: Session):
 
 def test_get_price_matrix_out_of_range_excluded(session: Session):
     """Prices outside [from_date, to_date] are not included."""
-    asset = _make_market_asset(session, isin="US_RANGE_TEST", symbol="RNG", name="Range Co.")
+    asset = _make_market_asset(session, asset_key="US_RANGE_TEST", symbol="RNG", name="Range Co.")
     _make_price(session, asset.id, Decimal("50.00"), date(2024, 1, 1))   # before range
     _make_price(session, asset.id, Decimal("55.00"), date(2024, 1, 5))   # in range
     _make_price(session, asset.id, Decimal("60.00"), date(2024, 1, 10))  # after range
@@ -260,10 +259,10 @@ def test_get_price_matrix_out_of_range_excluded(session: Session):
     assert date(2024, 1, 10) not in sym
 
 
-def test_get_price_matrix_multiple_symbols(session: Session):
-    """Multiple symbols are returned in independent sub-dicts."""
-    asset_a = _make_market_asset(session, isin="SYM_AA", symbol="AAA", name="Asset A")
-    asset_b = _make_market_asset(session, isin="SYM_BB", symbol="BBB", name="Asset B")
+def test_get_price_matrix_multiple_asset_keys(session: Session):
+    """Multiple asset keys are returned in independent sub-dicts."""
+    asset_a = _make_market_asset(session, asset_key="SYM_AA", symbol="AAA", name="Asset A")
+    asset_b = _make_market_asset(session, asset_key="SYM_BB", symbol="BBB", name="Asset B")
     _make_price(session, asset_a.id, Decimal("10.00"), date(2024, 2, 1))
     _make_price(session, asset_b.id, Decimal("20.00"), date(2024, 2, 1))
 
@@ -273,8 +272,8 @@ def test_get_price_matrix_multiple_symbols(session: Session):
     assert result["SYM_BB"][date(2024, 2, 1)] == Decimal("20.00")
 
 
-def test_get_price_matrix_unknown_symbol(session: Session):
-    """An unknown symbol yields no entry in the result (no error)."""
+def test_get_price_matrix_unknown_asset_key(session: Session):
+    """An unknown asset key yields no entry in the result (no error)."""
     result = _get_price_matrix(session, ["DOES_NOT_EXIST"], date(2024, 1, 1), date(2024, 1, 5))
     assert result == {}
 
@@ -327,8 +326,8 @@ def test_fill_price_gaps_new_price_overrides_carry(session: Session):
 
 
 def test_fill_price_gaps_fallback_from_db(session: Session):
-    """A symbol absent from the matrix is filled from the latest DB price before range start."""
-    asset = _make_market_asset(session, isin="SOL_FALLBACK", symbol="SOL", name="Solana")
+    """A asset_key absent from the matrix is filled from the latest DB price before range start."""
+    asset = _make_market_asset(session, asset_key="SOL_FALLBACK", symbol="SOL", name="Solana")
     # Price exists *before* the range we're filling
     _make_price(session, asset.id, Decimal("100.00"), date(2023, 12, 31))
 
@@ -365,16 +364,14 @@ def test_generate_missing_snapshots_stock_values(session: Session, master_key: s
     transactions = [
         _tx(
             type="DEPOSIT",
-            symbol="EUR",
-            isin="EUR",
+            asset_key="EUR",
             amount=Decimal("1800"),
             price_per_unit=Decimal("1"),
             executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
         ),
         _tx(
             type="BUY",
-            symbol="AAPL",
-            isin="US0378331005",
+            asset_key="US0378331005",
             amount=Decimal("10"),
             price_per_unit=Decimal("180"),
             executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
@@ -426,8 +423,7 @@ def test_compute_daily_net_flow_crypto_ignores_internal_swap_fiat_legs():
             id="tx_spend",
             group_uuid="g_swap",
             type="SPEND",
-            symbol="EUR",
-            isin="EUR",
+            asset_key="EUR",
             amount=Decimal("1000"),
             price_per_unit=Decimal("1"),
             executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
@@ -436,8 +432,7 @@ def test_compute_daily_net_flow_crypto_ignores_internal_swap_fiat_legs():
             id="tx_buy",
             group_uuid="g_swap",
             type="BUY",
-            symbol="BTC",
-            isin="BTC",
+            asset_key="BTC",
             amount=Decimal("0.02"),
             price_per_unit=Decimal("0"),
             executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
@@ -446,8 +441,7 @@ def test_compute_daily_net_flow_crypto_ignores_internal_swap_fiat_legs():
             id="tx_anchor",
             group_uuid="g_swap",
             type="ANCHOR",
-            symbol="EUR",
-            isin="EUR",
+            asset_key="EUR",
             amount=Decimal("1000"),
             price_per_unit=Decimal("1"),
             executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
@@ -472,7 +466,7 @@ def test_generate_missing_snapshots_bank_frozen(session: Session, master_key: st
     acc_bidx = hash_index("acc_bank_test", master_key)
     balance = Decimal("5000.00")
 
-    positions = [FrozenPosition(symbol="EUR", quantity=balance, total_invested=balance)]
+    positions = [FrozenPosition(asset_key="EUR", quantity=balance, total_invested=balance)]
 
     rows = _generate_missing_snapshots(
         session=session,
@@ -496,7 +490,7 @@ def test_generate_missing_snapshots_bank_frozen(session: Session, master_key: st
         assert row["positions_enc"] is not None
         positions_dec = json.loads(decrypt_data(row["positions_enc"], master_key))
         assert len(positions_dec) == 1
-        assert positions_dec[0]["symbol"] == "EUR"
+        assert positions_dec[0]["asset_key"] == "EUR"
         assert positions_dec[0]["percentage"] == "100.00"
     assert rows[0]["account_type"] == AccountCategory.BANK.value
 
@@ -509,24 +503,21 @@ def test_generate_missing_snapshots_position_with_missing_price_zero(session: Se
     transactions = [
         _tx(
             type="DEPOSIT",
-            symbol="EUR",
-            isin="EUR",
+            asset_key="EUR",
             amount=Decimal("700"),
             price_per_unit=Decimal("1"),
             executed_at=datetime(2024, 3, 1, 8, 0, tzinfo=timezone.utc),
         ),
         _tx(
             type="BUY",
-            symbol="PRICED",
-            isin="PRICED",
+            asset_key="PRICED",
             amount=Decimal("2"),
             price_per_unit=Decimal("100"),
             executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
         ),
         _tx(
             type="BUY",
-            symbol="UNPRICED",
-            isin="UNPRICED",
+            asset_key="UNPRICED",
             amount=Decimal("5"),
             price_per_unit=Decimal("100"),
             executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
@@ -559,31 +550,29 @@ def test_generate_missing_snapshots_position_with_missing_price_zero(session: Se
     # positions_enc should contain both: PRICED with its value, UNPRICED with value=0
     positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
     assert len(positions_dec) == 2
-    by_symbol = {p["symbol"]: p for p in positions_dec}
-    assert by_symbol["PRICED"]["value"] == "200.00"
-    assert by_symbol["UNPRICED"]["value"] == "0.00"
-    assert by_symbol["PRICED"]["invested"] == "200.00"
-    assert by_symbol["UNPRICED"]["invested"] == "500.00"
+    by_asset_key = {p["asset_key"]: p for p in positions_dec}
+    assert by_asset_key["PRICED"]["value"] == "200.00"
+    assert by_asset_key["UNPRICED"]["value"] == "0.00"
+    assert by_asset_key["PRICED"]["invested"] == "200.00"
+    assert by_asset_key["UNPRICED"]["invested"] == "500.00"
 
 
 def test_generate_missing_snapshots_positions_json_structure(session: Session, master_key: str):
-    """positions_enc JSON contains symbol, quantity, and rounded value."""
+    """positions_enc JSON contains asset_key, quantity, and rounded value."""
     user_bidx = hash_index("user_json_test", master_key)
     acc_bidx = hash_index("acc_json_test", master_key)
 
     transactions = [
         _tx(
             type="DEPOSIT",
-            symbol="EUR",
-            isin="EUR",
+            asset_key="EUR",
             amount=Decimal("15000"),
             price_per_unit=Decimal("1"),
             executed_at=datetime(2024, 4, 1, 8, 0, tzinfo=timezone.utc),
         ),
         _tx(
             type="BUY",
-            symbol="BTC",
-            isin="BTC",
+            asset_key="BTC",
             amount=Decimal("0.5"),
             price_per_unit=Decimal("30000"),
             executed_at=datetime(2024, 4, 1, 9, 0, tzinfo=timezone.utc),
@@ -609,8 +598,8 @@ def test_generate_missing_snapshots_positions_json_structure(session: Session, m
     assert len(rows) == 1
     positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
     assert len(positions_dec) == 2
-    by_symbol = {p["symbol"]: p for p in positions_dec}
-    entry = by_symbol["BTC"]
+    by_asset_key = {p["asset_key"]: p for p in positions_dec}
+    entry = by_asset_key["BTC"]
     assert entry["quantity"] == "0.5"
     # 0.5 × 40000 = 20000
     assert entry["value"] == "20000.00"
@@ -626,8 +615,7 @@ def test_generate_missing_snapshots_crypto_buy_uses_group_anchor_cost(session: S
         id="tx_anchor",
         group_uuid="g1",
         type="ANCHOR",
-        symbol="EUR",
-        isin="EUR",
+        asset_key="EUR",
         amount=Decimal("100"),
         price_per_unit=Decimal("1"),
         executed_at=datetime(2024, 4, 1, 10, 0, tzinfo=timezone.utc),
@@ -636,8 +624,7 @@ def test_generate_missing_snapshots_crypto_buy_uses_group_anchor_cost(session: S
         id="tx_buy",
         group_uuid="g1",
         type="BUY",
-        symbol="BTC",
-        isin="BTC",
+        asset_key="BTC",
         amount=Decimal("0.01"),
         price_per_unit=Decimal("0"),
         executed_at=datetime(2024, 4, 1, 10, 1, tzinfo=timezone.utc),
@@ -664,12 +651,12 @@ def test_generate_missing_snapshots_crypto_buy_uses_group_anchor_cost(session: S
     assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "100.00"
 
     positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
-    by_symbol = {p["symbol"]: p for p in positions_dec}
-    assert by_symbol["BTC"]["invested"] == "100.00"
+    by_asset_key = {p["asset_key"]: p for p in positions_dec}
+    assert by_asset_key["BTC"]["invested"] == "100.00"
 
 
 def test_generate_missing_snapshots_sell_partial_reduces_invested_correctly(session: Session, master_key: str):
-    """When selling part of a position, invested must be reduced by only that symbol's fraction, not total."""
+    """When selling part of a position, invested must be reduced by only that asset_key's fraction, not total."""
     user_bidx = hash_index("user_sell_invested", master_key)
     acc_bidx = hash_index("acc_sell_invested", master_key)
 
@@ -677,8 +664,7 @@ def test_generate_missing_snapshots_sell_partial_reduces_invested_correctly(sess
     tx_buy_btc = _tx(
         id="buy_btc",
         type="BUY",
-        symbol="BTC",
-        isin="BTC",
+        asset_key="BTC",
         amount=Decimal("1"),
         price_per_unit=Decimal("50000"),
         executed_at=datetime(2024, 5, 1, 10, 0, tzinfo=timezone.utc),
@@ -686,8 +672,7 @@ def test_generate_missing_snapshots_sell_partial_reduces_invested_correctly(sess
     tx_fiat_deposit = _tx(
         id="dep_eur",
         type="DEPOSIT",
-        symbol="EUR",
-        isin="EUR",
+        asset_key="EUR",
         amount=Decimal("54000"),
         price_per_unit=Decimal("1"),
         executed_at=datetime(2024, 5, 1, 9, 0, tzinfo=timezone.utc),
@@ -695,8 +680,7 @@ def test_generate_missing_snapshots_sell_partial_reduces_invested_correctly(sess
     tx_buy_eth = _tx(
         id="buy_eth",
         type="BUY",
-        symbol="ETH",
-        isin="ETH",
+        asset_key="ETH",
         amount=Decimal("2"),
         price_per_unit=Decimal("2000"),
         executed_at=datetime(2024, 5, 1, 11, 0, tzinfo=timezone.utc),
@@ -704,8 +688,7 @@ def test_generate_missing_snapshots_sell_partial_reduces_invested_correctly(sess
     tx_sell_eth = _tx(
         id="sell_eth",
         type="SPEND",
-        symbol="ETH",
-        isin="ETH",
+        asset_key="ETH",
         amount=Decimal("1"),
         price_per_unit=Decimal("2500"),
         executed_at=datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc),
@@ -735,9 +718,9 @@ def test_generate_missing_snapshots_sell_partial_reduces_invested_correctly(sess
     assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "52000.00"
 
     positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
-    by_symbol = {p["symbol"]: p for p in positions_dec}
-    assert by_symbol["BTC"]["invested"] == "50000.00"
-    assert by_symbol["ETH"]["invested"] == "2000.00"
+    by_asset_key = {p["asset_key"]: p for p in positions_dec}
+    assert by_asset_key["BTC"]["invested"] == "50000.00"
+    assert by_asset_key["ETH"]["invested"] == "2000.00"
 
 
 def test_generate_missing_snapshots_crypto_group_cost_includes_fees(session: Session, master_key: str):
@@ -750,8 +733,7 @@ def test_generate_missing_snapshots_crypto_group_cost_includes_fees(session: Ses
     tx_anchor = _tx(
         id="anchor_1",
         type="ANCHOR",
-        symbol="EUR",
-        isin="EUR",
+        asset_key="EUR",
         amount=Decimal("100"),
         price_per_unit=Decimal("1"),
         fees=Decimal("5"),
@@ -762,8 +744,7 @@ def test_generate_missing_snapshots_crypto_group_cost_includes_fees(session: Ses
     tx_buy = _tx(
         id="buy_btc_1",
         type="BUY",
-        symbol="BTC",
-        isin="BTC",
+        asset_key="BTC",
         amount=Decimal("1"),
         price_per_unit=Decimal("0"),
         group_uuid=group_uuid,
@@ -791,23 +772,23 @@ def test_generate_missing_snapshots_crypto_group_cost_includes_fees(session: Ses
     assert decrypt_data(rows[0]["total_invested_enc"], master_key) == "100.00"
 
     positions_dec = json.loads(decrypt_data(rows[0]["positions_enc"], master_key))
-    by_symbol = {p["symbol"]: p for p in positions_dec}
-    assert by_symbol["BTC"]["invested"] == "100.00"
+    by_asset_key = {p["asset_key"]: p for p in positions_dec}
+    assert by_asset_key["BTC"]["invested"] == "100.00"
 
 
 def test_parse_positions_json_reads_invested_with_backward_compat():
     """Parser should read invested when present and default to 0 when absent."""
     parsed = _parse_positions_json(
         json.dumps([
-            {"symbol": "BTC", "quantity": "1.25", "invested": "42000.50"},
-            {"symbol": "ETH", "quantity": "3"},  # old payload without invested
+            {"asset_key": "BTC", "quantity": "1.25", "invested": "42000.50"},
+            {"asset_key": "ETH", "quantity": "3"},  # old payload without invested
         ])
     )
 
     assert len(parsed) == 2
-    by_symbol = {p.symbol: p for p in parsed}
-    assert by_symbol["BTC"].total_invested == Decimal("42000.50")
-    assert by_symbol["ETH"].total_invested == Decimal("0")
+    by_asset_key = {p.asset_key: p for p in parsed}
+    assert by_asset_key["BTC"].total_invested == Decimal("42000.50")
+    assert by_asset_key["ETH"].total_invested == Decimal("0")
 
 
 def test_generate_missing_snapshots_no_positions(session: Session, master_key: str):
@@ -874,16 +855,14 @@ def test_generate_missing_snapshots_summary_filters_by_as_of_date(session: Sessi
     txs = [
         _tx(
             type="DEPOSIT",
-            symbol="EUR",
-            isin="EUR",
+            asset_key="EUR",
             amount=Decimal("10000"),
             price_per_unit=Decimal("1"),
             executed_at=datetime(2024, 3, 2, 8, 0, tzinfo=timezone.utc),
         ),
         _tx(
             type="BUY",
-            symbol="BTC",
-            isin="BTC",
+            asset_key="BTC",
             amount=Decimal("0.2"),
             price_per_unit=Decimal("50000"),
             executed_at=datetime(2024, 3, 2, 12, 0, tzinfo=timezone.utc),

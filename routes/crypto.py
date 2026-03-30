@@ -233,13 +233,13 @@ def create_transaction(
         account_id=data.account_id,
         asset_type=AssetType.CRYPTO,
         affected_dates=[executed_date],
-        affected_assets=[resp.symbol]
+        affected_assets=[resp.asset_key]
     )
 
     return CryptoTransactionBasicResponse(
         id=resp.id,
         account_id=data.account_id,
-        symbol=resp.symbol,
+        symbol=resp.asset_key,
         type=data.type,
         amount=resp.amount,
         price_per_unit=resp.price_per_unit,
@@ -289,7 +289,7 @@ def create_composite_transaction(
             id=tx.id,
             account_id=data.account_id,
             group_uuid=tx.group_uuid,
-            symbol=tx.symbol,
+            symbol=tx.asset_key,
             type=CryptoTransactionType(tx.type),
             amount=tx.amount,
             price_per_unit=tx.price_per_unit,
@@ -311,7 +311,7 @@ def create_composite_transaction(
         account_id=data.account_id,
         asset_type=AssetType.CRYPTO,
         affected_dates=[executed_date],
-        affected_assets=[tx.symbol for tx in created]
+        affected_assets=[tx.asset_key for tx in created]
     )
 
     return CryptoCompositeTransactionResponse(rows=rows, warning=warning, info=info)
@@ -340,7 +340,7 @@ def create_cross_account_transfer_route(
             id=tx.id,
             account_id=data.from_account_id,
             group_uuid=tx.group_uuid,
-            symbol=tx.symbol,
+            symbol=tx.asset_key,
             type=CryptoTransactionType(tx.type),
             amount=tx.amount,
             price_per_unit=tx.price_per_unit,
@@ -459,13 +459,13 @@ def update_transaction(
             account_id_bidx=tx_model.account_id_bidx,
             asset_type=AssetType.CRYPTO,
             affected_dates=[old_date, new_date],
-            affected_assets=[resp.symbol] if resp.symbol not in FIAT_SYMBOLS else []
+            affected_assets=[resp.asset_key] if resp.asset_key not in FIAT_SYMBOLS else []
         )
 
         return CryptoTransactionBasicResponse(
             id=resp.id,
             account_id="unknown",  # account_id not stored on tx; caller knows it
-            symbol=resp.symbol,
+            symbol=resp.asset_key,
             type=CryptoTransactionType(resp.type),
             amount=resp.amount,
             price_per_unit=resp.price_per_unit,
@@ -516,7 +516,7 @@ def delete_transaction(
             affected_dates.append(grouped_tx.created_at.date())
 
         try:
-            symbol = decrypt_data(grouped_tx.symbol_enc, master_key)
+            symbol = decrypt_data(grouped_tx.asset_key_enc, master_key)
             if symbol not in FIAT_SYMBOLS:
                 affected_assets.add(symbol)
         except Exception:
@@ -586,7 +586,7 @@ def bulk_import_transactions(
             id=resp.id,
             account_id=data.account_id,
             group_uuid=item.group_uuid,
-            symbol=resp.symbol,
+            symbol=resp.asset_key,
             type=item.type,
             amount=resp.amount,
             price_per_unit=resp.price_per_unit,
@@ -719,6 +719,7 @@ def get_crypto_assets_info(
     for symbol, info in data.items():
         response.append(AssetInfoResponse(
             symbol=symbol,
+            asset_key=symbol,
             name=info.get("name"),
             price=info.get("price"),
             currency=info.get("currency"),

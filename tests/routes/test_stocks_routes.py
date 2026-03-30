@@ -2,6 +2,8 @@ import json
 from decimal import Decimal
 from unittest.mock import patch
 
+from models.enums import AssetType
+from models.market import MarketAsset
 import pytest
 from fastapi.testclient import TestClient
 
@@ -54,9 +56,7 @@ def test_create_account_and_transaction(session, master_key):
 
     tx_payload = {
         "account_id": account_id,
-        "symbol": "AAPL",
-        "isin": "US0378331005",
-        "exchange": "NASDAQ",
+        "asset_key": "US0378331005",
         "type": "BUY",
         "amount": "2.5",
         "price_per_unit": "150",
@@ -68,12 +68,12 @@ def test_create_account_and_transaction(session, master_key):
     resp_tx = client.post("/stocks/transactions", json=tx_payload)
     assert resp_tx.status_code == 201
     tx = resp_tx.json()
-    assert tx["symbol"] == "AAPL"
+    assert tx["asset_key"] == "US0378331005"
 
     resp_get = client.get(f"/stocks/transactions/{tx['id']}")
     assert resp_get.status_code == 200
     got = resp_get.json()
-    assert got["symbol"] == "AAPL"
+    assert got["asset_key"] == "US0378331005"
 
 
 @patch("services.stock_transaction.get_stock_info")
@@ -89,7 +89,7 @@ def test_account_summary_with_market(mock_market, session, master_key):
     tx_payload = {
         "account_id": account_id,
         "symbol": "AAPL",
-        "isin": "US0378331005",
+        "asset_key": "US0378331005",
         "type": "BUY",
         "amount": "1",
         "price_per_unit": "100",
@@ -129,7 +129,17 @@ def test_stocks_additional_routes(session, master_key):
     assert rupd.status_code == 200
     assert rupd.json()["name"] == "CTO Updated"
 
-    tx = {"account_id": acc_id, "symbol": "XYZ", "isin": "ISIN_XYZ", "type": "BUY", "amount": "2", "price_per_unit": "10", "fees": "0", "executed_at": "2023-01-01T00:00:00"}
+    ma = MarketAsset(
+        asset_key="ISIN_XYZ",
+        symbol="XYZ",
+        name="Test Asset",
+        exchange="NYSE",
+        asset_type=AssetType.STOCK,
+    )
+    session.add(ma)
+    session.commit()
+
+    tx = {"account_id": acc_id, "asset_key": "ISIN_XYZ", "type": "BUY", "amount": "2", "price_per_unit": "10", "fees": "0", "executed_at": "2023-01-01T00:00:00"}
     rtx = client.post("/stocks/transactions", json=tx)
     assert rtx.status_code == 201
     txid = rtx.json()["id"]
@@ -141,7 +151,17 @@ def test_stocks_additional_routes(session, master_key):
     rbyacc = client.get(f"/stocks/transactions/account/{acc_id}")
     assert rbyacc.status_code == 200
 
-    bulk = {"account_id": acc_id, "transactions": [{"symbol": "A", "isin": "ISIN_A", "type": "BUY", "amount": "1", "price_per_unit": "1", "fees": "0", "executed_at": "2023-01-01T00:00:00"}]}
+    ma = MarketAsset(
+        asset_key="ISIN_A",
+        symbol="A",
+        name="Test Asset A",
+        exchange="NYSE",
+        asset_type=AssetType.STOCK,
+    )
+    session.add(ma)
+    session.commit()
+
+    bulk = {"account_id": acc_id, "transactions": [{"symbol": "A", "asset_key": "ISIN_A", "type": "BUY", "amount": "1", "price_per_unit": "1", "fees": "0", "executed_at": "2023-01-01T00:00:00"}]}
     rbulk = client.post("/stocks/transactions/bulk", json=bulk)
     assert rbulk.status_code == 201
     assert rbulk.json()["imported_count"] == 1
@@ -208,7 +228,7 @@ def test_bulk_import_deposit_with_fees_stores_net_amount(session, master_key):
         "account_id": account_id,
         "transactions": [
             {
-                "isin": "EUR",
+                "asset_key": "EUR",
                 "type": "DEPOSIT",
                 "amount": "975",
                 "price_per_unit": "1",
@@ -226,7 +246,7 @@ def test_bulk_import_deposit_with_fees_stores_net_amount(session, master_key):
     txs_resp = client.get(f"/stocks/transactions/account/{account_id}")
     assert txs_resp.status_code == 200
     txs = txs_resp.json()
-    deposit = next((t for t in txs if t["type"] == "DEPOSIT" and t["isin"] == "EUR"), None)
+    deposit = next((t for t in txs if t["type"] == "DEPOSIT" and t["asset_key"] == "EUR"), None)
     assert deposit is not None
     assert Decimal(str(deposit["amount"])) == Decimal("975")
     assert Decimal(str(deposit["fees"])) == Decimal("0")
@@ -237,13 +257,18 @@ def test_bulk_import_deposit_with_fees_stores_net_amount(session, master_key):
     summary = summary_resp.json()
     assert Decimal(str(summary["total_deposits"])) == Decimal("975")
 
-    eur_position = next((p for p in summary["positions"] if p["isin"] == "EUR"), None)
+    eur_position = next((p for p in summary["positions"] if p["asset_key"] == "EUR"), None)
     assert eur_position is not None
     assert Decimal(str(eur_position["total_amount"])) == Decimal("975")
 
 
 def test_bulk_import_sorts_transactions_to_allow_loss_sells(session, master_key):
     client = TestClient(app)
+
+    ma = MarketAsset(asset_key="FR0011869353", symbol="TEST", name="Test Asset", asset_type="STOCK")
+    session.add(ma)
+    session.commit()
+    session.refresh(ma)
 
     account_resp = client.post("/stocks/accounts", json={"name": "CTO Chrono", "account_type": "CTO"})
     assert account_resp.status_code == 201
@@ -254,7 +279,7 @@ def test_bulk_import_sorts_transactions_to_allow_loss_sells(session, master_key)
         "account_id": account_id,
         "transactions": [
             {
-                "isin": "FR0011869353",
+                "asset_key": "FR0011869353",
                 "type": "SELL",
                 "amount": "16",
                 "price_per_unit": "24.314",
@@ -262,7 +287,7 @@ def test_bulk_import_sorts_transactions_to_allow_loss_sells(session, master_key)
                 "executed_at": "2026-02-10T10:00:00",
             },
             {
-                "isin": "FR0011869353",
+                "asset_key": "FR0011869353",
                 "type": "BUY",
                 "amount": "16",
                 "price_per_unit": "26.1875",
@@ -280,4 +305,4 @@ def test_bulk_import_sorts_transactions_to_allow_loss_sells(session, master_key)
     txs_resp = client.get(f"/stocks/transactions/account/{account_id}")
     assert txs_resp.status_code == 200
     txs = txs_resp.json()
-    assert sum(1 for t in txs if t["isin"] == "FR0011869353") == 2
+    assert sum(1 for t in txs if t["asset_key"] == "FR0011869353") == 2

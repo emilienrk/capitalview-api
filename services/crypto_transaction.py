@@ -22,7 +22,7 @@ from services.market import get_crypto_info
 
 def _upsert_market_cache(session: Session, symbol: str, name: str | None) -> None:
     market_asset = session.exec(
-        select(MarketAsset).where(MarketAsset.isin == symbol.upper())
+        select(MarketAsset).where(MarketAsset.asset_key == symbol.upper())
     ).first()
     if market_asset:
         if name and not market_asset.name:
@@ -30,7 +30,7 @@ def _upsert_market_cache(session: Session, symbol: str, name: str | None) -> Non
             session.add(market_asset)
     else:
         market_asset = MarketAsset(
-            isin=symbol.upper(),
+            asset_key=symbol.upper(),
             symbol=symbol.upper(),
             name=name or symbol.upper(),
             asset_type=AssetType.CRYPTO,
@@ -41,7 +41,7 @@ def _upsert_market_cache(session: Session, symbol: str, name: str | None) -> Non
 def _decrypt_transaction(
     tx: CryptoTransaction, master_key: str
 ) -> TransactionResponse:
-    symbol = decrypt_data(tx.symbol_enc, master_key)
+    symbol = decrypt_data(tx.asset_key_enc, master_key)
     type_str = decrypt_data(tx.type_enc, master_key)
     amount = Decimal(decrypt_data(tx.amount_enc, master_key))
     price = Decimal(decrypt_data(tx.price_per_unit_enc, master_key))
@@ -57,8 +57,7 @@ def _decrypt_transaction(
 
     return TransactionResponse(
         id=tx.uuid,
-        symbol=symbol,
-        isin=symbol,
+        asset_key=symbol,
         type=type_str,
         amount=amount,
         price_per_unit=price,
@@ -82,7 +81,7 @@ def create_crypto_transaction(
 
     account_bidx = hash_index(data.account_id, master_key)
 
-    symbol_enc = encrypt_data(data.symbol.upper(), master_key)
+    asset_key_enc = encrypt_data(data.symbol.upper(), master_key)
     type_enc = encrypt_data(data.type.value, master_key)
     amount_enc = encrypt_data(str(data.amount), master_key)
     price_enc = encrypt_data(str(data.price_per_unit), master_key)
@@ -93,7 +92,7 @@ def create_crypto_transaction(
 
     transaction = CryptoTransaction(
         account_id_bidx=account_bidx,
-        symbol_enc=symbol_enc,
+        asset_key_enc=asset_key_enc,
         type_enc=type_enc,
         amount_enc=amount_enc,
         price_per_unit_enc=price_enc,
@@ -398,7 +397,7 @@ def _compute_symbol_pru(
             if tx.type == CryptoTransactionType.ANCHOR.value:
                 anchor_by_group.setdefault(tx.group_uuid, Decimal("0"))
                 anchor_by_group[tx.group_uuid] += tx.amount * tx.price_per_unit
-            elif tx.type == CryptoTransactionType.SPEND.value and tx.symbol in FIAT_SYMBOLS:
+            elif tx.type == CryptoTransactionType.SPEND.value and tx.asset_key in FIAT_SYMBOLS:
                 fiat_spend_by_group.setdefault(tx.group_uuid, Decimal("0"))
                 fiat_spend_by_group[tx.group_uuid] += tx.amount * tx.price_per_unit
 
@@ -416,7 +415,7 @@ def _compute_symbol_pru(
     cost_basis = Decimal("0")
 
     for tx in transactions:
-        if tx.symbol != symbol_up:
+        if tx.asset_key != symbol_up:
             continue
         match tx.type:
             case CryptoTransactionType.BUY.value:
@@ -564,7 +563,7 @@ def update_crypto_transaction(
         _upsert_market_cache(session, data.symbol, data.name)
 
     if data.symbol is not None:
-        transaction.symbol_enc = encrypt_data(data.symbol.upper(), master_key)
+        transaction.asset_key_enc = encrypt_data(data.symbol.upper(), master_key)
     if data.type is not None:
         transaction.type_enc = encrypt_data(data.type.value, master_key)
     if data.amount is not None:
@@ -632,21 +631,20 @@ def get_account_transactions(
 
     decoded = [_decrypt_transaction(tx, master_key) for tx in transactions]
 
-    symbols = {tx.symbol for tx in decoded if tx.symbol}
+    asset_keys = {tx.asset_key for tx in decoded if tx.asset_key}
     market_map: dict = {}
-    if symbols:
+    if asset_keys:
         market_assets = session.exec(
-            select(MarketAsset).where(MarketAsset.isin.in_(symbols))
+            select(MarketAsset).where(MarketAsset.asset_key.in_(asset_keys))
         ).all()
         from services.market import get_latest_price
         for ma in market_assets:
             latest = get_latest_price(session, ma.id)
-            market_map[ma.isin] = {"name": ma.name, "current_price": latest}
+            market_map[ma.asset_key] = {"name": ma.name, "current_price": latest}
 
     for tx in decoded:
-        info = market_map.get(tx.symbol)
+        info = market_map.get(tx.asset_key)
         if info and tx.type != "ANCHOR":
-            tx.name = info["name"]
             tx.current_price = info["current_price"]
             if tx.current_price and tx.amount:
                 tx.current_value = tx.amount * tx.current_price
@@ -680,12 +678,12 @@ def get_crypto_account_summary(
             if tx.type == "ANCHOR":
                 anchor_by_group.setdefault(tx.group_uuid, Decimal("0"))
                 anchor_by_group[tx.group_uuid] += tx.amount * tx.price_per_unit
-            elif tx.type == "SPEND" and tx.symbol in FIAT_SYMBOLS:
+            elif tx.type == "SPEND" and tx.asset_key in FIAT_SYMBOLS:
                 fiat_spend_by_group.setdefault(tx.group_uuid, Decimal("0"))
                 fiat_spend_by_group[tx.group_uuid] += tx.amount * tx.price_per_unit
-            elif tx.type == "SPEND" and tx.symbol not in FIAT_SYMBOLS:
+            elif tx.type == "SPEND" and tx.asset_key not in FIAT_SYMBOLS:
                 groups_with_crypto_spend.add(tx.group_uuid)
-            elif tx.type == "BUY" and tx.symbol not in FIAT_SYMBOLS:
+            elif tx.type == "BUY" and tx.asset_key not in FIAT_SYMBOLS:
                 groups_with_crypto_buy.add(tx.group_uuid)
 
     for tx in transactions:
@@ -700,15 +698,15 @@ def get_crypto_account_summary(
     positions_map: dict[str, dict] = {}
 
     for tx in transactions:
-        symbol = tx.symbol
-        if symbol not in positions_map:
-            positions_map[symbol] = {
-                "symbol": symbol,
+        asset_key = tx.asset_key
+        if asset_key not in positions_map:
+            positions_map[asset_key] = {
+                "symbol": asset_key,
                 "total_amount": Decimal("0"),
                 "cost_basis": Decimal("0"),
                 "fees_eur": Decimal("0"),
             }
-        pos = positions_map[symbol]
+        pos = positions_map[asset_key]
         tx_cost = tx.amount * tx.price_per_unit
 
         match tx.type:
@@ -739,7 +737,7 @@ def get_crypto_account_summary(
                 pos["total_amount"] -= tx.amount
                 pos["fees_eur"] += tx_cost
             case "WITHDRAW":
-                if tx.symbol in FIAT_SYMBOLS:
+                if tx.asset_key in FIAT_SYMBOLS:
                     # Fiat withdrawal (exchange -> bank): no crypto cost-basis impact.
                     pos["total_amount"] -= tx.amount
                 else:
@@ -756,8 +754,8 @@ def get_crypto_account_summary(
                 pass
 
     positions = []
-    for symbol, data in positions_map.items():
-        if data["total_amount"] < Decimal("0") and symbol in FIAT_SYMBOLS:
+    for asset_key, data in positions_map.items():
+        if data["total_amount"] < Decimal("0") and asset_key in FIAT_SYMBOLS:
             pass
         elif data["total_amount"] <= Decimal("0"):
             continue
@@ -768,15 +766,15 @@ def get_crypto_account_summary(
         avg_price = total_invested / total_amount if total_amount > 0 else Decimal("0")
         fees_pct = (fees_eur / total_invested * 100) if total_invested > 0 else Decimal("0")
 
-        if symbol in FIAT_SYMBOLS:
-            name = symbol
+        if asset_key in FIAT_SYMBOLS:
+            name = asset_key
             current_price = Decimal("1")
         else:
             if preloaded_prices is not None:
-                current_price = preloaded_prices.get(symbol)
-                name = symbol
+                current_price = preloaded_prices.get(asset_key)
+                name = asset_key
             else:
-                name, current_price = get_crypto_info(session, symbol, as_of=as_of, db_only=db_only)
+                name, current_price = get_crypto_info(session, asset_key, as_of=as_of, db_only=db_only)
 
         current_value = profit_loss = profit_loss_pct = None
         if current_price:
@@ -787,8 +785,8 @@ def get_crypto_account_summary(
 
         positions.append(
             PositionResponse(
-                symbol=symbol,
-                isin=symbol,
+                symbol=asset_key,
+                asset_key=asset_key,
                 name=name,
                 total_amount=total_amount,
                 average_buy_price=round(avg_price, 4),
@@ -805,15 +803,15 @@ def get_crypto_account_summary(
 
     net_external_deposits = Decimal("0")
     for tx in transactions:
-        if tx.type == "DEPOSIT" and tx.symbol in FIAT_SYMBOLS:
+        if tx.type == "DEPOSIT" and tx.asset_key in FIAT_SYMBOLS:
             # External wire IN — only if NOT part of a crypto-sale (SELL_TO_FIAT) group
             if not tx.group_uuid or tx.group_uuid not in groups_with_crypto_spend:
                 net_external_deposits += tx.amount * tx.price_per_unit
-        elif tx.type == "SPEND" and tx.symbol in FIAT_SYMBOLS:
+        elif tx.type == "SPEND" and tx.asset_key in FIAT_SYMBOLS:
             # External withdrawal OUT — only if NOT part of a crypto-buy group
             if not tx.group_uuid or tx.group_uuid not in groups_with_crypto_buy:
                 net_external_deposits -= tx.amount * tx.price_per_unit
-        elif tx.type == "WITHDRAW" and tx.symbol in FIAT_SYMBOLS:
+        elif tx.type == "WITHDRAW" and tx.asset_key in FIAT_SYMBOLS:
             # Direct withdrawal of fiat — always reduces net deposits
             net_external_deposits -= tx.amount * tx.price_per_unit
 
@@ -867,7 +865,7 @@ def get_symbol_balance(
     balance = Decimal("0")
     sym_upper = symbol.upper()
     for tx in transactions:
-        tx_sym = decrypt_data(tx.symbol_enc, master_key).upper()
+        tx_sym = decrypt_data(tx.asset_key_enc, master_key).upper()
         if tx_sym != sym_upper:
             continue
         type_str = decrypt_data(tx.type_enc, master_key)
@@ -900,7 +898,7 @@ def compute_balance_warning(
         type_str = row.type if isinstance(row.type, str) else row.type.value
         if type_str not in CryptoTransactionType.debit_types():
             continue
-        sym = (row.symbol or "").upper()
+        sym = (row.asset_key or "").upper()
         if not sym or sym in FIAT_SYMBOLS:
             continue
         acc = (

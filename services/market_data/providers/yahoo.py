@@ -102,11 +102,11 @@ class YahooProvider(MarketDataProvider):
             if not price or price <= 0:
                 return None
 
-            isin = None
+            asset_key = None
             try:
-                raw_isin = ticker.isin
-                if raw_isin and raw_isin != "-":
-                    isin = raw_isin
+                raw_asset_key = ticker.asset_key
+                if raw_asset_key and raw_asset_key != "-":
+                    asset_key = raw_asset_key
             except Exception:
                 pass
 
@@ -115,7 +115,7 @@ class YahooProvider(MarketDataProvider):
                 "currency": info.get("currency", "EUR"),
                 "price": Decimal(str(price)),
                 "symbol": original_symbol,
-                "isin": isin,
+                "asset_key": asset_key,
                 "exchange": self.normalize_exchange(info.get("exchange")),
             }
         except (ValueError, IndexError, KeyError):
@@ -202,7 +202,7 @@ class YahooProvider(MarketDataProvider):
                 price = None
                 currency = "EUR"
                 name = original_sym
-                isin = None
+                asset_key = None
 
                 if hasattr(ticker, "fast_info"):
                     try:
@@ -224,20 +224,20 @@ class YahooProvider(MarketDataProvider):
                         pass
 
                 # Fetch ISIN separately (always, not just in fallback path)
-                if isin is None:
+                if asset_key is None:
                     try:
-                        raw_isin = ticker.isin
-                        if raw_isin and raw_isin != "-":
-                            isin = raw_isin
+                        raw_asset_key = ticker.isin
+                        if raw_asset_key and raw_asset_key != "-":
+                            asset_key = raw_asset_key
                     except Exception:
                         pass
 
-                if (price and price > 0) or isin:
+                if (price and price > 0) or asset_key:
                     results[original_sym] = {
                         "price": Decimal(str(price)) if price and price > 0 else None,
                         "name": name,
                         "currency": currency,
-                        "isin": isin
+                        "asset_key": asset_key
                     }
             return results
         except Exception as e:

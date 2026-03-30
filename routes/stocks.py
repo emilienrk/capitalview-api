@@ -254,7 +254,7 @@ def create_transaction(
             account_id=data.account_id,
             asset_type=AssetType.STOCK,
             affected_dates=[executed_date],
-            affected_assets=[data.isin]
+            affected_assets=[data.asset_key]
         )
         
         return result
@@ -329,7 +329,7 @@ def update_transaction(
             account_id_bidx=tx_model.account_id_bidx,
             asset_type=AssetType.STOCK,
             affected_dates=[old_date, new_date],
-            affected_assets=[result.isin]
+            affected_assets=[result.asset_key]
         )
         
         return result
@@ -365,7 +365,7 @@ def delete_transaction(
         account_id_bidx=account_id_bidx,
         asset_type=AssetType.STOCK,
         affected_dates=[executed_date],
-        affected_assets=[tx.isin]
+        affected_assets=[tx.asset_key]
     )
     
     return None
@@ -418,10 +418,7 @@ def bulk_import_transactions(
             else:
                 create_dto = StockTransactionCreate(
                     account_id=data.account_id,
-                    symbol=None,
-                    isin=item.isin,
-                    name=None,
-                    exchange=None,
+                    asset_key=item.asset_key,
                     type=item.type,
                     amount=item.amount,
                     price_per_unit=item.price_per_unit,
@@ -434,10 +431,7 @@ def bulk_import_transactions(
             basic = StockTransactionBasicResponse(
                 id=resp.id,
                 account_id=data.account_id,
-                symbol=resp.symbol,
-                isin=resp.isin,
-                name=resp.name,
-                exchange=resp.exchange,
+                asset_key=resp.asset_key,
                 type=resp.type,
                 amount=resp.amount,
                 price_per_unit=resp.price_per_unit,
@@ -462,7 +456,7 @@ def bulk_import_transactions(
         account_id=data.account_id,
         asset_type=AssetType.STOCK,
         affected_dates=past_dates,
-        affected_assets=[item.isin for item in data.transactions if item.isin]
+        affected_assets=[item.asset_key for item in data.transactions if item.asset_key]
     )
 
     return StockBulkImportResponse(
@@ -484,7 +478,7 @@ def search_market_assets(
     return [
         AssetSearchResult(
             symbol=r["symbol"],
-            isin=r.get("isin"),
+            asset_key=r.get("isin"),
             name=r.get("name"),
             exchange=r.get("exchange"),
             type=r.get("type"),
@@ -509,7 +503,7 @@ def get_assets_info(
     for symbol, info in data.items():
         response.append(AssetInfoResponse(
             symbol=symbol,
-            isin=info.get("isin"),
+            asset_key=info.get("isin"),
             name=info.get("name"),
             price=info.get("price"),
             currency=info.get("currency"),

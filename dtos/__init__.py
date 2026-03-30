@@ -123,6 +123,8 @@ __all__ = [
     "BankAccountResponse",
     "BankAccountUpdate",
     "BankSummaryResponse",
+    "BankHistoryEntry",
+    "BankHistoryImportRequest",
     # Cashflow
     "CashflowBalanceResponse",
     "CashflowCategoryResponse",
@@ -150,6 +152,7 @@ __all__ = [
     "StockTransactionUpdate",
     "AssetSearchResult",
     "AssetInfoResponse",
+    "EurDepositCreate",
     # Crypto
     "CryptoAccountBasicResponse",
     "CryptoAccountCreate",
@@ -164,6 +167,8 @@ __all__ = [
     "CryptoTransactionBulkCreate",
     "CryptoTransactionCreate",
     "CryptoTransactionUpdate",
+    "CryptoCompositeTransactionCreate",
+    "CrossAccountTransferCreate",
     # Binance import
     "BinanceImportRowPreview",
     "BinanceImportGroupPreview",

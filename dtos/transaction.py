@@ -10,10 +10,7 @@ from pydantic import BaseModel
 class TransactionResponse(BaseModel):
     """Base transaction response with calculated fields."""
     id: str
-    name: str | None = None
-    symbol: str | None = None
-    isin: str | None = None
-    exchange: str | None = None
+    asset_key: str
     type: str
     amount: Decimal
     price_per_unit: Decimal
@@ -35,7 +32,7 @@ class PositionResponse(BaseModel):
     """Aggregated position for a single asset."""
     symbol: str
     name: str | None = None
-    isin: str | None = None
+    asset_key: str
     exchange: str | None = None
     total_amount: Decimal
     average_buy_price: Decimal

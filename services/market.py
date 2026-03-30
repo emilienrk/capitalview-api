@@ -286,7 +286,7 @@ def get_or_create_market_asset(
     """
     # Fast path: already in DB
     existing = session.exec(
-        select(MarketAsset).where(MarketAsset.isin == lookup_key)
+        select(MarketAsset).where(MarketAsset.asset_key == lookup_key)
     ).first()
     if existing:
         if _ensure_asset_type(existing, asset_type):
@@ -353,7 +353,7 @@ def _create_market_asset_entry(
         name = lookup_key
 
     existing = session.exec(
-        select(MarketAsset).where(MarketAsset.isin == lookup_key)
+        select(MarketAsset).where(MarketAsset.asset_key == lookup_key)
     ).first()
     if existing:
         if _ensure_asset_type(existing, asset_type):
@@ -363,7 +363,7 @@ def _create_market_asset_entry(
         return existing
 
     ma = MarketAsset(
-        isin=lookup_key,
+        asset_key=lookup_key,
         symbol=market_info.get("symbol") or lookup_key,
         name=name,
         exchange=market_info.get("exchange"),
@@ -375,7 +375,7 @@ def _create_market_asset_entry(
     except Exception:
         session.rollback()
         existing = session.exec(
-            select(MarketAsset).where(MarketAsset.isin == lookup_key)
+            select(MarketAsset).where(MarketAsset.asset_key == lookup_key)
         ).first()
         if existing:
             if _ensure_asset_type(existing, asset_type):
@@ -423,14 +423,14 @@ def get_assets_bulk_info(session: Session, symbols: list[str], asset_type: Asset
 
 def get_stock_price(
     session: Session,
-    isin: str,
+    asset_key: str,
     db_only: bool = False,
     as_of: date | None = None,
 ) -> Decimal | None:
     """Get current market price for a Stock (lookup by ISIN)."""
     _, price = _get_market_info_internal(
         session,
-        isin,
+        asset_key,
         AssetType.STOCK,
         db_only=db_only,
         as_of=as_of,
@@ -467,7 +467,7 @@ def _get_market_info_internal(
     today = date.today()
 
     cached = session.exec(
-        select(MarketAsset).where(MarketAsset.isin == lookup_key)
+        select(MarketAsset).where(MarketAsset.asset_key == lookup_key)
     ).first()
 
     if not cached:
@@ -502,14 +502,14 @@ def _get_market_info_internal(
 
 def get_stock_info(
     session: Session,
-    isin: str,
+    asset_key: str,
     db_only: bool = False,
     as_of: date | None = None,
 ) -> tuple[str | None, Decimal | None]:
     """Get (Name, Price) for a Stock."""
     return _get_market_info_internal(
         session,
-        isin,
+        asset_key,
         AssetType.STOCK,
         db_only=db_only,
         as_of=as_of,
@@ -693,10 +693,10 @@ def _date_range(from_date: date, to_date: date):
 
 def _get_or_create_forex_asset(session: Session, currency: str) -> MarketAsset:
     """Return (or auto-create) a FIAT MarketAsset tracking currency vs EUR."""
-    asset = session.exec(select(MarketAsset).where(MarketAsset.isin == currency)).first()
+    asset = session.exec(select(MarketAsset).where(MarketAsset.asset_key == currency)).first()
     if not asset:
         asset = MarketAsset(
-            isin=currency,
+            asset_key=currency,
             symbol=currency,
             name=currency,
             asset_type=AssetType.FIAT,
@@ -706,7 +706,7 @@ def _get_or_create_forex_asset(session: Session, currency: str) -> MarketAsset:
             session.commit()
         except Exception:
             session.rollback()
-            asset = session.exec(select(MarketAsset).where(MarketAsset.isin == currency)).first()
+            asset = session.exec(select(MarketAsset).where(MarketAsset.asset_key == currency)).first()
     return asset
 
 
@@ -889,7 +889,7 @@ def backfill_price_history(
 
     # Resolve or auto-create the MarketAsset
     asset = session.exec(
-        select(MarketAsset).where(MarketAsset.isin == lookup_key)
+        select(MarketAsset).where(MarketAsset.asset_key == lookup_key)
     ).first()
     if not asset:
         asset = _create_market_asset_entry(session, lookup_key, asset_type)

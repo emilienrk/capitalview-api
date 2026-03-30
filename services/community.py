@@ -261,15 +261,15 @@ def get_picks_for_profile(session: Session, target_user_uuid: str, target_userna
     return [_pick_to_response(p, target_username) for p in picks]
 
 
-def _compute_stock_pru_for_isins(
+def _compute_stock_pru_for_asset_keys(
     session: Session,
     user_uuid: str,
     master_key: str,
-    isins: list[str],
+    asset_keys: list[str],
 ) -> dict[str, Decimal]:
     """Compute PRU for a list of stock ISINs using the user's encrypted transactions.
 
-    Returns {isin: pru} for ISINs with a positive position.
+    Returns {asset_key: pru} for ISINs with a positive position.
     """
     from models import StockAccount, StockTransaction
     from services.encryption import decrypt_data, hash_index
@@ -281,8 +281,8 @@ def _compute_stock_pru_for_isins(
         select(StockAccount).where(StockAccount.user_uuid_bidx == user_bidx)
     ).all()
 
-    isin_set = {i.upper() for i in isins}
-    # Aggregate across all accounts: {isin: {amount, cost}}
+    asset_key_set = {i.upper() for i in asset_keys}
+    # Aggregate across all accounts: {asset_key: {amount, cost}}
     agg: dict[str, dict] = {}
 
     for account in accounts:
@@ -292,8 +292,8 @@ def _compute_stock_pru_for_isins(
         ).all()
 
         for tx in sorted(txs, key=lambda t: t.created_at):
-            isin = decrypt_data(tx.isin_enc, master_key).upper()
-            if isin not in isin_set:
+            asset_key = decrypt_data(tx.asset_key_enc, master_key).upper()
+            if asset_key not in asset_key_set:
                 continue
 
             tx_type = decrypt_data(tx.type_enc, master_key)
@@ -301,10 +301,10 @@ def _compute_stock_pru_for_isins(
             price = Decimal(decrypt_data(tx.price_per_unit_enc, master_key))
             fees = Decimal(decrypt_data(tx.fees_enc, master_key))
 
-            if isin not in agg:
-                agg[isin] = {"amount": Decimal("0"), "cost": Decimal("0")}
+            if asset_key not in agg:
+                agg[asset_key] = {"amount": Decimal("0"), "cost": Decimal("0")}
 
-            pos = agg[isin]
+            pos = agg[asset_key]
             if tx_type in ("BUY", "DIVIDEND", "DEPOSIT"):
                 pos["amount"] += amount
                 pos["cost"] += (amount * price) + fees
@@ -316,9 +316,9 @@ def _compute_stock_pru_for_isins(
                 pos["cost"] = max(pos["cost"], Decimal("0"))
 
     result: dict[str, Decimal] = {}
-    for isin, data in agg.items():
+    for asset_key, data in agg.items():
         if data["amount"] > 0:
-            result[isin] = data["cost"] / data["amount"]
+            result[asset_key] = data["cost"] / data["amount"]
     return result
 
 
@@ -355,7 +355,7 @@ def _compute_crypto_pru_for_symbols(
         ).all()
 
         for tx in raw_txs:
-            symbol = decrypt_data(tx.symbol_enc, master_key).upper()
+            symbol = decrypt_data(tx.asset_key_enc, master_key).upper()
             tx_type = decrypt_data(tx.type_enc, master_key)
             amount = Decimal(decrypt_data(tx.amount_enc, master_key))
             price = Decimal(decrypt_data(tx.price_per_unit_enc, master_key))
@@ -469,8 +469,8 @@ def update_community_settings(
     session.flush()
 
     # Compute PRU and create new positions
-    stock_pru = _compute_stock_pru_for_isins(
-        session, user_uuid, master_key, data.shared_stock_isins
+    stock_pru = _compute_stock_pru_for_asset_keys(
+        session, user_uuid, master_key, data.shared_stock_asset_keys
     )
     crypto_pru = _compute_crypto_pru_for_symbols(
         session, user_uuid, master_key, data.shared_crypto_symbols
@@ -478,12 +478,12 @@ def update_community_settings(
 
     created_count = 0
 
-    for isin, pru in stock_pru.items():
+    for asset_key, pru in stock_pru.items():
         pos = CommunityPosition(
             profile_user_id=profile.user_id,
             asset_type=AssetType.STOCK.value,
-            symbol_encrypted=community_encrypt(isin),
-            pru_encrypted=community_encrypt(str(pru)),
+            asset_key_enc=community_encrypt(asset_key),
+            pru_enc=community_encrypt(str(pru)),
         )
         session.add(pos)
         created_count += 1
@@ -492,8 +492,8 @@ def update_community_settings(
         pos = CommunityPosition(
             profile_user_id=profile.user_id,
             asset_type=AssetType.CRYPTO.value,
-            symbol_encrypted=community_encrypt(symbol),
-            pru_encrypted=community_encrypt(str(pru)),
+            asset_key_enc=community_encrypt(symbol),
+            pru_enc=community_encrypt(str(pru)),
         )
         session.add(pos)
         created_count += 1
@@ -505,7 +505,7 @@ def update_community_settings(
         is_private=profile.is_private,
         display_name=profile.display_name,
         bio=profile.bio,
-        shared_stock_isins=list(stock_pru.keys()),
+        shared_stock_asset_keys=list(stock_pru.keys()),
         shared_crypto_symbols=list(crypto_pru.keys()),
         positions_count=created_count,
     )
@@ -535,16 +535,16 @@ def refresh_community_positions(
         select(CommunityPosition).where(CommunityPosition.profile_user_id == profile.user_id)
     ).all()
 
-    stock_isins: list[str] = []
+    stock_asset_keys: list[str] = []
     crypto_symbols: list[str] = []
     for pos in existing:
-        symbol = community_decrypt(pos.symbol_encrypted)
+        symbol = community_decrypt(pos.asset_key_enc)
         if pos.asset_type == AssetType.STOCK.value:
-            stock_isins.append(symbol)
+            stock_asset_keys.append(symbol)
         else:
             crypto_symbols.append(symbol)
 
-    if not stock_isins and not crypto_symbols:
+    if not stock_asset_keys and not crypto_symbols:
         return
 
     # Delete old rows
@@ -553,23 +553,23 @@ def refresh_community_positions(
     session.flush()
 
     # Re-compute
-    stock_pru = _compute_stock_pru_for_isins(session, user_uuid, master_key, stock_isins)
+    stock_pru = _compute_stock_pru_for_asset_keys(session, user_uuid, master_key, stock_asset_keys)
     crypto_pru = _compute_crypto_pru_for_symbols(session, user_uuid, master_key, crypto_symbols)
 
-    for isin, pru in stock_pru.items():
+    for asset_key, pru in stock_pru.items():
         session.add(CommunityPosition(
             profile_user_id=profile.user_id,
             asset_type=AssetType.STOCK.value,
-            symbol_encrypted=community_encrypt(isin),
-            pru_encrypted=community_encrypt(str(pru)),
+            asset_key_enc=community_encrypt(asset_key),
+            pru_enc=community_encrypt(str(pru)),
         ))
 
     for symbol, pru in crypto_pru.items():
         session.add(CommunityPosition(
             profile_user_id=profile.user_id,
             asset_type=AssetType.CRYPTO.value,
-            symbol_encrypted=community_encrypt(symbol),
-            pru_encrypted=community_encrypt(str(pru)),
+            asset_key_enc=community_encrypt(symbol),
+            pru_enc=community_encrypt(str(pru)),
         ))
 
     session.commit()
@@ -734,8 +734,8 @@ def get_public_profile(
         weighted_pnl_sum = Decimal("0")
 
         for pos in positions:
-            symbol = community_decrypt(pos.symbol_encrypted)
-            pru = Decimal(community_decrypt(pos.pru_encrypted))
+            symbol = community_decrypt(pos.asset_key_enc)
+            pru = Decimal(community_decrypt(pos.pru_enc))
             asset_type = pos.asset_type
 
             current_price: Decimal | None = None
@@ -793,7 +793,7 @@ def get_community_settings(
             is_private=True,
             display_name=None,
             bio=None,
-            shared_stock_isins=[],
+            shared_stock_asset_keys=[],
             shared_crypto_symbols=[],
             positions_count=0,
         )
@@ -802,12 +802,12 @@ def get_community_settings(
         select(CommunityPosition).where(CommunityPosition.profile_user_id == profile.user_id)
     ).all()
 
-    stock_isins: list[str] = []
+    stock_asset_keys: list[str] = []
     crypto_symbols: list[str] = []
     for pos in positions:
-        symbol = community_decrypt(pos.symbol_encrypted)
+        symbol = community_decrypt(pos.asset_key_enc)
         if pos.asset_type == AssetType.STOCK.value:
-            stock_isins.append(symbol)
+            stock_asset_keys.append(symbol)
         else:
             crypto_symbols.append(symbol)
 
@@ -816,7 +816,7 @@ def get_community_settings(
         is_private=profile.is_private,
         display_name=profile.display_name,
         bio=profile.bio,
-        shared_stock_isins=stock_isins,
+        shared_stock_asset_keys=stock_asset_keys,
         shared_crypto_symbols=crypto_symbols,
         positions_count=len(positions),
     )
@@ -844,40 +844,40 @@ def get_available_positions(
         select(StockAccount).where(StockAccount.user_uuid_bidx == user_bidx)
     ).all()
 
-    stock_agg: dict[str, Decimal] = {}  # isin → net amount
+    stock_agg: dict[str, Decimal] = {}  # asset_key → net amount
     for account in stock_accounts:
         account_bidx = hash_index(account.uuid, master_key)
         txs = session.exec(
             select(StockTransaction).where(StockTransaction.account_id_bidx == account_bidx)
         ).all()
         for tx in txs:
-            isin = decrypt_data(tx.isin_enc, master_key).upper()
+            asset_key = decrypt_data(tx.asset_key_enc, master_key).upper()
             tx_type = decrypt_data(tx.type_enc, master_key)
             amount = Decimal(decrypt_data(tx.amount_enc, master_key))
-            if isin not in stock_agg:
-                stock_agg[isin] = Decimal("0")
+            if asset_key not in stock_agg:
+                stock_agg[asset_key] = Decimal("0")
             if tx_type in ("BUY", "DIVIDEND", "DEPOSIT"):
-                stock_agg[isin] += amount
+                stock_agg[asset_key] += amount
             elif tx_type == "SELL":
-                stock_agg[isin] -= amount
+                stock_agg[asset_key] -= amount
 
     # Lookup stock names from the MarketAsset cache (keyed by ISIN)
     from models.market import MarketAsset as MarketAssetModel
-    isin_to_name: dict[str, str] = {}
-    for isin in stock_agg:
+    asset_key_to_name: dict[str, str] = {}
+    for asset_key in stock_agg:
         mp = session.exec(
-            select(MarketAssetModel).where(MarketAssetModel.isin == isin)
+            select(MarketAssetModel).where(MarketAssetModel.asset_key == asset_key)
         ).first()
         if mp and mp.name:
-            isin_to_name[isin] = mp.name
+            asset_key_to_name[asset_key] = mp.name
 
     stocks = [
         AvailablePosition(
-            symbol=isin,
+            symbol=asset_key,
             asset_type=AssetType.STOCK.value,
-            name=isin_to_name.get(isin),
+            name=asset_key_to_name.get(asset_key),
         )
-        for isin, amt in sorted(stock_agg.items())
+        for asset_key, amt in sorted(stock_agg.items())
         if amt > 0
     ]
 
@@ -893,7 +893,7 @@ def get_available_positions(
             select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == account_bidx)
         ).all()
         for tx in txs:
-            symbol = decrypt_data(tx.symbol_enc, master_key).upper()
+            symbol = decrypt_data(tx.asset_key_enc, master_key).upper()
             tx_type = decrypt_data(tx.type_enc, master_key)
             amount = Decimal(decrypt_data(tx.amount_enc, master_key))
             # Skip fiat and anchor rows

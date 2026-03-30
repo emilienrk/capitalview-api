@@ -43,7 +43,7 @@ def test_dashboard_portfolio(mock_rate, mock_crypto, mock_stock, session, master
     client.post("/stocks/transactions", json={
         "account_id": acc_id,
         "symbol": "AAPL",
-        "isin": "US0378331005",
+        "asset_key": "US0378331005",
         "type": "BUY",
         "amount": "1",
         "price_per_unit": "100",
@@ -133,7 +133,7 @@ def test_dashboard_statistics(
     client.post("/stocks/transactions", json={
         "account_id": acc_id,
         "symbol": "AAPL",
-        "isin": "US0378331005",
+        "asset_key": "US0378331005",
         "type": "BUY",
         "amount": "2",
         "price_per_unit": "150",

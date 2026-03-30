@@ -21,7 +21,7 @@ from services.market import get_stock_info, get_or_create_market_asset
 
 def _decrypt_transaction(tx: StockTransaction, master_key: str) -> TransactionResponse:
     """Decrypt a StockTransaction and return a response with calculated totals."""
-    isin = decrypt_data(tx.isin_enc, master_key)
+    asset_key = decrypt_data(tx.asset_key_enc, master_key)
     type_str = decrypt_data(tx.type_enc, master_key)
     amount = Decimal(decrypt_data(tx.amount_enc, master_key))
     price = Decimal(decrypt_data(tx.price_per_unit_enc, master_key))
@@ -34,22 +34,16 @@ def _decrypt_transaction(tx: StockTransaction, master_key: str) -> TransactionRe
 
     notes = decrypt_data(tx.notes_enc, master_key) if tx.notes_enc else None
 
-    if type_str == "DEPOSIT" and isin == "EUR":
+    if type_str == "DEPOSIT" and asset_key == "EUR":
         total_cost = amount - fees
         fees_pct = (fees / amount * 100) if amount > 0 else Decimal("0")
     else:
         total_cost = (amount * price) + fees
         fees_pct = (fees / total_cost * 100) if total_cost > 0 else Decimal("0")
 
-    symbol = "EUR" if isin == "EUR" else None
-    name = "Euros" if isin == "EUR" else None
-
     return TransactionResponse(
         id=tx.uuid,
-        isin=isin,
-        symbol=symbol,
-        name=name,
-        exchange=None,
+        asset_key=asset_key,
         type=type_str,
         amount=amount,
         price_per_unit=price,
@@ -72,14 +66,14 @@ def create_eur_deposit(
 ) -> TransactionResponse:
     """Record a EUR cash deposit into a stock account.
     
-    Uses type=DEPOSIT + isin=EUR as sentinel: price_per_unit=1 (EUR is source of
+    Uses type=DEPOSIT + asset_key=EUR as sentinel: price_per_unit=1 (EUR is source of
     truth, no market call needed).
     """
     account_bidx = hash_index(account_uuid, master_key)
 
     transaction = StockTransaction(
         account_id_bidx=account_bidx,
-        isin_enc=encrypt_data("EUR", master_key),
+        asset_key_enc=encrypt_data("EUR", master_key),
         type_enc=encrypt_data("DEPOSIT", master_key),
         amount_enc=encrypt_data(str(amount), master_key),
         price_per_unit_enc=encrypt_data("1", master_key),
@@ -93,10 +87,7 @@ def create_eur_deposit(
 
     return TransactionResponse(
         id=transaction.uuid,
-        isin="EUR",
-        symbol="EUR",
-        name="Euros",
-        exchange=None,
+        asset_key="EUR",
         type="DEPOSIT",
         amount=amount,
         price_per_unit=Decimal("1"),
@@ -119,23 +110,23 @@ def _compute_eur_balance(
     txs.sort(key=lambda x: x.executed_at)
     eur = Decimal("0")
     for tx in txs:
-        if tx.type == "DEPOSIT" and tx.isin == "EUR":
+        if tx.type == "DEPOSIT" and tx.asset_key == "EUR":
             eur += tx.amount - tx.fees
-        elif tx.type == "BUY" and tx.isin != "EUR":
+        elif tx.type == "BUY" and tx.asset_key != "EUR":
             eur -= (tx.amount * tx.price_per_unit) + tx.fees
         elif tx.type == "DIVIDEND":
             eur += (tx.amount * tx.price_per_unit) - tx.fees
-        elif tx.type == "SELL" and tx.isin != "EUR":
+        elif tx.type == "SELL" and tx.asset_key != "EUR":
             eur += (tx.amount * tx.price_per_unit) - tx.fees
     return eur
 
 
-def _compute_held_quantity(session: Session, account_uuid: str, isin: str, master_key: str) -> Decimal:
+def _compute_held_quantity(session: Session, account_uuid: str, asset_key: str, master_key: str) -> Decimal:
     """Return the net quantity currently held for a given ISIN in an account."""
     txs = get_account_transactions(session, account_uuid, master_key)
     held = Decimal("0")
     for tx in txs:
-        if tx.isin != isin:
+        if tx.asset_key != asset_key:
             continue
         if tx.type == "BUY":
             held += tx.amount
@@ -145,7 +136,7 @@ def _compute_held_quantity(session: Session, account_uuid: str, isin: str, maste
 
 
 def _compute_held_quantity_by_bidx(
-    session: Session, account_id_bidx: str, isin: str, master_key: str,
+    session: Session, account_id_bidx: str, asset_key: str, master_key: str,
     exclude_tx_uuid: str | None = None,
 ) -> Decimal:
     """Same as _compute_held_quantity but works directly from the stored bidx.
@@ -161,8 +152,8 @@ def _compute_held_quantity_by_bidx(
         if exclude_tx_uuid and raw.uuid == exclude_tx_uuid:
             continue
         tx_type = decrypt_data(raw.type_enc, master_key)
-        tx_isin = decrypt_data(raw.isin_enc, master_key)
-        if tx_isin != isin:
+        tx_asset_key = decrypt_data(raw.asset_key_enc, master_key)
+        if tx_asset_key != asset_key:
             continue
         tx_amount = Decimal(decrypt_data(raw.amount_enc, master_key))
         if tx_type == "BUY":
@@ -182,21 +173,19 @@ def create_stock_transaction(
     For BUY transactions: if the account has insufficient EUR cash, an automatic
     EUR deposit is created first to cover the shortfall (without bank deduction).
     """
-    if data.isin:
-        data.isin = data.isin.strip()
-    if data.symbol:
-        data.symbol = data.symbol.strip()
+    if data.asset_key:
+        data.asset_key = data.asset_key.strip()
 
     # Validate SELL quantity against current position
-    if data.type.value == "SELL" and data.isin != "EUR":
-        held = _compute_held_quantity(session, data.account_id, data.isin, master_key)
+    if data.type.value == "SELL" and data.asset_key != "EUR":
+        held = _compute_held_quantity(session, data.account_id, data.asset_key, master_key)
         if data.amount > held:
             raise ValueError(
                 f"Quantité vendue ({data.amount}) supérieure à la position détenue ({round(held, 8)})"
             )
 
     # Auto-fund EUR balance for BUY transactions if needed
-    if data.type.value == "BUY" and data.isin != "EUR":
+    if data.type.value == "BUY" and data.asset_key != "EUR":
         cost = (data.amount * data.price_per_unit) + data.fees
         current_eur = max(
             _compute_eur_balance(
@@ -217,7 +206,7 @@ def create_stock_transaction(
             )
 
     account_bidx = hash_index(data.account_id, master_key)
-    isin_enc = encrypt_data(data.isin, master_key)
+    asset_key_enc = encrypt_data(data.asset_key, master_key)
     type_enc = encrypt_data(data.type.value, master_key)
     amount_enc = encrypt_data(str(data.amount), master_key)
     price_enc = encrypt_data(str(data.price_per_unit), master_key)
@@ -225,31 +214,9 @@ def create_stock_transaction(
     exec_at_enc = encrypt_data(data.executed_at.isoformat(), master_key)
     
 
-    mp = session.exec(select(MarketAsset).where(MarketAsset.isin == data.isin)).first()
+    mp = get_or_create_market_asset(session, data.asset_key, AssetType.STOCK)
     if not mp:
-        mp = get_or_create_market_asset(
-            session, data.isin, AssetType.STOCK, symbol_hint=data.symbol or None
-        )
-    if not mp and data.isin and data.symbol:
-        # Fallback: persist a minimal MarketAsset so the symbol survives across requests
-        # (happens when external market API is unavailable or the ISIN is unknown)
-        mp = MarketAsset(
-            isin=data.isin,
-            symbol=data.symbol,
-            name=data.name or data.symbol,
-            asset_type=AssetType.STOCK,
-        )
-        session.add(mp)
-        try:
-            session.commit()
-            session.refresh(mp)
-        except Exception:
-            session.rollback()
-            mp = session.exec(select(MarketAsset).where(MarketAsset.isin == data.isin)).first()
-    elif mp and data.symbol and not mp.symbol:
-        mp.symbol = data.symbol
-        session.add(mp)
-        session.commit()
+        raise ValueError(f"ISIN inconnu ou introuvable : {data.asset_key}")
 
     notes_enc = None
     if data.notes:
@@ -257,7 +224,7 @@ def create_stock_transaction(
 
     transaction = StockTransaction(
         account_id_bidx=account_bidx,
-        isin_enc=isin_enc,
+        asset_key_enc=asset_key_enc,
         type_enc=type_enc,
         amount_enc=amount_enc,
         price_per_unit_enc=price_enc,
@@ -270,22 +237,7 @@ def create_stock_transaction(
     session.commit()
     session.refresh(transaction)
 
-    resp = _decrypt_transaction(transaction, master_key)
-    if resp.isin:
-        if data.symbol:
-            resp.symbol = data.symbol
-        if data.exchange:
-            resp.exchange = data.exchange
-        if data.name:
-            resp.name = data.name
-        
-        if not resp.symbol or not resp.exchange or not resp.name:
-             mp = session.exec(select(MarketAsset).where(MarketAsset.isin == resp.isin)).first()
-             if mp:
-                 if not resp.symbol: resp.symbol = mp.symbol
-                 if not resp.exchange: resp.exchange = mp.exchange
-                 if not resp.name: resp.name = mp.name
-    return resp
+    return _decrypt_transaction(transaction, master_key)
 
 
 def get_stock_transaction(
@@ -297,15 +249,7 @@ def get_stock_transaction(
     transaction = session.get(StockTransaction, transaction_uuid)
     if not transaction:
         return None
-    resp = _decrypt_transaction(transaction, master_key)
-    
-    mp = session.exec(select(MarketAsset).where(MarketAsset.isin == resp.isin)).first()
-    if mp:
-        resp.symbol = mp.symbol
-        resp.exchange = mp.exchange
-        resp.name = mp.name
-            
-    return resp
+    return _decrypt_transaction(transaction, master_key)
 
 
 def update_stock_transaction(
@@ -315,21 +259,19 @@ def update_stock_transaction(
     master_key: str,
 ) -> TransactionResponse:
     """Update an existing stock transaction (only provided fields)."""
-    if data.isin:
-        data.isin = data.isin.strip()
-    if data.symbol:
-        data.symbol = data.symbol.strip()
+    if data.asset_key:
+        data.asset_key = data.asset_key.strip()
 
     # Validate SELL quantity: compute held quantity excluding this transaction itself
     current = _decrypt_transaction(transaction, master_key)
     effective_type = data.type.value if data.type is not None else current.type
-    effective_isin = data.isin if data.isin is not None else current.isin
+    effective_asset_key = data.asset_key if data.asset_key is not None else current.asset_key
     effective_amount = data.amount if data.amount is not None else current.amount
 
-    if effective_type == "SELL" and effective_isin and effective_isin != "EUR":
+    if effective_type == "SELL" and effective_asset_key and effective_asset_key != "EUR":
         # Compute held quantity without this transaction so we can re-validate cleanly
         held = _compute_held_quantity_by_bidx(
-            session, transaction.account_id_bidx, effective_isin, master_key,
+            session, transaction.account_id_bidx, effective_asset_key, master_key,
             exclude_tx_uuid=transaction.uuid,
         )
         if effective_amount > held:
@@ -337,8 +279,8 @@ def update_stock_transaction(
                 f"Quantité vendue ({effective_amount}) supérieure à la position détenue ({round(held, 8)})"
             )
 
-    if data.isin is not None:
-        transaction.isin_enc = encrypt_data(data.isin, master_key) if data.isin else None
+    if data.asset_key is not None:
+        transaction.asset_key_enc = encrypt_data(data.asset_key, master_key) if data.asset_key else None
         
     if data.type is not None:
         transaction.type_enc = encrypt_data(data.type.value, master_key)
@@ -357,15 +299,7 @@ def update_stock_transaction(
     session.commit()
     session.refresh(transaction)
 
-    resp = _decrypt_transaction(transaction, master_key)
-    if resp.isin:
-        mp = session.exec(select(MarketAsset).where(MarketAsset.isin == resp.isin)).first()
-        if mp:
-            resp.symbol = mp.symbol
-            resp.exchange = mp.exchange
-            resp.name = mp.name
-            
-    return resp
+    return _decrypt_transaction(transaction, master_key)
 
 
 def delete_stock_transaction(session: Session, transaction_uuid: str) -> bool:
@@ -391,35 +325,7 @@ def get_account_transactions(
         select(StockTransaction).where(StockTransaction.account_id_bidx == account_bidx)
     ).all()
 
-    decoded_transactions = [_decrypt_transaction(tx, master_key) for tx in transactions]
-    
-    # Use ISIN for reliable market data lookup
-    isins = {tx.isin for tx in decoded_transactions if tx.isin}
-    
-    market_map = {}
-    if isins:
-        market_assets = session.exec(
-            select(MarketAsset).where(MarketAsset.isin.in_(isins))
-        ).all()
-        for mp in market_assets:
-            market_map[mp.isin] = {
-                "name": mp.name, 
-                "symbol": mp.symbol, 
-                "exchange": mp.exchange
-            }
-            
-    for tx in decoded_transactions:
-        # Prioritize locally stored name, fallback to market map
-        if tx.isin and tx.isin in market_map:
-            if not tx.name:
-                tx.name = market_map[tx.isin]["name"]
-            if not tx.symbol:
-                tx.symbol = market_map[tx.isin]["symbol"]
-            if not tx.exchange:
-                tx.exchange = market_map[tx.isin]["exchange"]
-                
-    return decoded_transactions
-
+    return [_decrypt_transaction(tx, master_key) for tx in transactions]
 
 def get_stock_account_summary(
     session: Session,
@@ -434,11 +340,15 @@ def get_stock_account_summary(
     transactions.sort(key=lambda x: x.executed_at)
     transactions = [tx for tx in transactions if tx.executed_at.date() <= as_of]
 
+    asset_keys = {tx.asset_key for tx in transactions if tx.asset_key != "EUR"}
+    assets = session.exec(select(MarketAsset).where(MarketAsset.asset_key.in_(asset_keys))).all()
+    asset_map = {a.asset_key: a for a in assets}
+
     total_deposits_acc = Decimal("0")
 
     positions_map: dict[str, dict] = {
         "EUR": {
-            "isin": "EUR",
+            "asset_key": "EUR",
             "symbol": "EUR",
             "name": "Euros",
             "exchange": None,
@@ -451,14 +361,15 @@ def get_stock_account_summary(
     }
 
     for tx in transactions:
-        position_key = tx.isin
+        position_key = tx.asset_key
 
         if position_key not in positions_map:
+            mp = asset_map.get(position_key)
             positions_map[position_key] = {
-                "isin": tx.isin,
-                "symbol": tx.symbol,
-                "name": tx.name,
-                "exchange": tx.exchange,
+                "asset_key": tx.asset_key,
+                "symbol": mp.symbol if mp else position_key,
+                "name": mp.name if mp else None,
+                "exchange": mp.exchange if mp else None,  
                 "total_amount": Decimal("0"),
                 "total_cost": Decimal("0"),
                 "total_buy_fees": Decimal("0"),
@@ -468,14 +379,7 @@ def get_stock_account_summary(
 
         pos = positions_map[position_key]
 
-        if tx.symbol and not pos["symbol"]:
-            pos["symbol"] = tx.symbol
-        if tx.name and not pos["name"]:
-            pos["name"] = tx.name
-        if tx.exchange and not pos["exchange"]:
-            pos["exchange"] = tx.exchange
-
-        if tx.type == "DEPOSIT" and tx.isin == "EUR":
+        if tx.type == "DEPOSIT" and tx.asset_key == "EUR":
             net_deposit = tx.amount - tx.fees
             positions_map["EUR"]["total_amount"] += net_deposit
             total_deposits_acc += net_deposit
@@ -505,9 +409,9 @@ def get_stock_account_summary(
     positions: list[PositionResponse] = []
 
     for position_key, data in positions_map.items():
-        isin = data.get("isin")
+        asset_key = data.get("asset_key")
 
-        if isin == "EUR":
+        if asset_key == "EUR":
             # Keep EUR cash even when negative so account valuation reflects
             # temporary cash deficit created by transaction ordering.
             eur_amount = data["total_amount"]
@@ -517,7 +421,7 @@ def get_stock_account_summary(
                 symbol="EUR",
                 exchange=None,
                 name="Euros",
-                isin="EUR",
+                asset_key="EUR",
                 total_amount=eur_amount,
                 average_buy_price=Decimal("1"),
                 total_invested=round(eur_amount, 2),
@@ -539,12 +443,12 @@ def get_stock_account_summary(
         fees_pct = (data["total_buy_fees"] / total_invested * 100) if total_invested > 0 else Decimal("0")
 
         if preloaded_prices is not None:
-            market_name = data.get("name") or isin
-            current_price = preloaded_prices.get(isin)
+            market_name = data.get("name") or asset_key
+            current_price = preloaded_prices.get(asset_key)
         else:
             market_name, current_price = (
-                get_stock_info(session, isin, db_only=db_only, as_of=as_of)
-                if isin
+                get_stock_info(session, asset_key, db_only=db_only, as_of=as_of)
+                if asset_key
                 else (None, None)
             )
 
@@ -558,7 +462,7 @@ def get_stock_account_summary(
             symbol=data.get("symbol") or position_key,
             exchange=data.get("exchange"),
             name=market_name or data.get("name"),
-            isin=isin,
+            asset_key=asset_key,
             total_amount=data["total_amount"],
             average_buy_price=round(avg_price, 4),
             total_invested=round(total_invested, 2),
@@ -572,7 +476,7 @@ def get_stock_account_summary(
             profit_loss_percentage=round(profit_loss_pct, 2) if profit_loss_pct is not None else None,
         ))
 
-    stock_positions = [p for p in positions if p.isin != "EUR"]
+    stock_positions = [p for p in positions if p.asset_key != "EUR"]
     total_invested_acc = sum(p.total_invested for p in stock_positions)
     total_fees_acc = sum(p.total_fees for p in stock_positions)
     current_value_acc = sum(p.current_value for p in positions if p.current_value is not None)

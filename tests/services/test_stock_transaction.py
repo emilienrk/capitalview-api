@@ -26,11 +26,23 @@ def _stock_summary(session: Session, account_id: str, master_key: str):
     return get_stock_account_summary(session, txs)
 
 
+def _add_market_asset(session: Session, asset_key: str, symbol: str | None = None, name: str | None = None, exchange: str | None = None):
+    ma = MarketAsset(
+        asset_key=asset_key,
+        symbol=symbol,
+        name=name or symbol,
+        exchange=exchange,
+        asset_type=AssetType.STOCK,
+    )
+    session.add(ma)
+    session.commit()
+    return ma
+
+
 def test_create_stock_transaction(session: Session, master_key: str):
     data = StockTransactionCreate(
         account_id="acc_123",
-        symbol="AAPL",
-        isin="ISIN_AAPL",
+        asset_key="ISIN_AAPL",
         type=StockTransactionType.BUY,
         amount=Decimal("10.5"),
         price_per_unit=Decimal("150.0"),
@@ -39,10 +51,10 @@ def test_create_stock_transaction(session: Session, master_key: str):
         notes="First buy",
         exchange="NASDAQ"
     )
+    _add_market_asset(session, "ISIN_AAPL", symbol="AAPL", name="Apple Inc.", exchange="NASDAQ")
     resp = create_stock_transaction(session, data, master_key)
-    # Symbol comes from enrichment (MarketPrice created during transaction creation)
-    assert resp.symbol == "AAPL"
-    assert resp.exchange == "NASDAQ"
+    # Transaction now surfaces `asset_key` (ISIN-like identifier)
+    assert resp.asset_key == "ISIN_AAPL"
     assert resp.type == "BUY"
     assert resp.amount == Decimal("10.5")
     assert resp.price_per_unit == Decimal("150.0")
@@ -51,9 +63,9 @@ def test_create_stock_transaction(session: Session, master_key: str):
     tx_db = session.get(StockTransaction, resp.id)
     assert tx_db is not None
     # Verify fields are GONE (or at least not used/set). 
-    # Since we removed them from model, we can't access tx_db.symbol_enc.
+    # Since we removed them from model, we can't access tx_db.asset_key_enc.
     # But SqlAlchemy might still allow access if class definition has them (which it doesn't).
-    assert not hasattr(tx_db, "symbol_enc")
+    assert hasattr(tx_db, "asset_key_enc")
     assert not hasattr(tx_db, "exchange_enc")
     assert not hasattr(tx_db, "name_enc")
     assert tx_db.account_id_bidx == hash_index("acc_123", master_key)
@@ -62,19 +74,19 @@ def test_create_stock_transaction(session: Session, master_key: str):
 def test_get_stock_transaction(session: Session, master_key: str):
     data = StockTransactionCreate(
         account_id="acc_123",
-        symbol="MSFT",
-        isin="ISIN_MSFT",
+        asset_key="ISIN_MSFT",
         type=StockTransactionType.BUY,
         amount=Decimal("5"),
         price_per_unit=Decimal("200"),
         fees=Decimal("1"),
         executed_at=datetime.now()
     )
+    _add_market_asset(session, "ISIN_MSFT", symbol="MSFT", name="Microsoft")
     created = create_stock_transaction(session, data, master_key)
     fetched = get_stock_transaction(session, created.id, master_key)
     assert fetched is not None
     assert fetched.id == created.id
-    assert fetched.symbol == "MSFT"
+    assert fetched.asset_key == "ISIN_MSFT"
     assert get_stock_transaction(session, "non_existent", master_key) is None
     tx_db = session.get(StockTransaction, created.id)
     tx_db.executed_at_enc = encrypt_data("NOT A DATE", master_key)
@@ -87,8 +99,7 @@ def test_get_stock_transaction(session: Session, master_key: str):
 def test_update_stock_transaction(session: Session, master_key: str):
     data = StockTransactionCreate(
         account_id="acc_123",
-        symbol="GOOGL",
-        isin="ISIN_GOOGL",
+        asset_key="ISIN_GOOGL",
         type=StockTransactionType.BUY,
         amount=Decimal("10"),
         price_per_unit=Decimal("100"),
@@ -96,6 +107,7 @@ def test_update_stock_transaction(session: Session, master_key: str):
         executed_at=datetime(2023, 1, 1),
         notes="Old Note"
     )
+    _add_market_asset(session, "ISIN_GOOGL", symbol="GOOGL", name="Google")
     created = create_stock_transaction(session, data, master_key)
     tx_db = session.get(StockTransaction, created.id)
 
@@ -104,7 +116,7 @@ def test_update_stock_transaction(session: Session, master_key: str):
     extra_buy = StockTransactionCreate(
         account_id="acc_123",
         symbol="GOOGL",
-        isin="ISIN_GOOGL",
+        asset_key="ISIN_GOOGL",
         type=StockTransactionType.BUY,
         amount=Decimal("10"),
         price_per_unit=Decimal("100"),
@@ -115,8 +127,6 @@ def test_update_stock_transaction(session: Session, master_key: str):
 
     new_date = datetime(2023, 2, 2, 12, 0, 0)
     update_data = StockTransactionUpdate(
-        symbol="GOOG", # This update is ignored for MarketPrice/Transaction storage, but logic checks?
-        exchange="NASDAQ",
         type=StockTransactionType.SELL,
         amount=Decimal("10"),
         price_per_unit=Decimal("105"),
@@ -128,7 +138,7 @@ def test_update_stock_transaction(session: Session, master_key: str):
     # So returned symbol should still be "GOOGL" from initial creation.
     updated = update_stock_transaction(session, tx_db, update_data, master_key)
     
-    assert updated.symbol == "GOOGL" 
+    assert updated.asset_key == "ISIN_GOOGL" 
     assert updated.type == "SELL"
     assert updated.amount == Decimal("10")
     assert updated.price_per_unit == Decimal("105")
@@ -144,14 +154,14 @@ def test_update_stock_transaction(session: Session, master_key: str):
 def test_delete_stock_transaction(session: Session, master_key: str):
     data = StockTransactionCreate(
         account_id="acc_123",
-        symbol="TSLA",
-        isin="ISIN_TSLA",
+        asset_key="ISIN_TSLA",
         type=StockTransactionType.BUY,
         amount=Decimal("1"),
         price_per_unit=Decimal("500"),
         fees=Decimal("1"),
         executed_at=datetime.now()
     )
+    _add_market_asset(session, "ISIN_TSLA", symbol="TSLA", name="Tesla")
     created = create_stock_transaction(session, data, master_key)
     assert delete_stock_transaction(session, created.id) is True
     assert session.get(StockTransaction, created.id) is None
@@ -161,27 +171,30 @@ def test_delete_stock_transaction(session: Session, master_key: str):
 def test_get_account_transactions(session: Session, master_key: str):
     acc1 = "acc_1"
     acc2 = "acc_2"
+    _add_market_asset(session, "ISIN_A", symbol="A")
+    _add_market_asset(session, "ISIN_B", symbol="B")
+    _add_market_asset(session, "ISIN_C", symbol="C")
     create_stock_transaction(session, StockTransactionCreate(
-        account_id=acc1, symbol="A", isin="ISIN_A", type=StockTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), fees=Decimal(0), executed_at=datetime.now()
+        account_id=acc1, asset_key="ISIN_A", type=StockTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), fees=Decimal(0), executed_at=datetime.now()
     ), master_key)
     create_stock_transaction(session, StockTransactionCreate(
-        account_id=acc1, symbol="B", isin="ISIN_B", type=StockTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), fees=Decimal(0), executed_at=datetime.now()
+        account_id=acc1, asset_key="ISIN_B", type=StockTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), fees=Decimal(0), executed_at=datetime.now()
     ), master_key)
     create_stock_transaction(session, StockTransactionCreate(
-        account_id=acc2, symbol="C", isin="ISIN_C", type=StockTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), fees=Decimal(0), executed_at=datetime.now()
+        account_id=acc2, asset_key="ISIN_C", type=StockTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), fees=Decimal(0), executed_at=datetime.now()
     ), master_key)
     txs_1 = get_account_transactions(session, acc1, master_key)
     # Each BUY without prior EUR balance creates an auto EUR deposit → 2 BUY + 2 EUR deposits
-    non_eur_1 = [t for t in txs_1 if t.isin != "EUR"]
+    non_eur_1 = [t for t in txs_1 if t.asset_key != "EUR"]
     assert len(non_eur_1) == 2
-    symbols = {t.symbol for t in non_eur_1}
-    assert symbols == {"A", "B"}
+    asset_keys = {t.asset_key for t in non_eur_1}
+    assert asset_keys == {"ISIN_A", "ISIN_B"}
     # Verify no acc2 transactions leaked into acc1
-    assert all(t.isin != "ISIN_C" for t in txs_1)
+    assert all(t.asset_key != "ISIN_C" for t in txs_1)
     txs_2 = get_account_transactions(session, acc2, master_key)
-    non_eur_2 = [t for t in txs_2 if t.isin != "EUR"]
+    non_eur_2 = [t for t in txs_2 if t.asset_key != "EUR"]
     assert len(non_eur_2) == 1
-    assert non_eur_2[0].symbol == "C"
+    assert non_eur_2[0].asset_key == "ISIN_C"
 
 
 def test_auto_fund_uses_eur_balance_as_of_buy_date(session: Session, master_key: str):
@@ -196,10 +209,10 @@ def test_auto_fund_uses_eur_balance_as_of_buy_date(session: Session, master_key:
         master_key=master_key,
     )
 
+    _add_market_asset(session, "ISIN_AIR", symbol="AIR")
     create_stock_transaction(session, StockTransactionCreate(
         account_id=acc,
-        symbol="AIR",
-        isin="ISIN_AIR",
+        asset_key="ISIN_AIR",
         type=StockTransactionType.BUY,
         amount=Decimal("1"),
         price_per_unit=Decimal("80"),
@@ -211,7 +224,7 @@ def test_auto_fund_uses_eur_balance_as_of_buy_date(session: Session, master_key:
     auto_deposits = [
         tx for tx in txs
         if tx.type == "DEPOSIT"
-        and tx.isin == "EUR"
+        and tx.asset_key == "EUR"
         and tx.notes == "Provision automatique"
     ]
     assert len(auto_deposits) == 1
@@ -221,12 +234,12 @@ def test_auto_fund_uses_eur_balance_as_of_buy_date(session: Session, master_key:
 
 @patch("services.stock_transaction.get_stock_info")
 def test_get_stock_account_summary(mock_market, session: Session, master_key: str):
-    # Side effect now receives (session, isin)
-    mock_market.side_effect = lambda s, isin, db_only=False, as_of=None: {
+    # Side effect now receives (session, asset_key)
+    mock_market.side_effect = lambda s, asset_key, db_only=False, as_of=None: {
         "ISIN_AAPL": ("Apple Inc.", Decimal("180.0")),
         "ISIN_MSFT": ("Microsoft", Decimal("300.0")),
         "ISIN_SOLD": ("Sold Stock", Decimal("10.0")),
-    }.get(isin, ("Unknown", Decimal("0")))
+    }.get(asset_key, ("Unknown", Decimal("0")))
     
     account = StockAccount(
         uuid="acc_main",
@@ -236,36 +249,39 @@ def test_get_stock_account_summary(mock_market, session: Session, master_key: st
     )
     session.add(account)
     session.commit()
+    _add_market_asset(session, "ISIN_AAPL", symbol="AAPL", name="Apple Inc.")
+    _add_market_asset(session, "ISIN_MSFT", symbol="MSFT", name="Microsoft")
+    _add_market_asset(session, "ISIN_SOLD", symbol="SOLD", name="Sold Stock")
     create_stock_transaction(session, StockTransactionCreate(
-        account_id="acc_main", symbol="AAPL", isin="ISIN_AAPL", type=StockTransactionType.BUY, amount=Decimal("10"), price_per_unit=Decimal("150"), fees=Decimal("5"), executed_at=datetime(2023, 1, 1)
+        account_id="acc_main", asset_key="ISIN_AAPL", type=StockTransactionType.BUY, amount=Decimal("10"), price_per_unit=Decimal("150"), fees=Decimal("5"), executed_at=datetime(2023, 1, 1)
     ), master_key)
     create_stock_transaction(session, StockTransactionCreate(
-        account_id="acc_main", symbol="AAPL", isin="ISIN_AAPL", type=StockTransactionType.BUY, amount=Decimal("5"), price_per_unit=Decimal("160"), fees=Decimal("2"), executed_at=datetime(2023, 1, 2)
+        account_id="acc_main", asset_key="ISIN_AAPL", type=StockTransactionType.BUY, amount=Decimal("5"), price_per_unit=Decimal("160"), fees=Decimal("2"), executed_at=datetime(2023, 1, 2)
     ), master_key)
     create_stock_transaction(session, StockTransactionCreate(
-        account_id="acc_main", symbol="MSFT", isin="ISIN_MSFT", type=StockTransactionType.BUY, amount=Decimal("10"), price_per_unit=Decimal("250"), fees=Decimal("5"), executed_at=datetime(2023, 1, 3)
+        account_id="acc_main", asset_key="ISIN_MSFT", type=StockTransactionType.BUY, amount=Decimal("10"), price_per_unit=Decimal("250"), fees=Decimal("5"), executed_at=datetime(2023, 1, 3)
     ), master_key)
     create_stock_transaction(session, StockTransactionCreate(
-        account_id="acc_main", symbol="MSFT", isin="ISIN_MSFT", type=StockTransactionType.SELL, amount=Decimal("5"), price_per_unit=Decimal("280"), fees=Decimal("5"), executed_at=datetime(2023, 1, 4)
+        account_id="acc_main", asset_key="ISIN_MSFT", type=StockTransactionType.SELL, amount=Decimal("5"), price_per_unit=Decimal("280"), fees=Decimal("5"), executed_at=datetime(2023, 1, 4)
     ), master_key)
     create_stock_transaction(session, StockTransactionCreate(
-        account_id="acc_main", symbol="SOLD", isin="ISIN_SOLD", type=StockTransactionType.BUY, amount=Decimal("10"), price_per_unit=Decimal("10"), fees=Decimal("1"), executed_at=datetime(2023, 1, 5)
+        account_id="acc_main", asset_key="ISIN_SOLD", type=StockTransactionType.BUY, amount=Decimal("10"), price_per_unit=Decimal("10"), fees=Decimal("1"), executed_at=datetime(2023, 1, 5)
     ), master_key)
     create_stock_transaction(session, StockTransactionCreate(
-        account_id="acc_main", symbol="SOLD", isin="ISIN_SOLD", type=StockTransactionType.SELL, amount=Decimal("10"), price_per_unit=Decimal("12"), fees=Decimal("1"), executed_at=datetime(2023, 1, 6)
+        account_id="acc_main", asset_key="ISIN_SOLD", type=StockTransactionType.SELL, amount=Decimal("10"), price_per_unit=Decimal("12"), fees=Decimal("1"), executed_at=datetime(2023, 1, 6)
     ), master_key)
     summary = _stock_summary(session, account.uuid, master_key)
-    pos_aapl = next(p for p in summary.positions if p.symbol == "AAPL")
+    pos_aapl = next(p for p in summary.positions if p.asset_key == "ISIN_AAPL")
     assert pos_aapl.total_amount == Decimal("15")
     assert pos_aapl.total_invested == Decimal("2307")
     assert pos_aapl.average_buy_price == round(Decimal("2307") / 15, 4)
     assert pos_aapl.current_value == Decimal("2700")
     assert pos_aapl.profit_loss == Decimal("393")
-    pos_msft = next(p for p in summary.positions if p.symbol == "MSFT")
+    pos_msft = next(p for p in summary.positions if p.asset_key == "ISIN_MSFT")
     assert pos_msft.total_amount == Decimal("5")
     assert pos_msft.total_invested == Decimal("1252.5")
     assert pos_msft.current_value == Decimal("1500")
-    pos_sold = next((p for p in summary.positions if p.symbol == "SOLD"), None)
+    pos_sold = next((p for p in summary.positions if p.asset_key == "ISIN_SOLD"), None)
     assert pos_sold is None
     assert summary.total_invested == Decimal("3559.5")
 
@@ -273,10 +289,10 @@ def test_get_stock_account_summary(mock_market, session: Session, master_key: st
 @patch("services.stock_transaction.get_stock_info")
 def test_position_currency_always_eur(mock_market, session: Session, master_key: str):
     """All positions must surface currency='EUR' since prices are stored in EUR."""
-    mock_market.side_effect = lambda s, isin, db_only=False, as_of=None: {
+    mock_market.side_effect = lambda s, asset_key, db_only=False, as_of=None: {
         "ISIN_AAPL": ("Apple Inc.", Decimal("200.0")),
         "ISIN_LVMH": ("LVMH", Decimal("500.0")),
-    }.get(isin, (None, None))
+    }.get(asset_key, (None, None))
 
     account = StockAccount(
         uuid="acc_currency_test",
@@ -289,12 +305,12 @@ def test_position_currency_always_eur(mock_market, session: Session, master_key:
 
     # MarketAssets without currency (removed field) — asset_type only
     mp_us = MarketAsset(
-        isin="ISIN_AAPL", symbol="AAPL", name="Apple Inc.",
+        asset_key="ISIN_AAPL", symbol="AAPL", name="Apple Inc.",
         exchange="NASDAQ",
         asset_type=AssetType.STOCK,
     )
     mp_fr = MarketAsset(
-        isin="ISIN_LVMH", symbol="MC", name="LVMH",
+        asset_key="ISIN_LVMH", symbol="MC", name="LVMH",
         exchange="PAR",
         asset_type=AssetType.STOCK,
     )
@@ -303,21 +319,21 @@ def test_position_currency_always_eur(mock_market, session: Session, master_key:
     session.commit()
 
     create_stock_transaction(session, StockTransactionCreate(
-        account_id="acc_currency_test", symbol="AAPL", isin="ISIN_AAPL",
+        account_id="acc_currency_test", asset_key="ISIN_AAPL",
         type=StockTransactionType.BUY,
         amount=Decimal("1"), price_per_unit=Decimal("180"), fees=Decimal("0"),
         executed_at=datetime(2024, 1, 1),
     ), master_key)
     create_stock_transaction(session, StockTransactionCreate(
-        account_id="acc_currency_test", symbol="MC", isin="ISIN_LVMH",
+        account_id="acc_currency_test", asset_key="ISIN_LVMH",
         type=StockTransactionType.BUY,
         amount=Decimal("2"), price_per_unit=Decimal("480"), fees=Decimal("0"),
         executed_at=datetime(2024, 1, 2),
     ), master_key)
 
     summary = _stock_summary(session, account.uuid, master_key)
-    pos_aapl = next(p for p in summary.positions if p.symbol == "AAPL")
-    pos_lvmh = next(p for p in summary.positions if p.symbol == "MC")
+    pos_aapl = next(p for p in summary.positions if p.asset_key == "ISIN_AAPL")
+    pos_lvmh = next(p for p in summary.positions if p.asset_key == "ISIN_LVMH")
 
     # Prices are stored in EUR — all positions report EUR
     assert pos_aapl.currency == "EUR"
@@ -339,24 +355,25 @@ def test_position_currency_defaults_to_eur(mock_market, session: Session, master
     session.commit()
 
     # No MarketPrice inserted — currency must default to EUR
+    _add_market_asset(session, "ISIN_XYZ", symbol="XYZ")
     create_stock_transaction(session, StockTransactionCreate(
-        account_id="acc_no_mp", symbol="XYZ", isin="ISIN_XYZ",
+        account_id="acc_no_mp", asset_key="ISIN_XYZ",
         type=StockTransactionType.BUY,
         amount=Decimal("5"), price_per_unit=Decimal("100"), fees=Decimal("0"),
         executed_at=datetime(2024, 1, 1),
     ), master_key)
 
     summary = _stock_summary(session, account.uuid, master_key)
-    pos = next(p for p in summary.positions if p.isin == "ISIN_XYZ")
+    pos = next(p for p in summary.positions if p.asset_key == "ISIN_XYZ")
     assert pos.currency == "EUR"
 
 
 def test_create_sell_exceeds_held(session: Session, master_key: str):
     """Vendre plus que la quantité détenue doit lever ValueError."""
+    _add_market_asset(session, "ISIN_AAPL", symbol="AAPL")
     create_stock_transaction(session, StockTransactionCreate(
         account_id="acc_sell",
-        symbol="AAPL",
-        isin="ISIN_AAPL",
+        asset_key="ISIN_AAPL",
         type=StockTransactionType.BUY,
         amount=Decimal("5"),
         price_per_unit=Decimal("100"),
@@ -368,7 +385,7 @@ def test_create_sell_exceeds_held(session: Session, master_key: str):
         create_stock_transaction(session, StockTransactionCreate(
             account_id="acc_sell",
             symbol="AAPL",
-            isin="ISIN_AAPL",
+            asset_key="ISIN_AAPL",
             type=StockTransactionType.SELL,
             amount=Decimal("10"),  # More than 5 held
             price_per_unit=Decimal("110"),
@@ -379,11 +396,11 @@ def test_create_sell_exceeds_held(session: Session, master_key: str):
 
 def test_create_sell_asset_not_owned(session: Session, master_key: str):
     """Vendre une action non détenue (position nulle) doit lever ValueError."""
+    _add_market_asset(session, "ISIN_TSLA", symbol="TSLA")
     with pytest.raises(ValueError, match="supérieure à la position"):
         create_stock_transaction(session, StockTransactionCreate(
             account_id="acc_no_position",
-            symbol="TSLA",
-            isin="ISIN_TSLA",
+            asset_key="ISIN_TSLA",
             type=StockTransactionType.SELL,
             amount=Decimal("1"),
             price_per_unit=Decimal("200"),
@@ -394,10 +411,10 @@ def test_create_sell_asset_not_owned(session: Session, master_key: str):
 
 def test_update_sell_exceeds_held(session: Session, master_key: str):
     """Mettre à jour une transaction pour vendre plus que la quantité détenue doit lever ValueError."""
+    _add_market_asset(session, "ISIN_MSFT", symbol="MSFT")
     create_stock_transaction(session, StockTransactionCreate(
         account_id="acc_upd_sell",
-        symbol="MSFT",
-        isin="ISIN_MSFT",
+        asset_key="ISIN_MSFT",
         type=StockTransactionType.BUY,
         amount=Decimal("3"),
         price_per_unit=Decimal("200"),
@@ -407,7 +424,7 @@ def test_update_sell_exceeds_held(session: Session, master_key: str):
     tx2 = create_stock_transaction(session, StockTransactionCreate(
         account_id="acc_upd_sell",
         symbol="MSFT",
-        isin="ISIN_MSFT",
+        asset_key="ISIN_MSFT",
         type=StockTransactionType.BUY,
         amount=Decimal("2"),
         price_per_unit=Decimal("200"),

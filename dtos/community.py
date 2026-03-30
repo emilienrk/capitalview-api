@@ -18,7 +18,7 @@ class CommunitySettingsUpdate(BaseModel):
     is_private: bool = True
     display_name: str | None = None
     bio: str | None = None
-    shared_stock_isins: list[str] = []
+    shared_stock_asset_keys: list[str] = []
     shared_crypto_symbols: list[str] = []
 
 
@@ -64,7 +64,7 @@ class CommunitySettingsResponse(BaseModel):
     is_private: bool = True
     display_name: str | None = None
     bio: str | None = None
-    shared_stock_isins: list[str] = []
+    shared_stock_asset_keys: list[str] = []
     shared_crypto_symbols: list[str] = []
     positions_count: int = 0
 
