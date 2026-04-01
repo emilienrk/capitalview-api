@@ -471,7 +471,7 @@ def _get_market_info_internal(
     ).first()
 
     if not cached:
-        if db_only or target_date < today:
+        if db_only:
             # Asset unknown → nothing in DB, return empty immediately (no API call)
             return None, None
         cached = _create_market_asset_entry(session, lookup_key, asset_type)
@@ -483,10 +483,29 @@ def _get_market_info_internal(
         latest = _get_latest_price_entry_as_of(session, cached.id, target_date)
         return cached.name, (latest.price if latest else None)
 
-    # Historical valuation mode: never call live API for past dates.
+    # Historical valuation mode for past dates.
     if target_date < today:
         latest = _get_latest_price_entry_as_of(session, cached.id, target_date)
-        return cached.name, (latest.price if latest else None)
+        # If we have an exact match for the requested past date, return it
+        if latest and latest.price_date == target_date:
+            return cached.name, latest.price
+
+        try:
+            backfill_price_history(session, lookup_key, asset_type, target_date)
+        except Exception:
+            logger.debug(
+                "get_%s_price: historical backfill failed for %s on %s",
+                asset_type.value.lower(),
+                lookup_key,
+                target_date,
+                exc_info=True,
+            )
+
+        latest = _get_latest_price_entry_as_of(session, cached.id, target_date)
+        if latest and latest.price_date == target_date:
+            return cached.name, latest.price
+
+        return cached.name, None
 
     today_entry = _get_today_price(session, cached.id)
     if today_entry and _is_cache_fresh(cached, today_entry):

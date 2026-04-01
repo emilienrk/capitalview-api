@@ -962,3 +962,111 @@ def test_bulk_create_with_group_uuid_pru(session: Session, master_key: str):
     assert btc.average_buy_price == Decimal("30000.0000")
 
 
+
+def test_fiat_anchor_auto_inferred_from_market_price(session: Session, master_key: str):
+    from models.market import MarketAsset, MarketPriceHistory
+    from models.enums import AssetType
+    from datetime import date
+    
+    asset = MarketAsset(asset_key="ADA", symbol="ADA", asset_type=AssetType.CRYPTO)
+    session.add(asset)
+    session.commit()
+    session.add(MarketPriceHistory(market_asset_id=asset.id, price_date=date(2023, 1, 1), price=Decimal("0.50")))
+    session.add(MarketPriceHistory(market_asset_id=asset.id, price_date=date(2023, 1, 2), price=Decimal("0.60")))
+    session.commit()
+    
+    account = CryptoAccount(
+        uuid="acc_ada",
+        user_uuid_bidx=hash_index("u_ada", master_key),
+        name_enc=encrypt_data("ADAAccount", master_key),
+    )
+    session.add(account)
+    session.commit()
+
+    data = CryptoCompositeTransactionCreate(
+        account_id="acc_ada",
+        asset_key="ADA",
+        type="SELL_TO_FIAT",
+        amount=Decimal("100"),
+        eur_amount=Decimal("0"), # should infer
+        executed_at=datetime(2023, 1, 1, 12, 0),
+    )
+    rows = create_composite_crypto_transaction(session, data, master_key)
+    
+    eur_deposit = next(r for r in rows if r.type == "DEPOSIT")
+    assert eur_deposit.amount == Decimal("50.00") # 100 * 0.50 = 50.00
+
+
+def test_fiat_anchor_inferred_crypto_deposit(session: Session, master_key: str):
+    from models.market import MarketAsset, MarketPriceHistory
+    from models.enums import AssetType
+    from datetime import date
+    
+    asset = MarketAsset(asset_key="ETH", symbol="ETH", asset_type=AssetType.CRYPTO)
+    session.add(asset)
+    session.commit()
+    session.add(MarketPriceHistory(market_asset_id=asset.id, price_date=date(2023, 2, 1), price=Decimal("1500.00")))
+    session.commit()
+    
+    account = CryptoAccount(
+        uuid="acc_eth_dep",
+        user_uuid_bidx=hash_index("u_eth", master_key),
+        name_enc=encrypt_data("ETHAccount", master_key),
+    )
+    session.add(account)
+    session.commit()
+
+    data = CryptoCompositeTransactionCreate(
+        account_id="acc_eth_dep",
+        asset_key="ETH",
+        type="CRYPTO_DEPOSIT",
+        amount=Decimal("2"),
+        eur_amount=Decimal("0"),
+        executed_at=datetime(2023, 2, 1, 12, 0),
+    )
+    rows = create_composite_crypto_transaction(session, data, master_key)
+    
+    eur_deposit = next(r for r in rows if r.type == "DEPOSIT" and r.asset_key == "EUR")
+    assert eur_deposit.amount == Decimal("3000.00")
+
+def test_fiat_anchor_inferred_crypto_fee(session: Session, master_key: str):
+    from models.market import MarketAsset, MarketPriceHistory
+    from models.enums import AssetType
+    from datetime import date
+    
+    asset = MarketAsset(asset_key="BTC", symbol="BTC", asset_type=AssetType.CRYPTO)
+    fee_asset = MarketAsset(asset_key="BNB", symbol="BNB", asset_type=AssetType.CRYPTO)
+    session.add_all([asset, fee_asset])
+    session.commit()
+    
+    session.add(MarketPriceHistory(market_asset_id=asset.id, price_date=date(2023, 3, 1), price=Decimal("20000.00")))
+    session.add(MarketPriceHistory(market_asset_id=fee_asset.id, price_date=date(2023, 3, 1), price=Decimal("300.00")))
+    session.commit()
+    
+    account = CryptoAccount(
+        uuid="acc_btc_buy",
+        user_uuid_bidx=hash_index("u_btc", master_key),
+        name_enc=encrypt_data("BTCAccount", master_key),
+    )
+    session.add(account)
+    session.commit()
+
+    data = CryptoCompositeTransactionCreate(
+        account_id="acc_btc_buy",
+        asset_key="BTC",
+        type="BUY",
+        amount=Decimal("1"),
+        eur_amount=Decimal("0"),
+        fee_included=False,
+        fee_asset_key="BNB",
+        fee_amount=Decimal("0.5"),
+        executed_at=datetime(2023, 3, 1, 12, 0),
+    )
+    rows = create_composite_crypto_transaction(session, data, master_key)
+    
+    anchor = next((r for r in rows if r.type == "ANCHOR"), None)
+    assert anchor is not None
+    # Base: 1 BTC * 20000 = 20000
+    # Fee: 0.5 BNB * 300 = 150
+    # Total anchor = 20150
+    assert anchor.amount == Decimal("20150.00")

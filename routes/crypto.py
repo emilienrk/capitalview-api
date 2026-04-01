@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from database import get_session
@@ -51,7 +52,7 @@ from services.crypto_account import (
 from services.settings import get_or_create_settings
 from services.encryption import decrypt_data, hash_index
 from services.account_history import trigger_post_transaction_updates
-from services.market import search_assets, get_assets_bulk_info
+from services.market import search_assets, get_assets_bulk_info, get_crypto_price
 from services.crypto_transaction import (
     create_composite_crypto_transaction,
     create_cross_account_transfer,
@@ -67,6 +68,13 @@ from services.crypto_transaction import (
 from dtos.crypto import FIAT_ASSET_KEYS
 
 router = APIRouter(prefix="/crypto", tags=["Crypto"])
+
+
+class CryptoHistoricalPriceResponse(BaseModel):
+    symbol: str
+    as_of: date
+    price: Decimal | None
+    message: str | None = None
 
 
 # ============== ACCOUNTS ==============
@@ -649,7 +657,6 @@ def bulk_composite_import_transactions(
             account_id=data.account_id,
             type=item.type,
             asset_key=item.asset_key,
-            name=item.name,
             amount=item.amount,
             quote_asset_key=item.quote_asset_key,
             quote_amount=item.quote_amount,
@@ -809,3 +816,17 @@ def confirm_binance_import(
     )
     
     return result
+
+@router.get("/market/price", response_model=CryptoHistoricalPriceResponse)
+def get_crypto_historical_price(
+    symbol: str,
+    as_of: date,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session),
+):
+    """Get historical or current price for a single crypto."""
+    price = get_crypto_price(session, symbol, as_of=as_of)
+    message = None
+    if price is None:
+        message = f"Aucun prix historique exact n'a été trouvé pour {symbol.upper()} au {as_of.isoformat()}."
+    return CryptoHistoricalPriceResponse(symbol=symbol, as_of=as_of, price=price, message=message)

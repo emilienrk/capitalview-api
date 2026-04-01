@@ -1,10 +1,14 @@
 from decimal import Decimal
+from datetime import date, timedelta
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlmodel import select
 
 from main import app
+from models.enums import AssetType
+from models.market import MarketAsset, MarketPriceHistory
 from models.user import User
 
 
@@ -251,6 +255,59 @@ def test_create_crypto_transaction_negative_validation(session, master_key):
     }
     r = client.post("/crypto/transactions", json=tx_neg_price)
     assert r.status_code == 422
+
+
+def test_crypto_historical_price_route_backfills_missing_date(session, master_key):
+    client = TestClient(app)
+    symbol = "SOL"
+    target_date = date.today() - timedelta(days=3)
+    asset = MarketAsset(asset_key=symbol, symbol=symbol, name="Solana", asset_type=AssetType.CRYPTO)
+    session.add(asset)
+    session.commit()
+    session.refresh(asset)
+
+    def _historical_prices(request_symbol, asset_type, from_date, to_date):
+        if request_symbol == symbol and asset_type == AssetType.CRYPTO:
+            return {target_date: Decimal("122.34")}
+        if request_symbol == "USD" and asset_type == AssetType.FIAT:
+            return {}
+        return {}
+
+    with patch("services.market.market_data_manager.get_historical_prices", side_effect=_historical_prices):
+        with patch("services.market.get_exchange_rate", return_value=Decimal("1.0")):
+            response = client.get(f"/crypto/market/price?symbol={symbol}&as_of={target_date.isoformat()}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert Decimal(str(body["price"])) == Decimal("122.34")
+    assert body["message"] is None
+
+    row = session.exec(
+        select(MarketPriceHistory).where(
+            MarketPriceHistory.market_asset_id == asset.id,
+            MarketPriceHistory.price_date == target_date,
+        )
+    ).first()
+    assert row is not None
+    assert row.price == Decimal("122.34")
+
+
+def test_crypto_historical_price_route_returns_explicit_message_when_missing(session, master_key):
+    client = TestClient(app)
+    symbol = "NOPE"
+    target_date = date.today() - timedelta(days=4)
+    asset = MarketAsset(asset_key=symbol, symbol=symbol, name="Nope Coin", asset_type=AssetType.CRYPTO)
+    session.add(asset)
+    session.commit()
+
+    with patch("services.market.market_data_manager.get_historical_prices", return_value={}):
+        with patch("services.market.get_exchange_rate", return_value=Decimal("1.0")):
+            response = client.get(f"/crypto/market/price?symbol={symbol}&as_of={target_date.isoformat()}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["price"] is None
+    assert body["message"] is not None
 
 
 @patch("services.crypto_transaction.get_crypto_info")

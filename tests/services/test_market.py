@@ -175,6 +175,45 @@ def test_get_crypto_price_expired_cache(session: Session, mock_market_manager, m
     assert result == new_price
     mock_market_manager.get_info.assert_called_once_with(symbol, AssetType.CRYPTO)
 
+
+def test_get_crypto_price_backfills_missing_historical_price(session: Session, mock_exchange_rate_neutral):
+    symbol = "SOL"
+    target_date = date.today() - timedelta(days=3)
+    ma = _make_asset(session, asset_key=symbol, symbol=symbol, name="Solana", asset_type=AssetType.CRYPTO)
+
+    def _historical_prices(request_symbol, asset_type, from_date, to_date):
+        if request_symbol == symbol and asset_type == AssetType.CRYPTO:
+            return {target_date: Decimal("120.50")}
+        if request_symbol == "USD" and asset_type == AssetType.FIAT:
+            return {}
+        return {}
+
+    with patch("services.market.market_data_manager.get_historical_prices", side_effect=_historical_prices):
+        with patch("services.market.get_exchange_rate", return_value=Decimal("1.0")):
+            result = get_crypto_price(session, symbol, as_of=target_date)
+
+    assert result == Decimal("120.50")
+    row = session.exec(
+        select(MarketPriceHistory).where(
+            MarketPriceHistory.market_asset_id == ma.id,
+            MarketPriceHistory.price_date == target_date,
+        )
+    ).first()
+    assert row is not None
+    assert row.price == Decimal("120.50")
+
+
+def test_get_crypto_price_returns_none_when_historical_price_missing(session: Session, mock_exchange_rate_neutral):
+    symbol = "MISSING"
+    target_date = date.today() - timedelta(days=4)
+    _make_asset(session, asset_key=symbol, symbol=symbol, name="Missing Coin", asset_type=AssetType.CRYPTO)
+
+    with patch("services.market.market_data_manager.get_historical_prices", return_value={}):
+        with patch("services.market.get_exchange_rate", return_value=Decimal("1.0")):
+            result = get_crypto_price(session, symbol, as_of=target_date)
+
+    assert result is None
+
 def test_get_stock_price_fetch_fail_expired_cache(session: Session, mock_market_manager):
     asset_key = "US7777777777"
     price = Decimal("100.0")

@@ -18,24 +18,7 @@ from dtos import (
 )
 from dtos.crypto import CryptoCompositeTransactionCreate, CrossAccountTransferCreate, FIAT_ASSET_KEYS
 from services.encryption import encrypt_data, decrypt_data, hash_index
-from services.market import get_crypto_info
-
-def _upsert_market_cache(session: Session, asset_key: str, name: str | None) -> None:
-    market_asset = session.exec(
-        select(MarketAsset).where(MarketAsset.asset_key == asset_key.upper())
-    ).first()
-    if market_asset:
-        if name and not market_asset.name:
-            market_asset.name = name
-            session.add(market_asset)
-    else:
-        market_asset = MarketAsset(
-            asset_key=asset_key.upper(),
-            symbol=asset_key.upper(),
-            name=name or asset_key.upper(),
-            asset_type=AssetType.CRYPTO,
-        )
-        session.add(market_asset)
+from services.market import get_crypto_info, get_crypto_price
 
 
 def _decrypt_transaction(
@@ -76,8 +59,7 @@ def create_crypto_transaction(
     master_key: str,
     group_uuid: str | None = None,
 ) -> TransactionResponse:
-    if data.name and data.asset_key:
-        _upsert_market_cache(session, data.asset_key, data.name)
+
 
     account_bidx = hash_index(data.account_id, master_key)
 
@@ -120,6 +102,9 @@ def create_composite_crypto_transaction(
 
     if composite_type == CryptoCompositeTransactionType.CRYPTO_DEPOSIT:
         eur_amount = data.eur_amount or Decimal("0")
+        if eur_amount == Decimal("0") and data.asset_key not in FIAT_ASSET_KEYS:
+            price = get_crypto_price(session, data.asset_key, as_of=data.executed_at.date()) or Decimal("0")
+            eur_amount = data.amount * price
 
         fiat_deposit = CryptoTransactionCreate(
             account_id=data.account_id,
@@ -135,7 +120,6 @@ def create_composite_crypto_transaction(
         buy = CryptoTransactionCreate(
             account_id=data.account_id,
             asset_key=data.asset_key,
-            name=data.name,
             type=CryptoTransactionType.BUY,
             amount=data.amount,
             price_per_unit=Decimal("0"),
@@ -164,7 +148,6 @@ def create_composite_crypto_transaction(
         withdraw = CryptoTransactionCreate(
             account_id=data.account_id,
             asset_key="EUR",
-            name=data.name,
             type=CryptoTransactionType.WITHDRAW if composite_type == CryptoCompositeTransactionType.FIAT_WITHDRAW else CryptoTransactionType.DEPOSIT,
             amount=data.amount,
             price_per_unit=Decimal("1"),
@@ -183,7 +166,6 @@ def create_composite_crypto_transaction(
         single = CryptoTransactionCreate(
             account_id=data.account_id,
             asset_key=data.asset_key,
-            name=data.name,
             type=CryptoTransactionType.REWARD if composite_type == CryptoCompositeTransactionType.REWARD else CryptoTransactionType.TRANSFER,
             amount=data.amount,
             price_per_unit=Decimal("0"),
@@ -197,11 +179,14 @@ def create_composite_crypto_transaction(
     if composite_type == CryptoCompositeTransactionType.SELL_TO_FIAT:
         fiat_symbol = (data.quote_asset_key or "EUR").upper()
         fiat_amount = data.eur_amount or data.quote_amount or Decimal("0")
+        
+        if fiat_amount == Decimal("0") and data.asset_key not in FIAT_ASSET_KEYS:
+            price = get_crypto_price(session, data.asset_key, as_of=data.executed_at.date()) or Decimal("0")
+            fiat_amount = data.amount * price
 
         spend_crypto = CryptoTransactionCreate(
             account_id=data.account_id,
             asset_key=data.asset_key,
-            name=data.name,
             type=CryptoTransactionType.SPEND,
             amount=data.amount,
             price_per_unit=Decimal("0"),
@@ -245,7 +230,6 @@ def create_composite_crypto_transaction(
         fee_row = CryptoTransactionCreate(
             account_id=data.account_id,
             asset_key=data.asset_key,
-            name=data.name,
             type=CryptoTransactionType.FEE,
             amount=data.amount,
             price_per_unit=Decimal("0"),
@@ -260,7 +244,6 @@ def create_composite_crypto_transaction(
         transfer = CryptoTransactionCreate(
             account_id=data.account_id,
             asset_key=data.asset_key,
-            name=data.name,
             type=CryptoTransactionType.TRANSFER,
             amount=data.amount,
             price_per_unit=Decimal("0"),
@@ -283,9 +266,18 @@ def create_composite_crypto_transaction(
             )
             rows.append(create_crypto_transaction(session, fee_row, master_key, group_uuid=group))
         return rows
+
     eur_amount = data.eur_amount or Decimal("0")
     quote_sym = (data.quote_asset_key or "").upper()
     quote_qty = data.quote_amount or Decimal("0")
+
+    if eur_amount == Decimal("0"):
+        if quote_sym and quote_qty > 0 and quote_sym not in FIAT_ASSET_KEYS:
+            price = get_crypto_price(session, quote_sym, as_of=data.executed_at.date()) or Decimal("0")
+            eur_amount = quote_qty * price
+        elif data.asset_key not in FIAT_ASSET_KEYS:
+            price = get_crypto_price(session, data.asset_key, as_of=data.executed_at.date()) or Decimal("0")
+            eur_amount = data.amount * price
 
     fee_sym = (data.fee_asset_key or "").upper()
     fee_qty = data.fee_amount or Decimal("0")
@@ -300,7 +292,8 @@ def create_composite_crypto_transaction(
             elif data.fee_percentage and data.fee_percentage > 0:
                 extra_fee_eur = eur_amount * data.fee_percentage / Decimal("100")
             else:
-                extra_fee_eur = Decimal("0")
+                fee_price = get_crypto_price(session, fee_sym, as_of=data.executed_at.date()) or Decimal("0")
+                extra_fee_eur = fee_qty * fee_price
         else:
             extra_fee_eur = data.fee_eur or Decimal("0")
 
@@ -309,7 +302,6 @@ def create_composite_crypto_transaction(
     primary = CryptoTransactionCreate(
         account_id=data.account_id,
         asset_key=data.asset_key,
-        name=data.name,
         type=CryptoTransactionType.BUY,
         amount=data.amount,
         price_per_unit=Decimal("0"),
@@ -485,7 +477,6 @@ def create_cross_account_transfer(
     tx_out = CryptoTransactionCreate(
         account_id=data.from_account_id,
         asset_key=data.asset_key,
-        name=data.name,
         type=CryptoTransactionType.TRANSFER,
         amount=data.amount,
         price_per_unit=Decimal("0"),
@@ -513,7 +504,6 @@ def create_cross_account_transfer(
     tx_in = CryptoTransactionCreate(
         account_id=data.to_account_id,
         asset_key=data.asset_key,
-        name=data.name,
         type=CryptoTransactionType.BUY,
         amount=data.amount,
         price_per_unit=Decimal("0"),
@@ -559,8 +549,7 @@ def update_crypto_transaction(
     data: CryptoTransactionUpdate,
     master_key: str,
 ) -> TransactionResponse:
-    if data.name and data.asset_key:
-        _upsert_market_cache(session, data.asset_key, data.name)
+
 
     if data.asset_key is not None:
         transaction.asset_key_enc = encrypt_data(data.asset_key.upper(), master_key)

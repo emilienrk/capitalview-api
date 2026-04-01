@@ -37,7 +37,6 @@ class CryptoTransactionCreate(BaseModel):
     """
     account_id: str
     asset_key: str
-    name: str | None = None
     type: CryptoTransactionType
     amount: Decimal = Field(gt=0)
     price_per_unit: Decimal = Field(ge=0)
@@ -48,7 +47,6 @@ class CryptoTransactionCreate(BaseModel):
 
 class CryptoTransactionUpdate(BaseModel):
     asset_key: str | None = None
-    name: str | None = None
     type: CryptoTransactionType | None = None
     amount: Decimal | None = Field(None, gt=0)
     price_per_unit: Decimal | None = Field(None, ge=0)
@@ -123,7 +121,6 @@ class CrossAccountTransferCreate(BaseModel):
     from_account_id: str
     to_account_id: str
     asset_key: str
-    name: str | None = None
     amount: Decimal = Field(gt=0)
     fee_asset_key: str | None = None
     fee_amount: Decimal | None = Field(default=None, ge=0)
@@ -152,7 +149,6 @@ class CryptoCompositeTransactionCreate(BaseModel):
     account_id: str
     type: CryptoCompositeTransactionType
     asset_key: str
-    name: str | None = None
     amount: Decimal = Field(gt=0)
 
     quote_asset_key: str | None = None
@@ -180,7 +176,6 @@ class CryptoCompositeBulkItem(BaseModel):
     """
     type: CryptoCompositeTransactionType
     asset_key: str
-    name: str | None = None
     amount: Decimal = Field(gt=0)
     quote_asset_key: str | None = None
     quote_amount: Decimal | None = Field(default=None, ge=0)
