@@ -384,9 +384,9 @@ class TestExecuteImport:
         group = self._make_group(
             rows=[
                 dict(operation="Buy Crypto With Fiat", coin="BTC", change=0.1,
-                     mapped_type="BUY", mapped_symbol="BTC", mapped_amount=0.1, mapped_price=0.0),
+                     mapped_type="BUY", mapped_asset_key="BTC", mapped_amount=0.1, mapped_price=0.0),
                 dict(operation="Buy Crypto With Fiat", coin="EUR", change=-3000,
-                     mapped_type="SPEND", mapped_symbol="EUR", mapped_amount=3000.0, mapped_price=1.0),
+                     mapped_type="SPEND", mapped_asset_key="EUR", mapped_amount=3000.0, mapped_price=1.0),
             ],
             has_eur=True,
             needs_eur_input=False,
@@ -406,9 +406,9 @@ class TestExecuteImport:
         group = self._make_group(
             rows=[
                 dict(operation="Binance Convert", coin="BTC", change=-0.1,
-                     mapped_type="SPEND", mapped_symbol="BTC", mapped_amount=0.1, mapped_price=0.0),
+                     mapped_type="SPEND", mapped_asset_key="BTC", mapped_amount=0.1, mapped_price=0.0),
                 dict(operation="Binance Convert", coin="USDC", change=2800,
-                     mapped_type="BUY", mapped_symbol="USDC", mapped_amount=2800.0, mapped_price=0.0),
+                     mapped_type="BUY", mapped_asset_key="USDC", mapped_amount=2800.0, mapped_price=0.0),
             ],
             has_eur=False,
             needs_eur_input=True,
@@ -427,9 +427,9 @@ class TestExecuteImport:
         group = self._make_group(
             rows=[
                 dict(operation="Binance Convert", coin="BTC", change=-0.1,
-                     mapped_type="SPEND", mapped_symbol="BTC", mapped_amount=0.1, mapped_price=0.0),
+                     mapped_type="SPEND", mapped_asset_key="BTC", mapped_amount=0.1, mapped_price=0.0),
                 dict(operation="Binance Convert", coin="USDC", change=2800,
-                     mapped_type="BUY", mapped_symbol="USDC", mapped_amount=2800.0, mapped_price=0.0),
+                     mapped_type="BUY", mapped_asset_key="USDC", mapped_amount=2800.0, mapped_price=0.0),
             ],
             needs_eur_input=True,
             eur_amount=None,  # user skipped
@@ -445,7 +445,7 @@ class TestExecuteImport:
         group = self._make_group(
             rows=[
                 dict(operation="Crypto Box", coin="BTC", change=0.001,
-                     mapped_type="REWARD", mapped_symbol="BTC", mapped_amount=0.001, mapped_price=0.0),
+                     mapped_type="REWARD", mapped_asset_key="BTC", mapped_amount=0.001, mapped_price=0.0),
             ],
         )
 
@@ -462,9 +462,9 @@ class TestExecuteImport:
         group = self._make_group(
             rows=[
                 dict(operation="Transaction Sold", coin="BTC", change=-0.1,
-                     mapped_type="SPEND", mapped_symbol="BTC", mapped_amount=0.1, mapped_price=0.0),
+                     mapped_type="SPEND", mapped_asset_key="BTC", mapped_amount=0.1, mapped_price=0.0),
                 dict(operation="Transaction Revenue", coin="EUR", change=3000,
-                     mapped_type="DEPOSIT", mapped_symbol="EUR", mapped_amount=3000.0, mapped_price=1.0),
+                     mapped_type="DEPOSIT", mapped_asset_key="EUR", mapped_amount=3000.0, mapped_price=1.0),
             ],
             has_eur=True,
             needs_eur_input=False,
@@ -480,10 +480,10 @@ class TestExecuteImport:
         group = self._make_group(
             rows=[
                 dict(operation="Deposit", coin="BTC", change=0.1,
-                     mapped_type="BUY", mapped_symbol="BTC", mapped_amount=0.0,  # zero
+                     mapped_type="BUY", mapped_asset_key="BTC", mapped_amount=0.0,  # zero
                      mapped_price=0.0),
                 dict(operation="Deposit", coin="ETH", change=1.0,
-                     mapped_type="BUY", mapped_symbol="ETH", mapped_amount=1.0, mapped_price=0.0),
+                     mapped_type="BUY", mapped_asset_key="ETH", mapped_amount=1.0, mapped_price=0.0),
             ],
         )
 
@@ -499,11 +499,11 @@ class TestExecuteImport:
         group = self._make_group(
             rows=[
                 dict(operation="Transaction Buy", coin="BTC", change=0.1,
-                     mapped_type="BUY", mapped_symbol="BTC", mapped_amount=0.1, mapped_price=0.0),
+                     mapped_type="BUY", mapped_asset_key="BTC", mapped_amount=0.1, mapped_price=0.0),
                 dict(operation="Transaction Spend", coin="EUR", change=-3000,
-                     mapped_type="SPEND", mapped_symbol="EUR", mapped_amount=3000.0, mapped_price=1.0),
+                     mapped_type="SPEND", mapped_asset_key="EUR", mapped_amount=3000.0, mapped_price=1.0),
                 dict(operation="Transaction Fee", coin="BNB", change=-0.01,
-                     mapped_type="FEE", mapped_symbol="BNB", mapped_amount=0.01, mapped_price=0.0),
+                     mapped_type="FEE", mapped_asset_key="BNB", mapped_amount=0.01, mapped_price=0.0),
             ],
             has_eur=True,
             needs_eur_input=False,
@@ -519,16 +519,16 @@ class TestExecuteImport:
         g1 = self._make_group(
             rows=[
                 dict(operation="Buy Crypto With Fiat", coin="BTC", change=0.1,
-                     mapped_type="BUY", mapped_symbol="BTC", mapped_amount=0.1, mapped_price=0.0),
+                     mapped_type="BUY", mapped_asset_key="BTC", mapped_amount=0.1, mapped_price=0.0),
                 dict(operation="Buy Crypto With Fiat", coin="EUR", change=-3000,
-                     mapped_type="SPEND", mapped_symbol="EUR", mapped_amount=3000.0, mapped_price=1.0),
+                     mapped_type="SPEND", mapped_asset_key="EUR", mapped_amount=3000.0, mapped_price=1.0),
             ],
             group_index=0, has_eur=True,
         )
         g2 = self._make_group(
             rows=[
                 dict(operation="Crypto Box", coin="ETH", change=0.5,
-                     mapped_type="REWARD", mapped_symbol="ETH", mapped_amount=0.5, mapped_price=0.0),
+                     mapped_type="REWARD", mapped_asset_key="ETH", mapped_amount=0.5, mapped_price=0.0),
             ],
             group_index=1, timestamp="2024-01-02T12:00:00",
         )
@@ -579,11 +579,11 @@ class TestPRUAfterImport:
             rows=[
                 BinanceImportRowPreview(
                     operation="Buy Crypto With Fiat", coin="BTC", change=0.1,
-                    mapped_type="BUY", mapped_symbol="BTC", mapped_amount=0.1, mapped_price=0.0,
+                    mapped_type="BUY", mapped_asset_key="BTC", mapped_amount=0.1, mapped_price=0.0,
                 ),
                 BinanceImportRowPreview(
                     operation="Buy Crypto With Fiat", coin="EUR", change=-3000,
-                    mapped_type="SPEND", mapped_symbol="EUR", mapped_amount=3000.0, mapped_price=1.0,
+                    mapped_type="SPEND", mapped_asset_key="EUR", mapped_amount=3000.0, mapped_price=1.0,
                 ),
             ],
             summary="EUR → BTC",
@@ -614,11 +614,11 @@ class TestPRUAfterImport:
             rows=[
                 BinanceImportRowPreview(
                     operation="Binance Convert", coin="USDC", change=-3000,
-                    mapped_type="SPEND", mapped_symbol="USDC", mapped_amount=3000.0, mapped_price=0.0,
+                    mapped_type="SPEND", mapped_asset_key="USDC", mapped_amount=3000.0, mapped_price=0.0,
                 ),
                 BinanceImportRowPreview(
                     operation="Binance Convert", coin="BTC", change=0.1,
-                    mapped_type="BUY", mapped_symbol="BTC", mapped_amount=0.1, mapped_price=0.0,
+                    mapped_type="BUY", mapped_asset_key="BTC", mapped_amount=0.1, mapped_price=0.0,
                 ),
             ],
             summary="USDC → BTC",
@@ -647,7 +647,7 @@ class TestPRUAfterImport:
             rows=[
                 BinanceImportRowPreview(
                     operation="Crypto Box", coin="ETH", change=0.5,
-                    mapped_type="REWARD", mapped_symbol="ETH", mapped_amount=0.5, mapped_price=0.0,
+                    mapped_type="REWARD", mapped_asset_key="ETH", mapped_amount=0.5, mapped_price=0.0,
                 ),
             ],
             summary="Reward",
@@ -677,11 +677,11 @@ class TestPRUAfterImport:
             rows=[
                 BinanceImportRowPreview(
                     operation="Buy Crypto With Fiat", coin="BTC", change=1.0,
-                    mapped_type="BUY", mapped_symbol="BTC", mapped_amount=1.0, mapped_price=0.0,
+                    mapped_type="BUY", mapped_asset_key="BTC", mapped_amount=1.0, mapped_price=0.0,
                 ),
                 BinanceImportRowPreview(
                     operation="Buy Crypto With Fiat", coin="EUR", change=-30000,
-                    mapped_type="SPEND", mapped_symbol="EUR", mapped_amount=30000.0, mapped_price=1.0,
+                    mapped_type="SPEND", mapped_asset_key="EUR", mapped_amount=30000.0, mapped_price=1.0,
                 ),
             ],
             summary="EUR→BTC", has_eur=True, needs_eur_input=False,
@@ -691,11 +691,11 @@ class TestPRUAfterImport:
             rows=[
                 BinanceImportRowPreview(
                     operation="Transaction Sold", coin="BTC", change=-0.5,
-                    mapped_type="SPEND", mapped_symbol="BTC", mapped_amount=0.5, mapped_price=0.0,
+                    mapped_type="SPEND", mapped_asset_key="BTC", mapped_amount=0.5, mapped_price=0.0,
                 ),
                 BinanceImportRowPreview(
                     operation="Transaction Revenue", coin="EUR", change=17500,
-                    mapped_type="DEPOSIT", mapped_symbol="EUR", mapped_amount=17500.0, mapped_price=1.0,
+                    mapped_type="DEPOSIT", mapped_asset_key="EUR", mapped_amount=17500.0, mapped_price=1.0,
                 ),
             ],
             summary="BTC→EUR", has_eur=True, needs_eur_input=False,
@@ -724,11 +724,11 @@ class TestPRUAfterImport:
             rows=[
                 BinanceImportRowPreview(
                     operation="Buy Crypto With Fiat", coin="BTC", change=0.1,
-                    mapped_type="BUY", mapped_symbol="BTC", mapped_amount=0.1, mapped_price=0.0,
+                    mapped_type="BUY", mapped_asset_key="BTC", mapped_amount=0.1, mapped_price=0.0,
                 ),
                 BinanceImportRowPreview(
                     operation="Buy Crypto With Fiat", coin="EUR", change=-3000,
-                    mapped_type="SPEND", mapped_symbol="EUR", mapped_amount=3000.0, mapped_price=1.0,
+                    mapped_type="SPEND", mapped_asset_key="EUR", mapped_amount=3000.0, mapped_price=1.0,
                 ),
             ],
             summary="EUR→BTC", has_eur=True, needs_eur_input=False,
@@ -756,7 +756,7 @@ class TestPRUAfterImport:
             rows=[
                 BinanceImportRowPreview(
                     operation="Deposit", coin="EUR", change=5000,
-                    mapped_type="DEPOSIT", mapped_symbol="EUR", mapped_amount=5000.0, mapped_price=1.0,
+                    mapped_type="DEPOSIT", mapped_asset_key="EUR", mapped_amount=5000.0, mapped_price=1.0,
                 ),
             ],
             summary="EUR Deposit", has_eur=True, needs_eur_input=False,

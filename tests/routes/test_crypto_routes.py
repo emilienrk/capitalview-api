@@ -44,7 +44,7 @@ def test_crypto_account_and_transaction(session, master_key):
 
     tx = {
         "account_id": account_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "BUY",
         "amount": "0.1",
         "price_per_unit": "30000",
@@ -53,7 +53,7 @@ def test_crypto_account_and_transaction(session, master_key):
     r = client.post("/crypto/transactions", json=tx)
     assert r.status_code == 201
     created = r.json()
-    assert created["symbol"] == "BTC"
+    assert created["asset_key"] == "BTC"
     assert "fees" not in created
     assert "fees_symbol" not in created
 
@@ -73,18 +73,18 @@ def test_crypto_summary(mock_rate, mock_get_info, session, master_key):
     # Wire in capital then buy — correct model requires an external EUR deposit
     client.post("/crypto/transactions/composite", json={
         "account_id": account_id,
-        "symbol": "EUR",
+        "asset_key": "EUR",
         "type": "FIAT_DEPOSIT",
         "amount": "30000",
         "executed_at": "2023-01-01T11:00:00",
     })
     client.post("/crypto/transactions/composite", json={
         "account_id": account_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "BUY",
         "amount": "1",
         "eur_amount": "30000",
-        "quote_symbol": "EUR",
+        "quote_asset_key": "EUR",
         "quote_amount": "30000",
         "executed_at": "2023-01-01T12:00:00",
     })
@@ -109,7 +109,7 @@ def test_crypto_transactions_crud_and_bulk(session, master_key):
 
     tx = {
         "account_id": account_id,
-        "symbol": "ETH",
+        "asset_key": "ETH",
         "type": "BUY",
         "amount": "2",
         "price_per_unit": "2000",
@@ -127,7 +127,7 @@ def test_crypto_transactions_crud_and_bulk(session, master_key):
     rget = client.get(f"/crypto/transactions/{tx_id}")
     assert rget.status_code == 200
 
-    rupd = client.put(f"/crypto/transactions/{tx_id}", json={"symbol": "ETHX", "amount": "1"})
+    rupd = client.put(f"/crypto/transactions/{tx_id}", json={"asset_key": "ETHX", "amount": "1"})
     assert rupd.status_code == 200
 
     rdel = client.delete(f"/crypto/transactions/{tx_id}")
@@ -136,8 +136,8 @@ def test_crypto_transactions_crud_and_bulk(session, master_key):
     bulk = {
         "account_id": account_id,
         "transactions": [
-            {"symbol": "BTC", "type": "BUY", "amount": "0.1", "price_per_unit": "30000", "executed_at": "2023-01-01T00:00:00"},
-            {"symbol": "ETH", "type": "BUY", "amount": "5", "price_per_unit": "2000", "executed_at": "2023-01-01T00:00:00"}
+            {"asset_key": "BTC", "type": "BUY", "amount": "0.1", "price_per_unit": "30000", "executed_at": "2023-01-01T00:00:00"},
+            {"asset_key": "ETH", "type": "BUY", "amount": "5", "price_per_unit": "2000", "executed_at": "2023-01-01T00:00:00"}
         ]
     }
     rbulk = client.post("/crypto/transactions/bulk", json=bulk)
@@ -159,14 +159,14 @@ def test_bulk_import_with_group_uuid(session, master_key):
         "transactions": [
             # Atomic BUY row: price=0, cost carried by SPEND EUR via group_uuid
             {
-                "symbol": "BTC", "type": "BUY", "amount": "0.1",
+                "asset_key": "BTC", "type": "BUY", "amount": "0.1",
                 "price_per_unit": "0",
                 "executed_at": "2024-01-01T12:00:00",
                 "group_uuid": group,
             },
             # Atomic SPEND EUR row: carries the EUR cost
             {
-                "symbol": "EUR", "type": "SPEND", "amount": "3000",
+                "asset_key": "EUR", "type": "SPEND", "amount": "3000",
                 "price_per_unit": "1",
                 "executed_at": "2024-01-01T12:00:00",
                 "group_uuid": group,
@@ -182,7 +182,7 @@ def test_bulk_import_with_group_uuid(session, master_key):
 
     # Verify PRU is computed correctly via the shared group (3000 / 0.1 = 30 000)
     summary = client.get(f"/crypto/accounts/{account_id}").json()
-    btc = next(p for p in summary["positions"] if p["symbol"] == "BTC")
+    btc = next(p for p in summary["positions"] if p["asset_key"] == "BTC")
     assert Decimal(str(btc["total_amount"])) == Decimal("0.1")
     assert Decimal(str(btc["total_invested"])) == Decimal("3000.00")
     assert Decimal(str(btc["average_buy_price"])) == Decimal("30000.0000")
@@ -196,12 +196,12 @@ def test_delete_transaction_deletes_whole_group(session, master_key):
 
     payload = {
         "account_id": account_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "BUY",
         "amount": "0.1",
         "eur_amount": "3000",
         "executed_at": "2024-01-01T12:00:00",
-        "quote_symbol": "EUR",
+        "quote_asset_key": "EUR",
         "quote_amount": "3000",
     }
     created = client.post("/crypto/transactions/composite", json=payload)
@@ -231,7 +231,7 @@ def test_create_crypto_transaction_negative_validation(session, master_key):
     # Negative amount
     tx_neg_amount = {
         "account_id": account_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "BUY",
         "amount": -0.1,
         "price_per_unit": 30000,
@@ -243,7 +243,7 @@ def test_create_crypto_transaction_negative_validation(session, master_key):
     # Negative price
     tx_neg_price = {
         "account_id": account_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "BUY",
         "amount": 0.1,
         "price_per_unit": -30000,
@@ -269,11 +269,11 @@ def test_bulk_composite_import_eur_buy(mock_info, session, master_key):
         "account_id": account_id,
         "transactions": [
             {
-                "symbol": "BTC",
+                "asset_key": "BTC",
                 "type": "BUY",
                 "amount": "0.1",
                 "eur_amount": "3000",
-                "quote_symbol": "EUR",
+                "quote_asset_key": "EUR",
                 "quote_amount": "3000",
                 "executed_at": "2024-01-01T12:00:00",
             }
@@ -286,7 +286,7 @@ def test_bulk_composite_import_eur_buy(mock_info, session, master_key):
     assert body["imported_count"] == 2  # BUY BTC + SPEND EUR
 
     summary = client.get(f"/crypto/accounts/{account_id}").json()
-    btc = next(p for p in summary["positions"] if p["symbol"] == "BTC")
+    btc = next(p for p in summary["positions"] if p["asset_key"] == "BTC")
     assert Decimal(str(btc["total_amount"])) == Decimal("0.1")
     assert Decimal(str(btc["total_invested"])) == Decimal("3000.00")
     assert Decimal(str(btc["average_buy_price"])) == Decimal("30000.0000")
@@ -309,11 +309,11 @@ def test_bulk_composite_import_crypto_swap_with_eur_anchor(mock_info, session, m
         "account_id": account_id,
         "transactions": [
             {
-                "symbol": "BTC",
+                "asset_key": "BTC",
                 "type": "BUY",
                 "amount": "0.1",
                 "eur_amount": "2760",
-                "quote_symbol": "USDC",
+                "quote_asset_key": "USDC",
                 "quote_amount": "3000",
                 "executed_at": "2024-01-01T12:00:00",
             }
@@ -326,7 +326,7 @@ def test_bulk_composite_import_crypto_swap_with_eur_anchor(mock_info, session, m
     assert body["imported_count"] == 3  # BUY + SPEND + ANCHOR
 
     summary = client.get(f"/crypto/accounts/{account_id}").json()
-    btc = next(p for p in summary["positions"] if p["symbol"] == "BTC")
+    btc = next(p for p in summary["positions"] if p["asset_key"] == "BTC")
     assert Decimal(str(btc["total_invested"])) == Decimal("2760.00")
     assert Decimal(str(btc["average_buy_price"])) == Decimal("27600.0000")
 
@@ -351,14 +351,14 @@ def test_bulk_composite_import_reward_and_crypto_deposit(mock_info, session, mas
         "account_id": account_id,
         "transactions": [
             {
-                "symbol": "ETH",
+                "asset_key": "ETH",
                 "type": "REWARD",
                 "amount": "2.5",
                 "eur_amount": "0",
                 "executed_at": "2024-01-01T09:00:00",
             },
             {
-                "symbol": "BTC",
+                "asset_key": "BTC",
                 "type": "CRYPTO_DEPOSIT",
                 "amount": "0.5",
                 "eur_amount": "15000",
@@ -374,11 +374,11 @@ def test_bulk_composite_import_reward_and_crypto_deposit(mock_info, session, mas
 
     summary = client.get(f"/crypto/accounts/{account_id}").json()
 
-    eth = next(p for p in summary["positions"] if p["symbol"] == "ETH")
+    eth = next(p for p in summary["positions"] if p["asset_key"] == "ETH")
     assert Decimal(str(eth["total_amount"])) == Decimal("2.5")
     assert Decimal(str(eth["total_invested"])) == Decimal("0.00")  # REWARD: no cost
 
-    btc = next(p for p in summary["positions"] if p["symbol"] == "BTC")
+    btc = next(p for p in summary["positions"] if p["asset_key"] == "BTC")
     assert Decimal(str(btc["total_amount"])) == Decimal("0.5")
     assert Decimal(str(btc["total_invested"])) == Decimal("15000.00")
 
@@ -396,13 +396,13 @@ def test_bulk_composite_with_fee_creates_extra_row(session, master_key):
         "account_id": account_id,
         "transactions": [
             {
-                "symbol": "BTC",
+                "asset_key": "BTC",
                 "type": "BUY",
                 "amount": "0.1",
                 "eur_amount": "3000",
-                "quote_symbol": "EUR",
+                "quote_asset_key": "EUR",
                 "quote_amount": "3000",
-                "fee_symbol": "BNB",
+                "fee_asset_key": "BNB",
                 "fee_amount": "0.01",
                 "fee_included": True,
                 "executed_at": "2024-01-01T12:00:00",
@@ -421,11 +421,11 @@ def test_bulk_composite_account_not_found(session, master_key):
         "account_id": "nonexistent-account",
         "transactions": [
             {
-                "symbol": "BTC",
+                "asset_key": "BTC",
                 "type": "BUY",
                 "amount": "0.1",
                 "eur_amount": "3000",
-                "quote_symbol": "EUR",
+                "quote_asset_key": "EUR",
                 "quote_amount": "3000",
                 "executed_at": "2024-01-01T12:00:00",
             }
@@ -444,12 +444,12 @@ def test_composite_transaction_eur(session, master_key):
 
     payload = {
         "account_id": account_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "BUY",
         "amount": "0.1",
         "eur_amount": "3000",
         "executed_at": "2023-06-01T10:00:00",
-        "quote_symbol": "EUR",
+        "quote_asset_key": "EUR",
         "quote_amount": "3000",
     }
     r = client.post("/crypto/transactions/composite", json=payload)
@@ -475,12 +475,12 @@ def test_composite_transaction_crypto_quote(session, master_key):
 
     payload = {
         "account_id": account_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "BUY",
         "amount": "0.1",
         "eur_amount": "2760",
         "executed_at": "2023-06-02T10:00:00",
-        "quote_symbol": "USDC",
+        "quote_asset_key": "USDC",
         "quote_amount": "3000",
     }
     r = client.post("/crypto/transactions/composite", json=payload)
@@ -523,7 +523,7 @@ def test_account_pl_eur_cash_not_profit(mock_get_info, session, master_key):
     # 1. Wire 10 000 € into the exchange account
     r = client.post("/crypto/transactions/composite", json={
         "account_id": account_id,
-        "symbol": "EUR",
+        "asset_key": "EUR",
         "type": "FIAT_DEPOSIT",
         "amount": "10000",
         "executed_at": "2024-01-01T10:00:00",
@@ -533,11 +533,11 @@ def test_account_pl_eur_cash_not_profit(mock_get_info, session, master_key):
     # 2. Buy 1 BTC with 8 000 €
     r = client.post("/crypto/transactions/composite", json={
         "account_id": account_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "BUY",
         "amount": "1",
         "eur_amount": "8000",
-        "quote_symbol": "EUR",
+        "quote_asset_key": "EUR",
         "quote_amount": "8000",
         "executed_at": "2024-01-02T10:00:00",
     })
@@ -583,7 +583,7 @@ def test_account_pl_exit_does_not_inflate_invested(mock_get_info, session, maste
     # 1. Wire 10 000 €
     assert client.post("/crypto/transactions/composite", json={
         "account_id": account_id,
-        "symbol": "EUR",
+        "asset_key": "EUR",
         "type": "FIAT_DEPOSIT",
         "amount": "10000",
         "executed_at": "2024-01-01T10:00:00",
@@ -592,11 +592,11 @@ def test_account_pl_exit_does_not_inflate_invested(mock_get_info, session, maste
     # 2. Buy 1 BTC with 8 000 €
     assert client.post("/crypto/transactions/composite", json={
         "account_id": account_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "BUY",
         "amount": "1",
         "eur_amount": "8000",
-        "quote_symbol": "EUR",
+        "quote_asset_key": "EUR",
         "quote_amount": "8000",
         "executed_at": "2024-01-02T10:00:00",
     }).status_code == 201
@@ -604,7 +604,7 @@ def test_account_pl_exit_does_not_inflate_invested(mock_get_info, session, maste
     # 3. Sell 1 BTC at 7 000 € (SELL_TO_FIAT)
     assert client.post("/crypto/transactions/composite", json={
         "account_id": account_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "SELL_TO_FIAT",
         "amount": "1",
         "eur_amount": "7000",
@@ -635,7 +635,7 @@ def test_composite_no_warning_when_sufficient_balance(session, master_key):
     # First deposit 10 000 EUR
     client.post("/crypto/transactions/composite", json={
         "account_id": account_id,
-        "symbol": "EUR",
+        "asset_key": "EUR",
         "type": "FIAT_DEPOSIT",
         "amount": "10000",
         "executed_at": "2024-01-01T10:00:00",
@@ -644,11 +644,11 @@ def test_composite_no_warning_when_sufficient_balance(session, master_key):
     # Buy 1 BTC with 8 000 EUR (EUR balance stays positive: 2 000 remaining)
     r = client.post("/crypto/transactions/composite", json={
         "account_id": account_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "BUY",
         "amount": "1",
         "eur_amount": "8000",
-        "quote_symbol": "EUR",
+        "quote_asset_key": "EUR",
         "quote_amount": "8000",
         "executed_at": "2024-01-02T10:00:00",
     })
@@ -667,7 +667,7 @@ def test_composite_warning_when_insufficient_crypto(session, master_key):
     # Buy only 0.5 BTC
     client.post("/crypto/transactions/composite", json={
         "account_id": account_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "BUY",
         "amount": "0.5",
         "eur_amount": "15000",
@@ -677,7 +677,7 @@ def test_composite_warning_when_insufficient_crypto(session, master_key):
     # Attempt to TRANSFER 1 BTC (more than the 0.5 BTC held)
     r = client.post("/crypto/transactions/composite", json={
         "account_id": account_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "TRANSFER",
         "amount": "1",
         "executed_at": "2024-01-02T10:00:00",
@@ -698,7 +698,7 @@ def test_composite_warning_absent_when_balance_exact(session, master_key):
     # Buy exactly 1 ETH
     client.post("/crypto/transactions/composite", json={
         "account_id": account_id,
-        "symbol": "ETH",
+        "asset_key": "ETH",
         "type": "BUY",
         "amount": "1",
         "eur_amount": "2000",
@@ -708,7 +708,7 @@ def test_composite_warning_absent_when_balance_exact(session, master_key):
     # Transfer exactly 1 ETH (balance becomes 0 — no warning)
     r = client.post("/crypto/transactions/composite", json={
         "account_id": account_id,
-        "symbol": "ETH",
+        "asset_key": "ETH",
         "type": "TRANSFER",
         "amount": "1",
         "executed_at": "2024-01-02T10:00:00",

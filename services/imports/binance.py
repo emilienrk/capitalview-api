@@ -230,11 +230,11 @@ def _prefill_eur_amounts(session: Session, groups: list[BinanceImportGroupPrevie
 
         # Pick primary symbol: prefer non-stablecoin, non-EUR
         primary_row = next(
-            (r for r in buy_rows if r.mapped_symbol not in STABLECOIN_SYMBOLS and r.mapped_symbol != "EUR"),
+            (r for r in buy_rows if r.mapped_asset_key not in STABLECOIN_SYMBOLS and r.mapped_asset_key != "EUR"),
             buy_rows[0],
         )
-        symbol = primary_row.mapped_symbol
-        total_amount = sum(r.mapped_amount for r in buy_rows if r.mapped_symbol == symbol)
+        symbol = primary_row.mapped_asset_key
+        total_amount = sum(r.mapped_amount for r in buy_rows if r.mapped_asset_key == symbol)
 
         tx_date = datetime.fromisoformat(group.timestamp).date()
         to_fill.append((group, symbol, total_amount, tx_date))
@@ -348,7 +348,7 @@ def generate_preview(csv_content: str, session: Session | None = None) -> Binanc
                 coin=r.coin,
                 change=float(r.change),
                 mapped_type=tx_type.value,
-                mapped_symbol=symbol,
+                mapped_asset_key=symbol,
                 mapped_amount=float(amount),
                 mapped_price=float(price),
             ))
@@ -438,7 +438,7 @@ def execute_import(
 
             tx = CryptoTransactionCreate(
                 account_id=account_id,
-                symbol=row.mapped_symbol,
+                asset_key=row.mapped_asset_key,
                 type=CryptoTransactionType(row.mapped_type),
                 amount=amount,
                 price_per_unit=Decimal(str(row.mapped_price)),
@@ -451,7 +451,7 @@ def execute_import(
         if group.needs_eur_input and group.eur_amount is not None and group.eur_amount > 0:
             anchor = CryptoTransactionCreate(
                 account_id=account_id,
-                symbol="EUR",
+                asset_key="EUR",
                 type=CryptoTransactionType.ANCHOR,
                 amount=Decimal(str(group.eur_amount)),
                 price_per_unit=Decimal("1"),

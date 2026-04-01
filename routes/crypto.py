@@ -56,7 +56,7 @@ from services.crypto_transaction import (
     create_composite_crypto_transaction,
     create_cross_account_transfer,
     create_crypto_transaction,
-    get_symbol_balance,
+    get_asset_key_balance,
     get_crypto_transaction,
     get_account_transactions,
     update_crypto_transaction,
@@ -64,7 +64,7 @@ from services.crypto_transaction import (
     get_crypto_account_summary,
     compute_balance_warning,
 )
-from dtos.crypto import FIAT_SYMBOLS
+from dtos.crypto import FIAT_ASSET_KEYS
 
 router = APIRouter(prefix="/crypto", tags=["Crypto"])
 
@@ -239,7 +239,7 @@ def create_transaction(
     return CryptoTransactionBasicResponse(
         id=resp.id,
         account_id=data.account_id,
-        symbol=resp.asset_key,
+        asset_key=resp.asset_key,
         type=data.type,
         amount=resp.amount,
         price_per_unit=resp.price_per_unit,
@@ -274,7 +274,7 @@ def create_composite_transaction(
     info: str | None = None
     composite_type = CryptoCompositeTransactionType.normalize(data.type)
     if composite_type == CryptoCompositeTransactionType.FIAT_DEPOSIT:
-        eur_balance_before = get_symbol_balance(session, data.account_id, "EUR", master_key)
+        eur_balance_before = get_asset_key_balance(session, data.account_id, "EUR", master_key)
         if eur_balance_before < 0:
             negative_eur = abs(eur_balance_before).quantize(Decimal("0.01"))
             info = (
@@ -289,7 +289,7 @@ def create_composite_transaction(
             id=tx.id,
             account_id=data.account_id,
             group_uuid=tx.group_uuid,
-            symbol=tx.asset_key,
+            asset_key=tx.asset_key,
             type=CryptoTransactionType(tx.type),
             amount=tx.amount,
             price_per_unit=tx.price_per_unit,
@@ -340,7 +340,7 @@ def create_cross_account_transfer_route(
             id=tx.id,
             account_id=data.from_account_id,
             group_uuid=tx.group_uuid,
-            symbol=tx.asset_key,
+            asset_key=tx.asset_key,
             type=CryptoTransactionType(tx.type),
             amount=tx.amount,
             price_per_unit=tx.price_per_unit,
@@ -351,17 +351,17 @@ def create_cross_account_transfer_route(
         for tx in created
     ]
 
-    # For cross-account transfers the symbol is always debited from the source account
+    # For cross-account transfers the asset key is always debited from the source account
     warning = compute_balance_warning(
         session,
         data.from_account_id,
         created,
         master_key,
-        extra_account_for_symbols={data.symbol.upper(): data.from_account_id},
+        extra_account_for_asset_keys={data.asset_key.upper(): data.from_account_id},
     )
 
     executed_date = data.executed_at.date() if hasattr(data.executed_at, "date") else data.executed_at
-    transfer_symbols = [data.symbol] if data.symbol not in FIAT_SYMBOLS else []
+    transfer_assets = [data.asset_key] if data.asset_key not in FIAT_ASSET_KEYS else []
     
     # Update for source account
     trigger_post_transaction_updates(
@@ -372,7 +372,7 @@ def create_cross_account_transfer_route(
         account_id=data.from_account_id,
         asset_type=AssetType.CRYPTO,
         affected_dates=[executed_date],
-        affected_assets=transfer_symbols
+        affected_assets=transfer_assets
     )
     
     # Update for destination account (community positions and dates are handled idempotently if called sequentially, but to be clean we should probably only call it once for community positions, but that's fine)
@@ -384,7 +384,7 @@ def create_cross_account_transfer_route(
         account_id=data.to_account_id,
         asset_type=AssetType.CRYPTO,
         affected_dates=[executed_date],
-        affected_assets=transfer_symbols
+        affected_assets=transfer_assets
     )
 
     return CryptoCompositeTransactionResponse(rows=rows, warning=warning)
@@ -459,13 +459,13 @@ def update_transaction(
             account_id_bidx=tx_model.account_id_bidx,
             asset_type=AssetType.CRYPTO,
             affected_dates=[old_date, new_date],
-            affected_assets=[resp.asset_key] if resp.asset_key not in FIAT_SYMBOLS else []
+            affected_assets=[resp.asset_key] if resp.asset_key not in FIAT_ASSET_KEYS else []
         )
 
         return CryptoTransactionBasicResponse(
             id=resp.id,
             account_id="unknown",  # account_id not stored on tx; caller knows it
-            symbol=resp.asset_key,
+            asset_key=resp.asset_key,
             type=CryptoTransactionType(resp.type),
             amount=resp.amount,
             price_per_unit=resp.price_per_unit,
@@ -516,9 +516,9 @@ def delete_transaction(
             affected_dates.append(grouped_tx.created_at.date())
 
         try:
-            symbol = decrypt_data(grouped_tx.asset_key_enc, master_key)
-            if symbol not in FIAT_SYMBOLS:
-                affected_assets.add(symbol)
+            asset_key = decrypt_data(grouped_tx.asset_key_enc, master_key)
+            if asset_key not in FIAT_ASSET_KEYS:
+                affected_assets.add(asset_key)
         except Exception:
             pass
 
@@ -571,7 +571,7 @@ def bulk_import_transactions(
     for item in data.transactions:
         create_dto = CryptoTransactionCreate(
             account_id=data.account_id,
-            symbol=item.symbol,
+            asset_key=item.asset_key,
             type=item.type,
             amount=item.amount,
             price_per_unit=item.price_per_unit,
@@ -586,7 +586,7 @@ def bulk_import_transactions(
             id=resp.id,
             account_id=data.account_id,
             group_uuid=item.group_uuid,
-            symbol=resp.asset_key,
+            asset_key=resp.asset_key,
             type=item.type,
             amount=resp.amount,
             price_per_unit=resp.price_per_unit,
@@ -609,7 +609,11 @@ def bulk_import_transactions(
         account_id=data.account_id,
         asset_type=AssetType.CRYPTO,
         affected_dates=past_dates,
-        affected_assets=[item.symbol for item in data.transactions if item.symbol not in FIAT_SYMBOLS]
+        affected_assets=[
+            item.asset_key
+            for item in data.transactions
+            if item.asset_key not in FIAT_ASSET_KEYS
+        ]
     )
 
     return CryptoBulkImportResponse(
@@ -644,14 +648,14 @@ def bulk_composite_import_transactions(
         composite_dto = CryptoCompositeTransactionCreate(
             account_id=data.account_id,
             type=item.type,
-            symbol=item.symbol,
+            asset_key=item.asset_key,
             name=item.name,
             amount=item.amount,
-            quote_symbol=item.quote_symbol,
+            quote_asset_key=item.quote_asset_key,
             quote_amount=item.quote_amount,
             eur_amount=item.eur_amount,
             fee_included=item.fee_included,
-            fee_symbol=item.fee_symbol,
+            fee_asset_key=item.fee_asset_key,
             fee_amount=item.fee_amount,
             executed_at=item.executed_at,
             tx_hash=item.tx_hash,
@@ -673,7 +677,11 @@ def bulk_composite_import_transactions(
         account_id=data.account_id,
         asset_type=AssetType.CRYPTO,
         affected_dates=past_dates,
-        affected_assets=[item.symbol for item in data.transactions if item.symbol not in FIAT_SYMBOLS]
+        affected_assets=[
+            item.asset_key
+            for item in data.transactions
+            if item.asset_key not in FIAT_ASSET_KEYS
+        ]
     )
 
     return CryptoBulkCompositeImportResponse(
@@ -786,8 +794,8 @@ def confirm_binance_import(
         except Exception:
             pass
         for row in g.rows:
-            if row.mapped_symbol and row.mapped_symbol not in FIAT_SYMBOLS:
-                affected_assets.add(row.mapped_symbol)
+            if row.mapped_asset_key and row.mapped_asset_key not in FIAT_ASSET_KEYS:
+                affected_assets.add(row.mapped_asset_key)
                 
     trigger_post_transaction_updates(
         session=session,

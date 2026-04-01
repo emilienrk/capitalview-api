@@ -27,7 +27,7 @@ def _crypto_summary(session: Session, account_id: str, master_key: str):
 def test_create_crypto_transaction(session: Session, master_key: str):
     data = CryptoTransactionCreate(
         account_id="acc_crypto",
-        symbol="BTC",
+        asset_key="BTC",
         type=CryptoTransactionType.BUY,
         amount=Decimal("0.5"),
         price_per_unit=Decimal("30000.0"),
@@ -52,7 +52,7 @@ def test_create_crypto_transaction(session: Session, master_key: str):
 def test_get_crypto_transaction(session: Session, master_key: str):
     data = CryptoTransactionCreate(
         account_id="acc_crypto",
-        symbol="ETH",
+        asset_key="ETH",
         type=CryptoTransactionType.BUY,
         amount=Decimal("2"),
         price_per_unit=Decimal("2000"),
@@ -75,7 +75,7 @@ def test_get_crypto_transaction(session: Session, master_key: str):
 def test_update_crypto_transaction(session: Session, master_key: str):
     data = CryptoTransactionCreate(
         account_id="acc_crypto",
-        symbol="SOL",
+        asset_key="SOL",
         type=CryptoTransactionType.BUY,
         amount=Decimal("10"),
         price_per_unit=Decimal("20"),
@@ -86,7 +86,7 @@ def test_update_crypto_transaction(session: Session, master_key: str):
     tx_db = session.get(CryptoTransaction, created.id)
     new_date = datetime(2023, 2, 2, 12, 0, 0)
     update_data = CryptoTransactionUpdate(
-        symbol="SOLO",
+        asset_key="SOLO",
         type=CryptoTransactionType.SPEND,
         amount=Decimal("5"),
         price_per_unit=Decimal("25"),
@@ -109,7 +109,7 @@ def test_update_crypto_transaction(session: Session, master_key: str):
 def test_delete_crypto_transaction(session: Session, master_key: str):
     data = CryptoTransactionCreate(
         account_id="acc_crypto",
-        symbol="ADA",
+        asset_key="ADA",
         type=CryptoTransactionType.BUY,
         amount=Decimal("100"),
         price_per_unit=Decimal("0.5"),
@@ -127,7 +127,7 @@ def test_delete_crypto_transaction_deletes_group(session: Session, master_key: s
         session,
         CryptoTransactionCreate(
             account_id="acc_crypto",
-            symbol="BTC",
+            asset_key="BTC",
             type=CryptoTransactionType.BUY,
             amount=Decimal("1"),
             price_per_unit=Decimal("0"),
@@ -140,7 +140,7 @@ def test_delete_crypto_transaction_deletes_group(session: Session, master_key: s
         session,
         CryptoTransactionCreate(
             account_id="acc_crypto",
-            symbol="EUR",
+            asset_key="EUR",
             type=CryptoTransactionType.SPEND,
             amount=Decimal("30000"),
             price_per_unit=Decimal("1"),
@@ -158,10 +158,10 @@ def test_delete_crypto_transaction_deletes_group(session: Session, master_key: s
 def test_get_account_transactions(session: Session, master_key: str):
     acc1 = "acc_c1"
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id=acc1, symbol="A", type=CryptoTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), executed_at=datetime.now()
+        account_id=acc1, asset_key="A", type=CryptoTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), executed_at=datetime.now()
     ), master_key)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_c2", symbol="B", type=CryptoTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), executed_at=datetime.now()
+        account_id="acc_c2", asset_key="B", type=CryptoTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), executed_at=datetime.now()
     ), master_key)
     txs = get_account_transactions(session, acc1, master_key)
     assert len(txs) == 1
@@ -181,26 +181,26 @@ def test_get_crypto_account_summary(mock_info, session: Session, master_key: str
     # BUY 1 BTC: cost = 30000 (via SPEND EUR)
     g1 = "group-btc-buy"
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_main_crypto", symbol="BTC", type=CryptoTransactionType.BUY,
+        account_id="acc_main_crypto", asset_key="BTC", type=CryptoTransactionType.BUY,
         amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 1)
     ), master_key, group_uuid=g1)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_main_crypto", symbol="EUR", type=CryptoTransactionType.SPEND,
+        account_id="acc_main_crypto", asset_key="EUR", type=CryptoTransactionType.SPEND,
         amount=Decimal("30000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 1)
     ), master_key, group_uuid=g1)
     # BUY 10 ETH: cost = 20000 (via SPEND EUR)
     g2 = "group-eth-buy"
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_main_crypto", symbol="ETH", type=CryptoTransactionType.BUY,
+        account_id="acc_main_crypto", asset_key="ETH", type=CryptoTransactionType.BUY,
         amount=Decimal("10"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 2)
     ), master_key, group_uuid=g2)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_main_crypto", symbol="EUR", type=CryptoTransactionType.SPEND,
+        account_id="acc_main_crypto", asset_key="EUR", type=CryptoTransactionType.SPEND,
         amount=Decimal("20000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 2)
     ), master_key, group_uuid=g2)
     # SPEND 0.5 BTC → removes 50% of cost_basis → remaining = 15000
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_main_crypto", symbol="BTC", type=CryptoTransactionType.SPEND,
+        account_id="acc_main_crypto", asset_key="BTC", type=CryptoTransactionType.SPEND,
         amount=Decimal("0.5"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 3)
     ), master_key)
     summary = _crypto_summary(session, account.uuid, master_key)
@@ -218,7 +218,7 @@ def test_get_crypto_account_summary(mock_info, session: Session, master_key: str
 
     # Over-spend safety: ETH position should be filtered out
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_main_crypto", symbol="ETH", type=CryptoTransactionType.SPEND,
+        account_id="acc_main_crypto", asset_key="ETH", type=CryptoTransactionType.SPEND,
         amount=Decimal("15"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 4)
     ), master_key)
     summary_safety = _crypto_summary(session, account.uuid, master_key)
@@ -234,12 +234,12 @@ def test_create_composite_transaction_eur_only(session: Session, master_key: str
     session.commit()
     data = CryptoCompositeTransactionCreate(
         account_id="acc_comp_eur",
-        symbol="BTC",
+        asset_key="BTC",
         type="BUY",
         amount=Decimal("0.1"),
         eur_amount=Decimal("3000"),
         executed_at=datetime(2023, 6, 1),
-        quote_symbol="EUR",
+        quote_asset_key="EUR",
         quote_amount=Decimal("3000"),
         fee_included=True,
     )
@@ -265,12 +265,12 @@ def test_create_composite_transaction_with_crypto_quote(session: Session, master
     session.commit()
     data = CryptoCompositeTransactionCreate(
         account_id="acc_comp_swap",
-        symbol="BTC",
+        asset_key="BTC",
         type="BUY",
         amount=Decimal("0.1"),
         eur_amount=Decimal("2760"),
         executed_at=datetime(2023, 6, 2),
-        quote_symbol="USDC",
+        quote_asset_key="USDC",
         quote_amount=Decimal("3000"),
         fee_included=True,
     )
@@ -297,12 +297,12 @@ def test_create_composite_transaction_with_eur_fee_not_included(session: Session
     session.commit()
     data = CryptoCompositeTransactionCreate(
         account_id="acc_comp_fee",
-        symbol="BTC",
+        asset_key="BTC",
         type="BUY",
         amount=Decimal("0.1"),
         eur_amount=Decimal("3000"),
         executed_at=datetime(2023, 6, 3),
-        quote_symbol="EUR",
+        quote_asset_key="EUR",
         quote_amount=Decimal("3000"),
         fee_included=False,
         fee_eur=Decimal("3.1"),
@@ -328,12 +328,12 @@ def test_create_composite_transaction_crypto_quote_with_external_fee(session: Se
     session.commit()
     data = CryptoCompositeTransactionCreate(
         account_id="acc_comp_full",
-        symbol="BTC",
+        asset_key="BTC",
         type="BUY",
         amount=Decimal("0.1"),
         eur_amount=Decimal("2760"),
         executed_at=datetime(2023, 6, 4),
-        quote_symbol="USDC",
+        quote_asset_key="USDC",
         quote_amount=Decimal("3000"),
         fee_included=False,
         fee_eur=Decimal("3.1"),
@@ -362,15 +362,15 @@ def test_get_crypto_account_summary_with_fee_row(mock_info, session: Session, ma
     session.commit()
     g = "group-fee-test"
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_fee_row", symbol="BTC", type=CryptoTransactionType.BUY,
+        account_id="acc_fee_row", asset_key="BTC", type=CryptoTransactionType.BUY,
         amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 1)
     ), master_key, group_uuid=g)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_fee_row", symbol="EUR", type=CryptoTransactionType.SPEND,
+        account_id="acc_fee_row", asset_key="EUR", type=CryptoTransactionType.SPEND,
         amount=Decimal("30000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 1)
     ), master_key, group_uuid=g)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_fee_row", symbol="BTC", type=CryptoTransactionType.FEE,
+        account_id="acc_fee_row", asset_key="BTC", type=CryptoTransactionType.FEE,
         amount=Decimal("0.001"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 2)
     ), master_key)
     summary = _crypto_summary(session, account.uuid, master_key)
@@ -388,15 +388,15 @@ def test_get_crypto_account_summary_reward(mock_info, session: Session, master_k
     session.commit()
     g = "group-eth-buy"
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_staking", symbol="ETH", type=CryptoTransactionType.BUY,
+        account_id="acc_staking", asset_key="ETH", type=CryptoTransactionType.BUY,
         amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 1)
     ), master_key, group_uuid=g)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_staking", symbol="EUR", type=CryptoTransactionType.SPEND,
+        account_id="acc_staking", asset_key="EUR", type=CryptoTransactionType.SPEND,
         amount=Decimal("3000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 1)
     ), master_key, group_uuid=g)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_staking", symbol="ETH", type=CryptoTransactionType.REWARD,
+        account_id="acc_staking", asset_key="ETH", type=CryptoTransactionType.REWARD,
         amount=Decimal("0.1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 2)
     ), master_key)
     summary = _crypto_summary(session, account.uuid, master_key)
@@ -443,22 +443,22 @@ def test_group_based_pru(mock_info, session: Session, master_key: str):
     from services.crypto_transaction import create_crypto_transaction
     group_a = "group-pru-test"
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_group_pru", symbol="BTC", type=CryptoTransactionType.BUY,
+        account_id="acc_group_pru", asset_key="BTC", type=CryptoTransactionType.BUY,
         amount=Decimal("0.5"), price_per_unit=Decimal("0"),
         executed_at=datetime(2024, 1, 1),
     ), master_key, group_uuid=group_a)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_group_pru", symbol="ETH", type=CryptoTransactionType.SPEND,
+        account_id="acc_group_pru", asset_key="ETH", type=CryptoTransactionType.SPEND,
         amount=Decimal("20"), price_per_unit=Decimal("0"),
         executed_at=datetime(2024, 1, 1),
     ), master_key, group_uuid=group_a)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_group_pru", symbol="BNB", type=CryptoTransactionType.FEE,
+        account_id="acc_group_pru", asset_key="BNB", type=CryptoTransactionType.FEE,
         amount=Decimal("0.005"), price_per_unit=Decimal("0"),
         executed_at=datetime(2024, 1, 1),
     ), master_key, group_uuid=group_a)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_group_pru", symbol="EUR", type=CryptoTransactionType.ANCHOR,
+        account_id="acc_group_pru", asset_key="EUR", type=CryptoTransactionType.ANCHOR,
         amount=Decimal("30002"), price_per_unit=Decimal("1"),
         executed_at=datetime(2024, 1, 1),
     ), master_key, group_uuid=group_a)
@@ -483,7 +483,7 @@ def test_crypto_deposit_creates_fiat_anchor_and_buy(session: Session, master_key
 
     data = CryptoCompositeTransactionCreate(
         account_id="acc_cdeposit",
-        symbol="BTC",
+        asset_key="BTC",
         type="CRYPTO_DEPOSIT",
         amount=Decimal("0.5"),
         eur_amount=Decimal("15000"),        # original EUR cost
@@ -519,7 +519,7 @@ def test_crypto_deposit_with_external_fee_inflates_anchor(session: Session, mast
 
     data = CryptoCompositeTransactionCreate(
         account_id="acc_cdfee",
-        symbol="ETH",
+        asset_key="ETH",
         type="CRYPTO_DEPOSIT",
         amount=Decimal("10"),
         eur_amount=Decimal("20000"),
@@ -552,7 +552,7 @@ def test_fiat_anchor_not_counted_in_positions(mock_info, session: Session, maste
 
     data = CryptoCompositeTransactionCreate(
         account_id="acc_anchor_pos",
-        symbol="BTC",
+        asset_key="BTC",
         type="CRYPTO_DEPOSIT",
         amount=Decimal("1"),
         eur_amount=Decimal("25000"),
@@ -586,16 +586,16 @@ def test_transfer_neutral_proportional_removal(mock_info, session: Session, mast
     # BUY 4 ETH (price=0): cost = 8000 via SPEND EUR
     g = "group-eth-buy"
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_transfer", symbol="ETH", type=CryptoTransactionType.BUY,
+        account_id="acc_transfer", asset_key="ETH", type=CryptoTransactionType.BUY,
         amount=Decimal("4"), price_per_unit=Decimal("0"), executed_at=datetime(2024, 1, 1)
     ), master_key, group_uuid=g)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_transfer", symbol="EUR", type=CryptoTransactionType.SPEND,
+        account_id="acc_transfer", asset_key="EUR", type=CryptoTransactionType.SPEND,
         amount=Decimal("8000"), price_per_unit=Decimal("1"), executed_at=datetime(2024, 1, 1)
     ), master_key, group_uuid=g)
     # TRANSFER 1 ETH → remove 25% of position
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_transfer", symbol="ETH", type=CryptoTransactionType.TRANSFER,
+        account_id="acc_transfer", asset_key="ETH", type=CryptoTransactionType.TRANSFER,
         amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2024, 1, 2)
     ), master_key)
 
@@ -619,16 +619,16 @@ def test_exit_proportional_removal(mock_info, session: Session, master_key: str)
 
     g = "group-btc-buy"
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_exit", symbol="BTC", type=CryptoTransactionType.BUY,
+        account_id="acc_exit", asset_key="BTC", type=CryptoTransactionType.BUY,
         amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2024, 1, 1)
     ), master_key, group_uuid=g)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_exit", symbol="EUR", type=CryptoTransactionType.SPEND,
+        account_id="acc_exit", asset_key="EUR", type=CryptoTransactionType.SPEND,
         amount=Decimal("30000"), price_per_unit=Decimal("1"), executed_at=datetime(2024, 1, 1)
     ), master_key, group_uuid=g)
     # SELL_TO_FIAT keeps its price (fiat-type, taxable)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_exit", symbol="BTC", type=CryptoTransactionType.WITHDRAW,
+        account_id="acc_exit", asset_key="BTC", type=CryptoTransactionType.WITHDRAW,
         amount=Decimal("0.5"), price_per_unit=Decimal("40000"), executed_at=datetime(2024, 1, 2)
     ), master_key)
 
@@ -650,7 +650,7 @@ def test_composite_transfer_single_row(session: Session, master_key: str):
 
     data = CryptoCompositeTransactionCreate(
         account_id="acc_ctransfer",
-        symbol="SOL",
+        asset_key="SOL",
         type="TRANSFER",
         amount=Decimal("5"),
         executed_at=datetime(2024, 4, 1),
@@ -674,7 +674,7 @@ def test_composite_fiat_deposit_single_row(session: Session, master_key: str):
 
     data = CryptoCompositeTransactionCreate(
         account_id="acc_cfiat",
-        symbol="EUR",
+        asset_key="EUR",
         type="FIAT_DEPOSIT",
         amount=Decimal("1000"),
         executed_at=datetime(2024, 4, 2),
@@ -696,7 +696,7 @@ def test_composite_reward_single_row(session: Session, master_key: str):
 
     data = CryptoCompositeTransactionCreate(
         account_id="acc_creward",
-        symbol="ETH",
+        asset_key="ETH",
         type="REWARD",
         amount=Decimal("0.05"),
         executed_at=datetime(2024, 4, 3),
@@ -725,16 +725,16 @@ def test_eur_quote_crypto_fee_included(session: Session, master_key: str):
 
     data = CryptoCompositeTransactionCreate(
         account_id="acc_cfi_1",
-        symbol="BTC",
+        asset_key="BTC",
         type="BUY",
         amount=Decimal("0.1"),
         eur_amount=Decimal("3000"),
         executed_at=datetime(2024, 5, 1),
-        quote_symbol="EUR",
+        quote_asset_key="EUR",
         quote_amount=Decimal("3000"),
         fee_included=True,
         fee_percentage=Decimal("0.1"),
-        fee_symbol="BNB",
+        fee_asset_key="BNB",
         fee_amount=Decimal("0.01"),
     )
     rows = create_composite_crypto_transaction(session, data, master_key)
@@ -778,16 +778,16 @@ def test_eur_quote_crypto_fee_not_included_percentage(session: Session, master_k
 
     data = CryptoCompositeTransactionCreate(
         account_id="acc_cfni_1",
-        symbol="BTC",
+        asset_key="BTC",
         type="BUY",
         amount=Decimal("0.1"),
         eur_amount=Decimal("3000"),
         executed_at=datetime(2024, 5, 2),
-        quote_symbol="EUR",
+        quote_asset_key="EUR",
         quote_amount=Decimal("3000"),
         fee_included=False,
         fee_percentage=Decimal("0.1"),
-        fee_symbol="BNB",
+        fee_asset_key="BNB",
         fee_amount=Decimal("0.01"),
     )
     rows = create_composite_crypto_transaction(session, data, master_key)
@@ -831,16 +831,16 @@ def test_crypto_quote_crypto_fee_not_included_percentage(session: Session, maste
 
     data = CryptoCompositeTransactionCreate(
         account_id="acc_cfni_2",
-        symbol="BTC",
+        asset_key="BTC",
         type="BUY",
         amount=Decimal("0.1"),
         eur_amount=Decimal("2760"),
         executed_at=datetime(2024, 5, 3),
-        quote_symbol="USDC",
+        quote_asset_key="USDC",
         quote_amount=Decimal("3000"),
         fee_included=False,
         fee_percentage=Decimal("0.1"),
-        fee_symbol="BNB",
+        fee_asset_key="BNB",
         fee_amount=Decimal("0.01"),
     )
     rows = create_composite_crypto_transaction(session, data, master_key)
@@ -881,17 +881,17 @@ def test_crypto_fee_explicit_eur_takes_priority_over_percentage(session: Session
 
     data = CryptoCompositeTransactionCreate(
         account_id="acc_fee_prio",
-        symbol="BTC",
+        asset_key="BTC",
         type="BUY",
         amount=Decimal("0.1"),
         eur_amount=Decimal("3000"),
         executed_at=datetime(2024, 5, 4),
-        quote_symbol="EUR",
+        quote_asset_key="EUR",
         quote_amount=Decimal("3000"),
         fee_included=False,
         fee_eur=Decimal("5"),          # explicit → 5 EUR
         fee_percentage=Decimal("0.1"), # would give 3 EUR — must be ignored
-        fee_symbol="BNB",
+        fee_asset_key="BNB",
         fee_amount=Decimal("0.01"),
     )
     rows = create_composite_crypto_transaction(session, data, master_key)
@@ -930,7 +930,7 @@ def test_bulk_create_with_group_uuid_pru(session: Session, master_key: str):
         session,
         CryptoTransactionCreate(
             account_id="acc_bulk_grp",
-            symbol="BTC",
+            asset_key="BTC",
             type=CryptoTransactionType.BUY,
             amount=Decimal("0.1"),
             price_per_unit=Decimal("0"),
@@ -943,7 +943,7 @@ def test_bulk_create_with_group_uuid_pru(session: Session, master_key: str):
         session,
         CryptoTransactionCreate(
             account_id="acc_bulk_grp",
-            symbol="EUR",
+            asset_key="EUR",
             type=CryptoTransactionType.SPEND,
             amount=Decimal("3000"),
             price_per_unit=Decimal("1"),

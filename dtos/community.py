@@ -19,7 +19,7 @@ class CommunitySettingsUpdate(BaseModel):
     display_name: str | None = None
     bio: str | None = None
     shared_stock_asset_keys: list[str] = []
-    shared_crypto_symbols: list[str] = []
+    shared_crypto_asset_keys: list[str] = []
 
 
 class CommunityPositionResponse(BaseModel):
@@ -65,7 +65,7 @@ class CommunitySettingsResponse(BaseModel):
     display_name: str | None = None
     bio: str | None = None
     shared_stock_asset_keys: list[str] = []
-    shared_crypto_symbols: list[str] = []
+    shared_crypto_asset_keys: list[str] = []
     positions_count: int = 0
 
 

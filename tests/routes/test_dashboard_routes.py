@@ -42,7 +42,7 @@ def test_dashboard_portfolio(mock_rate, mock_crypto, mock_stock, session, master
 
     client.post("/stocks/transactions", json={
         "account_id": acc_id,
-        "symbol": "AAPL",
+        "asset_key": "AAPL",
         "asset_key": "US0378331005",
         "type": "BUY",
         "amount": "1",
@@ -59,7 +59,7 @@ def test_dashboard_portfolio(mock_rate, mock_crypto, mock_stock, session, master
     # reflects actual external capital (new correct behaviour).
     client.post("/crypto/transactions/composite", json={
         "account_id": cacc_id,
-        "symbol": "EUR",
+        "asset_key": "EUR",
         "type": "FIAT_DEPOSIT",
         "amount": "30000",
         "executed_at": "2023-01-01T11:00:00",
@@ -67,11 +67,11 @@ def test_dashboard_portfolio(mock_rate, mock_crypto, mock_stock, session, master
 
     client.post("/crypto/transactions/composite", json={
         "account_id": cacc_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "BUY",
         "amount": "1",
         "eur_amount": "30000",
-        "quote_symbol": "EUR",
+        "quote_asset_key": "EUR",
         "quote_amount": "30000",
         "executed_at": "2023-01-01T12:00:00",
     }, headers=headers)
@@ -132,7 +132,7 @@ def test_dashboard_statistics(
     acc_id = acc.json()["id"]
     client.post("/stocks/transactions", json={
         "account_id": acc_id,
-        "symbol": "AAPL",
+        "asset_key": "AAPL",
         "asset_key": "US0378331005",
         "type": "BUY",
         "amount": "2",
@@ -147,18 +147,18 @@ def test_dashboard_statistics(
     cacc_id = cacc.json()["id"]
     client.post("/crypto/transactions/composite", json={
         "account_id": cacc_id,
-        "symbol": "EUR",
+        "asset_key": "EUR",
         "type": "DEPOSIT",
         "amount": "20000",
         "executed_at": "2024-01-01T11:00:00",
     }, headers=headers)
     client.post("/crypto/transactions/composite", json={
         "account_id": cacc_id,
-        "symbol": "BTC",
+        "asset_key": "BTC",
         "type": "BUY",
         "amount": "0.5",
         "eur_amount": "20000",
-        "quote_symbol": "EUR",
+        "quote_asset_key": "EUR",
         "quote_amount": "20000",
         "executed_at": "2024-01-01T12:00:00",
     }, headers=headers)

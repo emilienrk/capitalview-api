@@ -110,7 +110,7 @@ class TestCommunitySettings:
         assert data["is_private"] is True
         assert data["display_name"] is None
         assert data["shared_stock_asset_keys"] == []
-        assert data["shared_crypto_symbols"] == []
+        assert data["shared_crypto_asset_keys"] == []
         assert data["positions_count"] == 0
 
     def test_update_settings_activates_profile(self, session):
@@ -122,7 +122,7 @@ class TestCommunitySettings:
             "display_name": "Alice D.",
             "bio": "Investor since 2020",
             "shared_stock_asset_keys": [],
-            "shared_crypto_symbols": [],
+            "shared_crypto_asset_keys": [],
         })
         assert r.status_code == 200
         data = r.json()
@@ -140,7 +140,7 @@ class TestCommunitySettings:
             "display_name": "Alice",
             "bio": "My bio",
             "shared_stock_asset_keys": [],
-            "shared_crypto_symbols": [],
+            "shared_crypto_asset_keys": [],
         })
         r = client.get("/community/settings")
         assert r.status_code == 200
@@ -155,12 +155,12 @@ class TestCommunitySettings:
         # Activate first
         client.put("/community/settings", json={
             "is_active": True, "is_private": False,
-            "shared_stock_asset_keys": [], "shared_crypto_symbols": [],
+            "shared_stock_asset_keys": [], "shared_crypto_asset_keys": [],
         })
         # Deactivate
         r = client.put("/community/settings", json={
             "is_active": False, "is_private": False,
-            "shared_stock_asset_keys": [], "shared_crypto_symbols": [],
+            "shared_stock_asset_keys": [], "shared_crypto_asset_keys": [],
         })
         assert r.status_code == 200
         assert r.json()["is_active"] is False

@@ -334,7 +334,7 @@ def _compute_crypto_pru_for_asset_keys(
     Reuses the same accounting logic as the main crypto_transaction module.
     """
     from models import CryptoAccount, CryptoTransaction
-    from dtos.crypto import FIAT_SYMBOLS
+    from dtos.crypto import FIAT_ASSET_KEYS
     from services.encryption import decrypt_data, hash_index
 
     user_bidx = hash_index(user_uuid, master_key)
@@ -381,7 +381,7 @@ def _compute_crypto_pru_for_asset_keys(
             if tx["type"] == "ANCHOR":
                 anchor_by_group.setdefault(g, Decimal("0"))
                 anchor_by_group[g] += tx["amount"] * tx["price"]
-            elif tx["type"] == "SPEND" and tx["asset_key"] in FIAT_SYMBOLS:
+            elif tx["type"] == "SPEND" and tx["asset_key"] in FIAT_ASSET_KEYS:
                 fiat_spend_by_group.setdefault(g, Decimal("0"))
                 fiat_spend_by_group[g] += tx["amount"] * tx["price"]
 
@@ -473,7 +473,7 @@ def update_community_settings(
         session, user_uuid, master_key, data.shared_stock_asset_keys
     )
     crypto_pru = _compute_crypto_pru_for_asset_keys(
-        session, user_uuid, master_key, data.shared_crypto_symbols
+        session, user_uuid, master_key, data.shared_crypto_asset_keys
     )
 
     created_count = 0
@@ -506,7 +506,7 @@ def update_community_settings(
         display_name=profile.display_name,
         bio=profile.bio,
         shared_stock_asset_keys=list(stock_pru.keys()),
-        shared_crypto_symbols=list(crypto_pru.keys()),
+        shared_crypto_asset_keys=list(crypto_pru.keys()),
         positions_count=created_count,
     )
 
@@ -794,7 +794,7 @@ def get_community_settings(
             display_name=None,
             bio=None,
             shared_stock_asset_keys=[],
-            shared_crypto_symbols=[],
+            shared_crypto_asset_keys=[],
             positions_count=0,
         )
 
@@ -817,7 +817,7 @@ def get_community_settings(
         display_name=profile.display_name,
         bio=profile.bio,
         shared_stock_asset_keys=stock_asset_keys,
-        shared_crypto_symbols=crypto_asset_keys,
+        shared_crypto_asset_keys=crypto_asset_keys,
         positions_count=len(positions),
     )
 
@@ -834,7 +834,7 @@ def get_available_positions(
     Crypto positions with negative amounts are excluded (no short sharing).
     """
     from models import StockAccount, StockTransaction, CryptoAccount, CryptoTransaction
-    from dtos.crypto import FIAT_SYMBOLS
+    from dtos.crypto import FIAT_ASSET_KEYS
     from services.encryption import decrypt_data, hash_index
 
     user_bidx = hash_index(user_uuid, master_key)
@@ -897,7 +897,7 @@ def get_available_positions(
             tx_type = decrypt_data(tx.type_enc, master_key)
             amount = Decimal(decrypt_data(tx.amount_enc, master_key))
             # Skip fiat and anchor rows
-            if asset_key in FIAT_SYMBOLS or tx_type == "ANCHOR":
+            if asset_key in FIAT_ASSET_KEYS or tx_type == "ANCHOR":
                 continue
             if asset_key not in crypto_agg:
                 crypto_agg[asset_key] = Decimal("0")

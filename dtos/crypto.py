@@ -36,7 +36,7 @@ class CryptoTransactionCreate(BaseModel):
     price_per_unit is always EUR. REWARD price=0. ANCHOR price=1.
     """
     account_id: str
-    symbol: str
+    asset_key: str
     name: str | None = None
     type: CryptoTransactionType
     amount: Decimal = Field(gt=0)
@@ -47,7 +47,7 @@ class CryptoTransactionCreate(BaseModel):
 
 
 class CryptoTransactionUpdate(BaseModel):
-    symbol: str | None = None
+    asset_key: str | None = None
     name: str | None = None
     type: CryptoTransactionType | None = None
     amount: Decimal | None = Field(None, gt=0)
@@ -58,7 +58,7 @@ class CryptoTransactionUpdate(BaseModel):
 
 
 class CryptoTransactionBulkCreate(BaseModel):
-    symbol: str
+    asset_key: str
     type: CryptoTransactionType
     amount: Decimal = Field(gt=0)
     price_per_unit: Decimal = Field(ge=0)
@@ -82,7 +82,7 @@ class CryptoTransactionBasicResponse(BaseModel):
     id: str
     account_id: str
     group_uuid: str | None = None
-    symbol: str
+    asset_key: str
     type: CryptoTransactionType
     amount: Decimal
     price_per_unit: Decimal
@@ -108,7 +108,7 @@ class CryptoCompositeTransactionResponse(BaseModel):
     info: str | None = None
 
 
-FIAT_SYMBOLS: frozenset[str] = frozenset(
+FIAT_ASSET_KEYS: frozenset[str] = frozenset(
     {"EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "CNY", "NZD", "SEK", "NOK", "DKK"}
 )
 
@@ -122,10 +122,10 @@ class CrossAccountTransferCreate(BaseModel):
     """
     from_account_id: str
     to_account_id: str
-    symbol: str
+    asset_key: str
     name: str | None = None
     amount: Decimal = Field(gt=0)
-    fee_symbol: str | None = None
+    fee_asset_key: str | None = None
     fee_amount: Decimal | None = Field(default=None, ge=0)
     executed_at: datetime
     tx_hash: str | None = None
@@ -151,11 +151,11 @@ class CryptoCompositeTransactionCreate(BaseModel):
     """
     account_id: str
     type: CryptoCompositeTransactionType
-    symbol: str
+    asset_key: str
     name: str | None = None
     amount: Decimal = Field(gt=0)
 
-    quote_symbol: str | None = None
+    quote_asset_key: str | None = None
     quote_amount: Decimal | None = Field(default=None, ge=0)
 
     eur_amount: Decimal | None = Field(default=None, ge=0)
@@ -163,7 +163,7 @@ class CryptoCompositeTransactionCreate(BaseModel):
     fee_included: bool = True
     fee_percentage: Decimal | None = Field(default=None, ge=0)
     fee_eur: Decimal | None = Field(default=None, ge=0)
-    fee_symbol: str | None = None
+    fee_asset_key: str | None = None
     fee_amount: Decimal | None = Field(default=None, ge=0)
 
     executed_at: datetime
@@ -179,14 +179,14 @@ class CryptoCompositeBulkItem(BaseModel):
     account_id is injected server-side from the request envelope.
     """
     type: CryptoCompositeTransactionType
-    symbol: str
+    asset_key: str
     name: str | None = None
     amount: Decimal = Field(gt=0)
-    quote_symbol: str | None = None
+    quote_asset_key: str | None = None
     quote_amount: Decimal | None = Field(default=None, ge=0)
     eur_amount: Decimal | None = Field(default=None, ge=0)
     fee_included: bool = True
-    fee_symbol: str | None = None
+    fee_asset_key: str | None = None
     fee_amount: Decimal | None = Field(default=None, ge=0)
     executed_at: datetime
     tx_hash: str | None = None
@@ -212,7 +212,7 @@ class BinanceImportRowPreview(BaseModel):
     coin: str
     change: float
     mapped_type: str
-    mapped_symbol: str
+    mapped_asset_key: str
     mapped_amount: float
     mapped_price: float
 

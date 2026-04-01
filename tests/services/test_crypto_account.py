@@ -86,7 +86,7 @@ def test_delete_crypto_account_cascade(session: Session, master_key: str):
     acc = create_crypto_account(session, CryptoAccountCreate(name="To Delete"), user_uuid, master_key)
     tx_data = CryptoTransactionCreate(
         account_id=acc.id,
-        symbol="BTC",
+        asset_key="BTC",
         type=CryptoTransactionType.BUY,
         amount=Decimal("1"),
         price_per_unit=Decimal("100"),

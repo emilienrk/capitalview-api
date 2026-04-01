@@ -31,7 +31,7 @@ from models.asset import Asset, AssetValuation
 from models.enums import AccountCategory, AssetType
 from models.market import MarketAsset, MarketPriceHistory
 from models import BankAccount, CryptoAccount, StockAccount
-from dtos.crypto import FIAT_SYMBOLS
+from dtos.crypto import FIAT_ASSET_KEYS
 from services.encryption import decrypt_data, encrypt_data, hash_index
 from services.settings import get_or_create_settings
 from models.enums import CryptoTransactionType, StockTransactionType
@@ -325,7 +325,7 @@ def _compute_daily_net_flow(
         for tx in day_txs
         if getattr(tx, "group_uuid", None)
         and _type(tx) == "SPEND"
-        and str(getattr(tx, "asset_key", "") or "").upper() not in FIAT_SYMBOLS
+        and str(getattr(tx, "asset_key", "") or "").upper() not in FIAT_ASSET_KEYS
     }
 
     for tx in day_txs:
@@ -334,7 +334,7 @@ def _compute_daily_net_flow(
         amount = _to_decimal(getattr(tx, "amount", _ZERO))
         group_uuid = getattr(tx, "group_uuid", None)
 
-        if asset_key in FIAT_SYMBOLS:
+        if asset_key in FIAT_ASSET_KEYS:
             match tx_type:
                 case "DEPOSIT":
                     if not group_uuid or group_uuid not in groups_with_crypto_spend:
