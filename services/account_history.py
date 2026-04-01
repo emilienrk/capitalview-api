@@ -86,7 +86,13 @@ class _AccountSnapshot:
 def _parse_iso_date(value: str) -> date | None:
     """Parse an ISO-like string into a date. Return None when invalid."""
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+        if dt.year < 1900:
+            if 0 <= dt.year <= 99:
+                dt = date(2000 + dt.year, dt.month, dt.day)
+            else:
+                dt = date(1990, 1, 1)
+        return dt
     except Exception:
         return None
 
@@ -184,7 +190,17 @@ def _resolve_account_start_date(
         except Exception:
             pass
 
-    return min(candidates)
+    resolved = min(candidates)
+    
+    # Auto-correct typo for years below 1900 (e.g., 0025 instead of 2025)
+    if resolved.year < 1900:
+        if 0 <= resolved.year <= 99:
+            corrected_year = 2000 + resolved.year
+            resolved = date(corrected_year, resolved.month, resolved.day)
+        else:
+            resolved = date(1990, 1, 1)
+
+    return resolved
 
 
 def _get_price_matrix(
