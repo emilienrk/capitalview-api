@@ -130,11 +130,11 @@ class CommunityPick(SQLModel, table=True):
     """A 'like' / pick on a stock or crypto asset.
 
     Users can publicly like assets with an optional comment and target price.
-    One pick per user per (symbol, asset_type) — enforced by unique constraint.
+    One pick per user per (asset_key, asset_type) — enforced by unique constraint.
     """
     __tablename__ = "community_picks"
     __table_args__ = (
-        sa.UniqueConstraint("user_id", "symbol", "asset_type", name="uq_user_pick"),
+        sa.UniqueConstraint("user_id", "asset_key", "asset_type", name="uq_user_pick"),
         {"extend_existing": True},
     )
 
@@ -147,7 +147,7 @@ class CommunityPick(SQLModel, table=True):
             index=True,
         )
     )
-    symbol: str = Field(sa_column=Column(sa.String(30), nullable=False))
+    asset_key: str = Field(sa_column=Column(sa.String(30), nullable=False))
     asset_type: str = Field(sa_column=Column(sa.String(10), nullable=False))
     comment: str | None = Field(default=None, sa_column=Column(sa.Text, nullable=True))
     target_price: float | None = Field(default=None, sa_column=Column(sa.Float, nullable=True))

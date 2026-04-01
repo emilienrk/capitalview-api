@@ -23,8 +23,8 @@ class CommunitySettingsUpdate(BaseModel):
 
 
 class CommunityPositionResponse(BaseModel):
-    """A single shared position — only symbol, name, type, and PnL %."""
-    symbol: str
+    """A single shared position — only asset_key, name, type, and PnL %."""
+    asset_key: str
     name: str | None = None  # Human-readable name (e.g. "Apple Inc." instead of ISIN)
     asset_type: str  # "CRYPTO" | "STOCK"
     pnl_percentage: str | None = None  # None if market price unavailable
@@ -94,7 +94,7 @@ class FollowStatsResponse(BaseModel):
 
 class AvailablePosition(BaseModel):
     """A single position the user can choose to share."""
-    symbol: str
+    asset_key: str
     asset_type: str  # "CRYPTO" | "STOCK"
     name: str | None = None  # Human-readable name (ticker name for stocks)
 
@@ -110,7 +110,7 @@ class AvailablePositionsResponse(BaseModel):
 
 class PickCreate(BaseModel):
     """Payload for POST /community/picks."""
-    symbol: str
+    asset_key: str
     asset_type: str  # "CRYPTO" | "STOCK"
     comment: str | None = None
     target_price: float | None = None
@@ -126,7 +126,7 @@ class PickResponse(BaseModel):
     """A single pick returned in responses."""
     id: int
     username: str
-    symbol: str
+    asset_key: str
     asset_type: str
     comment: str | None = None
     target_price: float | None = None

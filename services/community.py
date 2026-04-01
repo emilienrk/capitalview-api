@@ -4,7 +4,7 @@ Community service — business logic for sharing portfolio PnL.
 Responsibilities:
 1. Reading / writing CommunityProfile and CommunityPosition rows.
 2. Computing PRU from the user's encrypted transactions (requires master_key).
-3. Re-encrypting symbol + PRU with the COMMUNITY_ENCRYPTION_KEY.
+3. Re-encrypting asset_key + PRU with the COMMUNITY_ENCRYPTION_KEY.
 4. Building the public profile response (only PnL %).
 5. Listing available (positive) positions for checkbox selection.
 """
@@ -156,7 +156,7 @@ def _pick_to_response(pick: CommunityPick, username: str) -> PickResponse:
     return PickResponse(
         id=pick.id,  # type: ignore[arg-type]
         username=username,
-        symbol=pick.symbol,
+        asset_key=pick.asset_key,
         asset_type=pick.asset_type,
         comment=pick.comment,
         target_price=pick.target_price,
@@ -184,7 +184,7 @@ def create_pick(session: Session, user_uuid: str, data: PickCreate) -> PickRespo
     existing = session.exec(
         select(CommunityPick).where(
             CommunityPick.user_id == user_uuid,
-            CommunityPick.symbol == data.symbol.upper(),
+            CommunityPick.asset_key == data.asset_key.upper(),
             CommunityPick.asset_type == data.asset_type.upper(),
         )
     ).first()
@@ -193,7 +193,7 @@ def create_pick(session: Session, user_uuid: str, data: PickCreate) -> PickRespo
 
     pick = CommunityPick(
         user_id=user_uuid,
-        symbol=data.symbol.upper(),
+        asset_key=data.asset_key.upper(),
         asset_type=data.asset_type.upper(),
         comment=data.comment,
         target_price=data.target_price,
@@ -322,15 +322,15 @@ def _compute_stock_pru_for_asset_keys(
     return result
 
 
-def _compute_crypto_pru_for_symbols(
+def _compute_crypto_pru_for_asset_keys(
     session: Session,
     user_uuid: str,
     master_key: str,
-    symbols: list[str],
+    asset_keys: list[str],
 ) -> dict[str, Decimal]:
-    """Compute PRU for a list of crypto symbols using the user's encrypted transactions.
+    """Compute PRU for a list of crypto asset keys using the user's encrypted transactions.
 
-    Returns {symbol: pru} for symbols with a positive position.
+    Returns {asset_key: pru} for asset keys with a positive position.
     Reuses the same accounting logic as the main crypto_transaction module.
     """
     from models import CryptoAccount, CryptoTransaction
@@ -338,7 +338,7 @@ def _compute_crypto_pru_for_symbols(
     from services.encryption import decrypt_data, hash_index
 
     user_bidx = hash_index(user_uuid, master_key)
-    symbol_set = {s.upper() for s in symbols}
+    asset_key_set = {k.upper() for k in asset_keys}
 
     accounts = session.exec(
         select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
@@ -355,14 +355,14 @@ def _compute_crypto_pru_for_symbols(
         ).all()
 
         for tx in raw_txs:
-            symbol = decrypt_data(tx.asset_key_enc, master_key).upper()
+            asset_key = decrypt_data(tx.asset_key_enc, master_key).upper()
             tx_type = decrypt_data(tx.type_enc, master_key)
             amount = Decimal(decrypt_data(tx.amount_enc, master_key))
             price = Decimal(decrypt_data(tx.price_per_unit_enc, master_key))
 
             all_decrypted.append({
                 "id": tx.uuid,
-                "symbol": symbol,
+                "asset_key": asset_key,
                 "type": tx_type,
                 "amount": amount,
                 "price": price,
@@ -381,7 +381,7 @@ def _compute_crypto_pru_for_symbols(
             if tx["type"] == "ANCHOR":
                 anchor_by_group.setdefault(g, Decimal("0"))
                 anchor_by_group[g] += tx["amount"] * tx["price"]
-            elif tx["type"] == "SPEND" and tx["symbol"] in FIAT_SYMBOLS:
+            elif tx["type"] == "SPEND" and tx["asset_key"] in FIAT_SYMBOLS:
                 fiat_spend_by_group.setdefault(g, Decimal("0"))
                 fiat_spend_by_group[g] += tx["amount"] * tx["price"]
 
@@ -396,16 +396,16 @@ def _compute_crypto_pru_for_symbols(
             else:
                 buy_group_cost[tx["id"]] = Decimal("0")
 
-    # Replay per symbol
-    positions: dict[str, dict] = {}  # symbol → {amount, cost_basis}
+    # Replay per asset_key
+    positions: dict[str, dict] = {}  # asset_key → {amount, cost_basis}
     for tx in all_decrypted:
-        sym = tx["symbol"]
-        if sym not in symbol_set:
+        asset_key = tx["asset_key"]
+        if asset_key not in asset_key_set:
             continue
 
-        if sym not in positions:
-            positions[sym] = {"amount": Decimal("0"), "cost_basis": Decimal("0")}
-        pos = positions[sym]
+        if asset_key not in positions:
+            positions[asset_key] = {"amount": Decimal("0"), "cost_basis": Decimal("0")}
+        pos = positions[asset_key]
         tx_cost = tx["amount"] * tx["price"]
 
         match tx["type"]:
@@ -431,9 +431,9 @@ def _compute_crypto_pru_for_symbols(
                 pos["amount"] -= tx["amount"]
 
     result: dict[str, Decimal] = {}
-    for sym, data in positions.items():
+    for asset_key, data in positions.items():
         if data["amount"] > 0 and data["cost_basis"] > 0:
-            result[sym] = data["cost_basis"] / data["amount"]
+            result[asset_key] = data["cost_basis"] / data["amount"]
     return result
 
 
@@ -448,9 +448,9 @@ def update_community_settings(
     Steps:
     1. Ensure a CommunityProfile row exists.
     2. Set is_active, display_name, bio.
-    3. Compute PRU for selected stock ISINs and crypto symbols.
+    3. Compute PRU for selected stock ISINs and crypto asset keys.
     4. Delete existing CommunityPosition rows and insert new ones,
-       encrypting symbol + PRU with COMMUNITY_ENCRYPTION_KEY.
+    encrypting asset_key + PRU with COMMUNITY_ENCRYPTION_KEY.
     """
     profile = _get_or_create_profile(session, user_uuid)
     profile.is_active = data.is_active
@@ -472,7 +472,7 @@ def update_community_settings(
     stock_pru = _compute_stock_pru_for_asset_keys(
         session, user_uuid, master_key, data.shared_stock_asset_keys
     )
-    crypto_pru = _compute_crypto_pru_for_symbols(
+    crypto_pru = _compute_crypto_pru_for_asset_keys(
         session, user_uuid, master_key, data.shared_crypto_symbols
     )
 
@@ -488,11 +488,11 @@ def update_community_settings(
         session.add(pos)
         created_count += 1
 
-    for symbol, pru in crypto_pru.items():
+    for asset_key, pru in crypto_pru.items():
         pos = CommunityPosition(
             profile_user_id=profile.user_id,
             asset_type=AssetType.CRYPTO.value,
-            asset_key_enc=community_encrypt(symbol),
+            asset_key_enc=community_encrypt(asset_key),
             pru_enc=community_encrypt(str(pru)),
         )
         session.add(pos)
@@ -530,21 +530,21 @@ def refresh_community_positions(
     if not profile:
         return
 
-    # Read existing positions to know which symbols/ISINs to re-compute
+    # Read existing positions to know which asset keys/ISINs to re-compute
     existing = session.exec(
         select(CommunityPosition).where(CommunityPosition.profile_user_id == profile.user_id)
     ).all()
 
     stock_asset_keys: list[str] = []
-    crypto_symbols: list[str] = []
+    crypto_asset_keys: list[str] = []
     for pos in existing:
-        symbol = community_decrypt(pos.asset_key_enc)
+        asset_key = community_decrypt(pos.asset_key_enc)
         if pos.asset_type == AssetType.STOCK.value:
-            stock_asset_keys.append(symbol)
+            stock_asset_keys.append(asset_key)
         else:
-            crypto_symbols.append(symbol)
+            crypto_asset_keys.append(asset_key)
 
-    if not stock_asset_keys and not crypto_symbols:
+    if not stock_asset_keys and not crypto_asset_keys:
         return
 
     # Delete old rows
@@ -554,7 +554,7 @@ def refresh_community_positions(
 
     # Re-compute
     stock_pru = _compute_stock_pru_for_asset_keys(session, user_uuid, master_key, stock_asset_keys)
-    crypto_pru = _compute_crypto_pru_for_symbols(session, user_uuid, master_key, crypto_symbols)
+    crypto_pru = _compute_crypto_pru_for_asset_keys(session, user_uuid, master_key, crypto_asset_keys)
 
     for asset_key, pru in stock_pru.items():
         session.add(CommunityPosition(
@@ -564,11 +564,11 @@ def refresh_community_positions(
             pru_enc=community_encrypt(str(pru)),
         ))
 
-    for symbol, pru in crypto_pru.items():
+    for asset_key, pru in crypto_pru.items():
         session.add(CommunityPosition(
             profile_user_id=profile.user_id,
             asset_type=AssetType.CRYPTO.value,
-            asset_key_enc=community_encrypt(symbol),
+            asset_key_enc=community_encrypt(asset_key),
             pru_enc=community_encrypt(str(pru)),
         ))
 
@@ -734,16 +734,16 @@ def get_public_profile(
         weighted_pnl_sum = Decimal("0")
 
         for pos in positions:
-            symbol = community_decrypt(pos.asset_key_enc)
+            asset_key = community_decrypt(pos.asset_key_enc)
             pru = Decimal(community_decrypt(pos.pru_enc))
             asset_type = pos.asset_type
 
             current_price: Decimal | None = None
             asset_name: str | None = None
             if asset_type == AssetType.STOCK.value:
-                asset_name, current_price = get_stock_info(session, symbol)
+                asset_name, current_price = get_stock_info(session, asset_key)
             elif asset_type == AssetType.CRYPTO.value:
-                asset_name, current_price = get_crypto_info(session, symbol)
+                asset_name, current_price = get_crypto_info(session, asset_key)
 
             pnl_pct: float | None = None
             # current_price == 0 is a sentinel for "no market data" (see market.py)
@@ -754,7 +754,7 @@ def get_public_profile(
                 weighted_pnl_sum += pru * Decimal(str(pnl_pct))
 
             response_positions.append(CommunityPositionResponse(
-                symbol=symbol,
+                asset_key=asset_key,
                 name=asset_name,
                 asset_type=asset_type,
                 pnl_percentage=pnl_pct,
@@ -803,13 +803,13 @@ def get_community_settings(
     ).all()
 
     stock_asset_keys: list[str] = []
-    crypto_symbols: list[str] = []
+    crypto_asset_keys: list[str] = []
     for pos in positions:
-        symbol = community_decrypt(pos.asset_key_enc)
+        asset_key = community_decrypt(pos.asset_key_enc)
         if pos.asset_type == AssetType.STOCK.value:
-            stock_asset_keys.append(symbol)
+            stock_asset_keys.append(asset_key)
         else:
-            crypto_symbols.append(symbol)
+            crypto_asset_keys.append(asset_key)
 
     return CommunitySettingsResponse(
         is_active=profile.is_active,
@@ -817,7 +817,7 @@ def get_community_settings(
         display_name=profile.display_name,
         bio=profile.bio,
         shared_stock_asset_keys=stock_asset_keys,
-        shared_crypto_symbols=crypto_symbols,
+        shared_crypto_symbols=crypto_asset_keys,
         positions_count=len(positions),
     )
 
@@ -873,7 +873,7 @@ def get_available_positions(
 
     stocks = [
         AvailablePosition(
-            symbol=asset_key,
+            asset_key=asset_key,
             asset_type=AssetType.STOCK.value,
             name=asset_key_to_name.get(asset_key),
         )
@@ -881,7 +881,7 @@ def get_available_positions(
         if amt > 0
     ]
 
-    # Compute net crypto amount per symbol
+    # Compute net crypto amount per asset_key
     crypto_accounts = session.exec(
         select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
     ).all()
@@ -893,23 +893,23 @@ def get_available_positions(
             select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == account_bidx)
         ).all()
         for tx in txs:
-            symbol = decrypt_data(tx.asset_key_enc, master_key).upper()
+            asset_key = decrypt_data(tx.asset_key_enc, master_key).upper()
             tx_type = decrypt_data(tx.type_enc, master_key)
             amount = Decimal(decrypt_data(tx.amount_enc, master_key))
             # Skip fiat and anchor rows
-            if symbol in FIAT_SYMBOLS or tx_type == "ANCHOR":
+            if asset_key in FIAT_SYMBOLS or tx_type == "ANCHOR":
                 continue
-            if symbol not in crypto_agg:
-                crypto_agg[symbol] = Decimal("0")
+            if asset_key not in crypto_agg:
+                crypto_agg[asset_key] = Decimal("0")
             if tx_type in ("BUY", "REWARD", "DEPOSIT"):
-                crypto_agg[symbol] += amount
+                crypto_agg[asset_key] += amount
             elif tx_type in ("SPEND", "TRANSFER", "WITHDRAW", "FEE"):
-                crypto_agg[symbol] -= amount
+                crypto_agg[asset_key] -= amount
 
     # Only positive positions — no negative crypto sharing
     crypto = [
-        AvailablePosition(symbol=sym, asset_type=AssetType.CRYPTO.value)
-        for sym, amt in sorted(crypto_agg.items())
+        AvailablePosition(asset_key=asset_key, asset_type=AssetType.CRYPTO.value)
+        for asset_key, amt in sorted(crypto_agg.items())
         if amt > 0
     ]
 

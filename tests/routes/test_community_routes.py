@@ -181,7 +181,7 @@ class TestPicks:
         """POST /community/picks fails with 400 if no active community profile."""
         client = TestClient(app)
         r = client.post("/community/picks", json={
-            "symbol": "BTC",
+            "asset_key": "BTC",
             "asset_type": "CRYPTO",
         })
         # Service raises ValueError → route converts to 400
@@ -195,14 +195,14 @@ class TestPicks:
         _activate_profile(session, "user_1", is_private=False)
 
         r = client.post("/community/picks", json={
-            "symbol": "btc",          # should be uppercased
+            "asset_key": "btc",          # should be uppercased
             "asset_type": "CRYPTO",
             "comment": "Bull run 2025",
             "target_price": 150000.0,
         })
         assert r.status_code == 201
         data = r.json()
-        assert data["symbol"] == "BTC"         # uppercased
+        assert data["asset_key"] == "BTC"         # uppercased
         assert data["asset_type"] == "CRYPTO"
         assert data["comment"] == "Bull run 2025"
         assert data["target_price"] == 150000.0
@@ -210,21 +210,21 @@ class TestPicks:
         assert "id" in data
 
     def test_create_pick_duplicate_rejected(self, session):
-        """POST /community/picks with same symbol+type returns 400."""
+        """POST /community/picks with same asset_key+type returns 400."""
         client = TestClient(app)
         _activate_profile(session, "user_1", is_private=False)
 
-        client.post("/community/picks", json={"symbol": "AAPL", "asset_type": "STOCK"})
-        r2 = client.post("/community/picks", json={"symbol": "AAPL", "asset_type": "STOCK"})
+        client.post("/community/picks", json={"asset_key": "AAPL", "asset_type": "STOCK"})
+        r2 = client.post("/community/picks", json={"asset_key": "AAPL", "asset_type": "STOCK"})
         assert r2.status_code == 400
 
-    def test_create_pick_same_symbol_different_type_allowed(self, session):
-        """POST allows same symbol for different asset types (BTC as STOCK vs CRYPTO)."""
+    def test_create_pick_same_asset_key_different_type_allowed(self, session):
+        """POST allows same asset_key for different asset types (BTC as STOCK vs CRYPTO)."""
         client = TestClient(app)
         _activate_profile(session, "user_1", is_private=False)
 
-        r1 = client.post("/community/picks", json={"symbol": "BTC", "asset_type": "CRYPTO"})
-        r2 = client.post("/community/picks", json={"symbol": "BTC", "asset_type": "STOCK"})
+        r1 = client.post("/community/picks", json={"asset_key": "BTC", "asset_type": "CRYPTO"})
+        r2 = client.post("/community/picks", json={"asset_key": "BTC", "asset_type": "STOCK"})
         assert r1.status_code == 201
         assert r2.status_code == 201
 
@@ -233,15 +233,15 @@ class TestPicks:
         client = TestClient(app)
         _activate_profile(session, "user_1", is_private=False)
 
-        client.post("/community/picks", json={"symbol": "ETH", "asset_type": "CRYPTO"})
-        client.post("/community/picks", json={"symbol": "MSFT", "asset_type": "STOCK"})
+        client.post("/community/picks", json={"asset_key": "ETH", "asset_type": "CRYPTO"})
+        client.post("/community/picks", json={"asset_key": "MSFT", "asset_type": "STOCK"})
 
         r = client.get("/community/picks/me")
         assert r.status_code == 200
         picks = r.json()
         assert len(picks) == 2
-        symbols = {p["symbol"] for p in picks}
-        assert symbols == {"ETH", "MSFT"}
+        asset_keys = {p["asset_key"] for p in picks}
+        assert asset_keys == {"ETH", "MSFT"}
 
     def test_update_pick_comment_and_price(self, session):
         """PUT /community/picks/{id} updates comment and target_price."""
@@ -249,7 +249,7 @@ class TestPicks:
         _activate_profile(session, "user_1", is_private=False)
 
         create_r = client.post("/community/picks", json={
-            "symbol": "NVDA",
+            "asset_key": "NVDA",
             "asset_type": "STOCK",
             "comment": "AI play",
             "target_price": 1000.0,
@@ -264,7 +264,7 @@ class TestPicks:
         data = r.json()
         assert data["comment"] == "Updated: still bullish"
         assert data["target_price"] == 1500.0
-        assert data["symbol"] == "NVDA"   # symbol unchanged
+        assert data["asset_key"] == "NVDA"   # asset_key unchanged
 
     def test_update_pick_not_found(self):
         """PUT /community/picks/9999 returns 400 for a non-existent pick."""
@@ -277,7 +277,7 @@ class TestPicks:
         client = TestClient(app)
         _activate_profile(session, "user_1", is_private=False)
 
-        create_r = client.post("/community/picks", json={"symbol": "SOL", "asset_type": "CRYPTO"})
+        create_r = client.post("/community/picks", json={"asset_key": "SOL", "asset_type": "CRYPTO"})
         pick_id = create_r.json()["id"]
 
         r = client.delete(f"/community/picks/{pick_id}")
@@ -293,15 +293,15 @@ class TestPicks:
         assert r.status_code == 404
 
     def test_delete_clears_duplicate_constraint(self, session):
-        """After deleting a pick, the same symbol+type can be re-created."""
+        """After deleting a pick, the same asset_key+type can be re-created."""
         client = TestClient(app)
         _activate_profile(session, "user_1", is_private=False)
 
-        r1 = client.post("/community/picks", json={"symbol": "ADA", "asset_type": "CRYPTO"})
+        r1 = client.post("/community/picks", json={"asset_key": "ADA", "asset_type": "CRYPTO"})
         pick_id = r1.json()["id"]
         client.delete(f"/community/picks/{pick_id}")
 
-        r2 = client.post("/community/picks", json={"symbol": "ADA", "asset_type": "CRYPTO"})
+        r2 = client.post("/community/picks", json={"asset_key": "ADA", "asset_type": "CRYPTO"})
         assert r2.status_code == 201
 
 
@@ -557,9 +557,9 @@ class TestProfileDetail:
         assert r.status_code == 200
         data = r.json()
         assert data["is_mutual"] is True
-        # Positions should be visible (decoded symbol = "AAPL")
+        # Positions should be visible (decoded asset_key = "AAPL")
         assert len(data["positions"]) == 1
-        assert data["positions"][0]["symbol"] == "AAPL"
+        assert data["positions"][0]["asset_key"] == "AAPL"
         assert data["positions"][0]["asset_type"] == "STOCK"
         # pnl_percentage is None because there's no market data in test
         assert data["positions"][0]["pnl_percentage"] is None
@@ -574,7 +574,7 @@ class TestProfileDetail:
         from models.community import CommunityPick
         pick = CommunityPick(
             user_id="user_2",
-            symbol="BTC",
+            asset_key="BTC",
             asset_type="CRYPTO",
             comment="To the moon",
         )
@@ -585,7 +585,7 @@ class TestProfileDetail:
         assert r.status_code == 200
         picks = r.json()["picks"]
         assert len(picks) == 1
-        assert picks[0]["symbol"] == "BTC"
+        assert picks[0]["asset_key"] == "BTC"
         assert picks[0]["username"] == "bob"
 
 

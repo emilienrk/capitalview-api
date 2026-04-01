@@ -709,7 +709,7 @@ def get_asset_portfolio_history(
                     parsed = json.loads(raw_json)
                     positions = [
                         AccountHistoryPosition(
-                            symbol=p["symbol"],
+                            asset_key=p["asset_key"],
                             quantity=Decimal(p["quantity"]),
                             value=Decimal(p["value"]),
                             price=Decimal(p["price"]) if p.get("price") is not None else None,

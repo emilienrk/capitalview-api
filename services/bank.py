@@ -256,7 +256,7 @@ def _decode_history_row(row: AccountHistory, master_key: str) -> AccountHistoryS
                 parsed = json.loads(raw_json)
                 positions = [
                     AccountHistoryPosition(
-                        symbol=p["symbol"],
+                        asset_key=p["asset_key"],
                         quantity=Decimal(p["quantity"]),
                         value=Decimal(p["value"]),
                         price=Decimal(p["price"]) if p.get("price") is not None else None,
@@ -367,7 +367,7 @@ def import_bank_account_history(
         positions_json: str | None = None
         if total_value > Decimal("0"):
             positions_json = json.dumps([{
-                "symbol": "EUR",
+                "asset_key": "EUR",
                 "quantity": str(total_value),
                 "value": str(total_value),
                 "price": "1",
@@ -437,7 +437,7 @@ def get_all_bank_accounts_history(
         prev_value = total_value
         positions = [
             AccountHistoryPosition(
-                symbol="EUR",
+                asset_key="EUR",
                 quantity=total_value,
                 value=total_value,
                 price=Decimal("1"),

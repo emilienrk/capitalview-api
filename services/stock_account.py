@@ -201,7 +201,7 @@ def get_stock_account_history(
                     parsed = json.loads(raw_json)
                     positions = [
                         AccountHistoryPosition(
-                            symbol=p["symbol"],
+                            asset_key=p["asset_key"],
                             quantity=Decimal(p["quantity"]),
                             value=Decimal(p["value"]),
                             price=Decimal(p["price"]) if p.get("price") is not None else None,
@@ -234,8 +234,8 @@ def get_all_stock_accounts_history(
     """
     Aggregate daily snapshots across all stock accounts for a user.
     For each date, total_value and total_invested are summed; positions
-    are merged by symbol (quantities and values summed, price kept from
-    the last account that had a price for that symbol).
+    are merged by asset_key (quantities and values summed, price kept from
+    the last account that had a price for that asset_key).
     """
     user_bidx = hash_index(user_uuid, master_key)
     accounts = session.exec(
@@ -244,7 +244,7 @@ def get_all_stock_accounts_history(
 
     # Collect per-account snapshots then aggregate by date
     # date -> {"total_value": Decimal, "total_invested": Decimal,
-    #          "positions": {symbol: {"quantity", "value", "price", "invested"}}}
+    #          "positions": {asset_key: {"quantity", "value", "price", "invested"}}}
     aggregated: dict = {}
 
     for acc in accounts:
@@ -260,19 +260,19 @@ def get_all_stock_accounts_history(
             aggregated[d]["total_invested"] += snap.total_invested
 
             for pos in (snap.positions or []):
-                sym = pos.symbol
-                if sym not in aggregated[d]["positions"]:
-                    aggregated[d]["positions"][sym] = {
+                asset_key = pos.asset_key
+                if asset_key not in aggregated[d]["positions"]:
+                    aggregated[d]["positions"][asset_key] = {
                         "quantity": Decimal("0"),
                         "value": Decimal("0"),
                         "price": None,
                         "invested": Decimal("0"),
                     }
-                aggregated[d]["positions"][sym]["quantity"] += pos.quantity
-                aggregated[d]["positions"][sym]["value"] += pos.value
-                aggregated[d]["positions"][sym]["invested"] += pos.invested
+                aggregated[d]["positions"][asset_key]["quantity"] += pos.quantity
+                aggregated[d]["positions"][asset_key]["value"] += pos.value
+                aggregated[d]["positions"][asset_key]["invested"] += pos.invested
                 if pos.price is not None:
-                    aggregated[d]["positions"][sym]["price"] = pos.price
+                    aggregated[d]["positions"][asset_key]["price"] = pos.price
 
     result = []
     prev_value: Decimal | None = None
@@ -282,7 +282,7 @@ def get_all_stock_accounts_history(
         daily_pnl = (total_value - prev_value) if prev_value is not None else None
         positions = [
             AccountHistoryPosition(
-                symbol=sym,
+                asset_key=asset_key,
                 quantity=data["quantity"],
                 value=data["value"],
                 price=data["price"],
@@ -293,7 +293,7 @@ def get_all_stock_accounts_history(
                     else Decimal("0")
                 ),
             )
-            for sym, data in day["positions"].items()
+            for asset_key, data in day["positions"].items()
         ] or None
         result.append(
             AccountHistorySnapshotResponse(

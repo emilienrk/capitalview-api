@@ -132,7 +132,7 @@ class TestGetStockAccountHistory:
         user_bidx = hash_index("user_1", master_key)
 
         positions = [
-            {"symbol": "AAPL", "quantity": "10", "value": "1500.00",
+            {"asset_key": "AAPL", "quantity": "10", "value": "1500.00",
              "price": "150.00", "invested": "1200.00", "percentage": "100.00"}
         ]
         _insert_history_row(session, user_bidx=user_bidx, account_id_bidx=account_id_bidx,
@@ -145,7 +145,7 @@ class TestGetStockAccountHistory:
         assert result[0].positions is not None
         assert len(result[0].positions) == 1
         pos = result[0].positions[0]
-        assert pos.symbol == "AAPL"
+        assert pos.asset_key == "AAPL"
         assert pos.quantity == Decimal("10")
         assert pos.price == Decimal("150.00")
         assert pos.percentage == Decimal("100.00")
@@ -157,7 +157,7 @@ class TestGetStockAccountHistory:
         user_bidx = hash_index("user_2", master_key)
 
         positions = [
-            {"symbol": "BTC", "quantity": "1", "value": "0.00",
+            {"asset_key": "BTC", "quantity": "1", "value": "0.00",
              "price": None, "invested": "30000.00", "percentage": "0.00"}
         ]
         _insert_history_row(session, user_bidx=user_bidx, account_id_bidx=account_id_bidx,
@@ -257,7 +257,7 @@ class TestGetAllStockAccountsHistory:
         user_bidx = hash_index(user, master_key)
 
         for acc_id, value in [(acc1.id, "400.00"), (acc2.id, "600.00")]:
-            positions = [{"symbol": "MSFT", "quantity": "1", "value": value,
+            positions = [{"asset_key": "MSFT", "quantity": "1", "value": value,
                           "price": value, "invested": value, "percentage": "100.00"}]
             _insert_history_row(session, user_bidx=user_bidx, account_id_bidx=hash_index(acc_id, master_key),
                                 account_type=AccountCategory.STOCK, snapshot_date=date(2026, 3, 1),
@@ -266,7 +266,7 @@ class TestGetAllStockAccountsHistory:
         result = get_all_stock_accounts_history(session, user, master_key)
         assert result[0].total_value == Decimal("1000.00")
         msft = result[0].positions[0]
-        assert msft.symbol == "MSFT"
+        assert msft.asset_key == "MSFT"
         assert msft.value == Decimal("1000.00")
         # percentage relative to the combined total
         assert msft.percentage == Decimal("100.00")
@@ -360,7 +360,7 @@ class TestBankAccountHistory:
 
         d = date(2026, 2, 1)
         for acc, value in [(acc1, "5000.00"), (acc2, "3000.00")]:
-            positions = [{"symbol": "EUR", "quantity": value, "value": value,
+            positions = [{"asset_key": "EUR", "quantity": value, "value": value,
                           "price": "1.00", "invested": value, "percentage": "100.00"}]
             _insert_history_row(session, user_bidx=user_bidx, account_id_bidx=hash_index(acc.id, master_key),
                                 account_type=AccountCategory.BANK, snapshot_date=d,
@@ -375,7 +375,7 @@ class TestBankAccountHistory:
         # Aggregated EUR position
         assert snap.positions is not None
         eur_pos = snap.positions[0]
-        assert eur_pos.symbol == "EUR"
+        assert eur_pos.asset_key == "EUR"
         assert eur_pos.value == Decimal("8000.00")
         assert eur_pos.percentage == Decimal("100")
 
@@ -421,7 +421,7 @@ class TestAssetPortfolioHistory:
         account_id_bidx = self._virtual_account_id_bidx(user, master_key)
 
         positions = [
-            {"symbol": "Appartement Paris", "quantity": "1", "value": "350000.00",
+            {"asset_key": "Appartement Paris", "quantity": "1", "value": "350000.00",
              "price": "350000.00", "invested": "300000.00", "percentage": "100.00"}
         ]
         _insert_history_row(session, user_bidx=user_bidx, account_id_bidx=account_id_bidx,
@@ -431,7 +431,7 @@ class TestAssetPortfolioHistory:
 
         result = get_asset_portfolio_history(session, user, master_key)
         assert len(result) == 1
-        assert result[0].positions[0].symbol == "Appartement Paris"
+        assert result[0].positions[0].asset_key == "Appartement Paris"
         assert result[0].positions[0].value == Decimal("350000.00")
 
     def test_does_not_read_other_users_data(self, session: Session, master_key: str):

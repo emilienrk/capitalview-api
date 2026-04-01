@@ -80,7 +80,7 @@ class PortfolioResponse(BaseModel):
 
 class AccountHistoryPosition(BaseModel):
     """Single asset position within a daily snapshot."""
-    symbol: str
+    asset_key: str
     quantity: Decimal
     value: Decimal
     price: Decimal | None = None
