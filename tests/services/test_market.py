@@ -203,6 +203,29 @@ def test_get_crypto_price_backfills_missing_historical_price(session: Session, m
     assert row.price == Decimal("120.50")
 
 
+def test_get_crypto_price_uses_existing_historical_cache_without_api(session: Session):
+    symbol = "BTC"
+    target_date = date.today() - timedelta(days=2)
+    ma = _make_asset(session, asset_key=symbol, symbol=symbol, name="Bitcoin", asset_type=AssetType.CRYPTO)
+
+    now = datetime.now(timezone.utc)
+    entry = MarketPriceHistory(
+        market_asset_id=ma.id,
+        price=Decimal("42000.00"),
+        price_date=target_date,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(entry)
+    session.commit()
+
+    with patch("services.market.market_data_manager.get_historical_prices") as mock_fetch:
+        result = get_crypto_price(session, symbol, as_of=target_date)
+
+    assert result == Decimal("42000.00")
+    mock_fetch.assert_not_called()
+
+
 def test_get_crypto_price_returns_none_when_historical_price_missing(session: Session, mock_exchange_rate_neutral):
     symbol = "MISSING"
     target_date = date.today() - timedelta(days=4)
