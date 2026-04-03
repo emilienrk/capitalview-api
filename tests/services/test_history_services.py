@@ -287,6 +287,78 @@ class TestGetAllStockAccountsHistory:
         assert len(result_a) == 1
         assert result_a[0].total_value == Decimal("5000.00")
 
+    def test_daily_pnl_aggregates_from_account_snapshots_not_total_value_delta(
+        self, session: Session, master_key: str
+    ):
+        """Aggregated stock daily_pnl must sum per-account daily_pnl values."""
+        user = "user_stock_daily_pnl_agg"
+        acc1 = create_stock_account(
+            session,
+            StockAccountCreate(name="PEA", account_type=StockAccountType.PEA),
+            user,
+            master_key,
+        )
+        acc2 = create_stock_account(
+            session,
+            StockAccountCreate(name="CTO", account_type=StockAccountType.CTO),
+            user,
+            master_key,
+        )
+        user_bidx = hash_index(user, master_key)
+
+        # Day 1 baseline
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=hash_index(acc1.id, master_key),
+            account_type=AccountCategory.STOCK,
+            snapshot_date=date(2026, 4, 1),
+            total_value="1000.00",
+            total_invested="1000.00",
+            daily_pnl="0.00",
+            master_key=master_key,
+        )
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=hash_index(acc2.id, master_key),
+            account_type=AccountCategory.STOCK,
+            snapshot_date=date(2026, 4, 1),
+            total_value="1000.00",
+            total_invested="1000.00",
+            daily_pnl="0.00",
+            master_key=master_key,
+        )
+
+        # Day 2: large value jump (e.g. external flow) but zero per-account daily_pnl
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=hash_index(acc1.id, master_key),
+            account_type=AccountCategory.STOCK,
+            snapshot_date=date(2026, 4, 2),
+            total_value="2000.00",
+            total_invested="2000.00",
+            daily_pnl="0.00",
+            master_key=master_key,
+        )
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=hash_index(acc2.id, master_key),
+            account_type=AccountCategory.STOCK,
+            snapshot_date=date(2026, 4, 2),
+            total_value="1000.00",
+            total_invested="1000.00",
+            daily_pnl="0.00",
+            master_key=master_key,
+        )
+
+        result = get_all_stock_accounts_history(session, user, master_key)
+        assert len(result) == 2
+        assert result[0].daily_pnl is None
+        assert result[1].daily_pnl == Decimal("0.00")
+
 
 # ---------------------------------------------------------------------------
 # get_crypto_account_history / get_all_crypto_accounts_history
@@ -321,10 +393,12 @@ class TestCryptoAccountHistory:
                             total_value="4000.00", total_invested="3000.00", master_key=master_key)
         _insert_history_row(session, user_bidx=user_bidx, account_id_bidx=hash_index(acc1.id, master_key),
                             account_type=AccountCategory.CRYPTO, snapshot_date=date(2026, 1, 2),
-                            total_value="10100.00", total_invested="8000.00", master_key=master_key)
+                            total_value="10100.00", total_invested="8000.00",
+                            daily_pnl="100.00", master_key=master_key)
         _insert_history_row(session, user_bidx=user_bidx, account_id_bidx=hash_index(acc2.id, master_key),
                             account_type=AccountCategory.CRYPTO, snapshot_date=date(2026, 1, 2),
-                            total_value="4100.00", total_invested="3000.00", master_key=master_key)
+                            total_value="4100.00", total_invested="3000.00",
+                            daily_pnl="100.00", master_key=master_key)
 
         result = get_all_crypto_accounts_history(session, user, master_key)
         assert len(result) == 2
@@ -333,6 +407,65 @@ class TestCryptoAccountHistory:
         assert result[0].daily_pnl is None
         assert result[1].total_value == Decimal("14200.00")
         assert result[1].daily_pnl == Decimal("200.00")
+
+    def test_all_accounts_aggregation_uses_sum_of_daily_pnl(self, session: Session, master_key: str):
+        """Aggregated crypto daily_pnl must not be recomputed from total value deltas."""
+        user = "user_crypto_daily_pnl_agg"
+        acc1 = create_crypto_account(session, CryptoAccountCreate(name="Binance"), user, master_key)
+        acc2 = create_crypto_account(session, CryptoAccountCreate(name="Cold Wallet"), user, master_key)
+        user_bidx = hash_index(user, master_key)
+
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=hash_index(acc1.id, master_key),
+            account_type=AccountCategory.CRYPTO,
+            snapshot_date=date(2026, 5, 1),
+            total_value="5000.00",
+            total_invested="5000.00",
+            daily_pnl="0.00",
+            master_key=master_key,
+        )
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=hash_index(acc2.id, master_key),
+            account_type=AccountCategory.CRYPTO,
+            snapshot_date=date(2026, 5, 1),
+            total_value="5000.00",
+            total_invested="5000.00",
+            daily_pnl="0.00",
+            master_key=master_key,
+        )
+
+        # Total value rises strongly on day 2 while daily_pnl per account stays 0.
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=hash_index(acc1.id, master_key),
+            account_type=AccountCategory.CRYPTO,
+            snapshot_date=date(2026, 5, 2),
+            total_value="9000.00",
+            total_invested="9000.00",
+            daily_pnl="0.00",
+            master_key=master_key,
+        )
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=hash_index(acc2.id, master_key),
+            account_type=AccountCategory.CRYPTO,
+            snapshot_date=date(2026, 5, 2),
+            total_value="5000.00",
+            total_invested="5000.00",
+            daily_pnl="0.00",
+            master_key=master_key,
+        )
+
+        result = get_all_crypto_accounts_history(session, user, master_key)
+        assert len(result) == 2
+        assert result[0].daily_pnl is None
+        assert result[1].daily_pnl == Decimal("0.00")
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +484,7 @@ class TestBankAccountHistory:
         result = get_bank_account_history(session, acc.id, master_key)
         assert len(result) == 1
         assert result[0].total_value == Decimal("10000.00")
+        assert result[0].daily_pnl is None
 
     def test_all_accounts_aggregation_eur_position(self, session: Session, master_key: str):
         user = "user_bank_agg"
@@ -378,6 +512,7 @@ class TestBankAccountHistory:
         assert eur_pos.asset_key == "EUR"
         assert eur_pos.value == Decimal("8000.00")
         assert eur_pos.percentage == Decimal("100")
+        assert snap.daily_pnl is None
 
     def test_empty_when_no_history(self, session: Session, master_key: str):
         acc = create_bank_account(session, BankAccountCreate(name="Empty", balance=Decimal("0"), account_type=BankAccountType.CHECKING), "user_empty_bank", master_key)

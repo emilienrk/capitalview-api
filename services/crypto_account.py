@@ -268,7 +268,9 @@ def get_all_crypto_accounts_history(
         select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
     ).all()
 
-    # date -> {"total_value": Decimal, "total_invested": Decimal,
+    # date -> {"total_value": Decimal, 
+    #          "total_invested": Decimal,
+    #          "daily_pnl": Decimal,
     #          "positions": {asset_key: {"quantity", "value", "price", "invested"}}}
     aggregated: dict = {}
 
@@ -279,10 +281,13 @@ def get_all_crypto_accounts_history(
                 aggregated[d] = {
                     "total_value": Decimal("0"),
                     "total_invested": Decimal("0"),
+                    "daily_pnl": Decimal("0"),
                     "positions": {},
                 }
             aggregated[d]["total_value"] += snap.total_value
             aggregated[d]["total_invested"] += snap.total_invested
+            if snap.daily_pnl is not None:
+                aggregated[d]["daily_pnl"] += snap.daily_pnl
 
             for pos in (snap.positions or []):
                 asset_key = pos.asset_key
@@ -300,11 +305,10 @@ def get_all_crypto_accounts_history(
                     aggregated[d]["positions"][asset_key]["price"] = pos.price
 
     result = []
-    prev_value: Decimal | None = None
-    for d in sorted(aggregated):
+    for index, d in enumerate(sorted(aggregated)):
         day = aggregated[d]
         total_value = day["total_value"]
-        daily_pnl = (total_value - prev_value) if prev_value is not None else None
+        daily_pnl = None if index == 0 else day["daily_pnl"]
         positions = [
             AccountHistoryPosition(
                 asset_key=asset_key,
@@ -329,6 +333,5 @@ def get_all_crypto_accounts_history(
                 positions=positions,
             )
         )
-        prev_value = total_value
 
     return result

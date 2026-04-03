@@ -242,11 +242,8 @@ def _decode_history_row(row: AccountHistory, master_key: str) -> AccountHistoryS
     """Decrypt a single AccountHistory row into a response DTO."""
     total_value = Decimal(decrypt_data(row.total_value_enc, master_key))
     total_invested = Decimal(decrypt_data(row.total_invested_enc, master_key))
-    daily_pnl = (
-        Decimal(decrypt_data(row.daily_pnl_enc, master_key))
-        if row.daily_pnl_enc
-        else None
-    )
+    # Bank accounts do not expose a performance PnL series.
+    daily_pnl = None
 
     positions = None
     if row.positions_enc:
@@ -417,24 +414,24 @@ def get_all_bank_accounts_history(
         select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
     ).all()
 
-    # date -> {total_value, total_invested, total_qty}
+    # date -> {total_value, total_invested}
     aggregated: dict = {}
 
     for acc in accounts:
         for snap in get_bank_account_history(session, acc.uuid, master_key):
             d = snap.snapshot_date
             if d not in aggregated:
-                aggregated[d] = {"total_value": Decimal("0"), "total_invested": Decimal("0")}
+                aggregated[d] = {
+                    "total_value": Decimal("0"),
+                    "total_invested": Decimal("0"),
+                }
             aggregated[d]["total_value"] += snap.total_value
             aggregated[d]["total_invested"] += snap.total_invested
 
     result = []
-    prev_value = None
     for d in sorted(aggregated):
         day = aggregated[d]
         total_value = day["total_value"]
-        daily_pnl = (total_value - prev_value) if prev_value is not None else None
-        prev_value = total_value
         positions = [
             AccountHistoryPosition(
                 asset_key="EUR",
@@ -450,7 +447,7 @@ def get_all_bank_accounts_history(
                 snapshot_date=d,
                 total_value=total_value,
                 total_invested=day["total_invested"],
-                daily_pnl=daily_pnl,
+                daily_pnl=None,
                 positions=positions,
             )
         )
