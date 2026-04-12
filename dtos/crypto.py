@@ -3,6 +3,30 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from typing import Annotated
+from pydantic import AfterValidator
+
+def _validate_date_bounds(v):
+    if v is None:
+        return v
+    if isinstance(v, datetime):
+        if v.year < 2000:
+            raise ValueError("La date ne peut pas être avant 2000.")
+        if v > datetime.now(tz=v.tzinfo):
+            raise ValueError("La date ne peut pas être dans le futur.")
+    elif isinstance(v, date):
+        if v.year < 2000:
+            raise ValueError("La date ne peut pas être avant 2000.")
+        if v > date.today():
+            raise ValueError("La date ne peut pas être dans le futur.")
+    return v
+
+ValidDateOpt = Annotated[date | None, AfterValidator(_validate_date_bounds)]
+ValidDateReq = Annotated[date, AfterValidator(_validate_date_bounds)]
+ValidDatetime = Annotated[datetime, AfterValidator(_validate_date_bounds)]
+ValidDatetimeOpt = Annotated[datetime | None, AfterValidator(_validate_date_bounds)]
+
+
 from models.enums import CryptoCompositeTransactionType, CryptoTransactionType
 
 
@@ -10,14 +34,14 @@ class CryptoAccountCreate(BaseModel):
     name: str
     platform: str | None = None
     public_address: str | None = None
-    opened_at: date | None = None
+    opened_at: ValidDateOpt = None
 
 
 class CryptoAccountUpdate(BaseModel):
     name: str | None = None
     platform: str | None = None
     public_address: str | None = None
-    opened_at: date | None = None
+    opened_at: ValidDateOpt = None
 
 
 class CryptoAccountBasicResponse(BaseModel):
@@ -25,7 +49,7 @@ class CryptoAccountBasicResponse(BaseModel):
     name: str
     platform: str | None = None
     public_address: str | None = None
-    opened_at: date | None = None
+    opened_at: ValidDateOpt = None
     created_at: datetime
     updated_at: datetime
 
@@ -40,7 +64,7 @@ class CryptoTransactionCreate(BaseModel):
     type: CryptoTransactionType
     amount: Decimal = Field(gt=0)
     price_per_unit: Decimal = Field(ge=0)
-    executed_at: datetime
+    executed_at: ValidDatetime
     tx_hash: str | None = None
     notes: str | None = None
 
@@ -50,7 +74,7 @@ class CryptoTransactionUpdate(BaseModel):
     type: CryptoTransactionType | None = None
     amount: Decimal | None = Field(None, gt=0)
     price_per_unit: Decimal | None = Field(None, ge=0)
-    executed_at: datetime | None = None
+    executed_at: ValidDatetimeOpt = None
     tx_hash: str | None = None
     notes: str | None = None
 
@@ -60,7 +84,7 @@ class CryptoTransactionBulkCreate(BaseModel):
     type: CryptoTransactionType
     amount: Decimal = Field(gt=0)
     price_per_unit: Decimal = Field(ge=0)
-    executed_at: datetime
+    executed_at: ValidDatetime
     tx_hash: str | None = None
     notes: str | None = None
     group_uuid: str | None = None
@@ -84,7 +108,7 @@ class CryptoTransactionBasicResponse(BaseModel):
     type: CryptoTransactionType
     amount: Decimal
     price_per_unit: Decimal
-    executed_at: datetime
+    executed_at: ValidDatetime
     tx_hash: str | None = None
     notes: str | None = None
 
@@ -124,7 +148,7 @@ class CrossAccountTransferCreate(BaseModel):
     amount: Decimal = Field(gt=0)
     fee_asset_key: str | None = None
     fee_amount: Decimal | None = Field(default=None, ge=0)
-    executed_at: datetime
+    executed_at: ValidDatetime
     tx_hash: str | None = None
     notes: str | None = None
 
@@ -162,7 +186,7 @@ class CryptoCompositeTransactionCreate(BaseModel):
     fee_asset_key: str | None = None
     fee_amount: Decimal | None = Field(default=None, ge=0)
 
-    executed_at: datetime
+    executed_at: ValidDatetime
     tx_hash: str | None = None
     notes: str | None = None
 
@@ -183,7 +207,7 @@ class CryptoCompositeBulkItem(BaseModel):
     fee_included: bool = True
     fee_asset_key: str | None = None
     fee_amount: Decimal | None = Field(default=None, ge=0)
-    executed_at: datetime
+    executed_at: ValidDatetime
     tx_hash: str | None = None
     notes: str | None = None
 

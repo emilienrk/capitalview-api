@@ -5,6 +5,30 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from typing import Annotated
+from pydantic import AfterValidator
+
+def _validate_date_bounds(v):
+    if v is None:
+        return v
+    if isinstance(v, datetime):
+        if v.year < 2000:
+            raise ValueError("La date ne peut pas être avant 2000.")
+        if v > datetime.now(tz=v.tzinfo):
+            raise ValueError("La date ne peut pas être dans le futur.")
+    elif isinstance(v, date):
+        if v.year < 2000:
+            raise ValueError("La date ne peut pas être avant 2000.")
+        if v > date.today():
+            raise ValueError("La date ne peut pas être dans le futur.")
+    return v
+
+ValidDateOpt = Annotated[date | None, AfterValidator(_validate_date_bounds)]
+ValidDateReq = Annotated[date, AfterValidator(_validate_date_bounds)]
+ValidDatetime = Annotated[datetime, AfterValidator(_validate_date_bounds)]
+ValidDatetimeOpt = Annotated[datetime | None, AfterValidator(_validate_date_bounds)]
+
+
 from models.enums import StockAccountType, StockTransactionType
 
 
@@ -14,7 +38,7 @@ class StockAccountCreate(BaseModel):
     account_type: StockAccountType
     institution_name: str | None = None
     identifier: str | None = None
-    opened_at: date | None = None
+    opened_at: ValidDateOpt = None
 
 
 class StockAccountUpdate(BaseModel):
@@ -22,7 +46,7 @@ class StockAccountUpdate(BaseModel):
     name: str | None = None
     institution_name: str | None = None
     identifier: str | None = None
-    opened_at: date | None = None
+    opened_at: ValidDateOpt = None
 
 
 class StockAccountBasicResponse(BaseModel):
@@ -32,7 +56,7 @@ class StockAccountBasicResponse(BaseModel):
     account_type: StockAccountType
     institution_name: str | None = None
     identifier: str | None = None
-    opened_at: date | None = None
+    opened_at: ValidDateOpt = None
     created_at: datetime
     updated_at: datetime
 
@@ -41,7 +65,7 @@ class EurDepositCreate(BaseModel):
     """Deposit EUR cash into a stock account."""
     amount: Decimal = Field(gt=0)
     fees: Decimal = Field(default=Decimal("0"), ge=0)
-    executed_at: datetime
+    executed_at: ValidDatetime
     notes: str | None = None
 
 
@@ -53,7 +77,7 @@ class StockTransactionCreate(BaseModel):
     amount: Decimal = Field(gt=0)
     price_per_unit: Decimal = Field(ge=0)
     fees: Decimal = Field(default=Decimal("0"), ge=0)
-    executed_at: datetime
+    executed_at: ValidDatetime
     notes: str | None = None
 
 
@@ -64,7 +88,7 @@ class StockTransactionUpdate(BaseModel):
     amount: Decimal | None = Field(None, gt=0)
     price_per_unit: Decimal | None = Field(None, ge=0)
     fees: Decimal | None = Field(None, ge=0)
-    executed_at: datetime | None = None
+    executed_at: ValidDatetimeOpt = None
     notes: str | None = None
 
 
@@ -77,7 +101,7 @@ class StockTransactionBulkCreate(BaseModel):
     amount: Decimal = Field(gt=0)
     price_per_unit: Decimal = Field(ge=0)
     fees: Decimal = Field(default=Decimal("0"), ge=0)
-    executed_at: datetime
+    executed_at: ValidDatetime
     notes: str | None = None
 
 
@@ -102,7 +126,7 @@ class StockTransactionBasicResponse(BaseModel):
     amount: Decimal
     price_per_unit: Decimal
     fees: Decimal
-    executed_at: datetime
+    executed_at: ValidDatetime
     notes: str | None = None
 
 
