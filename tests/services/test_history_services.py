@@ -10,6 +10,7 @@ import json
 import uuid
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from sqlmodel import Session
@@ -36,6 +37,7 @@ from services.asset import get_asset_portfolio_history
 from dtos.stock import StockAccountCreate
 from dtos.crypto import CryptoAccountCreate
 from dtos import BankAccountCreate
+from dtos.transaction import AccountSummaryResponse, PositionResponse
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +83,66 @@ def _insert_history_row(
 # ---------------------------------------------------------------------------
 
 class TestGetStockAccountHistory:
-    def test_empty_when_no_snapshots(self, session: Session, master_key: str):
+    def test_single_account_history_includes_current_day(self, session: Session, master_key: str, monkeypatch: pytest.MonkeyPatch):
+        from dtos.transaction import AccountSummaryResponse, PositionResponse
+        from datetime import date
+        from decimal import Decimal
+        from types import SimpleNamespace
+        
+        acc = create_stock_account(session, StockAccountCreate(name="PEA", account_type=StockAccountType.PEA), "user_stock", master_key)
+        user_bidx = hash_index("user_stock", master_key)
+    
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=hash_index(acc.id, master_key),
+            account_type=AccountCategory.STOCK,
+            snapshot_date=date(2026, 1, 1),
+            total_value="8000.00",
+            total_invested="5000.00",
+            daily_pnl="200.00",
+            master_key=master_key,
+        )
+    
+        def fake_get_account_transactions(session: Session, account_uuid: str, master_key: str):
+            return [SimpleNamespace(account_uuid=account_uuid)]
+    
+        def fake_get_stock_account_summary(session: Session, transactions, as_of=None, db_only=False, preloaded_prices=None):
+            account_uuid = transactions[0].account_uuid
+            assert account_uuid == acc.id
+            position = PositionResponse(
+                symbol="CW8",
+                asset_key="CW8.PA",
+                total_amount=Decimal("1"),
+                average_buy_price=Decimal("5000"),
+                total_invested=Decimal("5000"),
+                total_fees=Decimal("0"),
+                fees_percentage=Decimal("0"),
+                current_price=Decimal("9000"),
+                current_value=Decimal("9000"),
+                profit_loss=Decimal("4000"),
+                profit_loss_percentage=Decimal("80"),
+            )
+            return AccountSummaryResponse(
+                total_invested=Decimal("5000"),
+                total_fees=Decimal("0"),
+                current_value=Decimal("9000"),
+                profit_loss=Decimal("4000"),
+                profit_loss_percentage=Decimal("80"),
+                positions=[position],
+            )
+    
+        monkeypatch.setattr("services.stock_account.get_account_transactions", fake_get_account_transactions)
+        monkeypatch.setattr("services.stock_account.get_stock_account_summary", fake_get_stock_account_summary)
+    
+        result = get_stock_account_history(session, acc.id, master_key)
+        assert len(result) == 2
+        assert result[-1].snapshot_date == date.today()
+        assert result[-1].total_value == Decimal("9000")
+        assert result[-1].daily_pnl == Decimal("1000.00")
+
+    def test_empty_when_no_snapshots(
+self, session: Session, master_key: str):
         acc = create_stock_account(session, StockAccountCreate(name="PEA", account_type=StockAccountType.PEA), "user_1", master_key)
         result = get_stock_account_history(session, acc.id, master_key)
         assert result == []
@@ -379,6 +440,61 @@ class TestCryptoAccountHistory:
         assert result[0].total_value == Decimal("8000.00")
         assert result[0].daily_pnl == Decimal("200.00")
 
+    def test_single_account_history_includes_current_day(self, session: Session, master_key: str, monkeypatch: pytest.MonkeyPatch):
+        acc = create_crypto_account(session, CryptoAccountCreate(name="Ledger"), "user_c", master_key)
+        user_bidx = hash_index("user_c", master_key)
+
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=hash_index(acc.id, master_key),
+            account_type=AccountCategory.CRYPTO,
+            snapshot_date=date(2026, 1, 1),
+            total_value="8000.00",
+            total_invested="5000.00",
+            daily_pnl="200.00",
+            master_key=master_key,
+        )
+
+        def fake_get_account_transactions(session: Session, account_uuid: str, master_key: str):
+            return [SimpleNamespace(account_uuid=account_uuid)]
+
+        def fake_get_crypto_account_summary(session: Session, transactions, as_of=None, db_only=False, preloaded_prices=None):
+            account_uuid = transactions[0].account_uuid
+            assert account_uuid == acc.id
+            position = PositionResponse(
+                symbol="BTC",
+                asset_key="BTC",
+                total_amount=Decimal("1"),
+                average_buy_price=Decimal("5000"),
+                total_invested=Decimal("5000"),
+                total_fees=Decimal("0"),
+                fees_percentage=Decimal("0"),
+                current_price=Decimal("9000"),
+                current_value=Decimal("9000"),
+                profit_loss=Decimal("4000"),
+                profit_loss_percentage=Decimal("80"),
+            )
+            return AccountSummaryResponse(
+                total_invested=Decimal("5000"),
+                total_fees=Decimal("0"),
+                current_value=Decimal("9000"),
+                profit_loss=Decimal("4000"),
+                profit_loss_percentage=Decimal("80"),
+                positions=[position],
+            )
+
+        monkeypatch.setattr("services.crypto_account.get_account_transactions", fake_get_account_transactions)
+        monkeypatch.setattr("services.crypto_account.get_crypto_account_summary", fake_get_crypto_account_summary)
+
+        result = get_crypto_account_history(session, acc.id, master_key)
+        assert len(result) == 2
+        assert result[-1].snapshot_date == date.today()
+        assert result[-1].total_value == Decimal("9000")
+        assert result[-1].daily_pnl == Decimal("1000.00")
+        assert result[-1].positions is not None
+        assert result[-1].positions[0].value == Decimal("9000")
+
     def test_all_accounts_aggregation(self, session: Session, master_key: str):
         user = "user_crypto_agg"
         acc1 = create_crypto_account(session, CryptoAccountCreate(name="Binance"), user, master_key)
@@ -407,6 +523,96 @@ class TestCryptoAccountHistory:
         assert result[0].daily_pnl is None
         assert result[1].total_value == Decimal("14200.00")
         assert result[1].daily_pnl == Decimal("200.00")
+
+    def test_all_accounts_aggregation_includes_current_day(self, session: Session, master_key: str, monkeypatch: pytest.MonkeyPatch):
+        user = "user_crypto_agg"
+        acc1 = create_crypto_account(session, CryptoAccountCreate(name="Binance"), user, master_key)
+        acc2 = create_crypto_account(session, CryptoAccountCreate(name="Cold Wallet"), user, master_key)
+        user_bidx = hash_index(user, master_key)
+
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=hash_index(acc1.id, master_key),
+            account_type=AccountCategory.CRYPTO,
+            snapshot_date=date(2026, 1, 1),
+            total_value="10000.00",
+            total_invested="8000.00",
+            master_key=master_key,
+        )
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=hash_index(acc2.id, master_key),
+            account_type=AccountCategory.CRYPTO,
+            snapshot_date=date(2026, 1, 1),
+            total_value="4000.00",
+            total_invested="3000.00",
+            master_key=master_key,
+        )
+
+        def fake_get_account_transactions(session: Session, account_uuid: str, master_key: str):
+            return [SimpleNamespace(account_uuid=account_uuid)]
+
+        def fake_get_crypto_account_summary(session: Session, transactions, as_of=None, db_only=False, preloaded_prices=None):
+            account_uuid = transactions[0].account_uuid
+            if account_uuid == acc1.id:
+                return AccountSummaryResponse(
+                    total_invested=Decimal("8000"),
+                    total_fees=Decimal("0"),
+                    current_value=Decimal("9000"),
+                    profit_loss=Decimal("1000"),
+                    profit_loss_percentage=Decimal("12.5"),
+                    positions=[
+                        PositionResponse(
+                            symbol="BTC",
+                            asset_key="BTC",
+                            total_amount=Decimal("1"),
+                            average_buy_price=Decimal("8000"),
+                            total_invested=Decimal("8000"),
+                            total_fees=Decimal("0"),
+                            fees_percentage=Decimal("0"),
+                            current_price=Decimal("9000"),
+                            current_value=Decimal("9000"),
+                            profit_loss=Decimal("1000"),
+                            profit_loss_percentage=Decimal("12.5"),
+                        )
+                    ],
+                )
+
+            return AccountSummaryResponse(
+                total_invested=Decimal("3000"),
+                total_fees=Decimal("0"),
+                current_value=Decimal("3500"),
+                profit_loss=Decimal("500"),
+                profit_loss_percentage=Decimal("16.67"),
+                positions=[
+                    PositionResponse(
+                        symbol="ETH",
+                        asset_key="ETH",
+                        total_amount=Decimal("2"),
+                        average_buy_price=Decimal("1500"),
+                        total_invested=Decimal("3000"),
+                        total_fees=Decimal("0"),
+                        fees_percentage=Decimal("0"),
+                        current_price=Decimal("1750"),
+                        current_value=Decimal("3500"),
+                        profit_loss=Decimal("500"),
+                        profit_loss_percentage=Decimal("16.67"),
+                    )
+                ],
+            )
+
+        monkeypatch.setattr("services.crypto_account.get_account_transactions", fake_get_account_transactions)
+        monkeypatch.setattr("services.crypto_account.get_crypto_account_summary", fake_get_crypto_account_summary)
+
+        result = get_all_crypto_accounts_history(session, user, master_key)
+        assert len(result) == 2
+        assert result[-1].snapshot_date == date.today()
+        assert result[-1].total_value == Decimal("12500")
+        assert result[-1].daily_pnl == Decimal("-1500.00")
+        assert result[-1].positions is not None
+        assert {p.asset_key for p in result[-1].positions} == {"BTC", "ETH"}
 
     def test_all_accounts_aggregation_uses_sum_of_daily_pnl(self, session: Session, master_key: str):
         """Aggregated crypto daily_pnl must not be recomputed from total value deltas."""

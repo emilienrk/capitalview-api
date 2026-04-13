@@ -1,6 +1,7 @@
 """Stock account services."""
 
 import json
+from datetime import date
 from decimal import Decimal
 
 import sqlalchemy as sa
@@ -13,7 +14,11 @@ from dtos import (
     StockAccountUpdate,
     StockAccountBasicResponse,
 )
-from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotResponse
+from dtos.transaction import (
+    AccountHistoryPosition,
+    AccountHistorySnapshotResponse,
+)
+from services.stock_transaction import get_account_transactions, get_stock_account_summary
 from services.encryption import encrypt_data, decrypt_data, hash_index
 
 
@@ -169,6 +174,60 @@ def delete_stock_account(
     return True
 
 
+
+def _build_current_account_snapshot(
+    session: Session,
+    account_uuid: str,
+    master_key: str,
+) -> AccountHistorySnapshotResponse | None:
+    """Build a fresh snapshot for today from the live account summary."""
+    account = session.get(StockAccount, account_uuid)
+    if not account:
+        return None
+
+    transactions = get_account_transactions(session, account_uuid, master_key)
+    summary = get_stock_account_summary(session, transactions, db_only=True)
+    if summary.current_value is None:
+        return None
+
+    total_value = Decimal(summary.current_value)
+    total_invested = Decimal(summary.total_invested)
+
+    positions = []
+    for position in summary.positions:
+        position_value = (
+            Decimal(position.current_value)
+            if position.current_value is not None
+            else (
+                Decimal(position.current_price) * Decimal(position.total_amount)
+                if position.current_price is not None
+                else Decimal("0")
+            )
+        )
+        positions.append(
+            AccountHistoryPosition(
+                asset_key=position.asset_key,
+                quantity=Decimal(position.total_amount),
+                value=position_value,
+                price=Decimal(position.current_price) if position.current_price is not None else None,
+                invested=Decimal(position.total_invested),
+                percentage=(
+                    (position_value / total_value * Decimal("100"))
+                    if total_value > Decimal("0")
+                    else Decimal("0")
+                ),
+            )
+        )
+
+    return AccountHistorySnapshotResponse(
+        snapshot_date=date.today(),
+        total_value=total_value,
+        total_invested=total_invested,
+        daily_pnl=None,
+        positions=positions or None,
+    )
+
+
 def get_stock_account_history(
     session: Session,
     account_uuid: str,
@@ -176,6 +235,7 @@ def get_stock_account_history(
 ) -> list[AccountHistorySnapshotResponse]:
     """Return decrypted daily snapshots for a stock account, ordered by date."""
     account_id_bidx = hash_index(account_uuid, master_key)
+    today = date.today()
 
     rows = session.exec(
         select(AccountHistory)
@@ -183,7 +243,7 @@ def get_stock_account_history(
         .order_by(AccountHistory.snapshot_date)
     ).all()
 
-    result = []
+    result: list[AccountHistorySnapshotResponse] = []
     for row in rows:
         total_value = Decimal(decrypt_data(row.total_value_enc, master_key))
         total_invested = Decimal(decrypt_data(row.total_invested_enc, master_key))
@@ -222,6 +282,21 @@ def get_stock_account_history(
                 positions=positions,
             )
         )
+
+    current_snapshot = _build_current_account_snapshot(session, account_uuid, master_key)
+    if current_snapshot is not None:
+        result = [snap for snap in result if snap.snapshot_date != today]
+        result.append(current_snapshot)
+
+    result.sort(key=lambda snap: snap.snapshot_date)
+
+    previous_snapshot: AccountHistorySnapshotResponse | None = None
+    for snapshot in result:
+        if snapshot.snapshot_date == today and snapshot.daily_pnl is None and previous_snapshot is not None:
+            prev_all_time_pnl = previous_snapshot.total_value - previous_snapshot.total_invested
+            curr_all_time_pnl = snapshot.total_value - snapshot.total_invested
+            snapshot.daily_pnl = round(curr_all_time_pnl - prev_all_time_pnl, 2)
+        previous_snapshot = snapshot
 
     return result
 
