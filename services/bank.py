@@ -242,6 +242,16 @@ def _decode_history_row(row: AccountHistory, master_key: str) -> AccountHistoryS
     """Decrypt a single AccountHistory row into a response DTO."""
     total_value = Decimal(decrypt_data(row.total_value_enc, master_key))
     total_invested = Decimal(decrypt_data(row.total_invested_enc, master_key))
+    total_deposits = (
+        Decimal(decrypt_data(row.total_deposits_enc, master_key))
+        if row.total_deposits_enc
+        else total_invested
+    )
+    total_withdrawals = (
+        Decimal(decrypt_data(row.total_withdrawals_enc, master_key))
+        if row.total_withdrawals_enc
+        else Decimal("0")
+    )
     # Bank accounts do not expose a performance PnL series.
     daily_pnl = None
 
@@ -269,6 +279,8 @@ def _decode_history_row(row: AccountHistory, master_key: str) -> AccountHistoryS
         snapshot_date=row.snapshot_date,
         total_value=total_value,
         total_invested=total_invested,
+        total_deposits=total_deposits,
+        total_withdrawals=total_withdrawals,
         daily_pnl=daily_pnl,
         positions=positions,
     )
@@ -380,6 +392,8 @@ def import_bank_account_history(
             "snapshot_date": d,
             "total_value_enc": encrypt_data(str(round(total_value, 2)), master_key),
             "total_invested_enc": encrypt_data(str(round(total_value, 2)), master_key),
+            "total_deposits_enc": encrypt_data(str(round(total_value, 2)), master_key),
+            "total_withdrawals_enc": encrypt_data("0.00", master_key),
             "daily_pnl_enc": encrypt_data(str(round(daily_pnl, 2)), master_key),
             "positions_enc": encrypt_data(positions_json, master_key) if positions_json else None,
             "created_at": now,
@@ -424,9 +438,13 @@ def get_all_bank_accounts_history(
                 aggregated[d] = {
                     "total_value": Decimal("0"),
                     "total_invested": Decimal("0"),
+                    "total_deposits": Decimal("0"),
+                    "total_withdrawals": Decimal("0"),
                 }
             aggregated[d]["total_value"] += snap.total_value
             aggregated[d]["total_invested"] += snap.total_invested
+            aggregated[d]["total_deposits"] += snap.total_deposits
+            aggregated[d]["total_withdrawals"] += snap.total_withdrawals
 
     result = []
     for d in sorted(aggregated):
@@ -447,6 +465,8 @@ def get_all_bank_accounts_history(
                 snapshot_date=d,
                 total_value=total_value,
                 total_invested=day["total_invested"],
+                total_deposits=day["total_deposits"],
+                total_withdrawals=day["total_withdrawals"],
                 daily_pnl=None,
                 positions=positions,
             )

@@ -345,6 +345,7 @@ def get_stock_account_summary(
     asset_map = {a.asset_key: a for a in assets}
 
     total_deposits_acc = Decimal("0")
+    total_withdrawals_acc = Decimal("0")
 
     positions_map: dict[str, dict] = {
         "EUR": {
@@ -382,7 +383,12 @@ def get_stock_account_summary(
         if tx.type == "DEPOSIT" and tx.asset_key == "EUR":
             net_deposit = tx.amount - tx.fees
             positions_map["EUR"]["total_amount"] += net_deposit
-            total_deposits_acc += net_deposit
+            total_deposits_acc += tx.amount
+
+        elif tx.type == "WITHDRAW" and tx.asset_key == "EUR":
+            net_withdraw = tx.amount + tx.fees
+            positions_map["EUR"]["total_amount"] -= net_withdraw
+            total_withdrawals_acc += tx.amount
 
         elif tx.type == "BUY":
             cost = (tx.amount * tx.price_per_unit) + tx.fees
@@ -495,6 +501,7 @@ def get_stock_account_summary(
     return AccountSummaryResponse(
         total_invested=round(total_invested_acc, 2),
         total_deposits=round(total_deposits_acc, 2),
+        total_withdrawals=round(total_withdrawals_acc, 2),
         total_fees=round(total_fees_acc, 2),
         total_dividends=round(total_dividends_acc, 2),
         current_value=round(current_value_acc, 2) if current_value_acc else None,

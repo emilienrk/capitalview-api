@@ -365,7 +365,7 @@ def _compute_daily_net_flow(
 
 def _build_positions_from_summary(
     summary,
-) -> tuple[Decimal, Decimal, str | None]:
+) -> tuple[Decimal, Decimal, Decimal, Decimal, str | None]:
     """Convert AccountSummaryResponse into snapshot payload fields."""
     computed_total = _ZERO
     temp_positions: list[dict] = []
@@ -397,6 +397,8 @@ def _build_positions_from_summary(
 
     total_value = Decimal(summary.current_value) if summary.current_value is not None else computed_total
     current_invested = Decimal(summary.total_invested)
+    current_deposits = Decimal(summary.total_deposits)
+    current_withdrawals = Decimal(summary.total_withdrawals)
 
     snapshot_positions = []
     for p in temp_positions:
@@ -417,7 +419,7 @@ def _build_positions_from_summary(
         )
 
     positions_json = json.dumps(snapshot_positions) if snapshot_positions else None
-    return total_value, current_invested, positions_json
+    return total_value, current_invested, current_deposits, current_withdrawals, positions_json
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +450,8 @@ def _generate_missing_snapshots(
 
     for day_index, d in enumerate(missing_dates):
         current_invested = account_snapshot.total_invested
+        current_deposits = account_snapshot.total_invested
+        current_withdrawals = _ZERO
 
         if account_snapshot.account_type == AccountCategory.BANK:
             # Bank balance doesn't fluctuate with the market — keep it frozen
@@ -455,6 +459,7 @@ def _generate_missing_snapshots(
             invested = account_snapshot.frozen_positions[0].total_invested if account_snapshot.frozen_positions else _ZERO
 
             total_value = qty
+            current_deposits = invested
 
             snapshot_positions = []
             if total_value > _ZERO:
@@ -470,6 +475,7 @@ def _generate_missing_snapshots(
         elif account_snapshot.account_type == AccountCategory.ASSET:
             total_value = _ZERO
             current_invested = _ZERO
+            current_deposits = _ZERO
             temp_positions = []
 
             for asset in account_snapshot.physical_assets:
@@ -486,6 +492,7 @@ def _generate_missing_snapshots(
 
                 total_value += current_val
                 current_invested += asset.invested
+                current_deposits += asset.invested
 
                 temp_positions.append({
                     "asset_key": asset.name,
@@ -524,7 +531,7 @@ def _generate_missing_snapshots(
                 db_only=True,
                 preloaded_prices=preloaded_prices,
             )
-            total_value, current_invested, positions_json = _build_positions_from_summary(summary)
+            total_value, current_invested, current_deposits, current_withdrawals, positions_json = _build_positions_from_summary(summary)
         else:  # AccountCategory.CRYPTO
             preloaded_prices = {}
             for tx in account_snapshot.transactions:
@@ -541,7 +548,7 @@ def _generate_missing_snapshots(
                 db_only=True,
                 preloaded_prices=preloaded_prices,
             )
-            total_value, current_invested, positions_json = _build_positions_from_summary(summary)
+            total_value, current_invested, current_deposits, current_withdrawals, positions_json = _build_positions_from_summary(summary)
 
         if total_value == _ZERO and prev_value > _ZERO:
             daily_pnl = _ZERO
@@ -559,6 +566,8 @@ def _generate_missing_snapshots(
             "snapshot_date": d,
             "total_value_enc": encrypt_data(str(round(total_value, 2)), master_key),
             "total_invested_enc": encrypt_data(str(round(current_invested, 2)), master_key),
+            "total_deposits_enc": encrypt_data(str(round(current_deposits, 2)), master_key),
+            "total_withdrawals_enc": encrypt_data(str(round(current_withdrawals, 2)), master_key),
             "daily_pnl_enc": encrypt_data(str(round(daily_pnl, 2)), master_key),
             "positions_enc": encrypt_data(positions_json, master_key) if positions_json else None,
             "created_at": now,
@@ -955,6 +964,8 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
             set_={
                 "total_value_enc": stmt.excluded.total_value_enc,
                 "total_invested_enc": stmt.excluded.total_invested_enc,
+                "total_deposits_enc": stmt.excluded.total_deposits_enc,
+                "total_withdrawals_enc": stmt.excluded.total_withdrawals_enc,
                 "daily_pnl_enc": stmt.excluded.daily_pnl_enc,
                 "positions_enc": stmt.excluded.positions_enc,
                 "updated_at": stmt.excluded.updated_at,

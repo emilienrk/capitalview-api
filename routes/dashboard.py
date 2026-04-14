@@ -219,11 +219,15 @@ def get_dashboard_statistics(
 
     stock_invested = Decimal(0)
     stock_current_value = Decimal(0)
+    stock_deposits = Decimal(0)
+    stock_withdrawals = Decimal(0)
     for acc in stock_models:
         transactions = get_stock_transactions(session, acc.uuid, master_key)
         summary = get_stock_account_summary(session, transactions, db_only=db_only)
 
         stock_invested += summary.total_invested
+        stock_deposits += summary.total_deposits
+        stock_withdrawals += summary.total_withdrawals
         if summary.current_value:
             stock_current_value += summary.current_value
 
@@ -235,13 +239,19 @@ def get_dashboard_statistics(
     settings = get_or_create_settings(session, current_user.uuid, master_key)
     crypto_invested = Decimal(0)
     crypto_current_value = Decimal(0)
+    crypto_deposits = Decimal(0)
+    crypto_withdrawals = Decimal(0)
     for acc in crypto_models:
         transactions = get_crypto_transactions(session, acc.uuid, master_key)
 
         summary = get_crypto_account_summary(session, transactions, db_only=db_only)
         crypto_invested += summary.total_invested
+        crypto_deposits += summary.total_deposits
+        crypto_withdrawals += summary.total_withdrawals
         if summary.current_value:
             crypto_current_value += summary.current_value
+
+    investment_net_deposits = (stock_deposits + crypto_deposits) - (stock_withdrawals + crypto_withdrawals)
 
     # ── Investment distribution percentages ─────────────────
     total_investment_value = stock_current_value + crypto_current_value
@@ -258,6 +268,8 @@ def get_dashboard_statistics(
         crypto_invested=round(crypto_invested, 2),
         crypto_current_value=round(crypto_current_value, 2),
         crypto_percentage=crypto_pct,
+        total_deposits=round(investment_net_deposits, 2),
+        total_withdrawals=round(stock_withdrawals + crypto_withdrawals, 2),
     )
 
     # ── Cash (bank balances) ────────────────────────────────
@@ -277,6 +289,7 @@ def get_dashboard_statistics(
     # ── Total wealth ────────────────────────────────────────
     investments_total = total_investment_value
     total_wealth = cash_total + investments_total + assets_total
+    total_deposits = investment_net_deposits + cash_total + assets_total
 
     cash_pct = None
     inv_pct = None
@@ -293,6 +306,8 @@ def get_dashboard_statistics(
         investments_percentage=inv_pct,
         assets=round(assets_total, 2),
         assets_percentage=assets_pct,
+        total_deposits=round(total_deposits, 2),
+        total_withdrawals=round(stock_withdrawals + crypto_withdrawals, 2),
         total_wealth=round(total_wealth, 2),
     )
 

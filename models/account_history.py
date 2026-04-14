@@ -36,6 +36,8 @@ class AccountHistory(SQLModel, table=True):
     snapshot_date: date = Field(sa_column=Column(sa.Date, nullable=False))
     total_value_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     total_invested_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    total_deposits_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    total_withdrawals_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     daily_pnl_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     positions_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     created_at: datetime = Field(

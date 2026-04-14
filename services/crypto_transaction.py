@@ -661,7 +661,6 @@ def get_crypto_account_summary(
     anchor_by_group: dict[str, Decimal] = {}
     fiat_spend_by_group: dict[str, Decimal] = {}
     groups_with_crypto_spend: set[str] = set()
-    groups_with_crypto_buy: set[str] = set()
     for tx in transactions:
         if tx.group_uuid:
             if tx.type == "ANCHOR":
@@ -672,8 +671,6 @@ def get_crypto_account_summary(
                 fiat_spend_by_group[tx.group_uuid] += tx.amount * tx.price_per_unit
             elif tx.type == "SPEND" and tx.asset_key not in FIAT_ASSET_KEYS:
                 groups_with_crypto_spend.add(tx.group_uuid)
-            elif tx.type == "BUY" and tx.asset_key not in FIAT_ASSET_KEYS:
-                groups_with_crypto_buy.add(tx.group_uuid)
 
     for tx in transactions:
         if tx.type == "BUY" and tx.group_uuid:
@@ -790,19 +787,17 @@ def get_crypto_account_summary(
             )
         )
 
-    net_external_deposits = Decimal("0")
+    total_deposits_acc = Decimal("0")
+    total_withdrawals_acc = Decimal("0")
     for tx in transactions:
         if tx.type == "DEPOSIT" and tx.asset_key in FIAT_ASSET_KEYS:
             # External wire IN — only if NOT part of a crypto-sale (SELL_TO_FIAT) group
             if not tx.group_uuid or tx.group_uuid not in groups_with_crypto_spend:
-                net_external_deposits += tx.amount * tx.price_per_unit
-        elif tx.type == "SPEND" and tx.asset_key in FIAT_ASSET_KEYS:
-            # External withdrawal OUT — only if NOT part of a crypto-buy group
-            if not tx.group_uuid or tx.group_uuid not in groups_with_crypto_buy:
-                net_external_deposits -= tx.amount * tx.price_per_unit
+                total_deposits_acc += tx.amount * tx.price_per_unit
         elif tx.type == "WITHDRAW" and tx.asset_key in FIAT_ASSET_KEYS:
-            # Direct withdrawal of fiat — always reduces net deposits
-            net_external_deposits -= tx.amount * tx.price_per_unit
+            total_withdrawals_acc += tx.amount * tx.price_per_unit
+
+    net_external_deposits = total_deposits_acc - total_withdrawals_acc
 
     crypto_positions = [p for p in positions if p.asset_key not in FIAT_ASSET_KEYS]
 
@@ -818,7 +813,8 @@ def get_crypto_account_summary(
 
     return AccountSummaryResponse(
         total_invested=round(total_invested_acc, 2),
-        total_deposits=round(net_external_deposits, 2),
+        total_deposits=round(total_deposits_acc, 2),
+        total_withdrawals=round(total_withdrawals_acc, 2),
         total_fees=round(total_fees_acc, 2),
         currency="EUR",
         current_value=round(current_value_acc, 2) if current_value_acc is not None else None,

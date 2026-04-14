@@ -192,6 +192,8 @@ def _build_current_account_snapshot(
 
     total_value = Decimal(summary.current_value)
     total_invested = Decimal(summary.total_invested)
+    total_deposits = Decimal(summary.total_deposits)
+    total_withdrawals = Decimal(summary.total_withdrawals)
 
     positions = []
     for position in summary.positions:
@@ -223,6 +225,8 @@ def _build_current_account_snapshot(
         snapshot_date=date.today(),
         total_value=total_value,
         total_invested=total_invested,
+        total_deposits=total_deposits,
+        total_withdrawals=total_withdrawals,
         daily_pnl=None,
         all_time_pnl=round(total_value - total_invested, 2),
         positions=positions or None,
@@ -249,6 +253,16 @@ def get_stock_account_history(
     for row in rows:
         total_value = Decimal(decrypt_data(row.total_value_enc, master_key))
         total_invested = Decimal(decrypt_data(row.total_invested_enc, master_key))
+        total_deposits = (
+            Decimal(decrypt_data(row.total_deposits_enc, master_key))
+            if row.total_deposits_enc
+            else Decimal("0")
+        )
+        total_withdrawals = (
+            Decimal(decrypt_data(row.total_withdrawals_enc, master_key))
+            if row.total_withdrawals_enc
+            else Decimal("0")
+        )
         daily_pnl = (
             Decimal(decrypt_data(row.daily_pnl_enc, master_key))
             if row.daily_pnl_enc
@@ -280,8 +294,9 @@ def get_stock_account_history(
                 snapshot_date=row.snapshot_date,
                 total_value=total_value,
                 total_invested=total_invested,
+                total_deposits=total_deposits,
+                total_withdrawals=total_withdrawals,
                 daily_pnl=daily_pnl,
-                all_time_pnl=round(total_value - total_invested, 2),
                 positions=positions,
             )
         )
@@ -294,14 +309,19 @@ def get_stock_account_history(
 
     result.sort(key=lambda snap: snap.snapshot_date)
 
-    if include_current:
-        previous_snapshot: AccountHistorySnapshotResponse | None = None
-        for snapshot in result:
-            if snapshot.snapshot_date == today and snapshot.daily_pnl is None and previous_snapshot is not None:
-                prev_all_time_pnl = previous_snapshot.total_value - previous_snapshot.total_invested
-                curr_all_time_pnl = snapshot.total_value - snapshot.total_invested
-                snapshot.daily_pnl = round(curr_all_time_pnl - prev_all_time_pnl, 2)
-            previous_snapshot = snapshot
+    cumulative_pnl = Decimal("0")
+    previous_snapshot: AccountHistorySnapshotResponse | None = None
+    for snapshot in result:
+        if include_current and snapshot.snapshot_date == today and snapshot.daily_pnl is None and previous_snapshot is not None:
+            prev_all_time_pnl = previous_snapshot.total_value - previous_snapshot.total_invested
+            curr_all_time_pnl = snapshot.total_value - snapshot.total_invested
+            snapshot.daily_pnl = round(curr_all_time_pnl - prev_all_time_pnl, 2)
+            
+        if snapshot.daily_pnl is not None:
+            cumulative_pnl += snapshot.daily_pnl
+            
+        snapshot.all_time_pnl = round(cumulative_pnl, 2)
+        previous_snapshot = snapshot
 
     return result
 
@@ -328,6 +348,8 @@ def get_all_stock_accounts_history(
     # external-flow neutralization already applied at account snapshot level.
     # date -> {"total_value": Decimal, 
     #          "total_invested": Decimal,
+    #          "total_deposits": Decimal,
+    #          "total_withdrawals": Decimal,
     #          "daily_pnl": Decimal,
     #          "positions": {asset_key: {"quantity", "value", "price", "invested"}}}
     aggregated: dict = {}
@@ -339,11 +361,15 @@ def get_all_stock_accounts_history(
                 aggregated[d] = {
                     "total_value": Decimal("0"),
                     "total_invested": Decimal("0"),
+                    "total_deposits": Decimal("0"),
+                    "total_withdrawals": Decimal("0"),
                     "daily_pnl": Decimal("0"),
                     "positions": {},
                 }
             aggregated[d]["total_value"] += snap.total_value
             aggregated[d]["total_invested"] += snap.total_invested
+            aggregated[d]["total_deposits"] += snap.total_deposits
+            aggregated[d]["total_withdrawals"] += snap.total_withdrawals
             if snap.daily_pnl is not None:
                 aggregated[d]["daily_pnl"] += snap.daily_pnl
 
@@ -363,10 +389,14 @@ def get_all_stock_accounts_history(
                     aggregated[d]["positions"][asset_key]["price"] = pos.price
 
     result = []
+    cumulative_pnl = Decimal("0")
     for index, d in enumerate(sorted(aggregated)):
         day = aggregated[d]
         total_value = day["total_value"]
-        daily_pnl = None if index == 0 else day["daily_pnl"]
+        daily_pnl = day["daily_pnl"]  # Keep raw sum of daily_pnl
+        if daily_pnl is not None:
+            cumulative_pnl += daily_pnl
+        
         positions = [
             AccountHistoryPosition(
                 asset_key=asset_key,
@@ -382,13 +412,16 @@ def get_all_stock_accounts_history(
             )
             for asset_key, data in day["positions"].items()
         ] or None
+        
         result.append(
             AccountHistorySnapshotResponse(
                 snapshot_date=d,
                 total_value=total_value,
                 total_invested=day["total_invested"],
-                daily_pnl=round(daily_pnl, 2) if daily_pnl is not None else None,
-                all_time_pnl=round(total_value - day["total_invested"], 2),
+                total_deposits=day["total_deposits"],
+                total_withdrawals=day["total_withdrawals"],
+                daily_pnl=round(daily_pnl, 2) if index > 0 else None,
+                all_time_pnl=round(cumulative_pnl, 2),
                 positions=positions,
             )
         )

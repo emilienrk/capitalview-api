@@ -54,6 +54,8 @@ def _insert_history_row(
     total_value: str,
     total_invested: str,
     master_key: str,
+    total_deposits: str | None = None,
+    total_withdrawals: str | None = None,
     daily_pnl: str = "0.00",
     positions: list | None = None,
 ) -> AccountHistory:
@@ -70,6 +72,8 @@ def _insert_history_row(
         snapshot_date=snapshot_date,
         total_value_enc=encrypt_data(total_value, master_key),
         total_invested_enc=encrypt_data(total_invested, master_key),
+        total_deposits_enc=encrypt_data(total_deposits or total_invested, master_key),
+        total_withdrawals_enc=encrypt_data(total_withdrawals or "0.00", master_key),
         daily_pnl_enc=encrypt_data(daily_pnl, master_key),
         positions_enc=positions_enc,
     )
@@ -186,7 +190,29 @@ self, session: Session, master_key: str):
         assert snap.total_value == Decimal("5432.10")
         assert snap.total_invested == Decimal("4000.00")
         assert snap.daily_pnl == Decimal("123.45")
-        assert snap.all_time_pnl == Decimal("1432.10")
+        assert snap.all_time_pnl == Decimal("123.45")
+
+    def test_total_withdrawals_is_decrypted(self, session: Session, master_key: str):
+        acc = create_stock_account(session, StockAccountCreate(name="PEA", account_type=StockAccountType.PEA), "user_w", master_key)
+        account_id_bidx = hash_index(acc.id, master_key)
+        user_bidx = hash_index("user_w", master_key)
+
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=account_id_bidx,
+            account_type=AccountCategory.STOCK,
+            snapshot_date=date(2026, 3, 1),
+            total_value="5432.10",
+            total_invested="4000.00",
+            total_withdrawals="250.00",
+            daily_pnl="123.45",
+            master_key=master_key,
+        )
+
+        result = get_stock_account_history(session, acc.id, master_key)
+        assert len(result) == 1
+        assert result[0].total_withdrawals == Decimal("250.00")
 
     def test_positions_are_parsed(self, session: Session, master_key: str):
         acc = create_stock_account(session, StockAccountCreate(name="PEA", account_type=StockAccountType.PEA), "user_1", master_key)
@@ -284,7 +310,7 @@ class TestGetAllStockAccountsHistory:
         assert len(result) == 1
         assert result[0].total_value == Decimal("4500.00")
         assert result[0].total_invested == Decimal("3700.00")
-        assert result[0].all_time_pnl == Decimal("800.00")
+        assert result[0].all_time_pnl == Decimal("0.00")
         assert result[0].total_invested == Decimal("3700.00")
 
     def test_union_of_dates_across_accounts(self, session: Session, master_key: str):
@@ -442,7 +468,40 @@ class TestCryptoAccountHistory:
         assert len(result) == 1
         assert result[0].total_value == Decimal("8000.00")
         assert result[0].daily_pnl == Decimal("200.00")
-        assert result[0].all_time_pnl == Decimal("3000.00")
+        assert result[0].all_time_pnl == Decimal("200.00")
+
+    def test_all_accounts_aggregates_total_withdrawals(self, session: Session, master_key: str):
+        user = "user_crypto_withdrawals"
+        acc1 = create_crypto_account(session, CryptoAccountCreate(name="Binance"), user, master_key)
+        acc2 = create_crypto_account(session, CryptoAccountCreate(name="Cold Wallet"), user, master_key)
+        user_bidx = hash_index(user, master_key)
+
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=hash_index(acc1.id, master_key),
+            account_type=AccountCategory.CRYPTO,
+            snapshot_date=date(2026, 1, 1),
+            total_value="10000.00",
+            total_invested="8000.00",
+            total_withdrawals="200.00",
+            master_key=master_key,
+        )
+        _insert_history_row(
+            session,
+            user_bidx=user_bidx,
+            account_id_bidx=hash_index(acc2.id, master_key),
+            account_type=AccountCategory.CRYPTO,
+            snapshot_date=date(2026, 1, 1),
+            total_value="4000.00",
+            total_invested="3000.00",
+            total_withdrawals="50.00",
+            master_key=master_key,
+        )
+
+        result = get_all_crypto_accounts_history(session, user, master_key)
+        assert len(result) == 1
+        assert result[0].total_withdrawals == Decimal("250.00")
 
     def test_single_account_history_includes_current_day(self, session: Session, master_key: str, monkeypatch: pytest.MonkeyPatch):
         acc = create_crypto_account(session, CryptoAccountCreate(name="Ledger"), "user_c", master_key)

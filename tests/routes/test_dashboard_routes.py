@@ -176,10 +176,14 @@ def test_dashboard_statistics(
     assert "crypto_invested" in dist
     assert "stock_percentage" in dist
     assert "crypto_percentage" in dist
+    assert "total_deposits" in dist
+    assert "total_withdrawals" in dist
 
     wealth = data["wealth"]
     assert Decimal(str(wealth["cash"])) == Decimal("5000")
     assert Decimal(str(wealth["assets"])) == Decimal("10000")
+    assert "total_deposits" in wealth
+    assert "total_withdrawals" in wealth
     assert Decimal(str(wealth["total_wealth"])) > 0
 
     # Percentages should sum to ~100

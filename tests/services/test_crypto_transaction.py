@@ -418,6 +418,86 @@ def test_get_crypto_account_summary_empty(session: Session, master_key: str):
 
 
 @patch("services.crypto_transaction.get_crypto_info")
+def test_crypto_total_deposits_and_withdrawals_are_split_without_virtual_inference(mock_info, session: Session, master_key: str):
+    """Fiat flows are explicit: no virtual deposit is inferred from negative EUR balance."""
+    mock_info.return_value = ("Bitcoin", Decimal("30000"))
+
+    account = CryptoAccount(
+        uuid="acc_hidden_dep",
+        user_uuid_bidx=hash_index("u_hidden_dep", master_key),
+        name_enc=encrypt_data("HiddenDep", master_key),
+    )
+    session.add(account)
+    session.commit()
+
+    buy_group = "group-hidden-buy"
+    create_crypto_transaction(
+        session,
+        CryptoTransactionCreate(
+            account_id=account.uuid,
+            asset_key="BTC",
+            type=CryptoTransactionType.BUY,
+            amount=Decimal("1"),
+            price_per_unit=Decimal("0"),
+            executed_at=datetime(2024, 1, 1),
+        ),
+        master_key,
+        group_uuid=buy_group,
+    )
+    create_crypto_transaction(
+        session,
+        CryptoTransactionCreate(
+            account_id=account.uuid,
+            asset_key="EUR",
+            type=CryptoTransactionType.SPEND,
+            amount=Decimal("30000"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 1, 1),
+        ),
+        master_key,
+        group_uuid=buy_group,
+    )
+
+    summary_after_buy = _crypto_summary(session, account.uuid, master_key)
+    assert summary_after_buy.total_deposits == Decimal("0")
+    assert summary_after_buy.total_withdrawals == Decimal("0")
+
+    fiat_deposit_group = "group-fiat-deposit"
+    create_crypto_transaction(
+        session,
+        CryptoTransactionCreate(
+            account_id=account.uuid,
+            asset_key="EUR",
+            type=CryptoTransactionType.DEPOSIT,
+            amount=Decimal("10000"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 1, 2),
+        ),
+        master_key,
+        group_uuid=fiat_deposit_group,
+    )
+
+    fiat_withdraw_group = "group-fiat-withdraw"
+    create_crypto_transaction(
+        session,
+        CryptoTransactionCreate(
+            account_id=account.uuid,
+            asset_key="EUR",
+            type=CryptoTransactionType.WITHDRAW,
+            amount=Decimal("2500"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 1, 3),
+        ),
+        master_key,
+        group_uuid=fiat_withdraw_group,
+    )
+
+    summary_after_explicit_flows = _crypto_summary(session, account.uuid, master_key)
+    assert summary_after_explicit_flows.total_deposits == Decimal("10000")
+    assert summary_after_explicit_flows.total_withdrawals == Decimal("2500")
+
+
+@patch("services.crypto_transaction.get_crypto_info")
 def test_group_based_pru(mock_info, session: Session, master_key: str):
     """ANCHOR is the authoritative EUR cost for a BUY group.
 

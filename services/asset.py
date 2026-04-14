@@ -695,6 +695,11 @@ def get_asset_portfolio_history(
     for row in rows:
         total_value = Decimal(decrypt_data(row.total_value_enc, master_key))
         total_invested = Decimal(decrypt_data(row.total_invested_enc, master_key))
+        total_deposits = (
+            Decimal(decrypt_data(row.total_deposits_enc, master_key))
+            if row.total_deposits_enc
+            else total_invested
+        )
         daily_pnl = (
             Decimal(decrypt_data(row.daily_pnl_enc, master_key))
             if row.daily_pnl_enc
@@ -726,6 +731,7 @@ def get_asset_portfolio_history(
                 snapshot_date=row.snapshot_date,
                 total_value=total_value,
                 total_invested=total_invested,
+                total_deposits=total_deposits,
                 daily_pnl=daily_pnl,
                 positions=positions,
             )

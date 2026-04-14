@@ -52,6 +52,7 @@ class AccountSummaryResponse(BaseModel):
     """Summary of an account with all positions."""
     total_invested: Decimal
     total_deposits: Decimal = Decimal("0")
+    total_withdrawals: Decimal = Decimal("0")
     total_fees: Decimal
     total_dividends: Decimal = Decimal("0")
     currency: str = "EUR"
@@ -93,6 +94,8 @@ class AccountHistorySnapshotResponse(BaseModel):
     snapshot_date: date
     total_value: Decimal
     total_invested: Decimal
+    total_deposits: Decimal = Decimal("0")
+    total_withdrawals: Decimal = Decimal("0")
     daily_pnl: Decimal | None = None
     all_time_pnl: Decimal | None = None
     positions: list[AccountHistoryPosition] | None = None
