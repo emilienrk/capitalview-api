@@ -94,4 +94,5 @@ class AccountHistorySnapshotResponse(BaseModel):
     total_value: Decimal
     total_invested: Decimal
     daily_pnl: Decimal | None = None
+    all_time_pnl: Decimal | None = None
     positions: list[AccountHistoryPosition] | None = None

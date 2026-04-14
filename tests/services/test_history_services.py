@@ -186,6 +186,7 @@ self, session: Session, master_key: str):
         assert snap.total_value == Decimal("5432.10")
         assert snap.total_invested == Decimal("4000.00")
         assert snap.daily_pnl == Decimal("123.45")
+        assert snap.all_time_pnl == Decimal("1432.10")
 
     def test_positions_are_parsed(self, session: Session, master_key: str):
         acc = create_stock_account(session, StockAccountCreate(name="PEA", account_type=StockAccountType.PEA), "user_1", master_key)
@@ -282,6 +283,8 @@ class TestGetAllStockAccountsHistory:
         result = get_all_stock_accounts_history(session, user, master_key)
         assert len(result) == 1
         assert result[0].total_value == Decimal("4500.00")
+        assert result[0].total_invested == Decimal("3700.00")
+        assert result[0].all_time_pnl == Decimal("800.00")
         assert result[0].total_invested == Decimal("3700.00")
 
     def test_union_of_dates_across_accounts(self, session: Session, master_key: str):
@@ -439,6 +442,7 @@ class TestCryptoAccountHistory:
         assert len(result) == 1
         assert result[0].total_value == Decimal("8000.00")
         assert result[0].daily_pnl == Decimal("200.00")
+        assert result[0].all_time_pnl == Decimal("3000.00")
 
     def test_single_account_history_includes_current_day(self, session: Session, master_key: str, monkeypatch: pytest.MonkeyPatch):
         acc = create_crypto_account(session, CryptoAccountCreate(name="Ledger"), "user_c", master_key)
@@ -671,7 +675,9 @@ class TestCryptoAccountHistory:
         result = get_all_crypto_accounts_history(session, user, master_key)
         assert len(result) == 2
         assert result[0].daily_pnl is None
+        assert result[0].all_time_pnl == Decimal("0.00")
         assert result[1].daily_pnl == Decimal("0.00")
+        assert result[1].all_time_pnl == Decimal("0.00")
 
 
 # ---------------------------------------------------------------------------

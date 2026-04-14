@@ -224,6 +224,7 @@ def _build_current_account_snapshot(
         total_value=total_value,
         total_invested=total_invested,
         daily_pnl=None,
+        all_time_pnl=round(total_value - total_invested, 2),
         positions=positions or None,
     )
 
@@ -280,6 +281,7 @@ def get_stock_account_history(
                 total_value=total_value,
                 total_invested=total_invested,
                 daily_pnl=daily_pnl,
+                all_time_pnl=round(total_value - total_invested, 2),
                 positions=positions,
             )
         )
@@ -386,6 +388,7 @@ def get_all_stock_accounts_history(
                 total_value=total_value,
                 total_invested=day["total_invested"],
                 daily_pnl=round(daily_pnl, 2) if daily_pnl is not None else None,
+                all_time_pnl=round(total_value - day["total_invested"], 2),
                 positions=positions,
             )
         )
