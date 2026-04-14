@@ -144,9 +144,10 @@ def get_all_history(
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
+    include_current: bool = True,
 ):
     """Get aggregated historical snapshots across all crypto accounts."""
-    return get_all_crypto_accounts_history(session, current_user.uuid, master_key)
+    return get_all_crypto_accounts_history(session, current_user.uuid, master_key, include_current)
 
 
 @router.get("/accounts/{account_id}", response_model=AccountSummaryResponse)
@@ -175,11 +176,12 @@ def get_account_history_route(
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
+    include_current: bool = True,
 ):
     """Get historical daily snapshots for a crypto account."""
     if not get_crypto_account(session, account_id, current_user.uuid, master_key):
         raise HTTPException(status_code=404, detail="Account not found")
-    return get_crypto_account_history(session, account_id, master_key)
+    return get_crypto_account_history(session, account_id, master_key, include_current)
 
 
 @router.put("/accounts/{account_id}", response_model=CryptoAccountBasicResponse)

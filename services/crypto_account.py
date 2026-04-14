@@ -257,6 +257,7 @@ def get_crypto_account_history(
     session: Session,
     account_uuid: str,
     master_key: str,
+    include_current: bool = True,
 ) -> list[AccountHistorySnapshotResponse]:
     """Return decrypted daily snapshots for a crypto account, ordered by date."""
     account_id_bidx = hash_index(account_uuid, master_key)
@@ -308,20 +309,22 @@ def get_crypto_account_history(
             )
         )
 
-    current_snapshot = _build_current_account_snapshot(session, account_uuid, master_key)
-    if current_snapshot is not None:
-        result = [snap for snap in result if snap.snapshot_date != today]
-        result.append(current_snapshot)
+    if include_current:
+        current_snapshot = _build_current_account_snapshot(session, account_uuid, master_key)
+        if current_snapshot is not None:
+            result = [snap for snap in result if snap.snapshot_date != today]
+            result.append(current_snapshot)
 
     result.sort(key=lambda snap: snap.snapshot_date)
 
-    previous_snapshot: AccountHistorySnapshotResponse | None = None
-    for snapshot in result:
-        if snapshot.snapshot_date == today and snapshot.daily_pnl is None and previous_snapshot is not None:
-            prev_all_time_pnl = previous_snapshot.total_value - previous_snapshot.total_invested
-            curr_all_time_pnl = snapshot.total_value - snapshot.total_invested
-            snapshot.daily_pnl = round(curr_all_time_pnl - prev_all_time_pnl, 2)
-        previous_snapshot = snapshot
+    if include_current:
+        previous_snapshot: AccountHistorySnapshotResponse | None = None
+        for snapshot in result:
+            if snapshot.snapshot_date == today and snapshot.daily_pnl is None and previous_snapshot is not None:
+                prev_all_time_pnl = previous_snapshot.total_value - previous_snapshot.total_invested
+                curr_all_time_pnl = snapshot.total_value - snapshot.total_invested
+                snapshot.daily_pnl = round(curr_all_time_pnl - prev_all_time_pnl, 2)
+            previous_snapshot = snapshot
 
     return result
 
@@ -330,6 +333,7 @@ def get_all_crypto_accounts_history(
     session: Session,
     user_uuid: str,
     master_key: str,
+    include_current: bool = True,
 ) -> list[AccountHistorySnapshotResponse]:
     """
     Aggregate daily snapshots across all crypto accounts for a user.
@@ -349,7 +353,7 @@ def get_all_crypto_accounts_history(
     aggregated: dict = {}
 
     for acc in accounts:
-        for snap in get_crypto_account_history(session, acc.uuid, master_key):
+        for snap in get_crypto_account_history(session, acc.uuid, master_key, include_current):
             d = snap.snapshot_date
             if d not in aggregated:
                 aggregated[d] = {
