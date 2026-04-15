@@ -72,6 +72,8 @@ class PortfolioAccountSummaryResponse(AccountSummaryResponse):
 class PortfolioResponse(BaseModel):
     """Global portfolio summary."""
     total_invested: Decimal
+    total_deposits: Decimal = Decimal("0")
+    total_withdrawals: Decimal = Decimal("0")
     total_fees: Decimal
     current_value: Decimal | None = None
     profit_loss: Decimal | None = None

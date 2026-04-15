@@ -85,8 +85,8 @@ def get_global_history(
     settings = get_or_create_settings(session, current_user.uuid, master_key)
 
     # Fetch per-category histories in parallel (same session, sequential is fine)
-    stock_snaps = {s.snapshot_date: s.total_value for s in get_all_stock_accounts_history(session, current_user.uuid, master_key)}
-    crypto_snaps = {s.snapshot_date: s.total_value for s in get_all_crypto_accounts_history(session, current_user.uuid, master_key)}
+    stock_snaps = {s.snapshot_date: s.total_value for s in get_all_stock_accounts_history(session, current_user.uuid, master_key, include_current=False)}
+    crypto_snaps = {s.snapshot_date: s.total_value for s in get_all_crypto_accounts_history(session, current_user.uuid, master_key, include_current=False)}
 
     bank_snaps: dict = {}
     if settings.bank_module_enabled:
@@ -177,23 +177,29 @@ def get_my_portfolio(
         )
     
     total_invested = sum(a.total_invested for a in accounts)
+    total_deposits = sum(a.total_deposits for a in accounts)
+    total_withdrawals = sum(a.total_withdrawals for a in accounts)
     total_fees = sum(a.total_fees for a in accounts)
     current_value = sum(a.current_value for a in accounts if a.current_value)
     
     profit_loss = None
     profit_loss_pct = None
     
-    if current_value > 0 or total_invested > 0:
-        profit_loss = current_value - total_invested
-        if total_invested > 0:
-            profit_loss_pct = (profit_loss / total_invested * 100)
+    net_deposits = total_deposits - total_withdrawals
+
+    if current_value is not None or net_deposits != 0:
+        profit_loss = current_value - net_deposits
+        if net_deposits > 0:
+            profit_loss_pct = (profit_loss / net_deposits * 100)
     
     return PortfolioResponse(
         total_invested=round(total_invested, 2),
+        total_deposits=round(total_deposits, 2),
+        total_withdrawals=round(total_withdrawals, 2),
         total_fees=round(total_fees, 2),
         current_value=round(current_value, 2) if current_value else None,
-        profit_loss=round(profit_loss, 2) if profit_loss else None,
-        profit_loss_percentage=round(profit_loss_pct, 2) if profit_loss_pct else None,
+        profit_loss=round(profit_loss, 2) if profit_loss is not None else None,
+        profit_loss_percentage=round(profit_loss_pct, 2) if profit_loss_pct is not None else None,
         accounts=accounts
     )
 

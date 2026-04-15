@@ -807,9 +807,10 @@ def get_crypto_account_summary(
     current_value_acc = sum(current_value_acc_list) if current_value_acc_list else None
 
     profit_loss_acc = profit_loss_pct_acc = None
-    if current_value_acc is not None and net_external_deposits > 0:
+    if current_value_acc is not None:
         profit_loss_acc = current_value_acc - net_external_deposits
-        profit_loss_pct_acc = (profit_loss_acc / net_external_deposits * 100)
+        if net_external_deposits > 0:
+            profit_loss_pct_acc = (profit_loss_acc / net_external_deposits * 100)
 
     return AccountSummaryResponse(
         total_invested=round(total_invested_acc, 2),

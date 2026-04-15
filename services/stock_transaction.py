@@ -485,14 +485,17 @@ def get_stock_account_summary(
     stock_positions = [p for p in positions if p.asset_key != "EUR"]
     total_invested_acc = sum(p.total_invested for p in stock_positions)
     total_fees_acc = sum(p.total_fees for p in stock_positions)
-    current_value_acc = sum(p.current_value for p in positions if p.current_value is not None)
+
+    current_value_acc_list = [p.current_value for p in positions if p.current_value is not None]
+    current_value_acc = sum(current_value_acc_list) if current_value_acc_list else None
+
+    net_external_deposits = total_deposits_acc - total_withdrawals_acc
 
     profit_loss_acc = profit_loss_pct_acc = None
-    if any(p.current_value is not None for p in stock_positions):
-        stock_value = sum(p.current_value for p in stock_positions if p.current_value is not None)
-        profit_loss_acc = stock_value - total_invested_acc
-        if total_invested_acc > 0:
-            profit_loss_pct_acc = (profit_loss_acc / total_invested_acc * 100)
+    if current_value_acc is not None:
+        profit_loss_acc = current_value_acc - net_external_deposits
+        if net_external_deposits > 0:
+            profit_loss_pct_acc = (profit_loss_acc / net_external_deposits * 100)
 
     total_dividends_acc = sum(
         v["total_dividends"] for k, v in positions_map.items() if k != "EUR"
