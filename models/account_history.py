@@ -39,6 +39,9 @@ class AccountHistory(SQLModel, table=True):
     total_deposits_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     total_withdrawals_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     daily_pnl_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    cumulative_pnl_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    total_fees_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    total_dividends_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     positions_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     created_at: datetime = Field(
         default=sa.func.now(),

@@ -227,8 +227,15 @@ def _build_current_account_snapshot(
         total_invested=total_invested,
         total_deposits=total_deposits,
         total_withdrawals=total_withdrawals,
+        total_fees=Decimal(summary.total_fees),
+        total_dividends=Decimal(summary.total_dividends),
         daily_pnl=None,
-        all_time_pnl=round(total_value - total_invested, 2),
+        cumulative_pnl=round(
+            Decimal(summary.profit_loss)
+            if summary.profit_loss is not None
+            else (total_value - total_deposits + total_withdrawals),
+            2,
+        ),
         positions=positions or None,
     )
 
@@ -268,6 +275,21 @@ def get_stock_account_history(
             if row.daily_pnl_enc
             else None
         )
+        cumulative_pnl = (
+            Decimal(decrypt_data(row.cumulative_pnl_enc, master_key))
+            if row.cumulative_pnl_enc
+            else None
+        )
+        total_fees = (
+            Decimal(decrypt_data(row.total_fees_enc, master_key))
+            if row.total_fees_enc
+            else None
+        )
+        total_dividends = (
+            Decimal(decrypt_data(row.total_dividends_enc, master_key))
+            if row.total_dividends_enc
+            else None
+        )
 
         positions = None
         if row.positions_enc:
@@ -296,7 +318,10 @@ def get_stock_account_history(
                 total_invested=total_invested,
                 total_deposits=total_deposits,
                 total_withdrawals=total_withdrawals,
+                total_fees=total_fees,
+                total_dividends=total_dividends,
                 daily_pnl=daily_pnl,
+                cumulative_pnl=cumulative_pnl,
                 positions=positions,
             )
         )
@@ -309,19 +334,16 @@ def get_stock_account_history(
 
     result.sort(key=lambda snap: snap.snapshot_date)
 
-    cumulative_pnl = Decimal("0")
-    previous_snapshot: AccountHistorySnapshotResponse | None = None
-    for snapshot in result:
-        if include_current and snapshot.snapshot_date == today and snapshot.daily_pnl is None and previous_snapshot is not None:
-            prev_all_time_pnl = previous_snapshot.total_value - previous_snapshot.total_invested
-            curr_all_time_pnl = snapshot.total_value - snapshot.total_invested
-            snapshot.daily_pnl = round(curr_all_time_pnl - prev_all_time_pnl, 2)
-            
-        if snapshot.daily_pnl is not None:
-            cumulative_pnl += snapshot.daily_pnl
-            
-        snapshot.all_time_pnl = round(cumulative_pnl, 2)
-        previous_snapshot = snapshot
+    if include_current and len(result) >= 2:
+        last_snap = result[-1]
+        prev_snap = result[-2]
+        if (
+            last_snap.snapshot_date == today
+            and last_snap.daily_pnl is None
+            and last_snap.cumulative_pnl is not None
+            and prev_snap.cumulative_pnl is not None
+        ):
+            last_snap.daily_pnl = round(last_snap.cumulative_pnl - prev_snap.cumulative_pnl, 2)
 
     return result
 
@@ -350,7 +372,10 @@ def get_all_stock_accounts_history(
     #          "total_invested": Decimal,
     #          "total_deposits": Decimal,
     #          "total_withdrawals": Decimal,
+    #          "total_fees": Decimal,
+    #          "total_dividends": Decimal,
     #          "daily_pnl": Decimal,
+    #          "cumulative_pnl": Decimal,
     #          "positions": {asset_key: {"quantity", "value", "price", "invested"}}}
     aggregated: dict = {}
 
@@ -363,15 +388,26 @@ def get_all_stock_accounts_history(
                     "total_invested": Decimal("0"),
                     "total_deposits": Decimal("0"),
                     "total_withdrawals": Decimal("0"),
+                    "total_fees": Decimal("0"),
+                    "total_dividends": Decimal("0"),
                     "daily_pnl": Decimal("0"),
+                    "cumulative_pnl": Decimal("0"),
+                    "has_cumulative_pnl": False,
                     "positions": {},
                 }
             aggregated[d]["total_value"] += snap.total_value
             aggregated[d]["total_invested"] += snap.total_invested
             aggregated[d]["total_deposits"] += snap.total_deposits
             aggregated[d]["total_withdrawals"] += snap.total_withdrawals
+            if snap.total_fees is not None:
+                aggregated[d]["total_fees"] += snap.total_fees
+            if snap.total_dividends is not None:
+                aggregated[d]["total_dividends"] += snap.total_dividends
             if snap.daily_pnl is not None:
                 aggregated[d]["daily_pnl"] += snap.daily_pnl
+            if snap.cumulative_pnl is not None:
+                aggregated[d]["cumulative_pnl"] += snap.cumulative_pnl
+                aggregated[d]["has_cumulative_pnl"] = True
 
             for pos in (snap.positions or []):
                 asset_key = pos.asset_key
@@ -389,14 +425,11 @@ def get_all_stock_accounts_history(
                     aggregated[d]["positions"][asset_key]["price"] = pos.price
 
     result = []
-    cumulative_pnl = Decimal("0")
     for index, d in enumerate(sorted(aggregated)):
         day = aggregated[d]
         total_value = day["total_value"]
         daily_pnl = day["daily_pnl"]  # Keep raw sum of daily_pnl
-        if daily_pnl is not None:
-            cumulative_pnl += daily_pnl
-        
+
         positions = [
             AccountHistoryPosition(
                 asset_key=asset_key,
@@ -420,8 +453,14 @@ def get_all_stock_accounts_history(
                 total_invested=day["total_invested"],
                 total_deposits=day["total_deposits"],
                 total_withdrawals=day["total_withdrawals"],
+                total_fees=round(day["total_fees"], 2),
+                total_dividends=round(day["total_dividends"], 2),
                 daily_pnl=round(daily_pnl, 2) if index > 0 else None,
-                all_time_pnl=round(cumulative_pnl, 2),
+                cumulative_pnl=(
+                    round(day["cumulative_pnl"], 2)
+                    if day["has_cumulative_pnl"]
+                    else None
+                ),
                 positions=positions,
             )
         )

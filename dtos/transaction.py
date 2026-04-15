@@ -98,6 +98,8 @@ class AccountHistorySnapshotResponse(BaseModel):
     total_invested: Decimal
     total_deposits: Decimal = Decimal("0")
     total_withdrawals: Decimal = Decimal("0")
+    total_fees: Decimal | None = None
+    total_dividends: Decimal | None = None
     daily_pnl: Decimal | None = None
-    all_time_pnl: Decimal | None = None
+    cumulative_pnl: Decimal | None = None
     positions: list[AccountHistoryPosition] | None = None

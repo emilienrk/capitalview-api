@@ -57,6 +57,9 @@ def _insert_history_row(
     total_deposits: str | None = None,
     total_withdrawals: str | None = None,
     daily_pnl: str = "0.00",
+    cumulative_pnl: str | None = None,
+    total_fees: str | None = None,
+    total_dividends: str | None = None,
     positions: list | None = None,
 ) -> AccountHistory:
     """Insert a minimal AccountHistory row directly into the session."""
@@ -75,6 +78,9 @@ def _insert_history_row(
         total_deposits_enc=encrypt_data(total_deposits or total_invested, master_key),
         total_withdrawals_enc=encrypt_data(total_withdrawals or "0.00", master_key),
         daily_pnl_enc=encrypt_data(daily_pnl, master_key),
+        cumulative_pnl_enc=encrypt_data(cumulative_pnl or daily_pnl, master_key),
+        total_fees_enc=encrypt_data(total_fees, master_key) if total_fees is not None else None,
+        total_dividends_enc=encrypt_data(total_dividends, master_key) if total_dividends is not None else None,
         positions_enc=positions_enc,
     )
     session.add(row)
@@ -105,6 +111,7 @@ class TestGetStockAccountHistory:
             total_value="8000.00",
             total_invested="5000.00",
             daily_pnl="200.00",
+            cumulative_pnl="3000.00",
             master_key=master_key,
         )
     
@@ -190,7 +197,7 @@ self, session: Session, master_key: str):
         assert snap.total_value == Decimal("5432.10")
         assert snap.total_invested == Decimal("4000.00")
         assert snap.daily_pnl == Decimal("123.45")
-        assert snap.all_time_pnl == Decimal("123.45")
+        assert snap.cumulative_pnl == Decimal("123.45")
 
     def test_total_withdrawals_is_decrypted(self, session: Session, master_key: str):
         acc = create_stock_account(session, StockAccountCreate(name="PEA", account_type=StockAccountType.PEA), "user_w", master_key)
@@ -310,7 +317,7 @@ class TestGetAllStockAccountsHistory:
         assert len(result) == 1
         assert result[0].total_value == Decimal("4500.00")
         assert result[0].total_invested == Decimal("3700.00")
-        assert result[0].all_time_pnl == Decimal("0.00")
+        assert result[0].cumulative_pnl == Decimal("0.00")
         assert result[0].total_invested == Decimal("3700.00")
 
     def test_union_of_dates_across_accounts(self, session: Session, master_key: str):
@@ -468,7 +475,7 @@ class TestCryptoAccountHistory:
         assert len(result) == 1
         assert result[0].total_value == Decimal("8000.00")
         assert result[0].daily_pnl == Decimal("200.00")
-        assert result[0].all_time_pnl == Decimal("200.00")
+        assert result[0].cumulative_pnl == Decimal("200.00")
 
     def test_all_accounts_aggregates_total_withdrawals(self, session: Session, master_key: str):
         user = "user_crypto_withdrawals"
@@ -516,6 +523,7 @@ class TestCryptoAccountHistory:
             total_value="8000.00",
             total_invested="5000.00",
             daily_pnl="200.00",
+            cumulative_pnl="3000.00",
             master_key=master_key,
         )
 
@@ -601,6 +609,7 @@ class TestCryptoAccountHistory:
             snapshot_date=date(2026, 1, 1),
             total_value="10000.00",
             total_invested="8000.00",
+            cumulative_pnl="2000.00",
             master_key=master_key,
         )
         _insert_history_row(
@@ -611,6 +620,7 @@ class TestCryptoAccountHistory:
             snapshot_date=date(2026, 1, 1),
             total_value="4000.00",
             total_invested="3000.00",
+            cumulative_pnl="1000.00",
             master_key=master_key,
         )
 
@@ -734,9 +744,9 @@ class TestCryptoAccountHistory:
         result = get_all_crypto_accounts_history(session, user, master_key)
         assert len(result) == 2
         assert result[0].daily_pnl is None
-        assert result[0].all_time_pnl == Decimal("0.00")
+        assert result[0].cumulative_pnl == Decimal("0.00")
         assert result[1].daily_pnl == Decimal("0.00")
-        assert result[1].all_time_pnl == Decimal("0.00")
+        assert result[1].cumulative_pnl == Decimal("0.00")
 
 
 # ---------------------------------------------------------------------------

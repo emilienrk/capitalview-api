@@ -365,7 +365,7 @@ def _compute_daily_net_flow(
 
 def _build_positions_from_summary(
     summary,
-) -> tuple[Decimal, Decimal, Decimal, Decimal, str | None]:
+) -> dict[str, Decimal | str | None]:
     """Convert AccountSummaryResponse into snapshot payload fields."""
     computed_total = _ZERO
     temp_positions: list[dict] = []
@@ -418,8 +418,22 @@ def _build_positions_from_summary(
             }
         )
 
-    positions_json = json.dumps(snapshot_positions) if snapshot_positions else None
-    return total_value, current_invested, current_deposits, current_withdrawals, positions_json
+    cumulative_pnl_raw = getattr(summary, "profit_loss", None)
+    if cumulative_pnl_raw is not None:
+        cumulative_pnl = _to_decimal(cumulative_pnl_raw)
+    else:
+        cumulative_pnl = total_value - current_deposits + current_withdrawals
+
+    return {
+        "total_value": total_value,
+        "total_invested": current_invested,
+        "total_deposits": current_deposits,
+        "total_withdrawals": current_withdrawals,
+        "cumulative_pnl": cumulative_pnl,
+        "total_fees": _to_decimal(getattr(summary, "total_fees", _ZERO)),
+        "total_dividends": _to_decimal(getattr(summary, "total_dividends", _ZERO)),
+        "positions_json": json.dumps(snapshot_positions) if snapshot_positions else None,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +466,9 @@ def _generate_missing_snapshots(
         current_invested = account_snapshot.total_invested
         current_deposits = account_snapshot.total_invested
         current_withdrawals = _ZERO
+        current_total_fees: Decimal | None = None
+        current_total_dividends: Decimal | None = None
+        current_cumulative_pnl: Decimal | None = None
 
         if account_snapshot.account_type == AccountCategory.BANK:
             # Bank balance doesn't fluctuate with the market — keep it frozen
@@ -531,7 +548,15 @@ def _generate_missing_snapshots(
                 db_only=True,
                 preloaded_prices=preloaded_prices,
             )
-            total_value, current_invested, current_deposits, current_withdrawals, positions_json = _build_positions_from_summary(summary)
+            summary_payload = _build_positions_from_summary(summary)
+            total_value = summary_payload["total_value"]
+            current_invested = summary_payload["total_invested"]
+            current_deposits = summary_payload["total_deposits"]
+            current_withdrawals = summary_payload["total_withdrawals"]
+            current_total_fees = summary_payload["total_fees"]
+            current_total_dividends = summary_payload["total_dividends"]
+            current_cumulative_pnl = summary_payload["cumulative_pnl"]
+            positions_json = summary_payload["positions_json"]
         else:  # AccountCategory.CRYPTO
             preloaded_prices = {}
             for tx in account_snapshot.transactions:
@@ -548,7 +573,15 @@ def _generate_missing_snapshots(
                 db_only=True,
                 preloaded_prices=preloaded_prices,
             )
-            total_value, current_invested, current_deposits, current_withdrawals, positions_json = _build_positions_from_summary(summary)
+            summary_payload = _build_positions_from_summary(summary)
+            total_value = summary_payload["total_value"]
+            current_invested = summary_payload["total_invested"]
+            current_deposits = summary_payload["total_deposits"]
+            current_withdrawals = summary_payload["total_withdrawals"]
+            current_total_fees = summary_payload["total_fees"]
+            current_total_dividends = summary_payload["total_dividends"]
+            current_cumulative_pnl = summary_payload["cumulative_pnl"]
+            positions_json = summary_payload["positions_json"]
 
         if total_value == _ZERO and prev_value > _ZERO:
             daily_pnl = _ZERO
@@ -569,6 +602,9 @@ def _generate_missing_snapshots(
             "total_deposits_enc": encrypt_data(str(round(current_deposits, 2)), master_key),
             "total_withdrawals_enc": encrypt_data(str(round(current_withdrawals, 2)), master_key),
             "daily_pnl_enc": encrypt_data(str(round(daily_pnl, 2)), master_key),
+            "cumulative_pnl_enc": encrypt_data(str(round(current_cumulative_pnl, 2)), master_key) if current_cumulative_pnl is not None else None,
+            "total_fees_enc": encrypt_data(str(round(current_total_fees, 2)), master_key) if current_total_fees is not None else None,
+            "total_dividends_enc": encrypt_data(str(round(current_total_dividends, 2)), master_key) if current_total_dividends is not None else None,
             "positions_enc": encrypt_data(positions_json, master_key) if positions_json else None,
             "created_at": now,
             "updated_at": now,
@@ -967,6 +1003,9 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
                 "total_deposits_enc": stmt.excluded.total_deposits_enc,
                 "total_withdrawals_enc": stmt.excluded.total_withdrawals_enc,
                 "daily_pnl_enc": stmt.excluded.daily_pnl_enc,
+                "cumulative_pnl_enc": stmt.excluded.cumulative_pnl_enc,
+                "total_fees_enc": stmt.excluded.total_fees_enc,
+                "total_dividends_enc": stmt.excluded.total_dividends_enc,
                 "positions_enc": stmt.excluded.positions_enc,
                 "updated_at": stmt.excluded.updated_at,
             },
