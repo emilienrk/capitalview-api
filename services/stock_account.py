@@ -331,6 +331,8 @@ def get_stock_account_history(
         if current_snapshot is not None:
             result = [snap for snap in result if snap.snapshot_date != today]
             result.append(current_snapshot)
+    else:
+        result = [snap for snap in result if snap.snapshot_date != today]
 
     result.sort(key=lambda snap: snap.snapshot_date)
 
