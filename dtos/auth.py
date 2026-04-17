@@ -66,6 +66,8 @@ class UserResponse(BaseModel):
     username: str
     email: str
     is_active: bool
+    last_username_change: datetime | None = None
+    last_email_change: datetime | None = None
     last_login: datetime | None = None
     created_at: datetime
 
@@ -73,3 +75,20 @@ class UserResponse(BaseModel):
 class MessageResponse(BaseModel):
     """Generic message response."""
     message: str
+
+class EmailUpdateRequest(BaseModel):
+    """Email update request."""
+    email: EmailStr
+
+
+class UsernameUpdateRequest(BaseModel):
+    """Username update request."""
+    username: str = Field(..., min_length=3, max_length=50)
+
+    @field_validator('username')
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        """Only allow alphanumeric, underscores, and hyphens."""
+        if not re.match(r'^[a-zA-Z0-9_-]+$', v):
+            raise ValueError('Le nom d\'utilisateur ne peut contenir que des lettres, chiffres, _ et -')
+        return v

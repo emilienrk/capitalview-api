@@ -18,6 +18,8 @@ from dtos.auth import (
     RegisterRequest,
     TokenResponse,
     UserResponse,
+    EmailUpdateRequest,
+    UsernameUpdateRequest,
 )
 from services.auth import (
     authenticate_user,
@@ -316,4 +318,85 @@ def get_current_user_info(
     
     Requires authentication.
     """
+    return current_user
+@router.put("/me/email", response_model=UserResponse)
+def update_email(
+    request: Request,
+    payload: EmailUpdateRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """
+    Update email address. Only allowed once every 30 days.
+    """
+    if current_user.email == payload.email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="C'est déjà votre adresse email"
+        )
+
+    # Check 30 day limit
+    if current_user.last_email_change:
+        days_since_change = (datetime.now(timezone.utc) - current_user.last_email_change).days
+        if days_since_change < 30:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Vous devez attendre {30 - days_since_change} jours avant de pouvoir rechanger d'email"
+            )
+
+    # Check if email taken
+    existing = session.exec(select(User).where(User.email == payload.email)).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cet email est déjà utilisé"
+        )
+
+    current_user.email = payload.email
+    current_user.last_email_change = datetime.now(timezone.utc)
+    
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+    
+    return current_user
+
+@router.put("/me/username", response_model=UserResponse)
+def update_username(
+    request: Request,
+    payload: UsernameUpdateRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session)
+):
+    """
+    Update username. Only allowed once.
+    """
+    if current_user.username == payload.username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="C'est déjà votre nom d'utilisateur"
+        )
+
+    # Check 1 time limit
+    if current_user.last_username_change:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Vous ne pouvez modifier votre nom d'utilisateur qu'une seule fois."
+        )
+
+    # Check if taken
+    existing = session.exec(select(User).where(User.username == payload.username)).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ce nom d'utilisateur est déjà pris"
+        )
+
+    current_user.username = payload.username
+    current_user.last_username_change = datetime.now(timezone.utc)
+    
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+    
     return current_user

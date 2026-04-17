@@ -17,6 +17,8 @@ class User(SQLModel, table=True):
     auth_salt: str = Field(sa_column=Column(TEXT, nullable=False))
     username: str = Field(nullable=False, unique=True, index=True)
     email: str = Field(nullable=False, unique=True, index=True)
+    last_username_change: datetime | None = Field(default=None)
+    last_email_change: datetime | None = Field(default=None)
     password_hash: str = Field(nullable=False)
     is_active: bool = Field(default=True, nullable=False)
     last_login: datetime | None = Field(default=None)
