@@ -11,6 +11,7 @@ from .settings import router as settings_router
 from .asset import router as asset_router
 from .community import router as community_router
 from .market import router as market_router
+from .projection import router as projection_router
 
 __all__ = [
     "auth_router",
@@ -24,4 +25,5 @@ __all__ = [
     "asset_router",
     "community_router",
     "market_router",
+    "projection_router",
 ]

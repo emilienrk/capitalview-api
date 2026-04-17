@@ -28,6 +28,8 @@ from services.asset import get_user_assets, get_asset_portfolio_history
 from services.stock_account import get_all_stock_accounts_history
 from services.crypto_account import get_all_crypto_accounts_history
 from services.cashflow import get_user_cashflow_balance
+from services.projection import generate_wealth_projection
+from dtos.projection import ProjectionParameters
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -47,11 +49,17 @@ def get_dashboard_summary(
     statistics = get_dashboard_statistics(current_user, master_key, session)
     portfolio = get_my_portfolio(current_user, master_key, session)
     cashflow = get_user_cashflow_balance(session, current_user.uuid, master_key)
+    
+    # ── Projection ──
+    # Create default parameters (120 months)
+    params = ProjectionParameters(months_to_project=120)
+    projection = generate_wealth_projection(session, current_user, master_key, params)
 
     return DashboardSummaryResponse(
         statistics=statistics,
         portfolio=portfolio,
         cashflow=cashflow,
+        projection=projection,
     )
 
 

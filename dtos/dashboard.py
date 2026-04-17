@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from dtos.transaction import PortfolioResponse
 from dtos.cashflow import CashflowBalanceResponse
+from dtos.projection import ProjectionResponse
 
 
 class InvestmentDistribution(BaseModel):
@@ -45,6 +46,7 @@ class DashboardSummaryResponse(BaseModel):
     statistics: DashboardStatisticsResponse
     portfolio: PortfolioResponse
     cashflow: CashflowBalanceResponse
+    projection: ProjectionResponse | None = None
 
 
 class GlobalHistorySnapshotResponse(BaseModel):
