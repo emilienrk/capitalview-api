@@ -245,16 +245,20 @@ def get_stock_account_history(
     account_uuid: str,
     master_key: str,
     include_current: bool = True,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> list[AccountHistorySnapshotResponse]:
     """Return decrypted daily snapshots for a stock account, ordered by date."""
     account_id_bidx = hash_index(account_uuid, master_key)
     today = date.today()
 
-    rows = session.exec(
-        select(AccountHistory)
-        .where(AccountHistory.account_id_bidx == account_id_bidx)
-        .order_by(AccountHistory.snapshot_date)
-    ).all()
+    query = select(AccountHistory).where(AccountHistory.account_id_bidx == account_id_bidx)
+    if start_date:
+        query = query.where(AccountHistory.snapshot_date >= start_date)
+    if end_date:
+        query = query.where(AccountHistory.snapshot_date <= end_date)
+
+    rows = session.exec(query.order_by(AccountHistory.snapshot_date)).all()
 
     result: list[AccountHistorySnapshotResponse] = []
     for row in rows:
@@ -326,7 +330,7 @@ def get_stock_account_history(
             )
         )
 
-    if include_current:
+    if include_current and (not end_date or end_date >= today):
         current_snapshot = _build_current_account_snapshot(session, account_uuid, master_key)
         if current_snapshot is not None:
             result = [snap for snap in result if snap.snapshot_date != today]
@@ -355,6 +359,8 @@ def get_all_stock_accounts_history(
     user_uuid: str,
     master_key: str,
     include_current: bool = True,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> list[AccountHistorySnapshotResponse]:
     """
     Aggregate daily snapshots across all stock accounts for a user.
@@ -382,7 +388,7 @@ def get_all_stock_accounts_history(
     aggregated: dict = {}
 
     for acc in accounts:
-        for snap in get_stock_account_history(session, acc.uuid, master_key, include_current):
+        for snap in get_stock_account_history(session, acc.uuid, master_key, include_current, start_date, end_date):
             d = snap.snapshot_date
             if d not in aggregated:
                 aggregated[d] = {
