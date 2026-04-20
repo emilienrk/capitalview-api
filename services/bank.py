@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from typing import Any
 from decimal import Decimal
 from datetime import date, datetime, timedelta, timezone
 
@@ -290,15 +291,19 @@ def get_bank_account_history(
     session: Session,
     account_uuid: str,
     master_key: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> list[AccountHistorySnapshotResponse]:
     """Return decrypted daily snapshots for a bank account, ordered by date."""
     account_id_bidx = hash_index(account_uuid, master_key)
 
-    rows = session.exec(
-        select(AccountHistory)
-        .where(AccountHistory.account_id_bidx == account_id_bidx)
-        .order_by(AccountHistory.snapshot_date)
-    ).all()
+    query = select(AccountHistory).where(AccountHistory.account_id_bidx == account_id_bidx)
+    if start_date:
+        query = query.where(AccountHistory.snapshot_date >= start_date)
+    if end_date:
+        query = query.where(AccountHistory.snapshot_date <= end_date)
+
+    rows = session.exec(query.order_by(AccountHistory.snapshot_date)).all()
 
     return [_decode_history_row(row, master_key) for row in rows]
 
@@ -418,6 +423,8 @@ def get_all_bank_accounts_history(
     session: Session,
     user_uuid: str,
     master_key: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> list[AccountHistorySnapshotResponse]:
     """
     Aggregate daily snapshots across all bank accounts for a user.
@@ -432,7 +439,7 @@ def get_all_bank_accounts_history(
     aggregated: dict = {}
 
     for acc in accounts:
-        for snap in get_bank_account_history(session, acc.uuid, master_key):
+        for snap in get_bank_account_history(session, acc.uuid, master_key, start_date, end_date):
             d = snap.snapshot_date
             if d not in aggregated:
                 aggregated[d] = {
@@ -473,3 +480,55 @@ def get_all_bank_accounts_history(
         )
 
     return result
+
+
+def get_all_bank_accounts_snapshot_for_date(
+    session: Session,
+    user_uuid: str,
+    target_date: date,
+    master_key: str,
+) -> dict[str, Any]:
+    """
+    Returns a list of bank account containing account name, institution, and balance.
+    """
+    user_bidx = hash_index(user_uuid, master_key)
+    accounts = session.exec(
+        select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
+    ).all()
+
+    if not accounts:
+        return []
+
+    result = []
+    total_value = Decimal("0")
+    for account in accounts:
+        account_id_bidx = hash_index(account.uuid, master_key)
+        
+        # Récupère l'historique de CE compte pour cette date
+        row = session.exec(
+            select(AccountHistory)
+            .where(AccountHistory.account_id_bidx == account_id_bidx)
+            .where(AccountHistory.snapshot_date == target_date)
+        ).first()
+
+        name = decrypt_data(account.name_enc, master_key)
+        inst_name = None
+        if account.institution_name_enc:
+            inst_name = decrypt_data(account.institution_name_enc, master_key)
+
+        if row:
+            snap = _decode_history_row(row, master_key)
+            balance = snap.total_value
+        else:
+            balance = Decimal("0")
+        total_value += balance
+        result.append({
+            "name": name,
+            "institution": inst_name,
+            "balance": balance,
+        })
+
+    return {
+        "total_value": total_value,
+        "accounts": result,
+    }

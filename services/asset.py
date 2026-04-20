@@ -738,3 +738,69 @@ def get_asset_portfolio_history(
         )
 
     return result
+
+
+def get_asset_portfolio_snapshot_for_date(
+    session: Session,
+    user_uuid: str,
+    target_date: date,
+    master_key: str,
+) -> AccountHistorySnapshotResponse | None:
+    """
+    Return a decrypted single snapshot for the user's virtual asset portfolio 
+    for a specific date.
+    """
+    user_bidx = hash_index(user_uuid, master_key)
+    virtual_account_id = f"ASSET_PORTFOLIO::{user_bidx}"
+    account_id_bidx = hash_index(virtual_account_id, master_key)
+
+    row = session.exec(
+        select(AccountHistory)
+        .where(AccountHistory.account_id_bidx == account_id_bidx)
+        .where(AccountHistory.snapshot_date == target_date)
+    ).first()
+
+    if not row:
+        return None
+
+    total_value = Decimal(decrypt_data(row.total_value_enc, master_key))
+    total_invested = Decimal(decrypt_data(row.total_invested_enc, master_key))
+    total_deposits = (
+        Decimal(decrypt_data(row.total_deposits_enc, master_key))
+        if row.total_deposits_enc
+        else total_invested
+    )
+    daily_pnl = (
+        Decimal(decrypt_data(row.daily_pnl_enc, master_key))
+        if row.daily_pnl_enc
+        else None
+    )
+
+    positions = None
+    if row.positions_enc:
+        raw_json = decrypt_data(row.positions_enc, master_key)
+        if raw_json:
+            try:
+                parsed = json.loads(raw_json)
+                positions = [
+                    AccountHistoryPosition(
+                        asset_key=p["asset_key"],
+                        quantity=Decimal(p["quantity"]),
+                        value=Decimal(p["value"]),
+                        price=Decimal(p["price"]) if p.get("price") is not None else None,
+                        invested=Decimal(p["invested"]),
+                        percentage=Decimal(p["percentage"]),
+                    )
+                    for p in parsed
+                ]
+            except Exception:
+                positions = None
+
+    return AccountHistorySnapshotResponse(
+        snapshot_date=row.snapshot_date,
+        total_value=total_value,
+        total_invested=total_invested,
+        total_deposits=total_deposits,
+        daily_pnl=daily_pnl,
+        positions=positions,
+    )

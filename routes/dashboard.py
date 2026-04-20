@@ -226,6 +226,8 @@ def get_dashboard_statistics(
     """
     user_bidx = hash_index(current_user.uuid, master_key)
 
+    liquidity = Decimal(0)
+
     # ── Stock accounts ──────────────────────────────────────
     stock_models = session.exec(
         select(StockAccount).where(StockAccount.user_uuid_bidx == user_bidx)
@@ -242,8 +244,10 @@ def get_dashboard_statistics(
         stock_invested += summary.total_invested
         stock_deposits += summary.total_deposits
         stock_withdrawals += summary.total_withdrawals
+        liquidity += summary.total_deposits - summary.total_withdrawals - summary.total_invested
+
         if summary.current_value:
-            stock_current_value += summary.current_value
+            stock_current_value += stock_invested + summary.profit_loss 
 
     # ── Crypto accounts ──────────────────────────────────────
     crypto_models = session.exec(
@@ -262,8 +266,10 @@ def get_dashboard_statistics(
         crypto_invested += summary.total_invested
         crypto_deposits += summary.total_deposits
         crypto_withdrawals += summary.total_withdrawals
+        liquidity += summary.total_deposits - summary.total_withdrawals - summary.total_invested
+
         if summary.current_value:
-            crypto_current_value += summary.current_value
+            crypto_current_value += summary.current_value + summary.profit_loss
 
     investment_net_deposits = (stock_deposits + crypto_deposits) - (stock_withdrawals + crypto_withdrawals)
 
@@ -302,7 +308,7 @@ def get_dashboard_statistics(
 
     # ── Total wealth ────────────────────────────────────────
     investments_total = total_investment_value
-    total_wealth = cash_total + investments_total + assets_total
+    total_wealth = cash_total + investments_total + assets_total + liquidity
     total_deposits = investment_net_deposits + cash_total + assets_total
 
     cash_pct = None
