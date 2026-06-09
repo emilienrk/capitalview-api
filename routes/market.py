@@ -10,8 +10,8 @@ from sqlmodel import Session
 from database import get_session
 from models import User
 from models.enums import AssetType
-from services.auth import get_current_user
-from services.market import backfill_price_history
+from services.auth import get_current_user, get_master_key
+from services.market import backfill_price_history, get_all_assets
 
 router = APIRouter(prefix="/market", tags=["Market"])
 
@@ -80,3 +80,31 @@ def backfill_prices(
         inserted=result["inserted"],
         skipped=result["skipped"],
     )
+
+
+@router.get(
+    "/assets",
+    response_model=list[dict],
+    summary="Obtenir tous les actifs",
+    description=(
+        "Récupère tous les actifs enregistrés en base, en excluant les devises FIAT. "
+        "Permet de filtrer par type d'actif et par possession (owned). "
+        "Si owned=False, les actifs possédés par l'utilisateur sont tout de même triés en premier."
+    ),
+)
+def get_market_assets(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    asset_type: AssetType | None = None,
+    limit: int | None = None,
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    return get_all_assets(
+        user_uuid=current_user.uuid,
+        master_key=master_key,
+        session=session,
+        only_owned=True,
+        asset_type=asset_type,
+        limit=limit,
+    )
+

@@ -18,6 +18,8 @@ from models.market import MarketAsset, MarketPriceHistory
 from services.market_data import market_data_manager
 from services.market_data.providers.coinmarketcap import CoinMarketCapProvider
 from services.market_data.providers.yahoo import YahooProvider
+from services.encryption import decrypt_data, hash_index
+from models import StockAccount, StockTransaction, CryptoAccount, CryptoTransaction
 
 logger = logging.getLogger(__name__)
 
@@ -419,6 +421,98 @@ def get_assets_bulk_info(session: Session, symbols: list[str], asset_type: Asset
             info["price"] = eur_price
             info["currency"] = "EUR"
     return data
+
+
+def get_all_assets(
+    user_uuid: str,
+    master_key: str,
+    session: Session,
+    only_owned: bool,
+    asset_type: AssetType | None,
+    limit: int | None,
+    
+) -> list[dict]:
+    """Get all market assets, excluding FIAT, with optional filtering by asset type and owned status."""
+    statement = select(MarketAsset).where(MarketAsset.asset_type != AssetType.FIAT)
+    if asset_type is not None:
+        statement = statement.where(MarketAsset.asset_type == asset_type)
+    
+    assets = session.exec(statement).all()
+    
+    owned_keys = set()
+    if asset_type == None or asset_type.value == AssetType.STOCK:
+        user_bidx = hash_index(user_uuid, master_key)
+
+        # Stocks
+        stock_accounts = session.exec(
+            select(StockAccount).where(StockAccount.user_uuid_bidx == user_bidx)
+        ).all()
+        stock_agg = {}
+        for account in stock_accounts:
+            account_bidx = hash_index(account.uuid, master_key)
+            txs = session.exec(
+                select(StockTransaction).where(StockTransaction.account_id_bidx == account_bidx)
+            ).all()
+            for tx in txs:
+                try:
+                    key = decrypt_data(tx.asset_key_enc, master_key).upper()
+                    tx_type = decrypt_data(tx.type_enc, master_key)
+                    amount = Decimal(decrypt_data(tx.amount_enc, master_key))
+                    if key not in stock_agg:
+                        stock_agg[key] = Decimal("0")
+                    if tx_type in ("BUY", "DIVIDEND", "DEPOSIT"):
+                        stock_agg[key] += amount
+                    elif tx_type == "SELL":
+                        stock_agg[key] -= amount
+                except Exception:
+                    continue
+        for key, amt in stock_agg.items():
+            if amt > 0:
+                owned_keys.add(key)
+
+    if asset_type == None or asset_type.value == AssetType.CRYPTO:
+        from dtos.crypto import FIAT_ASSET_KEYS
+        # Crypto
+        crypto_accounts = session.exec(
+            select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
+        ).all()
+        crypto_agg = {}
+        for account in crypto_accounts:
+            account_bidx = hash_index(account.uuid, master_key)
+            txs = session.exec(
+                select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == account_bidx)
+            ).all()
+            for tx in txs:
+                try:
+                    key = decrypt_data(tx.asset_key_enc, master_key).upper()
+                    tx_type = decrypt_data(tx.type_enc, master_key)
+                    amount = Decimal(decrypt_data(tx.amount_enc, master_key))
+                    if key in FIAT_ASSET_KEYS or tx_type == "ANCHOR":
+                        continue
+                    if key not in crypto_agg:
+                        crypto_agg[key] = Decimal("0")
+                    if tx_type in ("BUY", "REWARD", "DEPOSIT"):
+                        crypto_agg[key] += amount
+                    elif tx_type in ("SPEND", "TRANSFER", "WITHDRAW", "FEE"):
+                        crypto_agg[key] -= amount
+                except Exception:
+                    continue
+        for key, amt in crypto_agg.items():
+            if amt > 0:
+                owned_keys.add(key)
+
+    # Filter by owned if requested
+    if only_owned:
+        assets = [a for a in assets if a.asset_key and a.asset_key.upper() in owned_keys]
+    
+    # Sort: owned assets first, then keep original database ordering
+    sorted_assets = sorted(assets, key=lambda a: 0 if (a.asset_key and a.asset_key.upper() in owned_keys) else 1)
+    
+    # Apply limit
+    if limit is not None and limit > 0:
+        sorted_assets = sorted_assets[:limit]
+        
+    return [a.model_dump() for a in sorted_assets]
 
 
 def get_stock_price(
