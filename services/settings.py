@@ -31,6 +31,10 @@ def _map_settings_to_response(settings: UserSettings, master_key: str) -> UserSe
         bank_module_enabled=settings.bank_module_enabled,
         cashflow_module_enabled=settings.cashflow_module_enabled,
         wealth_module_enabled=settings.wealth_module_enabled,
+        ai_feature_enabled=settings.ai_feature_enabled,
+        has_claude_api_key=bool(settings.claude_api_key_enc),
+        has_deepseek_api_key=bool(settings.deepseek_api_key_enc),
+        has_gemini_api_key=bool(settings.gemini_api_key_enc),
         usd_eur_rate=float(settings.usd_eur_rate) if settings.usd_eur_rate is not None else None,
         created_at=settings.created_at,
         updated_at=settings.updated_at,
@@ -124,6 +128,27 @@ def update_settings(
 
     if data.wealth_module_enabled is not None:
         settings.wealth_module_enabled = data.wealth_module_enabled
+
+    if data.ai_feature_enabled is not None:
+        settings.ai_feature_enabled = data.ai_feature_enabled
+
+    if "claude_api_key" in data.model_fields_set:
+        if data.claude_api_key is None or data.claude_api_key.strip() == "":
+            settings.claude_api_key_enc = None
+        else:
+            settings.claude_api_key_enc = encrypt_data(data.claude_api_key, master_key)
+
+    if "deepseek_api_key" in data.model_fields_set:
+        if data.deepseek_api_key is None or data.deepseek_api_key.strip() == "":
+            settings.deepseek_api_key_enc = None
+        else:
+            settings.deepseek_api_key_enc = encrypt_data(data.deepseek_api_key, master_key)
+
+    if "gemini_api_key" in data.model_fields_set:
+        if data.gemini_api_key is None or data.gemini_api_key.strip() == "":
+            settings.gemini_api_key_enc = None
+        else:
+            settings.gemini_api_key_enc = encrypt_data(data.gemini_api_key, master_key)
 
     if "usd_eur_rate" in data.model_fields_set:
         if data.usd_eur_rate is not None:

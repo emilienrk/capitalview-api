@@ -18,6 +18,10 @@ class UserSettingsUpdate(BaseModel):
     bank_module_enabled: bool | None = None
     cashflow_module_enabled: bool | None = None
     wealth_module_enabled: bool | None = None
+    ai_feature_enabled: bool | None = None
+    claude_api_key: str | None = None
+    deepseek_api_key: str | None = None
+    gemini_api_key: str | None = None
     usd_eur_rate: float | None = Field(None, gt=0, le=10)
 
 
@@ -37,6 +41,10 @@ class UserSettingsResponse(BaseModel):
     bank_module_enabled: bool = False
     cashflow_module_enabled: bool = True
     wealth_module_enabled: bool = False
+    ai_feature_enabled: bool = False
+    has_claude_api_key: bool = False
+    has_deepseek_api_key: bool = False
+    has_gemini_api_key: bool = False
     usd_eur_rate: float | None = None
     created_at: datetime
     updated_at: datetime
