@@ -1,11 +1,13 @@
 """Crypto accounts and transactions CRUD routes."""
 
+import base64
+import json
 from typing import Annotated
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
@@ -37,7 +39,10 @@ from dtos import (
     BinanceImportPreviewResponse,
     BinanceImportConfirmRequest,
     BinanceImportConfirmResponse,
+    ExtractedCryptoTransaction,
+    CryptoPhotoExtractResponse,
 )
+from services.ai.agents.extract_tx_agent import ExtractTxAgent
 from services.imports.binance import generate_preview, execute_import
 from services.crypto_account import (
     create_crypto_account,
@@ -417,6 +422,48 @@ def list_transactions(
     all_transactions.sort(key=lambda x: x.executed_at, reverse=True)
     
     return all_transactions
+
+
+@router.post("/transactions/extract", response_model=CryptoPhotoExtractResponse)
+async def extract_crypto_transactions_from_photo(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+    file: UploadFile = File(...),
+):
+    content = await file.read()
+    image_data = base64.b64encode(content).decode()
+    media_type = file.content_type or "image/jpeg"
+
+    agent = ExtractTxAgent(current_user.uuid, session, master_key)
+    raw_json = await agent.analyse(image_data, media_type, AssetType.CRYPTO)
+
+    try:
+        parsed = json.loads(raw_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"L'agent n'a pas pu extraire de transactions valides : {exc}",
+        )
+
+    transactions = []
+    if isinstance(parsed, list):
+        tx_list = parsed
+    elif isinstance(parsed, dict):
+        tx_list = parsed.get("transactions", [])
+    else:
+        tx_list = []
+
+    for tx in tx_list:
+        if not isinstance(tx, dict):
+            continue
+        try:
+            transactions.append(ExtractedCryptoTransaction(**tx))
+        except Exception as exc:
+            print(f"WARNING: Failed to parse crypto transaction: {tx}. Error: {exc}")
+            continue
+
+    return CryptoPhotoExtractResponse(transactions=transactions)
 
 
 @router.get("/transactions/{transaction_id}", response_model=TransactionResponse)

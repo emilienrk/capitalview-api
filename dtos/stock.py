@@ -150,3 +150,17 @@ class AssetInfoResponse(BaseModel):
     exchange: str | None = None
     type: str | None = None
     change_percent: float | None = None  # 24h or daily change
+
+
+class ExtractedStockTransaction(BaseModel):
+    asset_key: str | None = None
+    type: StockTransactionType
+    amount: Decimal
+    price_per_unit: Decimal
+    fees: Decimal = Decimal("0")
+    executed_at: ValidDatetime
+    notes: str | None = None
+
+
+class PhotoExtractResponse(BaseModel):
+    transactions: list[ExtractedStockTransaction]
