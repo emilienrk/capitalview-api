@@ -57,6 +57,10 @@ class UserSettings(SQLModel, table=True):
     bank_module_enabled: bool = Field(default=True, nullable=False)
     cashflow_module_enabled: bool = Field(default=True, nullable=False)
     wealth_module_enabled: bool = Field(default=True, nullable=False)
+    ai_feature_enabled: bool = Field(default=False, nullable=False)
+    claude_api_key_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    deepseek_api_key_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    gemini_api_key_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     # Manual USD→EUR rate override (None = use auto-fetched rate)
     usd_eur_rate: Decimal | None = Field(
         default=None,

@@ -126,3 +126,15 @@ class CryptoCompositeTransactionType(str, Enum):
     def normalize(cls, value: "CryptoCompositeTransactionType") -> "CryptoCompositeTransactionType":
         """Return a canonical composite action."""
         return value
+
+class CardTheme(str, Enum):
+    """Theme for AI generated cards."""
+    MONTHLY = "MONTHLY"
+    WEEKLY = "WEEKLY"
+    ANALYSIS = "ANALYSIS"
+    SPONTANEOUS = "SPONTANEOUS"
+    TREND = "TREND"
+    ISSUE = "ISSUE"
+    TAX_EFFICENCY = "TAX_EFFICENCY"
+    FEAR_INDEX = "FEAR_INDEX"
+    DIVERSIFICATION = "DIVERSIFICATION"

@@ -20,6 +20,7 @@ from .stock import StockAccount, StockTransaction
 from .crypto import CryptoAccount, CryptoTransaction
 from .market import MarketAsset, MarketPriceHistory, MarketPrice
 from .note import Note
+from .card import Card
 from .asset import Asset, AssetValuation
 from .community import CommunityProfile, CommunityPosition, CommunityFollow, CommunityPick
 from .account_history import AccountHistory
@@ -46,6 +47,7 @@ __all__ = [
     "MarketPriceHistory",
     "MarketPrice",
     "Note",
+    "Card",
     "Asset",
     "AssetValuation",
     "CommunityProfile",
