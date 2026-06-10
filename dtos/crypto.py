@@ -271,10 +271,13 @@ class BinanceImportConfirmResponse(BaseModel):
 
 
 class ExtractedCryptoTransaction(BaseModel):
+    type: CryptoCompositeTransactionType
     asset_key: str
-    type: CryptoTransactionType
-    amount: Decimal
-    price_per_unit: Decimal
+    amount: Decimal = Field(gt=0)
+    quote_asset_key: str | None = None
+    quote_amount: Decimal | None = Field(default=None, ge=0)
+    fee_asset_key: str | None = None
+    fee_amount: Decimal | None = Field(default=None, ge=0)
     executed_at: ValidDatetime
     tx_hash: str | None = None
     notes: str | None = None

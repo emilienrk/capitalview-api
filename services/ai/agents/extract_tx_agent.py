@@ -9,7 +9,7 @@ import json
 import logging
 from typing import Any, Optional
 
-from models.enums import AssetType, CryptoTransactionType, StockTransactionType
+from models.enums import AssetType, CryptoTransactionType, StockTransactionType, CryptoCompositeTransactionType
 from services.ai.manager import AIProviderManager, NoProviderAvailableError
 from services.market import get_all_assets, search_assets
 
@@ -51,6 +51,14 @@ class ExtractTxAgent:
                                 "items": {
                                     "type": "object",
                                     "properties": {
+                                        "reasoning": {
+                                            "type": "string",
+                                            "description": (
+                                                "Mandatory step-by-step analysis before extracting data:\n"
+                                                "1. Visual Location: Describe exactly where the key information is located on the image.\n"
+                                                "2. Literal Extraction: Quote the exact raw text seen on the screen for amounts, tickers, fees, and dates. Do not perform any calculations, conversions, or assumptions."
+                                            ),
+                                        },
                                         "asset_key": {
                                             "type": ["string", "null"],
                                             "description": (
@@ -90,7 +98,7 @@ class ExtractTxAgent:
                                         },
                                         "notes": {"type": ["string", "null"]},
                                     },
-                                    "required": ["type", "amount", "price_per_unit", "fees", "executed_at"],
+                                    "required": ["reasoning", "type", "amount", "price_per_unit", "fees", "executed_at"],
                                     "additionalProperties": False,
                                 },
                             }
@@ -113,34 +121,64 @@ class ExtractTxAgent:
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "asset_key": {
+                                    "reasoning": {
                                         "type": "string",
                                         "description": (
-                                            "Cryptocurrency ticker symbol. Must be uppercase, "
-                                            "between 2 and 10 characters. Examples: BTC, ETH, SOL, USDT, MATIC."
+                                            "Mandatory step-by-step analysis before extracting data:\n"
+                                            "1. Visual Location: Describe exactly where the key information is located on the image.\n"
+                                            "2. Literal Extraction: Quote the exact raw text seen on the screen for amounts, tickers, fees, and dates. Do not perform any calculations, conversions, or assumptions."
                                         ),
                                     },
                                     "type": {
                                         "type": "string",
-                                        "enum": [t.value for t in CryptoTransactionType],
+                                        "enum": [
+                                            CryptoCompositeTransactionType.BUY.value,
+                                            CryptoCompositeTransactionType.FIAT_DEPOSIT.value,
+                                            CryptoCompositeTransactionType.FIAT_WITHDRAW.value,
+                                            CryptoCompositeTransactionType.SELL_TO_FIAT.value,
+                                            CryptoCompositeTransactionType.CRYPTO_DEPOSIT.value,
+                                            CryptoCompositeTransactionType.EXIT.value,
+                                        ],
+                                        "description": (
+                                            "Type of transaction:\n"
+                                            "- BUY: Buying crypto using fiat or swapping crypto to crypto.\n"
+                                            "- FIAT_DEPOSIT: Depositing fiat (EUR, USD, etc.) to an exchange.\n"
+                                            "- FIAT_WITHDRAW: Withdrawing fiat to a bank account.\n"
+                                            "- SELL_TO_FIAT: Selling crypto for fiat.\n"
+                                            "- CRYPTO_DEPOSIT: Depositing crypto from another wallet.\n"
+                                            "- EXIT: Withdrawing crypto to an external wallet or spending it."
+                                        )
+                                    },
+                                    "asset_key": {
+                                        "type": "string",
+                                        "description": (
+                                            "Cryptocurrency ticker symbol (e.g., BTC, ETH). For FIAT_DEPOSIT or FIAT_WITHDRAW, use EUR, USD, etc."
+                                        ),
                                     },
                                     "amount": {
                                         "type": "string",
                                         "description": (
-                                            "The amount of the asset as seen exactly on the document. "
-                                            "DO NOT perform any math or division. "
-                                            "Note that the comma ',' can be a decimal separator in European formats. "
-                                            "Remove the currency symbol and return only the raw numeric value with its decimals."
+                                            "The amount of the asset (asset_key) involved. "
+                                            "Return only the raw numeric value, using '.' for decimals."
                                         ),
                                     },
-                                    "price_per_unit": {
-                                        "type": "string",
-                                        "description": (
-                                            "Price per unit as seen exactly on the document. "
-                                            "DO NOT perform any math or division. "
-                                            "Note that the comma ',' can be a decimal separator in European formats. "
-                                            "Remove the currency symbol and return only the raw numeric value with its decimals."
-                                        ),
+                                    "quote_asset_key": {
+                                        "type": ["string", "null"],
+                                        "description": "Ticker of the asset used to pay (e.g., EUR, USDT)."
+                                    },
+                                    "quote_amount": {
+                                        "type": ["string", "null"],
+                                        "description": "The amount of the quote asset used to pay."
+                                    },
+
+
+                                    "fee_asset_key": {
+                                        "type": ["string", "null"],
+                                        "description": "Asset used to pay fees. IMPORTANT: If there are fees but the fee ticker is not specified, use the ticker of the asset being bought."
+                                    },
+                                    "fee_amount": {
+                                        "type": ["string", "null"],
+                                        "description": "Amount of fees paid."
                                     },
                                     "executed_at": {
                                         "type": "string",
@@ -153,7 +191,7 @@ class ExtractTxAgent:
                                     "tx_hash": {"type": ["string", "null"]},
                                     "notes": {"type": ["string", "null"]},
                                 },
-                                "required": ["asset_key", "type", "amount", "price_per_unit", "executed_at"],
+                                "required": ["reasoning", "type", "asset_key", "amount", "executed_at"],
                                 "additionalProperties": False,
                             },
                         }
