@@ -1,7 +1,7 @@
 """Stock transaction services."""
 
 from decimal import Decimal
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 
 from sqlmodel import Session, select
 
@@ -28,9 +28,15 @@ def _decrypt_transaction(tx: StockTransaction, master_key: str) -> TransactionRe
     fees = Decimal(decrypt_data(tx.fees_enc, master_key))
     exec_at_str = decrypt_data(tx.executed_at_enc, master_key)
     try:
-        executed_at = datetime.fromisoformat(exec_at_str.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(exec_at_str.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        executed_at = dt
     except ValueError:
-        executed_at = tx.created_at
+        dt = tx.created_at
+        if dt and dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        executed_at = dt
 
     notes = decrypt_data(tx.notes_enc, master_key) if tx.notes_enc else None
 
@@ -106,6 +112,8 @@ def _compute_eur_balance(
 ) -> Decimal:
     txs = get_account_transactions(session, account_uuid, master_key)
     if as_of is not None:
+        if hasattr(as_of, "tzinfo") and as_of.tzinfo is not None:
+            as_of = as_of.astimezone(timezone.utc).replace(tzinfo=None)
         txs = [tx for tx in txs if tx.executed_at <= as_of]
     txs.sort(key=lambda x: x.executed_at)
     eur = Decimal("0")

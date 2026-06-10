@@ -1,6 +1,6 @@
 """Dashboard statistics schemas."""
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel
@@ -60,3 +60,11 @@ class GlobalHistorySnapshotResponse(BaseModel):
     crypto_value: Decimal
     bank_value: Decimal
     assets_value: Decimal
+
+class CardResponse(BaseModel):
+    uuid: str
+    title: str
+    theme: str
+    text: str
+    scope: str
+    created_at: date | datetime

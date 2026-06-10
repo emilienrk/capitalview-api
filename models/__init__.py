@@ -13,13 +13,14 @@ from .enums import (
     StockTransactionType,
     AccountCategory,
 )
-from .user import User, UserSettings
+from .user import User, UserSettings, UserAIProvider
 from .cashflow import Cashflow
 from .bank import BankAccount
 from .stock import StockAccount, StockTransaction
 from .crypto import CryptoAccount, CryptoTransaction
 from .market import MarketAsset, MarketPriceHistory, MarketPrice
 from .note import Note
+from .card import Card
 from .asset import Asset, AssetValuation
 from .community import CommunityProfile, CommunityPosition, CommunityFollow, CommunityPick
 from .account_history import AccountHistory
@@ -36,6 +37,7 @@ __all__ = [
     # Models
     "User",
     "UserSettings",
+    "UserAIProvider",
     "Cashflow",
     "BankAccount",
     "StockAccount",
@@ -46,6 +48,7 @@ __all__ = [
     "MarketPriceHistory",
     "MarketPrice",
     "Note",
+    "Card",
     "Asset",
     "AssetValuation",
     "CommunityProfile",

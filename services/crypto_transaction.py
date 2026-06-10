@@ -1,7 +1,7 @@
 """Crypto transaction services — atomic ledger model."""
 
 from decimal import Decimal
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from uuid import uuid4
 
 from sqlmodel import Session, select
@@ -30,9 +30,15 @@ def _decrypt_transaction(
     price = Decimal(decrypt_data(tx.price_per_unit_enc, master_key))
     exec_at_str = decrypt_data(tx.executed_at_enc, master_key)
     try:
-        executed_at = datetime.fromisoformat(exec_at_str.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(exec_at_str.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        executed_at = dt
     except ValueError:
-        executed_at = tx.created_at
+        dt = tx.created_at
+        if dt and dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        executed_at = dt
 
     total_cost = amount * price
     is_fee_row = type_str == CryptoTransactionType.FEE.value

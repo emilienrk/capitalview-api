@@ -45,6 +45,8 @@ from .stock import (
     EurDepositCreate,
     AssetSearchResult,
     AssetInfoResponse,
+    ExtractedStockTransaction,
+    PhotoExtractResponse,
 )
 
 # Crypto schemas
@@ -70,6 +72,8 @@ from .crypto import (
     BinanceImportPreviewResponse,
     BinanceImportConfirmRequest,
     BinanceImportConfirmResponse,
+    ExtractedCryptoTransaction,
+    CryptoPhotoExtractResponse,
 )
 
 # Note schemas
@@ -153,6 +157,8 @@ __all__ = [
     "AssetSearchResult",
     "AssetInfoResponse",
     "EurDepositCreate",
+    "ExtractedStockTransaction",
+    "PhotoExtractResponse",
     # Crypto
     "CryptoAccountBasicResponse",
     "CryptoAccountCreate",
@@ -176,6 +182,8 @@ __all__ = [
     "BinanceImportPreviewResponse",
     "BinanceImportConfirmRequest",
     "BinanceImportConfirmResponse",
+    "ExtractedCryptoTransaction",
+    "CryptoPhotoExtractResponse",
     # Note
     "NoteCreate",
     "NoteReorder",
