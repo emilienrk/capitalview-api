@@ -16,6 +16,7 @@ from dtos.dashboard import (
     GlobalHistorySnapshotResponse,
     InvestmentDistribution,
     WealthBreakdown,
+    CardResponse,
 )
 from services.auth import get_current_user, get_master_key
 from services.encryption import hash_index, decrypt_data
@@ -307,8 +308,8 @@ def get_dashboard_statistics(
         assets_total = Decimal(0)
 
     # ── Total wealth ────────────────────────────────────────
-    investments_total = total_investment_value
-    total_wealth = cash_total + investments_total + assets_total + liquidity
+    investments_total = total_investment_value + liquidity
+    total_wealth = cash_total + investments_total + assets_total
     total_deposits = investment_net_deposits + cash_total + assets_total
 
     cash_pct = None
@@ -334,4 +335,153 @@ def get_dashboard_statistics(
     return DashboardStatisticsResponse(
         distribution=distribution,
         wealth=wealth,
+    )
+@router.get("/card", response_model=CardResponse)
+async def get_or_generate_card(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """
+    Returns the card for today. If it doesn't exist, generates one.
+    """
+    from datetime import datetime, timedelta, timezone
+    import random
+    from models.card import Card
+    from models.enums import CardTheme
+    from services.ai.agents.card_agent import CardAgent
+    from services.ai.tools import get_performance_since_last_login
+    from services.encryption import encrypt_data, decrypt_data, hash_index
+
+    user_bidx = hash_index(current_user.uuid, master_key)
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Check if a card exists for today
+    today_card = session.exec(
+        select(Card)
+        .where(Card.user_uuid_bidx == user_bidx)
+        .where(Card.created_at >= today_start)
+    ).first()
+
+    if today_card:
+        try:
+            return CardResponse(
+                uuid=today_card.uuid,
+                title=decrypt_data(today_card.title_enc, master_key),
+                theme=decrypt_data(today_card.theme_enc, master_key),
+                text=decrypt_data(today_card.text_enc, master_key),
+                scope=decrypt_data(today_card.scope_enc, master_key),
+                created_at=today_card.created_at
+            )
+        except Exception:
+            pass
+
+    # Check recent cards to avoid repeating monthly/weekly
+    thirty_days_ago = now - timedelta(days=35)
+    recent_cards = session.exec(
+        select(Card)
+        .where(Card.user_uuid_bidx == user_bidx)
+        .where(Card.created_at >= thirty_days_ago)
+        .order_by(Card.created_at.desc())
+    ).all()
+
+    recent_themes = set()
+    last_monthly = None
+    last_weekly = None
+    
+    for card in recent_cards:
+        try:
+            th = decrypt_data(card.theme_enc, master_key)
+            recent_themes.add(th)
+            if th == CardTheme.MONTHLY.value and last_monthly is None:
+                last_monthly = card.created_at
+            if th == CardTheme.WEEKLY.value and last_weekly is None:
+                last_weekly = card.created_at
+        except Exception:
+            continue
+
+    # Determine Theme
+    selected_theme = None
+    theme_context = ""
+    is_significant = False
+    perf_data = {}
+
+    import calendar
+    _, days_in_month = calendar.monthrange(now.year, now.month)
+
+    # 1. Monthly condition
+    # If the month is over (or very near the end) and we haven't done it 
+    # Let's say if we are in the first 5 days of the month and no MONTHLY for the previous month
+    # Or if we are in the last 2 days of the month and no MONTHLY this month
+    is_start_of_month = now.day <= 5
+    is_end_of_month = now.day >= days_in_month - 1
+    
+    if is_end_of_month and (last_monthly is None or (now - last_monthly).days > 25):
+        selected_theme = CardTheme.MONTHLY.value
+        theme_context = "Thème : Bilan mensuel. Rédige un bref bilan du mois qui s'écoule pour le portefeuille de l'utilisateur."
+    elif is_start_of_month and (last_monthly is None or (now - last_monthly).days > 25):
+        selected_theme = CardTheme.MONTHLY.value
+        theme_context = "Thème : Bilan mensuel. Rédige un résumé du mois précédent pour les finances de l'utilisateur."
+
+    # 2. Weekly condition
+    if not selected_theme:
+        is_weekend = now.weekday() in [5, 6] # Saturday, Sunday
+        if is_weekend and (last_weekly is None or (now - last_weekly).days > 5):
+            selected_theme = CardTheme.WEEKLY.value
+            theme_context = "Thème : Bilan de la semaine. Rédige un aperçu des événements de la semaine écoulée."
+
+    # 3. Performance / Significant
+    if not selected_theme:
+        perf_data = get_performance_since_last_login(session, current_user.uuid, master_key)
+        is_significant = perf_data.get("is_significant", False)
+        if is_significant:
+            selected_theme = (
+                CardTheme.TREND.value
+                if perf_data.get("total_absolute_change_eur", 0) >= 0
+                else CardTheme.ISSUE.value
+            )
+            theme_context = (
+                f"Thème prioritaire basé sur la variation depuis la dernière connexion : {selected_theme}\n"
+                "RÉDIGE OBLIGATOIREMENT une card expliquant l'évolution du patrimoine sur les derniers jours. Liste simplement les faits."
+            )
+
+    # 4. Random fallback
+    if not selected_theme:
+        # Exclude monthly and weekly from random themes
+        choices = [t.value for t in CardTheme if t.value not in [CardTheme.MONTHLY.value, CardTheme.WEEKLY.value]]
+        selected_theme = random.choice(choices)
+        theme_context = f"Thème tiré au sort pour cette carte : {selected_theme}\n"
+
+    # Call agent
+    agent = CardAgent(current_user.uuid, session, master_key.encode() if isinstance(master_key, str) else master_key)
+    card_data = await agent.main(
+        theme_context=theme_context,
+        selected_theme=selected_theme,
+        recent_cards=recent_cards,
+        is_significant=is_significant,
+        perf_data=perf_data
+    )
+    
+    card_title = card_data.get("title", selected_theme)
+    card_body = card_data.get("body", str(card_data))
+
+    new_card = Card(
+        user_uuid_bidx=user_bidx,
+        title_enc=encrypt_data(card_title, master_key),
+        text_enc=encrypt_data(card_body, master_key),
+        theme_enc=encrypt_data(selected_theme, master_key),
+        scope_enc=encrypt_data("GLOBAL", master_key)
+    )
+    session.add(new_card)
+    session.commit()
+    session.refresh(new_card)
+
+    return CardResponse(
+        uuid=new_card.uuid,
+        title=card_title,
+        theme=selected_theme,
+        text=card_body,
+        scope="GLOBAL",
+        created_at=new_card.created_at
     )

@@ -346,3 +346,140 @@ def test_get_historical_exchange_rates_db_uses_cache_on_second_call(session: Ses
 
     # Yahoo should only have been called once (or zero on second call if all dates exist)
     assert mock_fetch.call_count <= 2  # second call may skip if all dates found in DB
+
+
+def test_get_all_assets_basic(session: Session):
+    """Test get_all_assets basic features: excludes FIAT, filters by asset type, and respects limit."""
+    from services.market import get_all_assets
+    
+    # Setup some assets
+    _make_asset(session, asset_key="ISIN_AAPL", symbol="AAPL", name="Apple", asset_type=AssetType.STOCK)
+    _make_asset(session, asset_key="BTC", symbol="BTC", name="Bitcoin", asset_type=AssetType.CRYPTO)
+    _make_asset(session, asset_key="EUR", symbol="EUR", name="Euro", asset_type=AssetType.FIAT)
+    _make_asset(session, asset_key="USD", symbol="USD", name="US Dollar", asset_type=AssetType.FIAT)
+    
+    # 1. Verify FIAT assets are excluded
+    all_assets = get_all_assets(user_uuid="test", master_key="test", session=session, only_owned=False, asset_type=None, limit=None)
+    assert len(all_assets) == 2
+    keys = {a["asset_key"] for a in all_assets}
+    assert keys == {"ISIN_AAPL", "BTC"}
+    
+    # 2. Filter by type
+    stocks = get_all_assets(user_uuid="test", master_key="test", session=session, only_owned=False, asset_type=AssetType.STOCK, limit=None)
+    assert len(stocks) == 1
+    assert stocks[0]["asset_key"] == "ISIN_AAPL"
+    
+    # 3. Respect limit
+    limited = get_all_assets(user_uuid="test", master_key="test", session=session, only_owned=False, asset_type=None, limit=1)
+    assert len(limited) == 1
+
+
+def test_get_all_assets_owned_ordering(session: Session, master_key: str):
+    """Test get_all_assets owned logic: prioritizes owned assets or filters by owned."""
+    from services.market import get_all_assets
+    from models import StockAccount, StockTransaction, CryptoAccount, CryptoTransaction
+    from services.encryption import hash_index, encrypt_data
+    
+    user_uuid = "test_user_uuid"
+    user_bidx = hash_index(user_uuid, master_key)
+    
+    # Setup market assets
+    _make_asset(session, asset_key="ISIN_AAPL", symbol="AAPL", name="Apple", asset_type=AssetType.STOCK)
+    _make_asset(session, asset_key="ISIN_MSFT", symbol="MSFT", name="Microsoft", asset_type=AssetType.STOCK)
+    _make_asset(session, asset_key="BTC", symbol="BTC", name="Bitcoin", asset_type=AssetType.CRYPTO)
+    _make_asset(session, asset_key="ETH", symbol="ETH", name="Ethereum", asset_type=AssetType.CRYPTO)
+    
+    # Setup accounts
+    stock_acc = StockAccount(
+        uuid="stock_acc_uuid",
+        user_uuid_bidx=user_bidx,
+        name_enc=encrypt_data("PEA", master_key),
+        account_type_enc=encrypt_data("PEA", master_key)
+    )
+    crypto_acc = CryptoAccount(
+        uuid="crypto_acc_uuid",
+        user_uuid_bidx=user_bidx,
+        name_enc=encrypt_data("Wallet", master_key),
+        platform_enc=encrypt_data("Ledger", master_key),
+    )
+    session.add(stock_acc)
+    session.add(crypto_acc)
+    session.commit()
+    
+    stock_acc_bidx = hash_index(stock_acc.uuid, master_key)
+    crypto_acc_bidx = hash_index(crypto_acc.uuid, master_key)
+    
+    # Transactions:
+    # 1. AAPL: BUY 10, SELL 2 -> net 8 (owned)
+    # 2. MSFT: BUY 5, SELL 5 -> net 0 (not owned)
+    # 3. BTC: BUY 2 -> net 2 (owned)
+    # (ETH: no transactions -> not owned)
+    
+    tx1 = StockTransaction(
+        account_id_bidx=stock_acc_bidx,
+        asset_key_enc=encrypt_data("ISIN_AAPL", master_key),
+        type_enc=encrypt_data("BUY", master_key),
+        amount_enc=encrypt_data("10", master_key),
+        price_per_unit_enc=encrypt_data("150", master_key),
+        fees_enc=encrypt_data("1", master_key),
+        executed_at_enc=encrypt_data("2026-06-01T12:00:00", master_key),
+    )
+    tx2 = StockTransaction(
+        account_id_bidx=stock_acc_bidx,
+        asset_key_enc=encrypt_data("ISIN_AAPL", master_key),
+        type_enc=encrypt_data("SELL", master_key),
+        amount_enc=encrypt_data("2", master_key),
+        price_per_unit_enc=encrypt_data("160", master_key),
+        fees_enc=encrypt_data("1", master_key),
+        executed_at_enc=encrypt_data("2026-06-02T12:00:00", master_key),
+    )
+    tx3 = StockTransaction(
+        account_id_bidx=stock_acc_bidx,
+        asset_key_enc=encrypt_data("ISIN_MSFT", master_key),
+        type_enc=encrypt_data("BUY", master_key),
+        amount_enc=encrypt_data("5", master_key),
+        price_per_unit_enc=encrypt_data("300", master_key),
+        fees_enc=encrypt_data("1", master_key),
+        executed_at_enc=encrypt_data("2026-06-01T12:00:00", master_key),
+    )
+    tx4 = StockTransaction(
+        account_id_bidx=stock_acc_bidx,
+        asset_key_enc=encrypt_data("ISIN_MSFT", master_key),
+        type_enc=encrypt_data("SELL", master_key),
+        amount_enc=encrypt_data("5", master_key),
+        price_per_unit_enc=encrypt_data("310", master_key),
+        fees_enc=encrypt_data("1", master_key),
+        executed_at_enc=encrypt_data("2026-06-02T12:00:00", master_key),
+    )
+    tx5 = CryptoTransaction(
+        account_id_bidx=crypto_acc_bidx,
+        asset_key_enc=encrypt_data("BTC", master_key),
+        type_enc=encrypt_data("BUY", master_key),
+        amount_enc=encrypt_data("2", master_key),
+        price_per_unit_enc=encrypt_data("60000", master_key),
+        executed_at_enc=encrypt_data("2026-06-01T12:00:00", master_key),
+    )
+    session.add(tx1)
+    session.add(tx2)
+    session.add(tx3)
+    session.add(tx4)
+    session.add(tx5)
+    session.commit()
+    
+    # Attach credentials to session object
+    session.user_uuid = user_uuid
+    session.master_key = master_key
+    
+    # Test 1: only_owned=False (owned assets must be first in list)
+    assets = get_all_assets(user_uuid=user_uuid, master_key=master_key, session=session, only_owned=False, asset_type=None, limit=None)
+    # Owned are AAPL and BTC
+    assert len(assets) == 4
+    first_two = {assets[0]["asset_key"], assets[1]["asset_key"]}
+    assert first_two == {"ISIN_AAPL", "BTC"}
+    
+    # Test 2: only_owned=True (only owned assets returned)
+    owned_assets = get_all_assets(user_uuid=user_uuid, master_key=master_key, session=session, only_owned=True, asset_type=None, limit=None)
+    assert len(owned_assets) == 2
+    owned_keys = {a["asset_key"] for a in owned_assets}
+    assert owned_keys == {"ISIN_AAPL", "BTC"}
+

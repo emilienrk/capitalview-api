@@ -29,6 +29,9 @@ dependencies = [
     "pytest>=9.0.2",
     "pytest-cov>=7.0.0",
     "httpx>=0.28.1",
+    "anthropic>=0.96.0",
+    "google-genai>=2.8.0",
+    "openai>=2.41.0",
 ]
 
 [build-system]

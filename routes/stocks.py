@@ -1,10 +1,13 @@
 """Stock accounts and transactions CRUD routes."""
 
+import base64
+import json
 from typing import Annotated
 
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from services.ai.agents.extract_tx_agent import ExtractTxAgent
 from sqlmodel import Session
 
 from database import get_session
@@ -26,6 +29,8 @@ from dtos import (
     TransactionResponse,
     AssetSearchResult,
     AssetInfoResponse,
+    ExtractedStockTransaction,
+    PhotoExtractResponse,
 )
 from services.stock_account import (
     create_stock_account,
@@ -465,6 +470,48 @@ def bulk_import_transactions(
         imported_count=len(created_responses),
         transactions=created_responses
     )
+
+
+@router.post("/transactions/extract", response_model=PhotoExtractResponse)
+async def extract_transactions_from_photo(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+    file: UploadFile = File(...),
+):
+    content = await file.read()
+    image_data = base64.b64encode(content).decode()
+    media_type = file.content_type or "image/jpeg"
+
+    agent = ExtractTxAgent(current_user.uuid, session, master_key)
+    raw_json = await agent.analyse(image_data, media_type, AssetType.STOCK)
+
+    try:
+        parsed = json.loads(raw_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"L'agent n'a pas pu extraire de transactions valides : {exc}",
+        )
+
+    transactions = []
+    if isinstance(parsed, list):
+        tx_list = parsed
+    elif isinstance(parsed, dict):
+        tx_list = parsed.get("transactions", [])
+    else:
+        tx_list = []
+
+    for tx in tx_list:
+        if not isinstance(tx, dict):
+            continue
+        try:
+            transactions.append(ExtractedStockTransaction(**tx))
+        except Exception as exc:
+            print(f"WARNING: Failed to parse stock transaction: {tx}. Error: {exc}")
+            continue
+
+    return PhotoExtractResponse(transactions=transactions)
 
 
 @router.get("/market/search", response_model=list[AssetSearchResult])

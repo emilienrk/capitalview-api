@@ -268,3 +268,20 @@ class BinanceImportConfirmRequest(BaseModel):
 class BinanceImportConfirmResponse(BaseModel):
     imported_count: int
     groups_count: int
+
+
+class ExtractedCryptoTransaction(BaseModel):
+    type: CryptoCompositeTransactionType
+    asset_key: str
+    amount: Decimal = Field(gt=0)
+    quote_asset_key: str | None = None
+    quote_amount: Decimal | None = Field(default=None, ge=0)
+    fee_asset_key: str | None = None
+    fee_amount: Decimal | None = Field(default=None, ge=0)
+    executed_at: ValidDatetime
+    tx_hash: str | None = None
+    notes: str | None = None
+
+
+class CryptoPhotoExtractResponse(BaseModel):
+    transactions: list[ExtractedCryptoTransaction]
