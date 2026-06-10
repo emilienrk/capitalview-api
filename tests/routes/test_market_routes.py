@@ -50,6 +50,6 @@ def test_get_market_assets_route(session):
     resp = client.get("/market/assets")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 2
-    keys = {a["asset_key"] for a in data}
-    assert keys == {"ISIN_AAPL", "BTC"}
+    # Since only_owned=True, and no stock/crypto accounts/transactions were created, 
+    # the user does not own any of the created assets.
+    assert len(data) == 0
