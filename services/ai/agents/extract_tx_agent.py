@@ -1,9 +1,8 @@
 """
 Transaction screenshot extraction agent.
 
-Uses AIProviderManager to resolve the best available provider that supports VISION.
-Falls back to TEXT-only providers if no vision provider is available (though results
-will be degraded since the input is an image).
+Uses AIProviderManager to resolve the best available provider for vision,
+respecting the user's configured provider and model preferences.
 """
 
 import json
@@ -12,7 +11,6 @@ from typing import Any, Optional
 
 from models.enums import AssetType, CryptoTransactionType, StockTransactionType
 from services.ai.manager import AIProviderManager, NoProviderAvailableError
-from services.ai.providers.base import ModelCapability
 from services.market import get_all_assets, search_assets
 
 logger = logging.getLogger(__name__)
@@ -31,11 +29,8 @@ class ExtractTxAgent:
         self.master_key: bytes = master_key
         self.messages: list = []
 
-        # Vision is required to analyse screenshots
         self._manager = AIProviderManager.from_user_settings(session, user_uuid, master_key)
-        self._provider = self._manager.get_provider(
-            required=ModelCapability.TEXT | ModelCapability.VISION
-        )
+        self._provider = self._manager.get_provider_for_capability("vision")
 
     @staticmethod
     def system_prompt() -> str:

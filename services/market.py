@@ -440,9 +440,9 @@ def get_all_assets(
     assets = session.exec(statement).all()
     
     owned_keys = set()
-    if asset_type == None or asset_type.value == AssetType.STOCK:
-        user_bidx = hash_index(user_uuid, master_key)
+    user_bidx = hash_index(user_uuid, master_key)
 
+    if asset_type == None or asset_type.value == AssetType.STOCK:
         # Stocks
         stock_accounts = session.exec(
             select(StockAccount).where(StockAccount.user_uuid_bidx == user_bidx)

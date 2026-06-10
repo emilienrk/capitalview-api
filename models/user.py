@@ -2,7 +2,7 @@
 User and UserSettings models.
 """
 from sqlmodel import SQLModel, Field
-from sqlalchemy import Column, TEXT
+from sqlalchemy import Column, TEXT, UniqueConstraint
 from datetime import datetime
 from decimal import Decimal
 import sqlalchemy as sa
@@ -37,13 +37,33 @@ class User(SQLModel, table=True):
     )
 
 
+class UserAIProvider(SQLModel, table=True):
+    """
+    Per-provider AI configuration for a user.
+
+    Stores the encrypted API key and the user's preferred model for each provider.
+    One row per (user, provider) pair — adding a new provider never requires a migration.
+    """
+    __tablename__ = "user_ai_providers"
+    __table_args__ = (
+        UniqueConstraint("user_uuid_bidx", "provider", name="uq_user_ai_provider"),
+        {"extend_existing": True},
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_uuid_bidx: str = Field(index=True)
+    provider: str = Field(nullable=False)          # e.g. "google" | "anthropic" | "deepseek"
+    api_key_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    selected_model: str | None = Field(default=None)  # None = use provider default model
+
+
 class UserSettings(SQLModel, table=True):
     """Simulation constants per user (inflation, tax rates)."""
     __tablename__ = "user_settings"
     __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
-    user_uuid_bidx: str = Field(index=True, unique=True) 
+    user_uuid_bidx: str = Field(index=True, unique=True)
     objectives_enc: str | None = Field(sa_column=Column(TEXT))
     theme: str = Field(default="system", nullable=False)
     dashboard_layout_enc: str | None = Field(sa_column=Column(TEXT))
@@ -58,9 +78,9 @@ class UserSettings(SQLModel, table=True):
     cashflow_module_enabled: bool = Field(default=True, nullable=False)
     wealth_module_enabled: bool = Field(default=True, nullable=False)
     ai_feature_enabled: bool = Field(default=False, nullable=False)
-    claude_api_key_enc: str | None = Field(default=None, sa_column=Column(TEXT))
-    deepseek_api_key_enc: str | None = Field(default=None, sa_column=Column(TEXT))
-    gemini_api_key_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    # Preferred provider per capability (None = auto-select from priority list)
+    ai_vision_provider: str | None = Field(default=None, nullable=True)
+    ai_chat_provider: str | None = Field(default=None, nullable=True)
     # Manual USD→EUR rate override (None = use auto-fetched rate)
     usd_eur_rate: Decimal | None = Field(
         default=None,

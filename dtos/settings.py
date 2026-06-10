@@ -4,6 +4,40 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 
 
+# ---------------------------------------------------------------------------
+# AI Provider DTOs
+# ---------------------------------------------------------------------------
+
+class AIProviderConfig(BaseModel):
+    """State of a single AI provider for a user (read-only)."""
+    provider: str               # "google" | "anthropic" | "deepseek"
+    has_key: bool               # True if an API key is configured
+    selected_model: str | None  # None = provider default
+
+
+class AIProviderUpdate(BaseModel):
+    """Update the API key and/or model for a single provider."""
+    api_key: str | None = None          # None = delete the key; omit field to leave unchanged
+    selected_model: str | None = None   # None = use provider default
+
+
+class AIProviderOption(BaseModel):
+    """A selectable provider option returned by GET /settings/ai/options."""
+    provider: str
+    label: str
+    has_key: bool
+    models: list[dict]  # [{"id": str, "label": str, "default"?: bool}]
+
+
+class AIOptionsResponse(BaseModel):
+    """Response for GET /settings/ai/options."""
+    capabilities: dict[str, list[AIProviderOption]]  # {"vision": [...], "chat": [...]}
+
+
+# ---------------------------------------------------------------------------
+# User Settings DTOs
+# ---------------------------------------------------------------------------
+
 class UserSettingsUpdate(BaseModel):
     """Update user settings (all fields optional)."""
     objectives: str | None = None
@@ -19,9 +53,8 @@ class UserSettingsUpdate(BaseModel):
     cashflow_module_enabled: bool | None = None
     wealth_module_enabled: bool | None = None
     ai_feature_enabled: bool | None = None
-    claude_api_key: str | None = None
-    deepseek_api_key: str | None = None
-    gemini_api_key: str | None = None
+    ai_vision_provider: str | None = None
+    ai_chat_provider: str | None = None
     usd_eur_rate: float | None = Field(None, gt=0, le=10)
 
 
@@ -42,9 +75,9 @@ class UserSettingsResponse(BaseModel):
     cashflow_module_enabled: bool = True
     wealth_module_enabled: bool = False
     ai_feature_enabled: bool = False
-    has_claude_api_key: bool = False
-    has_deepseek_api_key: bool = False
-    has_gemini_api_key: bool = False
+    ai_vision_provider: str | None = None
+    ai_chat_provider: str | None = None
+    ai_providers: list[AIProviderConfig] = []  # configured providers with key state
     usd_eur_rate: float | None = None
     created_at: datetime
     updated_at: datetime

@@ -13,7 +13,7 @@ from .enums import (
     StockTransactionType,
     AccountCategory,
 )
-from .user import User, UserSettings
+from .user import User, UserSettings, UserAIProvider
 from .cashflow import Cashflow
 from .bank import BankAccount
 from .stock import StockAccount, StockTransaction
@@ -37,6 +37,7 @@ __all__ = [
     # Models
     "User",
     "UserSettings",
+    "UserAIProvider",
     "Cashflow",
     "BankAccount",
     "StockAccount",
