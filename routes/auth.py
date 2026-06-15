@@ -1,12 +1,13 @@
 """Authentication routes."""
 
+import asyncio
+import time
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, Header, HTTPException, Request, Response, status
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from sqlmodel import Session, select
 
 from config import get_settings
@@ -39,25 +40,59 @@ from services.account_history import run_lazy_catchup
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-def rate_limit_key_func(request: Request):
-    """Skip rate limiting for OPTIONS requests."""
+_rate_lock = asyncio.Lock()
+_rate_hits: dict[str, list[float]] = defaultdict(list)
+
+
+def _get_client_ip(request: Request) -> str:
+    """Return the real client IP, honouring X-Forwarded-For behind a proxy."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+async def _check_rate_limit(request: Request, key: str, max_calls: int, window_seconds: int) -> None:
+    """
+    Sliding-window rate limiter.  Raises HTTP 429 if the caller has exceeded
+    *max_calls* requests within the last *window_seconds* seconds.
+    Skips OPTIONS (CORS preflight) entirely.
+    """
     if request.method == "OPTIONS":
-        return None
-    return get_remote_address(request)
+        return
 
+    ip = _get_client_ip(request)
+    bucket = f"{ip}:{key}"
+    now = time.monotonic()
+    cutoff = now - window_seconds
 
-limiter = Limiter(key_func=rate_limit_key_func)
+    async with _rate_lock:
+        # Prune timestamps outside the sliding window
+        hits = [t for t in _rate_hits[bucket] if t > cutoff]
+        if not hits:
+            # No recent hits: free the key to avoid accumulation of ephemeral IPs
+            _rate_hits.pop(bucket, None)
+        else:
+            _rate_hits[bucket] = hits
+        if len(hits) >= max_calls:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Trop de requêtes, veuillez réessayer plus tard.",
+                headers={"Retry-After": str(window_seconds)},
+            )
+        _rate_hits[bucket].append(now)
+
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("10/hour")
-def register(
+async def register(
     request: Request,
     payload: RegisterRequest,
     response: Response,
     session: Session = Depends(get_session),
     x_return_master_key: Annotated[str | None, Header(alias="X-Return-Master-Key")] = None
 ):
+    await _check_rate_limit(request, "register", max_calls=10, window_seconds=3600)
     """
     Register a new user.
     
@@ -139,8 +174,7 @@ def register(
 
 
 @router.post("/login", response_model=TokenResponse)
-@limiter.limit("5/minute")
-def login(
+async def login(
     request: Request,
     payload: LoginRequest,
     response: Response,
@@ -148,6 +182,7 @@ def login(
     session: Session = Depends(get_session),
     x_return_master_key: Annotated[str | None, Header(alias="X-Return-Master-Key")] = None
 ):
+    await _check_rate_limit(request, "login", max_calls=5, window_seconds=60)
     """
     Login with email and password.
     
