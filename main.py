@@ -10,9 +10,7 @@ _pyproject = Path(__file__).parent / "pyproject.toml"
 with _pyproject.open("rb") as _f:
     __version__: str = tomllib.load(_f)["project"]["version"]
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
+
 from sqlmodel import Session, select
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -35,14 +33,6 @@ from routes import (
 )
 
 
-def rate_limit_key_func(request: Request):
-    """
-    Key function for rate limiting.
-    Skip rate limiting for OPTIONS requests (CORS preflight).
-    """
-    if request.method == "OPTIONS":
-        return None
-    return get_remote_address(request)
 
 
 @asynccontextmanager
@@ -73,16 +63,12 @@ async def lifespan(app: FastAPI):
 
 settings = get_settings()
 
-limiter = Limiter(key_func=rate_limit_key_func)
-
 app = FastAPI(
     title=settings.app_name,
     description="Personal wealth management and investment tracking API",
     version=__version__,
     lifespan=lifespan,
 )
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
