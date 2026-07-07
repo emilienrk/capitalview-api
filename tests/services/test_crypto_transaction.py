@@ -1261,3 +1261,44 @@ def test_sell_to_fiat_eur_deposit_stays_at_one(session: Session, master_key: str
 
     deposit_row = next(r for r in rows if r.type == "DEPOSIT" and r.asset_key == "EUR")
     assert deposit_row.price_per_unit == Decimal("1")
+
+
+def test_fee_row_valued_in_eur_at_creation(session: Session, master_key: str):
+    """A crypto FEE row must carry the EUR price of the fee asset at
+    creation time when a price is cached in DB, not always 0."""
+    from models.market import MarketAsset, MarketPriceHistory
+    from models.enums import AssetType
+    from datetime import date
+
+    asset = MarketAsset(asset_key="BTC", symbol="BTC", asset_type=AssetType.CRYPTO)
+    session.add(asset)
+    session.commit()
+    session.add(MarketPriceHistory(market_asset_id=asset.id, price_date=date(2024, 5, 1), price=Decimal("30000")))
+    session.commit()
+
+    account = CryptoAccount(uuid="acc_fee_priced", user_uuid_bidx=hash_index("u_fee_priced", master_key), name_enc=encrypt_data("FeePriced", master_key))
+    session.add(account)
+    session.commit()
+
+    data = CryptoCompositeTransactionCreate(
+        account_id="acc_fee_priced",
+        asset_key="BTC",
+        type="BUY",
+        amount=Decimal("1"),
+        eur_amount=Decimal("30000"),
+        executed_at=datetime(2024, 5, 1, 12, 0),
+        quote_asset_key="EUR",
+        quote_amount=Decimal("30000"),
+        fee_included=True,
+        fee_asset_key="BTC",
+        fee_amount=Decimal("0.001"),
+    )
+    rows = create_composite_crypto_transaction(session, data, master_key)
+    fee_row = next(r for r in rows if r.type == "FEE")
+    assert fee_row.price_per_unit == Decimal("30000")
+    assert fee_row.total_cost == Decimal("30.000")  # 0.001 × 30000
+
+    txs = get_account_transactions(session, "acc_fee_priced", master_key)
+    summary = get_crypto_account_summary(session, txs, as_of=date(2024, 5, 1), db_only=True)
+    pos = next(p for p in summary.positions if p.symbol == "BTC")
+    assert pos.total_fees == Decimal("30.00")
