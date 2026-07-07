@@ -7,6 +7,7 @@ from sqlmodel import Session
 from services.crypto_transaction import (
     create_crypto_transaction,
     create_composite_crypto_transaction,
+    create_cross_account_transfer,
     get_crypto_transaction,
     update_crypto_transaction,
     delete_crypto_transaction,
@@ -15,7 +16,12 @@ from services.crypto_transaction import (
     get_asset_key_balance,
     compute_balance_warning,
 )
-from dtos.crypto import CryptoTransactionCreate, CryptoTransactionUpdate, CryptoCompositeTransactionCreate
+from dtos.crypto import (
+    CryptoTransactionCreate,
+    CryptoTransactionUpdate,
+    CryptoCompositeTransactionCreate,
+    CrossAccountTransferCreate,
+)
 from models.enums import CryptoTransactionType
 from models.crypto import CryptoAccount, CryptoTransaction
 from services.encryption import hash_index, encrypt_data
@@ -1365,3 +1371,44 @@ def test_compute_balance_warning_detects_negative_across_symbols(session: Sessio
     assert warning is not None
     assert "BTC" in warning
     assert "ETH" in warning
+
+
+def test_create_cross_account_transfer_carries_pru_and_fee(session: Session, master_key: str):
+    """create_cross_account_transfer must carry the source PRU as the
+    destination's book value (ANCHOR), preserve quantity (BUY), keep the
+    source TRANSFER neutral, and support an optional on-chain fee row."""
+    account_src = CryptoAccount(uuid="acc_transfer_src", user_uuid_bidx=hash_index("u_transfer", master_key), name_enc=encrypt_data("Src", master_key))
+    account_dst = CryptoAccount(uuid="acc_transfer_dst", user_uuid_bidx=hash_index("u_transfer", master_key), name_enc=encrypt_data("Dst", master_key))
+    session.add(account_src)
+    session.add(account_dst)
+    session.commit()
+
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_transfer_src", asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("2"), price_per_unit=Decimal("10000"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    transfer_data = CrossAccountTransferCreate(
+        from_account_id="acc_transfer_src",
+        to_account_id="acc_transfer_dst",
+        asset_key="BTC",
+        amount=Decimal("1"),
+        fee_asset_key="BTC",
+        fee_amount=Decimal("0.001"),
+        executed_at=datetime(2024, 1, 5),
+    )
+    rows = create_cross_account_transfer(session, transfer_data, "u_transfer", master_key)
+
+    types = {r.type for r in rows}
+    assert types == {"TRANSFER", "ANCHOR", "BUY", "FEE"}
+    assert len({r.group_uuid for r in rows}) == 1
+
+    anchor_row = next(r for r in rows if r.type == "ANCHOR")
+    assert anchor_row.amount == Decimal("10000.00")  # 1 BTC × PRU 10000
+
+    buy_row = next(r for r in rows if r.type == "BUY")
+    assert buy_row.amount == Decimal("1")
+
+    fee_row = next(r for r in rows if r.type == "FEE")
+    assert fee_row.asset_key == "BTC"
+    assert fee_row.amount == Decimal("0.001")
