@@ -522,17 +522,19 @@ def create_cross_account_transfer(
 
     # 2a. ANCHOR in destination — establishes cost basis equal to the
     #     book value that left the source account (quantity × PRU_source).
-    if book_value > 0:
-        anchor_in = CryptoTransactionCreate(
-            account_id=data.to_account_id,
-            asset_key="EUR",
-            type=CryptoTransactionType.ANCHOR,
-            amount=book_value,
-            price_per_unit=Decimal("1"),
-            executed_at=data.executed_at,
-            notes=data.notes,
-        )
-        rows.append(create_crypto_transaction(session, anchor_in, master_key, group_uuid=group))
+    #     Always emitted (even at 0 for a zero-cost-basis asset such as a
+    #     staking reward) so the BUY+ANCHOR/no-SPEND-or-DEPOSIT shape stays a
+    #     reliable transfer signature for _compute_daily_net_flow.
+    anchor_in = CryptoTransactionCreate(
+        account_id=data.to_account_id,
+        asset_key="EUR",
+        type=CryptoTransactionType.ANCHOR,
+        amount=book_value,
+        price_per_unit=Decimal("1"),
+        executed_at=data.executed_at,
+        notes=data.notes,
+    )
+    rows.append(create_crypto_transaction(session, anchor_in, master_key, group_uuid=group))
 
     # 2b. Inbound BUY (price=0) in destination — quantity row paired with anchor
     tx_in = CryptoTransactionCreate(

@@ -1412,3 +1412,63 @@ def test_create_cross_account_transfer_carries_pru_and_fee(session: Session, mas
     fee_row = next(r for r in rows if r.type == "FEE")
     assert fee_row.asset_key == "BTC"
     assert fee_row.amount == Decimal("0.001")
+
+
+def test_create_cross_account_transfer_zero_pru_still_creates_anchor(session: Session, master_key: str):
+    """Transferring an asset with zero cost basis (e.g. a staking reward)
+    must still emit an ANCHOR row at the destination — even at amount=0 —
+    so the daily net-flow detection rule (BUY+ANCHOR, no SPEND/DEPOSIT)
+    correctly counts it as an external inflow instead of a market gain."""
+    from datetime import date
+    from models.enums import AccountCategory
+    from services.account_history import _AccountSnapshot, _compute_daily_net_flow
+
+    account_src = CryptoAccount(uuid="acc_zero_pru_src", user_uuid_bidx=hash_index("u_zero_pru", master_key), name_enc=encrypt_data("Src", master_key))
+    account_dst = CryptoAccount(uuid="acc_zero_pru_dst", user_uuid_bidx=hash_index("u_zero_pru", master_key), name_enc=encrypt_data("Dst", master_key))
+    session.add(account_src)
+    session.add(account_dst)
+    session.commit()
+
+    # Zero cost-basis crypto: staking reward, never bought.
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_zero_pru_src", asset_key="ETH", type=CryptoTransactionType.REWARD,
+        amount=Decimal("2"), price_per_unit=Decimal("0"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    transfer_data = CrossAccountTransferCreate(
+        from_account_id="acc_zero_pru_src",
+        to_account_id="acc_zero_pru_dst",
+        asset_key="ETH",
+        amount=Decimal("1"),
+        executed_at=datetime(2024, 1, 5),
+    )
+    rows = create_cross_account_transfer(session, transfer_data, "u_zero_pru", master_key)
+
+    anchor_row = next((r for r in rows if r.type == "ANCHOR"), None)
+    assert anchor_row is not None
+    assert anchor_row.amount == Decimal("0")
+
+    dest_txs = get_account_transactions(session, "acc_zero_pru_dst", master_key)
+    net_flow = _compute_daily_net_flow(
+        _AccountSnapshot(account_id="acc_zero_pru_dst", account_type=AccountCategory.CRYPTO, transactions=dest_txs),
+        date(2024, 1, 5),
+        price_matrix={"ETH": {date(2024, 1, 5): Decimal("3000")}},
+    )
+    assert net_flow == Decimal("3000")  # 1 ETH × 3000, counted as external inflow, not a market gain
+
+
+def test_crypto_transaction_amount_zero_still_rejected_for_non_anchor_types():
+    """Only ANCHOR may carry amount=0 (a EUR cost basis, not a quantity).
+    Every other type must stay strictly positive."""
+    with pytest.raises(ValueError):
+        CryptoTransactionCreate(
+            account_id="acc_zero_amount", asset_key="BTC", type=CryptoTransactionType.BUY,
+            amount=Decimal("0"), price_per_unit=Decimal("100"), executed_at=datetime(2024, 1, 1),
+        )
+
+    # ANCHOR at 0 is explicitly allowed.
+    anchor = CryptoTransactionCreate(
+        account_id="acc_zero_amount", asset_key="EUR", type=CryptoTransactionType.ANCHOR,
+        amount=Decimal("0"), price_per_unit=Decimal("1"), executed_at=datetime(2024, 1, 1),
+    )
+    assert anchor.amount == Decimal("0")
