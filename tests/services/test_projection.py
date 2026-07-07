@@ -94,3 +94,23 @@ def test_projection_negative_rate_returns_empty(session: Session, master_key: st
     resp = generate_wealth_projection(session, _make_user(), master_key, params)
 
     assert resp.data == []
+
+
+def test_compute_defaults_bounds_cagr_and_average_injection():
+    """CAGR must be clamped to [-0.99, 2] and the default injection must be
+    the average of invested capital over the elapsed months."""
+    from services.projection import _compute_defaults
+
+    # Explosive growth over a short period → CAGR clamped to the 2.0 ceiling.
+    injection, rate = _compute_defaults(value=Decimal("100000"), invested=Decimal("1000"), days=30)
+    assert rate == 2.0
+    assert injection == Decimal("1000")  # invested / max(30/30.41, 1.0) == invested / 1.0
+
+    # Near-total loss over a year → CAGR clamped to the -0.99 floor.
+    _, rate_loss = _compute_defaults(value=Decimal("1"), invested=Decimal("100000"), days=365)
+    assert rate_loss == -0.99
+
+    # No history at all → no default injection, no default rate.
+    injection_zero, rate_zero = _compute_defaults(value=Decimal("0"), invested=Decimal("0"), days=0)
+    assert injection_zero == Decimal("0")
+    assert rate_zero == 0.0

@@ -519,3 +519,22 @@ def test_eur_balance_accounts_for_withdrawals(session: Session, master_key: str)
     summary = _stock_summary(session, acc, master_key)
     eur_pos = next(p for p in summary.positions if p.asset_key == "EUR")
     assert eur_pos.total_amount == Decimal("590")
+
+
+def test_stock_summary_total_withdrawals(session: Session, master_key: str):
+    """A EUR WITHDRAW must be reflected in total_withdrawals (already-correct
+    behavior, previously untested)."""
+    create_eur_deposit(session, "acc_stock_wd", Decimal("1000"), datetime(2024, 1, 1), master_key)
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_stock_wd",
+        asset_key="EUR",
+        type=StockTransactionType.WITHDRAW,
+        amount=Decimal("300"),
+        price_per_unit=Decimal("1"),
+        fees=Decimal("0"),
+        executed_at=datetime(2024, 1, 5),
+    ), master_key)
+
+    summary = _stock_summary(session, "acc_stock_wd", master_key)
+
+    assert summary.total_withdrawals == Decimal("300.00")

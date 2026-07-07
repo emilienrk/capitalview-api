@@ -1345,3 +1345,42 @@ def test_generate_asset_snapshots_sale_day_pnl_not_a_cliff(session: Session, mas
     daily_pnl = Decimal(decrypt_data(rows[0]["daily_pnl_enc"], master_key))
     assert total_value == Decimal("100000.00")
     assert daily_pnl == Decimal("0.00")
+
+
+def test_compute_daily_net_flow_crypto_withdraw_fiat():
+    """A EUR WITHDRAW must reduce net flow at face value (already-correct
+    behavior, previously untested)."""
+    d = date(2024, 3, 1)
+    txs = [
+        _tx(
+            id="w1", type="WITHDRAW", asset_key="EUR", amount=Decimal("500"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    net_flow = _compute_daily_net_flow(
+        _AccountSnapshot(account_id="acc_crypto", account_type=AccountCategory.CRYPTO, transactions=txs),
+        d,
+    )
+
+    assert net_flow == Decimal("-500")
+
+
+def test_compute_daily_net_flow_stock_withdraw():
+    """A EUR WITHDRAW on a stock account must reduce net flow (already-correct
+    behavior, previously untested)."""
+    d = date(2024, 3, 1)
+    txs = [
+        _tx(
+            id="w1", type="WITHDRAW", asset_key="EUR", amount=Decimal("200"),
+            executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    net_flow = _compute_daily_net_flow(
+        _AccountSnapshot(account_id="acc_stock", account_type=AccountCategory.STOCK, transactions=txs),
+        d,
+    )
+
+    assert net_flow == Decimal("-200")
