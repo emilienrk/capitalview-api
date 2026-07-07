@@ -1150,3 +1150,33 @@ def test_fiat_anchor_inferred_crypto_fee(session: Session, master_key: str):
     # Fee: 0.5 BNB * 300 = 150
     # Total anchor = 20150
     assert anchor.amount == Decimal("20150.00")
+
+
+def test_pru_accounts_for_withdraw(session: Session, master_key: str):
+    """WITHDRAW must reduce quantity and cost basis in the PRU replay.
+
+    BUY 1 BTC @ 30 000 → WITHDRAW 1 BTC (full taxable cash-out) → BUY 1 BTC @ 10 000.
+    The remaining position is 1 BTC with a basis of 10 000, so PRU = 10 000.
+    Matches get_crypto_account_summary, which removes basis proportionally on WITHDRAW.
+    """
+    from services.crypto_transaction import _compute_asset_key_pru
+
+    acc = "acc_pru_withdraw"
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id=acc, asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("1"), price_per_unit=Decimal("30000"),
+        executed_at=datetime(2024, 1, 1),
+    ), master_key)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id=acc, asset_key="BTC", type=CryptoTransactionType.WITHDRAW,
+        amount=Decimal("1"), price_per_unit=Decimal("0"),
+        executed_at=datetime(2024, 2, 1),
+    ), master_key)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id=acc, asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("1"), price_per_unit=Decimal("10000"),
+        executed_at=datetime(2024, 3, 1),
+    ), master_key)
+
+    pru = _compute_asset_key_pru(session, acc, "BTC", master_key)
+    assert pru == Decimal("10000")

@@ -439,3 +439,36 @@ def test_update_sell_exceeds_held(session: Session, master_key: str):
             type=StockTransactionType.SELL,
             amount=Decimal("10"),
         ), master_key)
+
+def test_eur_balance_accounts_for_withdrawals(session: Session, master_key: str):
+    """EUR WITHDRAW must reduce the cash balance used for BUY auto-funding."""
+    from services.stock_transaction import _compute_eur_balance
+
+    acc = "acc_eur_withdraw"
+    create_eur_deposit(
+        session,
+        account_uuid=acc,
+        amount=Decimal("1000"),
+        executed_at=datetime(2023, 1, 1, 12, 0, 0),
+        master_key=master_key,
+    )
+
+    _add_market_asset(session, "EUR", symbol="EUR", name="Euros")
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id=acc,
+        asset_key="EUR",
+        type=StockTransactionType.WITHDRAW,
+        amount=Decimal("400"),
+        price_per_unit=Decimal("1"),
+        fees=Decimal("10"),
+        executed_at=datetime(2023, 1, 2, 12, 0, 0),
+    ), master_key)
+
+    # 1000 deposited - (400 withdrawn + 10 fees) = 590, matching the summary's
+    # EUR position (get_stock_account_summary applies the same net_withdraw).
+    balance = _compute_eur_balance(session, acc, master_key)
+    assert balance == Decimal("590")
+
+    summary = _stock_summary(session, acc, master_key)
+    eur_pos = next(p for p in summary.positions if p.asset_key == "EUR")
+    assert eur_pos.total_amount == Decimal("590")
