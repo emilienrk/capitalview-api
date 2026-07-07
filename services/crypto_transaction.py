@@ -18,7 +18,7 @@ from dtos import (
 )
 from dtos.crypto import CryptoCompositeTransactionCreate, CrossAccountTransferCreate, FIAT_ASSET_KEYS
 from services.encryption import encrypt_data, decrypt_data, hash_index
-from services.market import get_crypto_info, get_crypto_price
+from services.market import get_crypto_info, get_crypto_price, get_exchange_rate
 
 
 def _decrypt_transaction(
@@ -769,7 +769,12 @@ def get_crypto_account_summary(
 
         if asset_key in FIAT_ASSET_KEYS:
             name = asset_key
-            current_price = Decimal("1")
+            if asset_key == "EUR":
+                current_price = Decimal("1")
+            elif preloaded_prices is not None:
+                current_price = preloaded_prices.get(asset_key)
+            else:
+                current_price = get_exchange_rate(session, asset_key, "EUR", db_only=db_only)
         else:
             if preloaded_prices is not None:
                 current_price = preloaded_prices.get(asset_key)

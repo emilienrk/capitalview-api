@@ -1180,3 +1180,42 @@ def test_pru_accounts_for_withdraw(session: Session, master_key: str):
 
     pru = _compute_asset_key_pru(session, acc, "BTC", master_key)
     assert pru == Decimal("10000")
+
+
+def test_summary_prices_non_eur_fiat_via_exchange_rate(session: Session, master_key: str):
+    """A non-EUR fiat balance (USD) must be valued at the real EUR exchange
+    rate, not hardcoded 1:1."""
+    account = CryptoAccount(uuid="acc_fiat_usd", user_uuid_bidx=hash_index("u_fiat_usd", master_key), name_enc=encrypt_data("Fiat", master_key))
+    session.add(account)
+    session.commit()
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_fiat_usd", asset_key="USD", type=CryptoTransactionType.DEPOSIT,
+        amount=Decimal("100"), price_per_unit=Decimal("1"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    txs = get_account_transactions(session, "acc_fiat_usd", master_key)
+    summary = get_crypto_account_summary(session, txs, db_only=True)
+
+    usd_position = next(p for p in summary.positions if p.asset_key == "USD")
+    assert usd_position.current_price == Decimal("0.92")  # fallback rate, no cached price
+    assert usd_position.current_value == Decimal("92.00")
+
+
+def test_summary_uses_preloaded_price_for_non_eur_fiat(session: Session, master_key: str):
+    """When a preloaded price matrix is supplied (snapshot generation path),
+    it must take priority over the fallback exchange rate for non-EUR fiat."""
+    account = CryptoAccount(uuid="acc_fiat_gbp", user_uuid_bidx=hash_index("u_fiat_gbp", master_key), name_enc=encrypt_data("FiatGBP", master_key))
+    session.add(account)
+    session.commit()
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_fiat_gbp", asset_key="GBP", type=CryptoTransactionType.DEPOSIT,
+        amount=Decimal("50"), price_per_unit=Decimal("1"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    txs = get_account_transactions(session, "acc_fiat_gbp", master_key)
+    summary = get_crypto_account_summary(
+        session, txs, db_only=True, preloaded_prices={"GBP": Decimal("1.15")}
+    )
+
+    gbp_position = next(p for p in summary.positions if p.asset_key == "GBP")
+    assert gbp_position.current_price == Decimal("1.15")
