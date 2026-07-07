@@ -33,3 +33,6 @@ htmlcov/
 # OS / editor files
 .DS_Store
 .idea/
+
+# Subagent-driven-development scratch (progress ledger, briefs, reports)
+.superpowers/

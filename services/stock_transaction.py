@@ -126,12 +126,21 @@ def _compute_eur_balance(
             eur += (tx.amount * tx.price_per_unit) - tx.fees
         elif tx.type == "SELL" and tx.asset_key != "EUR":
             eur += (tx.amount * tx.price_per_unit) - tx.fees
+        elif tx.type == "WITHDRAW" and tx.asset_key == "EUR":
+            eur -= tx.amount + tx.fees
     return eur
 
 
-def _compute_held_quantity(session: Session, account_uuid: str, asset_key: str, master_key: str) -> Decimal:
-    """Return the net quantity currently held for a given ISIN in an account."""
+def _compute_held_quantity(
+    session: Session, account_uuid: str, asset_key: str, master_key: str,
+    as_of: datetime | None = None,
+) -> Decimal:
+    """Return the net quantity held for a given ISIN, optionally as of a given moment."""
     txs = get_account_transactions(session, account_uuid, master_key)
+    if as_of is not None:
+        if hasattr(as_of, "tzinfo") and as_of.tzinfo is not None:
+            as_of = as_of.astimezone(timezone.utc).replace(tzinfo=None)
+        txs = [tx for tx in txs if tx.executed_at <= as_of]
     held = Decimal("0")
     for tx in txs:
         if tx.asset_key != asset_key:
@@ -146,12 +155,17 @@ def _compute_held_quantity(session: Session, account_uuid: str, asset_key: str, 
 def _compute_held_quantity_by_bidx(
     session: Session, account_id_bidx: str, asset_key: str, master_key: str,
     exclude_tx_uuid: str | None = None,
+    as_of: datetime | None = None,
 ) -> Decimal:
     """Same as _compute_held_quantity but works directly from the stored bidx.
-    
+
     Used in update_stock_transaction where we have the bidx but not the UUID.
     exclude_tx_uuid allows discounting the current transaction being edited.
+    as_of restricts the replay to transactions executed on or before it.
     """
+    if as_of is not None and hasattr(as_of, "tzinfo") and as_of.tzinfo is not None:
+        as_of = as_of.astimezone(timezone.utc).replace(tzinfo=None)
+
     raw_txs = session.exec(
         select(StockTransaction).where(StockTransaction.account_id_bidx == account_id_bidx)
     ).all()
@@ -163,6 +177,13 @@ def _compute_held_quantity_by_bidx(
         tx_asset_key = decrypt_data(raw.asset_key_enc, master_key)
         if tx_asset_key != asset_key:
             continue
+        if as_of is not None:
+            exec_at_str = decrypt_data(raw.executed_at_enc, master_key)
+            tx_executed_at = datetime.fromisoformat(exec_at_str.replace("Z", "+00:00"))
+            if tx_executed_at.tzinfo is not None:
+                tx_executed_at = tx_executed_at.astimezone(timezone.utc).replace(tzinfo=None)
+            if tx_executed_at > as_of:
+                continue
         tx_amount = Decimal(decrypt_data(raw.amount_enc, master_key))
         if tx_type == "BUY":
             held += tx_amount
@@ -186,7 +207,7 @@ def create_stock_transaction(
 
     # Validate SELL quantity against current position
     if data.type.value == "SELL" and data.asset_key != "EUR":
-        held = _compute_held_quantity(session, data.account_id, data.asset_key, master_key)
+        held = _compute_held_quantity(session, data.account_id, data.asset_key, master_key, as_of=data.executed_at)
         if data.amount > held:
             raise ValueError(
                 f"Quantité vendue ({data.amount}) supérieure à la position détenue ({round(held, 8)})"
@@ -276,11 +297,14 @@ def update_stock_transaction(
     effective_asset_key = data.asset_key if data.asset_key is not None else current.asset_key
     effective_amount = data.amount if data.amount is not None else current.amount
 
+    effective_executed_at = data.executed_at if data.executed_at is not None else current.executed_at
+
     if effective_type == "SELL" and effective_asset_key and effective_asset_key != "EUR":
         # Compute held quantity without this transaction so we can re-validate cleanly
         held = _compute_held_quantity_by_bidx(
             session, transaction.account_id_bidx, effective_asset_key, master_key,
             exclude_tx_uuid=transaction.uuid,
+            as_of=effective_executed_at,
         )
         if effective_amount > held:
             raise ValueError(
@@ -515,7 +539,7 @@ def get_stock_account_summary(
         total_withdrawals=round(total_withdrawals_acc, 2),
         total_fees=round(total_fees_acc, 2),
         total_dividends=round(total_dividends_acc, 2),
-        current_value=round(current_value_acc, 2) if current_value_acc else None,
+        current_value=round(current_value_acc, 2) if current_value_acc is not None else None,
         profit_loss=round(profit_loss_acc, 2) if profit_loss_acc is not None else None,
         profit_loss_percentage=round(profit_loss_pct_acc, 2) if profit_loss_pct_acc is not None else None,
         positions=positions,

@@ -1,7 +1,7 @@
 from datetime import datetime, date
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from typing import Annotated
 from pydantic import AfterValidator
@@ -58,15 +58,25 @@ class CryptoTransactionCreate(BaseModel):
     """
     Atomic operation. Composite actions share group_uuid.
     price_per_unit is always EUR. REWARD price=0. ANCHOR price=1.
+
+    amount must be strictly positive, except for ANCHOR: it carries a EUR
+    cost basis (not a quantity), which is legitimately 0 for an asset that
+    cost nothing to acquire (e.g. a transferred staking reward).
     """
     account_id: str
     asset_key: str
     type: CryptoTransactionType
-    amount: Decimal = Field(gt=0)
+    amount: Decimal = Field(ge=0)
     price_per_unit: Decimal = Field(ge=0)
     executed_at: ValidDatetime
     tx_hash: str | None = None
     notes: str | None = None
+
+    @model_validator(mode="after")
+    def amount_positive_unless_anchor(self) -> "CryptoTransactionCreate":
+        if self.type != CryptoTransactionType.ANCHOR and self.amount <= 0:
+            raise ValueError("amount doit être strictement positif")
+        return self
 
 
 class CryptoTransactionUpdate(BaseModel):

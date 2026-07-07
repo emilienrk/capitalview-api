@@ -7,13 +7,21 @@ from sqlmodel import Session
 from services.crypto_transaction import (
     create_crypto_transaction,
     create_composite_crypto_transaction,
+    create_cross_account_transfer,
     get_crypto_transaction,
     update_crypto_transaction,
     delete_crypto_transaction,
     get_account_transactions,
     get_crypto_account_summary,
+    get_asset_key_balance,
+    compute_balance_warning,
 )
-from dtos.crypto import CryptoTransactionCreate, CryptoTransactionUpdate, CryptoCompositeTransactionCreate
+from dtos.crypto import (
+    CryptoTransactionCreate,
+    CryptoTransactionUpdate,
+    CryptoCompositeTransactionCreate,
+    CrossAccountTransferCreate,
+)
 from models.enums import CryptoTransactionType
 from models.crypto import CryptoAccount, CryptoTransaction
 from services.encryption import hash_index, encrypt_data
@@ -1150,3 +1158,317 @@ def test_fiat_anchor_inferred_crypto_fee(session: Session, master_key: str):
     # Fee: 0.5 BNB * 300 = 150
     # Total anchor = 20150
     assert anchor.amount == Decimal("20150.00")
+
+
+def test_pru_accounts_for_withdraw(session: Session, master_key: str):
+    """WITHDRAW must reduce quantity and cost basis in the PRU replay.
+
+    BUY 1 BTC @ 30 000 → WITHDRAW 1 BTC (full taxable cash-out) → BUY 1 BTC @ 10 000.
+    The remaining position is 1 BTC with a basis of 10 000, so PRU = 10 000.
+    Matches get_crypto_account_summary, which removes basis proportionally on WITHDRAW.
+    """
+    from services.crypto_transaction import _compute_asset_key_pru
+
+    acc = "acc_pru_withdraw"
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id=acc, asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("1"), price_per_unit=Decimal("30000"),
+        executed_at=datetime(2024, 1, 1),
+    ), master_key)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id=acc, asset_key="BTC", type=CryptoTransactionType.WITHDRAW,
+        amount=Decimal("1"), price_per_unit=Decimal("0"),
+        executed_at=datetime(2024, 2, 1),
+    ), master_key)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id=acc, asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("1"), price_per_unit=Decimal("10000"),
+        executed_at=datetime(2024, 3, 1),
+    ), master_key)
+
+    pru = _compute_asset_key_pru(session, acc, "BTC", master_key)
+    assert pru == Decimal("10000")
+
+
+def test_summary_prices_non_eur_fiat_via_exchange_rate(session: Session, master_key: str):
+    """A non-EUR fiat balance (USD) must be valued at the real EUR exchange
+    rate, not hardcoded 1:1."""
+    account = CryptoAccount(uuid="acc_fiat_usd", user_uuid_bidx=hash_index("u_fiat_usd", master_key), name_enc=encrypt_data("Fiat", master_key))
+    session.add(account)
+    session.commit()
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_fiat_usd", asset_key="USD", type=CryptoTransactionType.DEPOSIT,
+        amount=Decimal("100"), price_per_unit=Decimal("1"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    txs = get_account_transactions(session, "acc_fiat_usd", master_key)
+    summary = get_crypto_account_summary(session, txs, db_only=True)
+
+    usd_position = next(p for p in summary.positions if p.asset_key == "USD")
+    assert usd_position.current_price == Decimal("0.92")  # fallback rate, no cached price
+    assert usd_position.current_value == Decimal("92.00")
+
+
+def test_summary_uses_preloaded_price_for_non_eur_fiat(session: Session, master_key: str):
+    """When a preloaded price matrix is supplied (snapshot generation path),
+    it must take priority over the fallback exchange rate for non-EUR fiat."""
+    account = CryptoAccount(uuid="acc_fiat_gbp", user_uuid_bidx=hash_index("u_fiat_gbp", master_key), name_enc=encrypt_data("FiatGBP", master_key))
+    session.add(account)
+    session.commit()
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_fiat_gbp", asset_key="GBP", type=CryptoTransactionType.DEPOSIT,
+        amount=Decimal("50"), price_per_unit=Decimal("1"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    txs = get_account_transactions(session, "acc_fiat_gbp", master_key)
+    summary = get_crypto_account_summary(
+        session, txs, db_only=True, preloaded_prices={"GBP": Decimal("1.15")}
+    )
+
+    gbp_position = next(p for p in summary.positions if p.asset_key == "GBP")
+    assert gbp_position.current_price == Decimal("1.15")
+
+
+def test_sell_to_fiat_non_eur_deposit_uses_exchange_rate(session: Session, master_key: str):
+    """A SELL_TO_FIAT with a non-EUR quote currency must value the resulting
+    fiat DEPOSIT at the real EUR exchange rate, not 1:1."""
+    account = CryptoAccount(uuid="acc_sell_usd", user_uuid_bidx=hash_index("u_sell_usd", master_key), name_enc=encrypt_data("SellUSD", master_key))
+    session.add(account)
+    session.commit()
+
+    data = CryptoCompositeTransactionCreate(
+        account_id="acc_sell_usd",
+        type="SELL_TO_FIAT",
+        asset_key="BTC",
+        amount=Decimal("0.01"),
+        quote_asset_key="USD",
+        quote_amount=Decimal("100"),
+        executed_at=datetime(2024, 1, 1),
+    )
+    rows = create_composite_crypto_transaction(session, data, master_key)
+
+    deposit_row = next(r for r in rows if r.type == "DEPOSIT" and r.asset_key == "USD")
+    assert deposit_row.price_per_unit == Decimal("0.92")
+
+
+def test_sell_to_fiat_eur_deposit_stays_at_one(session: Session, master_key: str):
+    """A SELL_TO_FIAT to EUR (the common case) is unaffected: price stays 1."""
+    account = CryptoAccount(uuid="acc_sell_eur", user_uuid_bidx=hash_index("u_sell_eur", master_key), name_enc=encrypt_data("SellEUR", master_key))
+    session.add(account)
+    session.commit()
+
+    data = CryptoCompositeTransactionCreate(
+        account_id="acc_sell_eur",
+        type="SELL_TO_FIAT",
+        asset_key="BTC",
+        amount=Decimal("0.01"),
+        eur_amount=Decimal("300"),
+        executed_at=datetime(2024, 1, 1),
+    )
+    rows = create_composite_crypto_transaction(session, data, master_key)
+
+    deposit_row = next(r for r in rows if r.type == "DEPOSIT" and r.asset_key == "EUR")
+    assert deposit_row.price_per_unit == Decimal("1")
+
+
+@patch("services.crypto_transaction.get_crypto_info")
+def test_position_zero_profit_loss_is_not_none(mock_info, session: Session, master_key: str):
+    """A position with exactly 0 PnL must expose 0, not None."""
+    mock_info.return_value = ("Bitcoin", Decimal("100"))
+    account = CryptoAccount(uuid="acc_zero_pnl", user_uuid_bidx=hash_index("u_zero", master_key), name_enc=encrypt_data("Zero", master_key))
+    session.add(account)
+    session.commit()
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_zero_pnl", asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("1"), price_per_unit=Decimal("100"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    summary = _crypto_summary(session, "acc_zero_pnl", master_key)
+    pos = next(p for p in summary.positions if p.symbol == "BTC")
+
+    assert pos.current_value == Decimal("100")
+    assert pos.profit_loss == Decimal("0")
+    assert pos.profit_loss is not None
+
+
+def test_fee_row_valued_in_eur_at_creation(session: Session, master_key: str):
+    """A crypto FEE row must carry the EUR price of the fee asset at
+    creation time when a price is cached in DB, not always 0."""
+    from models.market import MarketAsset, MarketPriceHistory
+    from models.enums import AssetType
+    from datetime import date
+
+    asset = MarketAsset(asset_key="BTC", symbol="BTC", asset_type=AssetType.CRYPTO)
+    session.add(asset)
+    session.commit()
+    session.add(MarketPriceHistory(market_asset_id=asset.id, price_date=date(2024, 5, 1), price=Decimal("30000")))
+    session.commit()
+
+    account = CryptoAccount(uuid="acc_fee_priced", user_uuid_bidx=hash_index("u_fee_priced", master_key), name_enc=encrypt_data("FeePriced", master_key))
+    session.add(account)
+    session.commit()
+
+    data = CryptoCompositeTransactionCreate(
+        account_id="acc_fee_priced",
+        asset_key="BTC",
+        type="BUY",
+        amount=Decimal("1"),
+        eur_amount=Decimal("30000"),
+        executed_at=datetime(2024, 5, 1, 12, 0),
+        quote_asset_key="EUR",
+        quote_amount=Decimal("30000"),
+        fee_included=True,
+        fee_asset_key="BTC",
+        fee_amount=Decimal("0.001"),
+    )
+    rows = create_composite_crypto_transaction(session, data, master_key)
+    fee_row = next(r for r in rows if r.type == "FEE")
+    assert fee_row.price_per_unit == Decimal("30000")
+    assert fee_row.total_cost == Decimal("30.000")  # 0.001 × 30000
+
+    txs = get_account_transactions(session, "acc_fee_priced", master_key)
+    summary = get_crypto_account_summary(session, txs, as_of=date(2024, 5, 1), db_only=True)
+    pos = next(p for p in summary.positions if p.symbol == "BTC")
+    assert pos.total_fees == Decimal("30.00")
+
+
+def test_get_asset_key_balance_uses_provided_transactions(session: Session, master_key: str):
+    """The transactions param must be honored instead of silently re-queried."""
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_balance_reuse", asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("2"), price_per_unit=Decimal("100"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    # An explicit empty list must short-circuit to 0, proving the function no
+    # longer silently re-queries the database.
+    balance_overridden = get_asset_key_balance(session, "acc_balance_reuse", "BTC", master_key, transactions=[])
+    assert balance_overridden == Decimal("0")
+
+    balance_real = get_asset_key_balance(session, "acc_balance_reuse", "BTC", master_key)
+    assert balance_real == Decimal("2")
+
+
+def test_compute_balance_warning_detects_negative_across_symbols(session: Session, master_key: str):
+    """Multiple debited asset keys in the same account must all be checked,
+    even after caching their transactions per account to avoid N queries."""
+    from types import SimpleNamespace
+
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_multi_warn", asset_key="BTC", type=CryptoTransactionType.SPEND,
+        amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_multi_warn", asset_key="ETH", type=CryptoTransactionType.SPEND,
+        amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    created_rows = [
+        SimpleNamespace(type="SPEND", asset_key="BTC"),
+        SimpleNamespace(type="SPEND", asset_key="ETH"),
+    ]
+    warning = compute_balance_warning(session, "acc_multi_warn", created_rows, master_key)
+
+    assert warning is not None
+    assert "BTC" in warning
+    assert "ETH" in warning
+
+
+def test_create_cross_account_transfer_carries_pru_and_fee(session: Session, master_key: str):
+    """create_cross_account_transfer must carry the source PRU as the
+    destination's book value (ANCHOR), preserve quantity (BUY), keep the
+    source TRANSFER neutral, and support an optional on-chain fee row."""
+    account_src = CryptoAccount(uuid="acc_transfer_src", user_uuid_bidx=hash_index("u_transfer", master_key), name_enc=encrypt_data("Src", master_key))
+    account_dst = CryptoAccount(uuid="acc_transfer_dst", user_uuid_bidx=hash_index("u_transfer", master_key), name_enc=encrypt_data("Dst", master_key))
+    session.add(account_src)
+    session.add(account_dst)
+    session.commit()
+
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_transfer_src", asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("2"), price_per_unit=Decimal("10000"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    transfer_data = CrossAccountTransferCreate(
+        from_account_id="acc_transfer_src",
+        to_account_id="acc_transfer_dst",
+        asset_key="BTC",
+        amount=Decimal("1"),
+        fee_asset_key="BTC",
+        fee_amount=Decimal("0.001"),
+        executed_at=datetime(2024, 1, 5),
+    )
+    rows = create_cross_account_transfer(session, transfer_data, "u_transfer", master_key)
+
+    types = {r.type for r in rows}
+    assert types == {"TRANSFER", "ANCHOR", "BUY", "FEE"}
+    assert len({r.group_uuid for r in rows}) == 1
+
+    anchor_row = next(r for r in rows if r.type == "ANCHOR")
+    assert anchor_row.amount == Decimal("10000.00")  # 1 BTC × PRU 10000
+
+    buy_row = next(r for r in rows if r.type == "BUY")
+    assert buy_row.amount == Decimal("1")
+
+    fee_row = next(r for r in rows if r.type == "FEE")
+    assert fee_row.asset_key == "BTC"
+    assert fee_row.amount == Decimal("0.001")
+
+
+def test_create_cross_account_transfer_zero_pru_still_creates_anchor(session: Session, master_key: str):
+    """Transferring an asset with zero cost basis (e.g. a staking reward)
+    must still emit an ANCHOR row at the destination — even at amount=0 —
+    so the daily net-flow detection rule (BUY+ANCHOR, no SPEND/DEPOSIT)
+    correctly counts it as an external inflow instead of a market gain."""
+    from datetime import date
+    from models.enums import AccountCategory
+    from services.account_history import _AccountSnapshot, _compute_daily_net_flow
+
+    account_src = CryptoAccount(uuid="acc_zero_pru_src", user_uuid_bidx=hash_index("u_zero_pru", master_key), name_enc=encrypt_data("Src", master_key))
+    account_dst = CryptoAccount(uuid="acc_zero_pru_dst", user_uuid_bidx=hash_index("u_zero_pru", master_key), name_enc=encrypt_data("Dst", master_key))
+    session.add(account_src)
+    session.add(account_dst)
+    session.commit()
+
+    # Zero cost-basis crypto: staking reward, never bought.
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_zero_pru_src", asset_key="ETH", type=CryptoTransactionType.REWARD,
+        amount=Decimal("2"), price_per_unit=Decimal("0"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    transfer_data = CrossAccountTransferCreate(
+        from_account_id="acc_zero_pru_src",
+        to_account_id="acc_zero_pru_dst",
+        asset_key="ETH",
+        amount=Decimal("1"),
+        executed_at=datetime(2024, 1, 5),
+    )
+    rows = create_cross_account_transfer(session, transfer_data, "u_zero_pru", master_key)
+
+    anchor_row = next((r for r in rows if r.type == "ANCHOR"), None)
+    assert anchor_row is not None
+    assert anchor_row.amount == Decimal("0")
+
+    dest_txs = get_account_transactions(session, "acc_zero_pru_dst", master_key)
+    net_flow = _compute_daily_net_flow(
+        _AccountSnapshot(account_id="acc_zero_pru_dst", account_type=AccountCategory.CRYPTO, transactions=dest_txs),
+        date(2024, 1, 5),
+        price_matrix={"ETH": {date(2024, 1, 5): Decimal("3000")}},
+    )
+    assert net_flow == Decimal("3000")  # 1 ETH × 3000, counted as external inflow, not a market gain
+
+
+def test_crypto_transaction_amount_zero_still_rejected_for_non_anchor_types():
+    """Only ANCHOR may carry amount=0 (a EUR cost basis, not a quantity).
+    Every other type must stay strictly positive."""
+    with pytest.raises(ValueError):
+        CryptoTransactionCreate(
+            account_id="acc_zero_amount", asset_key="BTC", type=CryptoTransactionType.BUY,
+            amount=Decimal("0"), price_per_unit=Decimal("100"), executed_at=datetime(2024, 1, 1),
+        )
+
+    # ANCHOR at 0 is explicitly allowed.
+    anchor = CryptoTransactionCreate(
+        account_id="acc_zero_amount", asset_key="EUR", type=CryptoTransactionType.ANCHOR,
+        amount=Decimal("0"), price_per_unit=Decimal("1"), executed_at=datetime(2024, 1, 1),
+    )
+    assert anchor.amount == Decimal("0")

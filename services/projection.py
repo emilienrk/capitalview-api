@@ -212,7 +212,11 @@ def generate_wealth_projection(
 
         current_date += relativedelta(months=1)
 
-        # Apply rate then injection by category.
+        # Apply rate then injection by category — skipped after the last
+        # recorded data point so injected totals match the projected series.
+        if _month == params.months_to_project:
+            break
+
         for category in PROJECTED_CATEGORIES:
             current_values[category] = (
                 current_values[category] * (ONE_DECIMAL + monthly_rates[category])
