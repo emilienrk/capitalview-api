@@ -1279,3 +1279,69 @@ def test_generate_asset_snapshots_flat_after_last_valuation(session: Session, ma
     )
 
     assert Decimal(decrypt_data(rows[0]["total_value_enc"], master_key)) == Decimal("12000.00")
+
+
+def test_compute_daily_net_flow_asset_sale_day():
+    """Selling a physical asset must register as an external outflow equal
+    to its value on the sale day, not a silent market loss."""
+    from services.account_history import IndividualAsset
+
+    sold_at = date(2024, 6, 1)
+    snap = _AccountSnapshot(
+        account_id="asset_acc",
+        account_type=AccountCategory.ASSET,
+        physical_assets=[
+            IndividualAsset(
+                name="Voiture", acquired_at=date(2023, 1, 1), sold_at=sold_at,
+                invested=Decimal("20000"), valuations=[],
+            ),
+        ],
+    )
+
+    net_flow = _compute_daily_net_flow(snap, sold_at)
+
+    assert net_flow == Decimal("-20000")
+
+
+def test_generate_asset_snapshots_sale_day_pnl_not_a_cliff(session: Session, master_key: str):
+    """Selling one physical asset in a multi-asset portfolio must not create
+    a fake PnL crash on the sale day — the lost value is an external flow."""
+    from services.account_history import IndividualAsset
+
+    user_bidx = hash_index("user_asset_sale", master_key)
+    acc_bidx = hash_index("ASSET_PORTFOLIO::user_asset_sale", master_key)
+    acquired = date(2023, 1, 1)
+    sold_at = date(2024, 6, 1)
+
+    snap = _AccountSnapshot(
+        account_id="ASSET_PORTFOLIO::user_asset_sale",
+        account_type=AccountCategory.ASSET,
+        account_created_at=acquired,
+        physical_assets=[
+            IndividualAsset(
+                name="Maison", acquired_at=acquired, sold_at=None,
+                invested=Decimal("100000"), valuations=[],
+            ),
+            IndividualAsset(
+                name="Voiture", acquired_at=acquired, sold_at=sold_at,
+                invested=Decimal("20000"), valuations=[],
+            ),
+        ],
+    )
+
+    rows = _generate_missing_snapshots(
+        session=session,
+        user_uuid_bidx=user_bidx,
+        account_id_bidx=acc_bidx,
+        account_snapshot=snap,
+        price_matrix={},
+        missing_dates=[sold_at],
+        prev_value=Decimal("120000"),
+        master_key=master_key,
+    )
+
+    assert len(rows) == 1
+    total_value = Decimal(decrypt_data(rows[0]["total_value_enc"], master_key))
+    daily_pnl = Decimal(decrypt_data(rows[0]["daily_pnl_enc"], master_key))
+    assert total_value == Decimal("100000.00")
+    assert daily_pnl == Decimal("0.00")

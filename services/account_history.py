@@ -305,6 +305,15 @@ def _compute_daily_net_flow(
     price_matrix: dict[str, dict[date, Decimal]] | None = None,
 ) -> Decimal:
     """Signed external cash flow for day d."""
+    if account_snapshot.account_type == AccountCategory.ASSET:
+        net_flow = _ZERO
+        for asset in account_snapshot.physical_assets:
+            if asset.sold_at == d:
+                net_flow -= _interpolate_asset_value(
+                    asset.invested, asset.acquired_at, asset.valuations, d
+                )
+        return net_flow
+
     if account_snapshot.account_type not in (AccountCategory.STOCK, AccountCategory.CRYPTO):
         return _ZERO
 
