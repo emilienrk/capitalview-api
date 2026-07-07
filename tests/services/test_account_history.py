@@ -550,6 +550,35 @@ def test_compute_daily_net_flow_crypto_deposit_group_not_matched_as_transfer():
     assert net_flow == Decimal("3000")
 
 
+def test_compute_daily_net_flow_crypto_withdraw_counted_as_outflow():
+    """A non-fiat WITHDRAW (cash-out/payment/donation) must be treated like
+    a TRANSFER: external outflow at the day's price, not a market loss."""
+    d = date(2024, 3, 1)
+    price_matrix = {"BTC": {d: Decimal("30000")}}
+    txs = [
+        _tx(
+            id="tx_withdraw",
+            type="WITHDRAW",
+            asset_key="BTC",
+            amount=Decimal("0.5"),
+            price_per_unit=Decimal("0"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    net_flow = _compute_daily_net_flow(
+        _AccountSnapshot(
+            account_id="acc_crypto",
+            account_type=AccountCategory.CRYPTO,
+            transactions=txs,
+        ),
+        d,
+        price_matrix,
+    )
+
+    assert net_flow == Decimal("-15000")  # 0.5 × 30000
+
+
 def test_generate_missing_snapshots_bank_frozen(session: Session, master_key: str):
     """Bank account value is frozen and exported as a single EUR position."""
     user_bidx = hash_index("user_bank_test", master_key)
