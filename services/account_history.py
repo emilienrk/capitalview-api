@@ -305,6 +305,15 @@ def _compute_daily_net_flow(
     price_matrix: dict[str, dict[date, Decimal]] | None = None,
 ) -> Decimal:
     """Signed external cash flow for day d."""
+    if account_snapshot.account_type == AccountCategory.ASSET:
+        net_flow = _ZERO
+        for asset in account_snapshot.physical_assets:
+            if asset.sold_at == d:
+                net_flow -= _interpolate_asset_value(
+                    asset.invested, asset.acquired_at, asset.valuations, d
+                )
+        return net_flow
+
     if account_snapshot.account_type not in (AccountCategory.STOCK, AccountCategory.CRYPTO):
         return _ZERO
 
@@ -343,6 +352,16 @@ def _compute_daily_net_flow(
         and _type(tx) == "SPEND"
         and str(getattr(tx, "asset_key", "") or "").upper() not in FIAT_ASSET_KEYS
     }
+    groups_with_spend_or_deposit: set[str] = {
+        tx.group_uuid
+        for tx in day_txs
+        if getattr(tx, "group_uuid", None) and _type(tx) in ("SPEND", "DEPOSIT")
+    }
+    groups_with_anchor: set[str] = {
+        tx.group_uuid
+        for tx in day_txs
+        if getattr(tx, "group_uuid", None) and _type(tx) == "ANCHOR"
+    }
 
     for tx in day_txs:
         tx_type = _type(tx)
@@ -357,9 +376,24 @@ def _compute_daily_net_flow(
                         net_flow += amount
                 case "WITHDRAW":
                     net_flow -= amount
-        elif tx_type == "TRANSFER":
+        elif tx_type in ("TRANSFER", "WITHDRAW"):
             day_price = (price_matrix or {}).get(asset_key, {}).get(d, _ZERO)
             net_flow -= amount * day_price
+        elif (
+            tx_type == "BUY"
+            and group_uuid
+            and group_uuid in groups_with_anchor
+            and group_uuid not in groups_with_spend_or_deposit
+        ):
+            # Inbound cross-account transfer: destination BUY paired with an
+            # ANCHOR but no SPEND/DEPOSIT counterpart in the same group/day —
+            # the characteristic signature of create_cross_account_transfer.
+            # Not provably unique: a composite BUY with no quote asset and a
+            # non-included crypto fee produces the same shape (BUY+ANCHOR+FEE,
+            # no SPEND) and would be misclassified. Low reachability today
+            # (accepted, see AUDIT_CALCULS.md follow-up).
+            day_price = (price_matrix or {}).get(asset_key, {}).get(d, _ZERO)
+            net_flow += amount * day_price
 
     return net_flow
 
@@ -905,7 +939,7 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
 
         # ── 4b. Ensure historical market prices exist for all affected asset_keys ──
         # Delegated to services/market.py which is the single owner of price data.
-        from services.market import ensure_price_history
+        from services.market import ensure_price_history, get_historical_exchange_rates_db
 
         earliest_date = min(d for _, dates in accounts_to_process for d in dates)
 
@@ -925,7 +959,7 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
             if acc_snap.transactions:
                 for tx in acc_snap.transactions:
                     sym = getattr(tx, "asset_key", None)
-                    if sym and getattr(tx, "type", "") not in ("DEPOSIT", "ANCHOR") and sym != "EUR":
+                    if sym and getattr(tx, "type", "") != "ANCHOR" and sym != "EUR":
                         asset_keys.add(sym)
 
             # Include bootstrap-held asset_keys (important when no new txs).
@@ -934,11 +968,15 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
                     asset_keys.add(pos.asset_key)
 
             for asset_key in asset_keys:
-                asset_key_types_map.setdefault(asset_key, set()).add(atype)
+                key_type = AssetType.FIAT if asset_key.upper() in FIAT_ASSET_KEYS else atype
+                asset_key_types_map.setdefault(asset_key, set()).add(key_type)
 
         for asset_key, asset_types in asset_key_types_map.items():
             for atype in asset_types:
-                ensure_price_history(session, asset_key, atype, earliest_date)
+                if atype == AssetType.FIAT:
+                    get_historical_exchange_rates_db(session, asset_key, earliest_date, yesterday)
+                else:
+                    ensure_price_history(session, asset_key, atype, earliest_date)
 
         # ── 5. Build price matrix (union of all per-account date ranges) ───────
         all_asset_keys = list(asset_key_types_map.keys())

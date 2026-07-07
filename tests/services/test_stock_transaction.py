@@ -409,6 +409,33 @@ def test_create_sell_asset_not_owned(session: Session, master_key: str):
         ), master_key)
 
 
+def test_create_sell_before_buy_raises_valueerror(session: Session, master_key: str):
+    """A SELL dated before its BUY must be rejected up front (as-of
+    validation), instead of passing validation and being silently skipped
+    at replay (position and cash overstated with no visible error)."""
+    _add_market_asset(session, "ISIN_ANTEDATE", symbol="ANTD")
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_antedate",
+        asset_key="ISIN_ANTEDATE",
+        type=StockTransactionType.BUY,
+        amount=Decimal("10"),
+        price_per_unit=Decimal("150"),
+        fees=Decimal("0"),
+        executed_at=datetime(2024, 3, 10),
+    ), master_key)
+
+    with pytest.raises(ValueError, match="supérieure à la position"):
+        create_stock_transaction(session, StockTransactionCreate(
+            account_id="acc_antedate",
+            asset_key="ISIN_ANTEDATE",
+            type=StockTransactionType.SELL,
+            amount=Decimal("5"),
+            price_per_unit=Decimal("150"),
+            fees=Decimal("0"),
+            executed_at=datetime(2024, 3, 5),  # before the BUY
+        ), master_key)
+
+
 def test_update_sell_exceeds_held(session: Session, master_key: str):
     """Mettre à jour une transaction pour vendre plus que la quantité détenue doit lever ValueError."""
     _add_market_asset(session, "ISIN_MSFT", symbol="MSFT")
@@ -439,3 +466,75 @@ def test_update_sell_exceeds_held(session: Session, master_key: str):
             type=StockTransactionType.SELL,
             amount=Decimal("10"),
         ), master_key)
+
+def test_stock_summary_zero_current_value_is_not_none(session: Session, master_key: str):
+    """An account whose only position is currently worth exactly 0 must
+    report current_value = 0, not None."""
+    _add_market_asset(session, "ISIN_WORTHLESS", symbol="WLESS")
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_worthless",
+        asset_key="ISIN_WORTHLESS",
+        type=StockTransactionType.BUY,
+        amount=Decimal("10"),
+        price_per_unit=Decimal("0"),
+        fees=Decimal("0"),
+        executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    txs = get_account_transactions(session, "acc_worthless", master_key)
+    summary = get_stock_account_summary(session, txs, preloaded_prices={"ISIN_WORTHLESS": Decimal("0")})
+
+    assert summary.current_value == Decimal("0.00")
+
+
+def test_eur_balance_accounts_for_withdrawals(session: Session, master_key: str):
+    """EUR WITHDRAW must reduce the cash balance used for BUY auto-funding."""
+    from services.stock_transaction import _compute_eur_balance
+
+    acc = "acc_eur_withdraw"
+    create_eur_deposit(
+        session,
+        account_uuid=acc,
+        amount=Decimal("1000"),
+        executed_at=datetime(2023, 1, 1, 12, 0, 0),
+        master_key=master_key,
+    )
+
+    _add_market_asset(session, "EUR", symbol="EUR", name="Euros")
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id=acc,
+        asset_key="EUR",
+        type=StockTransactionType.WITHDRAW,
+        amount=Decimal("400"),
+        price_per_unit=Decimal("1"),
+        fees=Decimal("10"),
+        executed_at=datetime(2023, 1, 2, 12, 0, 0),
+    ), master_key)
+
+    # 1000 deposited - (400 withdrawn + 10 fees) = 590, matching the summary's
+    # EUR position (get_stock_account_summary applies the same net_withdraw).
+    balance = _compute_eur_balance(session, acc, master_key)
+    assert balance == Decimal("590")
+
+    summary = _stock_summary(session, acc, master_key)
+    eur_pos = next(p for p in summary.positions if p.asset_key == "EUR")
+    assert eur_pos.total_amount == Decimal("590")
+
+
+def test_stock_summary_total_withdrawals(session: Session, master_key: str):
+    """A EUR WITHDRAW must be reflected in total_withdrawals (already-correct
+    behavior, previously untested)."""
+    create_eur_deposit(session, "acc_stock_wd", Decimal("1000"), datetime(2024, 1, 1), master_key)
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_stock_wd",
+        asset_key="EUR",
+        type=StockTransactionType.WITHDRAW,
+        amount=Decimal("300"),
+        price_per_unit=Decimal("1"),
+        fees=Decimal("0"),
+        executed_at=datetime(2024, 1, 5),
+    ), master_key)
+
+    summary = _stock_summary(session, "acc_stock_wd", master_key)
+
+    assert summary.total_withdrawals == Decimal("300.00")

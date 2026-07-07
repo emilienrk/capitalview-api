@@ -18,7 +18,7 @@ from dtos import (
 )
 from dtos.crypto import CryptoCompositeTransactionCreate, CrossAccountTransferCreate, FIAT_ASSET_KEYS
 from services.encryption import encrypt_data, decrypt_data, hash_index
-from services.market import get_crypto_info, get_crypto_price
+from services.market import get_crypto_info, get_crypto_price, get_exchange_rate
 
 
 def _decrypt_transaction(
@@ -57,6 +57,20 @@ def _decrypt_transaction(
         fees_percentage=Decimal("100") if is_fee_row else Decimal("0"),
         group_uuid=tx.group_uuid,
     )
+
+
+def _fee_price_per_unit(session: Session, fee_sym: str, as_of: date) -> Decimal:
+    """EUR price for a FEE row at creation time.
+
+    Fiat fees are always 1:1... except non-EUR fiat, priced like any other
+    fiat balance (see get_crypto_account_summary). Crypto fees use the
+    cached DB price for the day; unknown prices fall back to 0 (no network
+    call at transaction-creation time).
+    """
+    sym_upper = fee_sym.upper()
+    if sym_upper in FIAT_ASSET_KEYS:
+        return Decimal("1") if sym_upper == "EUR" else get_exchange_rate(session, sym_upper, "EUR", db_only=True)
+    return get_crypto_price(session, fee_sym, as_of=as_of, db_only=True) or Decimal("0")
 
 
 def create_crypto_transaction(
@@ -203,12 +217,17 @@ def create_composite_crypto_transaction(
         rows.append(create_crypto_transaction(session, spend_crypto, master_key, group_uuid=group))
 
         if fiat_amount > 0:
+            fiat_price = (
+                Decimal("1")
+                if fiat_symbol == "EUR"
+                else get_exchange_rate(session, fiat_symbol, "EUR")
+            )
             deposit_fiat = CryptoTransactionCreate(
                 account_id=data.account_id,
                 asset_key=fiat_symbol,
                 type=CryptoTransactionType.DEPOSIT,
                 amount=fiat_amount,
-                price_per_unit=Decimal("1"),
+                price_per_unit=fiat_price,
                 executed_at=data.executed_at,
                 tx_hash=data.tx_hash,
                 notes=data.notes,
@@ -223,7 +242,7 @@ def create_composite_crypto_transaction(
                 asset_key=fee_sym,
                 type=CryptoTransactionType.FEE,
                 amount=fee_qty,
-                price_per_unit=Decimal("0"),
+                price_per_unit=_fee_price_per_unit(session, fee_sym, data.executed_at.date()),
                 executed_at=data.executed_at,
                 tx_hash=data.tx_hash,
                 notes=data.notes,
@@ -238,7 +257,7 @@ def create_composite_crypto_transaction(
             asset_key=data.asset_key,
             type=CryptoTransactionType.FEE,
             amount=data.amount,
-            price_per_unit=Decimal("0"),
+            price_per_unit=_fee_price_per_unit(session, data.asset_key, data.executed_at.date()),
             executed_at=data.executed_at,
             tx_hash=data.tx_hash,
             notes=data.notes,
@@ -267,7 +286,7 @@ def create_composite_crypto_transaction(
                 asset_key=fee_sym,
                 type=CryptoTransactionType.FEE,
                 amount=fee_qty,
-                price_per_unit=Decimal("0"),
+                price_per_unit=_fee_price_per_unit(session, fee_sym, data.executed_at.date()),
                 executed_at=data.executed_at,
             )
             rows.append(create_crypto_transaction(session, fee_row, master_key, group_uuid=group))
@@ -356,7 +375,7 @@ def create_composite_crypto_transaction(
             asset_key=fee_sym,
             type=CryptoTransactionType.FEE,
             amount=fee_qty,
-            price_per_unit=Decimal("0"),
+            price_per_unit=_fee_price_per_unit(session, fee_sym, data.executed_at.date()),
             executed_at=data.executed_at,
         )
         rows.append(create_crypto_transaction(session, fee_row, master_key, group_uuid=group))
@@ -436,6 +455,15 @@ def _compute_asset_key_pru(
                 # Always subtract quantity — allows negative balance when SPEND
                 # precedes BUY, so subsequent BUY correctly nets the position.
                 total_amount -= tx.amount
+            case CryptoTransactionType.WITHDRAW.value:
+                # Mirror get_crypto_account_summary: taxable crypto outbound
+                # removes cost basis proportionally; fiat only reduces quantity.
+                if asset_key_up not in FIAT_ASSET_KEYS and total_amount > 0:
+                    fraction = min(tx.amount / total_amount, Decimal("1"))
+                    cost_basis -= cost_basis * fraction
+                    if cost_basis < 0:
+                        cost_basis = Decimal("0")
+                total_amount -= tx.amount
             case CryptoTransactionType.FEE.value:
                 total_amount -= tx.amount
 
@@ -494,17 +522,19 @@ def create_cross_account_transfer(
 
     # 2a. ANCHOR in destination — establishes cost basis equal to the
     #     book value that left the source account (quantity × PRU_source).
-    if book_value > 0:
-        anchor_in = CryptoTransactionCreate(
-            account_id=data.to_account_id,
-            asset_key="EUR",
-            type=CryptoTransactionType.ANCHOR,
-            amount=book_value,
-            price_per_unit=Decimal("1"),
-            executed_at=data.executed_at,
-            notes=data.notes,
-        )
-        rows.append(create_crypto_transaction(session, anchor_in, master_key, group_uuid=group))
+    #     Always emitted (even at 0 for a zero-cost-basis asset such as a
+    #     staking reward) so the BUY+ANCHOR/no-SPEND-or-DEPOSIT shape stays a
+    #     reliable transfer signature for _compute_daily_net_flow.
+    anchor_in = CryptoTransactionCreate(
+        account_id=data.to_account_id,
+        asset_key="EUR",
+        type=CryptoTransactionType.ANCHOR,
+        amount=book_value,
+        price_per_unit=Decimal("1"),
+        executed_at=data.executed_at,
+        notes=data.notes,
+    )
+    rows.append(create_crypto_transaction(session, anchor_in, master_key, group_uuid=group))
 
     # 2b. Inbound BUY (price=0) in destination — quantity row paired with anchor
     tx_in = CryptoTransactionCreate(
@@ -528,7 +558,7 @@ def create_cross_account_transfer(
             asset_key=fee_sym,
             type=CryptoTransactionType.FEE,
             amount=fee_qty,
-            price_per_unit=Decimal("0"),
+            price_per_unit=_fee_price_per_unit(session, fee_sym, data.executed_at.date()),
             executed_at=data.executed_at,
             tx_hash=data.tx_hash,
             notes=data.notes,
@@ -760,7 +790,12 @@ def get_crypto_account_summary(
 
         if asset_key in FIAT_ASSET_KEYS:
             name = asset_key
-            current_price = Decimal("1")
+            if asset_key == "EUR":
+                current_price = Decimal("1")
+            elif preloaded_prices is not None:
+                current_price = preloaded_prices.get(asset_key)
+            else:
+                current_price = get_exchange_rate(session, asset_key, "EUR", db_only=db_only)
         else:
             if preloaded_prices is not None:
                 current_price = preloaded_prices.get(asset_key)
@@ -787,9 +822,9 @@ def get_crypto_account_summary(
                 fees_percentage=round(fees_pct, 2),
                 currency="EUR",
                 current_price=current_price,
-                current_value=round(current_value, 2) if current_value else None,
-                profit_loss=round(profit_loss, 2) if profit_loss else None,
-                profit_loss_percentage=round(profit_loss_pct, 2) if profit_loss_pct else None,
+                current_value=round(current_value, 2) if current_value is not None else None,
+                profit_loss=round(profit_loss, 2) if profit_loss is not None else None,
+                profit_loss_percentage=round(profit_loss_pct, 2) if profit_loss_pct is not None else None,
             )
         )
 
@@ -848,11 +883,15 @@ def get_asset_key_balance(
     Debits  (SPEND, TRANSFER, WITHDRAW, FEE)
     subtract from the balance.
     ANCHOR rows are skipped (accounting reference, not a real cash flow).
+
+    If *transactions* is provided, it is used as-is instead of re-querying
+    the database (caller already has the rows loaded).
     """
-    account_bidx = hash_index(account_uuid, master_key)
-    transactions = session.exec(
-        select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == account_bidx)
-    ).all()
+    if transactions is None:
+        account_bidx = hash_index(account_uuid, master_key)
+        transactions = session.exec(
+            select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == account_bidx)
+        ).all()
 
     balance = Decimal("0")
     sym_upper = asset_key.upper()
@@ -903,9 +942,15 @@ def compute_balance_warning(
     if not to_check:
         return None
 
+    txs_by_account: dict[str, list[CryptoTransaction]] = {}
     negative: list[str] = []
     for sym, acc in sorted(to_check.items()):
-        balance = get_asset_key_balance(session, acc, sym, master_key)
+        if acc not in txs_by_account:
+            account_bidx = hash_index(acc, master_key)
+            txs_by_account[acc] = session.exec(
+                select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == account_bidx)
+            ).all()
+        balance = get_asset_key_balance(session, acc, sym, master_key, transactions=txs_by_account[acc])
         if balance < 0:
             negative.append(f"{sym} (solde\u00a0: {balance:+.8g})")
 

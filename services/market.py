@@ -442,7 +442,7 @@ def get_all_assets(
     owned_keys = set()
     user_bidx = hash_index(user_uuid, master_key)
 
-    if asset_type == None or asset_type.value == AssetType.STOCK:
+    if asset_type is None or asset_type == AssetType.STOCK:
         # Stocks
         stock_accounts = session.exec(
             select(StockAccount).where(StockAccount.user_uuid_bidx == user_bidx)
@@ -470,7 +470,7 @@ def get_all_assets(
             if amt > 0:
                 owned_keys.add(key)
 
-    if asset_type == None or asset_type.value == AssetType.CRYPTO:
+    if asset_type is None or asset_type == AssetType.CRYPTO:
         from dtos.crypto import FIAT_ASSET_KEYS
         # Crypto
         crypto_accounts = session.exec(

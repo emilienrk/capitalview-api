@@ -460,6 +460,125 @@ def test_compute_daily_net_flow_crypto_ignores_internal_swap_fiat_legs():
     assert net_flow == Decimal("0")
 
 
+def test_compute_daily_net_flow_crypto_inbound_transfer_counted_as_flow():
+    """A cross-account transfer inbound BUY (ANCHOR + BUY, no SPEND/DEPOSIT
+    in the same group/day) must be counted as an external inflow, symmetric
+    to the outbound TRANSFER."""
+    d = date(2024, 3, 1)
+    price_matrix = {"BTC": {d: Decimal("30000")}}
+    txs = [
+        _tx(
+            id="tx_anchor_in",
+            group_uuid="g_transfer",
+            type="ANCHOR",
+            asset_key="EUR",
+            amount=Decimal("25000"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
+        _tx(
+            id="tx_buy_in",
+            group_uuid="g_transfer",
+            type="BUY",
+            asset_key="BTC",
+            amount=Decimal("1"),
+            price_per_unit=Decimal("0"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    net_flow = _compute_daily_net_flow(
+        _AccountSnapshot(
+            account_id="acc_dest",
+            account_type=AccountCategory.CRYPTO,
+            transactions=txs,
+        ),
+        d,
+        price_matrix,
+    )
+
+    assert net_flow == Decimal("30000")
+
+
+def test_compute_daily_net_flow_crypto_deposit_group_not_matched_as_transfer():
+    """A CRYPTO_DEPOSIT group (DEPOSIT + BUY + SPEND, no real transfer) must
+    NOT be matched by the inbound-transfer rule."""
+    d = date(2024, 3, 1)
+    price_matrix = {"ETH": {d: Decimal("3000")}}
+    txs = [
+        _tx(
+            id="tx_dep",
+            group_uuid="g_deposit",
+            type="DEPOSIT",
+            asset_key="EUR",
+            amount=Decimal("3000"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
+        ),
+        _tx(
+            id="tx_buy",
+            group_uuid="g_deposit",
+            type="BUY",
+            asset_key="ETH",
+            amount=Decimal("1"),
+            price_per_unit=Decimal("0"),
+            executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
+        ),
+        _tx(
+            id="tx_spend",
+            group_uuid="g_deposit",
+            type="SPEND",
+            asset_key="EUR",
+            amount=Decimal("3000"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    net_flow = _compute_daily_net_flow(
+        _AccountSnapshot(
+            account_id="acc_dest",
+            account_type=AccountCategory.CRYPTO,
+            transactions=txs,
+        ),
+        d,
+        price_matrix,
+    )
+
+    # DEPOSIT is external (not part of a crypto SPEND group) → +3000; BUY is
+    # excluded from the inbound-transfer rule because the group has a DEPOSIT.
+    assert net_flow == Decimal("3000")
+
+
+def test_compute_daily_net_flow_crypto_withdraw_counted_as_outflow():
+    """A non-fiat WITHDRAW (cash-out/payment/donation) must be treated like
+    a TRANSFER: external outflow at the day's price, not a market loss."""
+    d = date(2024, 3, 1)
+    price_matrix = {"BTC": {d: Decimal("30000")}}
+    txs = [
+        _tx(
+            id="tx_withdraw",
+            type="WITHDRAW",
+            asset_key="BTC",
+            amount=Decimal("0.5"),
+            price_per_unit=Decimal("0"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    net_flow = _compute_daily_net_flow(
+        _AccountSnapshot(
+            account_id="acc_crypto",
+            account_type=AccountCategory.CRYPTO,
+            transactions=txs,
+        ),
+        d,
+        price_matrix,
+    )
+
+    assert net_flow == Decimal("-15000")  # 0.5 × 30000
+
+
 def test_generate_missing_snapshots_bank_frozen(session: Session, master_key: str):
     """Bank account value is frozen and exported as a single EUR position."""
     user_bidx = hash_index("user_bank_test", master_key)
@@ -1160,3 +1279,108 @@ def test_generate_asset_snapshots_flat_after_last_valuation(session: Session, ma
     )
 
     assert Decimal(decrypt_data(rows[0]["total_value_enc"], master_key)) == Decimal("12000.00")
+
+
+def test_compute_daily_net_flow_asset_sale_day():
+    """Selling a physical asset must register as an external outflow equal
+    to its value on the sale day, not a silent market loss."""
+    from services.account_history import IndividualAsset
+
+    sold_at = date(2024, 6, 1)
+    snap = _AccountSnapshot(
+        account_id="asset_acc",
+        account_type=AccountCategory.ASSET,
+        physical_assets=[
+            IndividualAsset(
+                name="Voiture", acquired_at=date(2023, 1, 1), sold_at=sold_at,
+                invested=Decimal("20000"), valuations=[],
+            ),
+        ],
+    )
+
+    net_flow = _compute_daily_net_flow(snap, sold_at)
+
+    assert net_flow == Decimal("-20000")
+
+
+def test_generate_asset_snapshots_sale_day_pnl_not_a_cliff(session: Session, master_key: str):
+    """Selling one physical asset in a multi-asset portfolio must not create
+    a fake PnL crash on the sale day — the lost value is an external flow."""
+    from services.account_history import IndividualAsset
+
+    user_bidx = hash_index("user_asset_sale", master_key)
+    acc_bidx = hash_index("ASSET_PORTFOLIO::user_asset_sale", master_key)
+    acquired = date(2023, 1, 1)
+    sold_at = date(2024, 6, 1)
+
+    snap = _AccountSnapshot(
+        account_id="ASSET_PORTFOLIO::user_asset_sale",
+        account_type=AccountCategory.ASSET,
+        account_created_at=acquired,
+        physical_assets=[
+            IndividualAsset(
+                name="Maison", acquired_at=acquired, sold_at=None,
+                invested=Decimal("100000"), valuations=[],
+            ),
+            IndividualAsset(
+                name="Voiture", acquired_at=acquired, sold_at=sold_at,
+                invested=Decimal("20000"), valuations=[],
+            ),
+        ],
+    )
+
+    rows = _generate_missing_snapshots(
+        session=session,
+        user_uuid_bidx=user_bidx,
+        account_id_bidx=acc_bidx,
+        account_snapshot=snap,
+        price_matrix={},
+        missing_dates=[sold_at],
+        prev_value=Decimal("120000"),
+        master_key=master_key,
+    )
+
+    assert len(rows) == 1
+    total_value = Decimal(decrypt_data(rows[0]["total_value_enc"], master_key))
+    daily_pnl = Decimal(decrypt_data(rows[0]["daily_pnl_enc"], master_key))
+    assert total_value == Decimal("100000.00")
+    assert daily_pnl == Decimal("0.00")
+
+
+def test_compute_daily_net_flow_crypto_withdraw_fiat():
+    """A EUR WITHDRAW must reduce net flow at face value (already-correct
+    behavior, previously untested)."""
+    d = date(2024, 3, 1)
+    txs = [
+        _tx(
+            id="w1", type="WITHDRAW", asset_key="EUR", amount=Decimal("500"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    net_flow = _compute_daily_net_flow(
+        _AccountSnapshot(account_id="acc_crypto", account_type=AccountCategory.CRYPTO, transactions=txs),
+        d,
+    )
+
+    assert net_flow == Decimal("-500")
+
+
+def test_compute_daily_net_flow_stock_withdraw():
+    """A EUR WITHDRAW on a stock account must reduce net flow (already-correct
+    behavior, previously untested)."""
+    d = date(2024, 3, 1)
+    txs = [
+        _tx(
+            id="w1", type="WITHDRAW", asset_key="EUR", amount=Decimal("200"),
+            executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    net_flow = _compute_daily_net_flow(
+        _AccountSnapshot(account_id="acc_stock", account_type=AccountCategory.STOCK, transactions=txs),
+        d,
+    )
+
+    assert net_flow == Decimal("-200")
