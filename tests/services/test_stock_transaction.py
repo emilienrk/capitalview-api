@@ -467,6 +467,26 @@ def test_update_sell_exceeds_held(session: Session, master_key: str):
             amount=Decimal("10"),
         ), master_key)
 
+def test_stock_summary_zero_current_value_is_not_none(session: Session, master_key: str):
+    """An account whose only position is currently worth exactly 0 must
+    report current_value = 0, not None."""
+    _add_market_asset(session, "ISIN_WORTHLESS", symbol="WLESS")
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_worthless",
+        asset_key="ISIN_WORTHLESS",
+        type=StockTransactionType.BUY,
+        amount=Decimal("10"),
+        price_per_unit=Decimal("0"),
+        fees=Decimal("0"),
+        executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    txs = get_account_transactions(session, "acc_worthless", master_key)
+    summary = get_stock_account_summary(session, txs, preloaded_prices={"ISIN_WORTHLESS": Decimal("0")})
+
+    assert summary.current_value == Decimal("0.00")
+
+
 def test_eur_balance_accounts_for_withdrawals(session: Session, master_key: str):
     """EUR WITHDRAW must reduce the cash balance used for BUY auto-funding."""
     from services.stock_transaction import _compute_eur_balance

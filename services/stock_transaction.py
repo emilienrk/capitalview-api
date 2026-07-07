@@ -539,7 +539,7 @@ def get_stock_account_summary(
         total_withdrawals=round(total_withdrawals_acc, 2),
         total_fees=round(total_fees_acc, 2),
         total_dividends=round(total_dividends_acc, 2),
-        current_value=round(current_value_acc, 2) if current_value_acc else None,
+        current_value=round(current_value_acc, 2) if current_value_acc is not None else None,
         profit_loss=round(profit_loss_acc, 2) if profit_loss_acc is not None else None,
         profit_loss_percentage=round(profit_loss_pct_acc, 2) if profit_loss_pct_acc is not None else None,
         positions=positions,

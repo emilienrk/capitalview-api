@@ -1263,6 +1263,26 @@ def test_sell_to_fiat_eur_deposit_stays_at_one(session: Session, master_key: str
     assert deposit_row.price_per_unit == Decimal("1")
 
 
+@patch("services.crypto_transaction.get_crypto_info")
+def test_position_zero_profit_loss_is_not_none(mock_info, session: Session, master_key: str):
+    """A position with exactly 0 PnL must expose 0, not None."""
+    mock_info.return_value = ("Bitcoin", Decimal("100"))
+    account = CryptoAccount(uuid="acc_zero_pnl", user_uuid_bidx=hash_index("u_zero", master_key), name_enc=encrypt_data("Zero", master_key))
+    session.add(account)
+    session.commit()
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_zero_pnl", asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("1"), price_per_unit=Decimal("100"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    summary = _crypto_summary(session, "acc_zero_pnl", master_key)
+    pos = next(p for p in summary.positions if p.symbol == "BTC")
+
+    assert pos.current_value == Decimal("100")
+    assert pos.profit_loss == Decimal("0")
+    assert pos.profit_loss is not None
+
+
 def test_fee_row_valued_in_eur_at_creation(session: Session, master_key: str):
     """A crypto FEE row must carry the EUR price of the fee asset at
     creation time when a price is cached in DB, not always 0."""
