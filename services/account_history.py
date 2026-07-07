@@ -926,7 +926,7 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
 
         # ── 4b. Ensure historical market prices exist for all affected asset_keys ──
         # Delegated to services/market.py which is the single owner of price data.
-        from services.market import ensure_price_history
+        from services.market import ensure_price_history, get_historical_exchange_rates_db
 
         earliest_date = min(d for _, dates in accounts_to_process for d in dates)
 
@@ -946,7 +946,7 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
             if acc_snap.transactions:
                 for tx in acc_snap.transactions:
                     sym = getattr(tx, "asset_key", None)
-                    if sym and getattr(tx, "type", "") not in ("DEPOSIT", "ANCHOR") and sym != "EUR":
+                    if sym and getattr(tx, "type", "") != "ANCHOR" and sym != "EUR":
                         asset_keys.add(sym)
 
             # Include bootstrap-held asset_keys (important when no new txs).
@@ -955,11 +955,15 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
                     asset_keys.add(pos.asset_key)
 
             for asset_key in asset_keys:
-                asset_key_types_map.setdefault(asset_key, set()).add(atype)
+                key_type = AssetType.FIAT if asset_key.upper() in FIAT_ASSET_KEYS else atype
+                asset_key_types_map.setdefault(asset_key, set()).add(key_type)
 
         for asset_key, asset_types in asset_key_types_map.items():
             for atype in asset_types:
-                ensure_price_history(session, asset_key, atype, earliest_date)
+                if atype == AssetType.FIAT:
+                    get_historical_exchange_rates_db(session, asset_key, earliest_date, yesterday)
+                else:
+                    ensure_price_history(session, asset_key, atype, earliest_date)
 
         # ── 5. Build price matrix (union of all per-account date ranges) ───────
         all_asset_keys = list(asset_key_types_map.keys())
