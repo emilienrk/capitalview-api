@@ -45,10 +45,21 @@ _rate_hits: dict[str, list[float]] = defaultdict(list)
 
 
 def _get_client_ip(request: Request) -> str:
-    """Return the real client IP, honouring X-Forwarded-For behind a proxy."""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    """Return the real client IP for rate-limiting purposes.
+
+    X-Forwarded-For is client-controlled and trivially spoofable, so it is only
+    trusted when the app is known to sit behind TRUSTED_PROXY_COUNT trusted
+    reverse proxies (each of which appends its own hop). In that case we take
+    the n-th hop from the right, i.e. the IP added by the outermost trusted
+    proxy. Otherwise we fall back to the socket peer address.
+    """
+    trusted_hops = get_settings().trusted_proxy_count
+    if trusted_hops > 0:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+            if len(hops) >= trusted_hops:
+                return hops[-trusted_hops]
     return request.client.host if request.client else "unknown"
 
 

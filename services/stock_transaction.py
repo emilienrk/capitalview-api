@@ -269,14 +269,31 @@ def create_stock_transaction(
     return _decrypt_transaction(transaction, master_key)
 
 
+def _account_owned_by_user(
+    session: Session,
+    account_id_bidx: str,
+    user_uuid: str,
+    master_key: str,
+) -> bool:
+    """Check that account_id_bidx belongs to one of the user's stock accounts."""
+    user_bidx = hash_index(user_uuid, master_key)
+    accounts = session.exec(
+        select(StockAccount).where(StockAccount.user_uuid_bidx == user_bidx)
+    ).all()
+    return any(hash_index(acc.uuid, master_key) == account_id_bidx for acc in accounts)
+
+
 def get_stock_transaction(
     session: Session,
     transaction_uuid: str,
+    user_uuid: str,
     master_key: str,
 ) -> TransactionResponse | None:
-    """Get a single transaction by UUID."""
+    """Get a single transaction by UUID, if it belongs to the user."""
     transaction = session.get(StockTransaction, transaction_uuid)
     if not transaction:
+        return None
+    if not _account_owned_by_user(session, transaction.account_id_bidx, user_uuid, master_key):
         return None
     return _decrypt_transaction(transaction, master_key)
 
@@ -285,9 +302,13 @@ def update_stock_transaction(
     session: Session,
     transaction: StockTransaction,
     data: StockTransactionUpdate,
+    user_uuid: str,
     master_key: str,
-) -> TransactionResponse:
+) -> TransactionResponse | None:
     """Update an existing stock transaction (only provided fields)."""
+    if not _account_owned_by_user(session, transaction.account_id_bidx, user_uuid, master_key):
+        return None
+
     if data.asset_key:
         data.asset_key = data.asset_key.strip()
 
@@ -334,10 +355,17 @@ def update_stock_transaction(
     return _decrypt_transaction(transaction, master_key)
 
 
-def delete_stock_transaction(session: Session, transaction_uuid: str) -> bool:
-    """Delete a transaction by UUID."""
+def delete_stock_transaction(
+    session: Session,
+    transaction_uuid: str,
+    user_uuid: str,
+    master_key: str,
+) -> bool:
+    """Delete a transaction by UUID, if it belongs to the user."""
     transaction = session.get(StockTransaction, transaction_uuid)
     if not transaction:
+        return False
+    if not _account_owned_by_user(session, transaction.account_id_bidx, user_uuid, master_key):
         return False
 
     session.delete(transaction)

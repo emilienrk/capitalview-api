@@ -27,6 +27,18 @@ from models.crypto import CryptoAccount, CryptoTransaction
 from services.encryption import hash_index, encrypt_data
 
 
+def _make_crypto_account(session: Session, account_uuid: str, user_uuid: str, master_key: str) -> None:
+    """Insert a CryptoAccount row owned by user_uuid with a fixed uuid, so tests can
+    keep using plain account_id strings while satisfying the ownership check."""
+    account = CryptoAccount(
+        uuid=account_uuid,
+        user_uuid_bidx=hash_index(user_uuid, master_key),
+        name_enc=encrypt_data("Test Account", master_key),
+    )
+    session.add(account)
+    session.commit()
+
+
 def _crypto_summary(session: Session, account_id: str, master_key: str):
     txs = get_account_transactions(session, account_id, master_key)
     return get_crypto_account_summary(session, txs)
@@ -58,6 +70,8 @@ def test_create_crypto_transaction(session: Session, master_key: str):
 
 
 def test_get_crypto_transaction(session: Session, master_key: str):
+    user_uuid = "user_get_crypto_tx"
+    _make_crypto_account(session, "acc_crypto", user_uuid, master_key)
     data = CryptoTransactionCreate(
         account_id="acc_crypto",
         asset_key="ETH",
@@ -67,20 +81,23 @@ def test_get_crypto_transaction(session: Session, master_key: str):
         executed_at=datetime.now()
     )
     created = create_crypto_transaction(session, data, master_key)
-    fetched = get_crypto_transaction(session, created.id, master_key)
+    fetched = get_crypto_transaction(session, created.id, user_uuid, master_key)
     assert fetched is not None
     assert fetched.id == created.id
     assert fetched.asset_key == "ETH"
-    assert get_crypto_transaction(session, "non_existent", master_key) is None
+    assert get_crypto_transaction(session, "non_existent", user_uuid, master_key) is None
+    assert get_crypto_transaction(session, created.id, "some_other_user", master_key) is None
     tx_db = session.get(CryptoTransaction, created.id)
     tx_db.executed_at_enc = encrypt_data("BAD DATE", master_key)
     session.add(tx_db)
     session.commit()
-    fetched_bad = get_crypto_transaction(session, created.id, master_key)
+    fetched_bad = get_crypto_transaction(session, created.id, user_uuid, master_key)
     assert fetched_bad.executed_at == tx_db.created_at
 
 
 def test_update_crypto_transaction(session: Session, master_key: str):
+    user_uuid = "user_update_crypto_tx"
+    _make_crypto_account(session, "acc_crypto", user_uuid, master_key)
     data = CryptoTransactionCreate(
         account_id="acc_crypto",
         asset_key="SOL",
@@ -102,7 +119,8 @@ def test_update_crypto_transaction(session: Session, master_key: str):
         notes="New Note",
         tx_hash="0xABC"
     )
-    updated = update_crypto_transaction(session, tx_db, update_data, master_key)
+    assert update_crypto_transaction(session, tx_db, update_data, "some_other_user", master_key) is None
+    updated = update_crypto_transaction(session, tx_db, update_data, user_uuid, master_key)
     assert updated.asset_key == "SOLO"
     assert updated.type == "SPEND"
     assert updated.amount == Decimal("5")
@@ -115,6 +133,8 @@ def test_update_crypto_transaction(session: Session, master_key: str):
 
 
 def test_delete_crypto_transaction(session: Session, master_key: str):
+    user_uuid = "user_delete_crypto_tx"
+    _make_crypto_account(session, "acc_crypto", user_uuid, master_key)
     data = CryptoTransactionCreate(
         account_id="acc_crypto",
         asset_key="ADA",
@@ -124,12 +144,16 @@ def test_delete_crypto_transaction(session: Session, master_key: str):
         executed_at=datetime.now()
     )
     created = create_crypto_transaction(session, data, master_key)
-    assert delete_crypto_transaction(session, created.id) is True
+    assert delete_crypto_transaction(session, created.id, "some_other_user", master_key) is False
+    assert session.get(CryptoTransaction, created.id) is not None
+    assert delete_crypto_transaction(session, created.id, user_uuid, master_key) is True
     assert session.get(CryptoTransaction, created.id) is None
-    assert delete_crypto_transaction(session, "non_existent") is False
+    assert delete_crypto_transaction(session, "non_existent", user_uuid, master_key) is False
 
 
 def test_delete_crypto_transaction_deletes_group(session: Session, master_key: str):
+    user_uuid = "user_delete_group_crypto_tx"
+    _make_crypto_account(session, "acc_crypto", user_uuid, master_key)
     group_uuid = "group-delete-test"
     first = create_crypto_transaction(
         session,
@@ -158,7 +182,7 @@ def test_delete_crypto_transaction_deletes_group(session: Session, master_key: s
         group_uuid=group_uuid,
     )
 
-    assert delete_crypto_transaction(session, first.id) is True
+    assert delete_crypto_transaction(session, first.id, user_uuid, master_key) is True
     assert session.get(CryptoTransaction, first.id) is None
     assert session.get(CryptoTransaction, second.id) is None
 

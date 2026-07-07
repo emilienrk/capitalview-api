@@ -14,6 +14,7 @@ from services.auth import (
     decode_access_token,
     authenticate_user,
     create_refresh_token_db,
+    hash_refresh_token,
     verify_refresh_token,
     revoke_user_refresh_tokens,
     revoke_refresh_token,
@@ -81,7 +82,8 @@ def test_refresh_token_lifecycle(session: Session):
     session.commit()
     token_str = create_refresh_token()
     rt = create_refresh_token_db(session, user_uuid, token_str)
-    assert rt.token == token_str
+    assert rt.token_hash == hash_refresh_token(token_str)
+    assert rt.token_hash != token_str
     assert rt.user_uuid == user_uuid
     assert rt.revoked is False
     expires_at = rt.expires_at
@@ -117,7 +119,11 @@ def test_verify_refresh_token_expired(session: Session):
     session.add(user)
     session.commit()
     token_str = "expired_token"
-    rt = RefreshToken(user_uuid=user_uuid, token=token_str, expires_at=datetime.now(timezone.utc) - timedelta(days=1))
+    rt = RefreshToken(
+        user_uuid=user_uuid,
+        token_hash=hash_refresh_token(token_str),
+        expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+    )
     session.add(rt)
     session.commit()
     assert verify_refresh_token(session, token_str) is None

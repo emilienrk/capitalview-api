@@ -48,7 +48,8 @@ from services.stock_transaction import (
     get_account_transactions,
     update_stock_transaction,
     delete_stock_transaction,
-    get_stock_account_summary
+    get_stock_account_summary,
+    _account_owned_by_user as _stock_account_owned_by_user,
 )
 from services.market import search_assets as _search_assets_svc, get_assets_bulk_info
 from services.account_history import trigger_post_transaction_updates
@@ -296,10 +297,10 @@ def get_transaction(
     session: Session = Depends(get_session)
 ):
     """Get a specific stock transaction."""
-    transaction = get_stock_transaction(session, transaction_id, master_key)
+    transaction = get_stock_transaction(session, transaction_id, current_user.uuid, master_key)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    
+
     return transaction
 
 
@@ -316,6 +317,8 @@ def update_transaction(
     tx_model = session.get(StockTransaction, transaction_id)
     if not tx_model:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    if not _stock_account_owned_by_user(session, tx_model.account_id_bidx, current_user.uuid, master_key):
+        raise HTTPException(status_code=404, detail="Transaction not found")
 
     # Capture old executed_at before the update so we can rebuild from the earliest affected date.
     try:
@@ -324,8 +327,8 @@ def update_transaction(
         old_date = None
 
     try:
-        result = update_stock_transaction(session, tx_model, data, master_key)
-        
+        result = update_stock_transaction(session, tx_model, data, current_user.uuid, master_key)
+
         new_date = data.executed_at.date() if hasattr(data.executed_at, "date") else data.executed_at
         
         trigger_post_transaction_updates(
@@ -353,7 +356,7 @@ def delete_transaction(
     session: Session = Depends(get_session)
 ):
     """Delete a stock transaction."""
-    tx = get_stock_transaction(session, transaction_id, master_key)
+    tx = get_stock_transaction(session, transaction_id, current_user.uuid, master_key)
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
@@ -362,8 +365,8 @@ def delete_transaction(
     account_id_bidx = tx_model.account_id_bidx if tx_model else None
     executed_date = tx.executed_at.date() if tx.executed_at and hasattr(tx.executed_at, "date") else None
 
-    delete_stock_transaction(session, transaction_id)
-    
+    delete_stock_transaction(session, transaction_id, current_user.uuid, master_key)
+
     trigger_post_transaction_updates(
         session=session,
         background_tasks=background_tasks,
@@ -374,7 +377,7 @@ def delete_transaction(
         affected_dates=[executed_date],
         affected_assets=[tx.asset_key]
     )
-    
+
     return None
 
 
