@@ -59,6 +59,20 @@ def _decrypt_transaction(
     )
 
 
+def _fee_price_per_unit(session: Session, fee_sym: str, as_of: date) -> Decimal:
+    """EUR price for a FEE row at creation time.
+
+    Fiat fees are always 1:1... except non-EUR fiat, priced like any other
+    fiat balance (see get_crypto_account_summary). Crypto fees use the
+    cached DB price for the day; unknown prices fall back to 0 (no network
+    call at transaction-creation time).
+    """
+    sym_upper = fee_sym.upper()
+    if sym_upper in FIAT_ASSET_KEYS:
+        return Decimal("1") if sym_upper == "EUR" else get_exchange_rate(session, sym_upper, "EUR", db_only=True)
+    return get_crypto_price(session, fee_sym, as_of=as_of, db_only=True) or Decimal("0")
+
+
 def create_crypto_transaction(
     session: Session,
     data: CryptoTransactionCreate,
@@ -228,7 +242,7 @@ def create_composite_crypto_transaction(
                 asset_key=fee_sym,
                 type=CryptoTransactionType.FEE,
                 amount=fee_qty,
-                price_per_unit=Decimal("0"),
+                price_per_unit=_fee_price_per_unit(session, fee_sym, data.executed_at.date()),
                 executed_at=data.executed_at,
                 tx_hash=data.tx_hash,
                 notes=data.notes,
@@ -243,7 +257,7 @@ def create_composite_crypto_transaction(
             asset_key=data.asset_key,
             type=CryptoTransactionType.FEE,
             amount=data.amount,
-            price_per_unit=Decimal("0"),
+            price_per_unit=_fee_price_per_unit(session, data.asset_key, data.executed_at.date()),
             executed_at=data.executed_at,
             tx_hash=data.tx_hash,
             notes=data.notes,
@@ -272,7 +286,7 @@ def create_composite_crypto_transaction(
                 asset_key=fee_sym,
                 type=CryptoTransactionType.FEE,
                 amount=fee_qty,
-                price_per_unit=Decimal("0"),
+                price_per_unit=_fee_price_per_unit(session, fee_sym, data.executed_at.date()),
                 executed_at=data.executed_at,
             )
             rows.append(create_crypto_transaction(session, fee_row, master_key, group_uuid=group))
@@ -361,7 +375,7 @@ def create_composite_crypto_transaction(
             asset_key=fee_sym,
             type=CryptoTransactionType.FEE,
             amount=fee_qty,
-            price_per_unit=Decimal("0"),
+            price_per_unit=_fee_price_per_unit(session, fee_sym, data.executed_at.date()),
             executed_at=data.executed_at,
         )
         rows.append(create_crypto_transaction(session, fee_row, master_key, group_uuid=group))
@@ -542,7 +556,7 @@ def create_cross_account_transfer(
             asset_key=fee_sym,
             type=CryptoTransactionType.FEE,
             amount=fee_qty,
-            price_per_unit=Decimal("0"),
+            price_per_unit=_fee_price_per_unit(session, fee_sym, data.executed_at.date()),
             executed_at=data.executed_at,
             tx_hash=data.tx_hash,
             notes=data.notes,
