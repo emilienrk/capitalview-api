@@ -436,6 +436,15 @@ def _compute_asset_key_pru(
                 # Always subtract quantity — allows negative balance when SPEND
                 # precedes BUY, so subsequent BUY correctly nets the position.
                 total_amount -= tx.amount
+            case CryptoTransactionType.WITHDRAW.value:
+                # Mirror get_crypto_account_summary: taxable crypto outbound
+                # removes cost basis proportionally; fiat only reduces quantity.
+                if asset_key_up not in FIAT_ASSET_KEYS and total_amount > 0:
+                    fraction = min(tx.amount / total_amount, Decimal("1"))
+                    cost_basis -= cost_basis * fraction
+                    if cost_basis < 0:
+                        cost_basis = Decimal("0")
+                total_amount -= tx.amount
             case CryptoTransactionType.FEE.value:
                 total_amount -= tx.amount
 

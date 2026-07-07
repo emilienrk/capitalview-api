@@ -126,6 +126,8 @@ def _compute_eur_balance(
             eur += (tx.amount * tx.price_per_unit) - tx.fees
         elif tx.type == "SELL" and tx.asset_key != "EUR":
             eur += (tx.amount * tx.price_per_unit) - tx.fees
+        elif tx.type == "WITHDRAW" and tx.asset_key == "EUR":
+            eur -= tx.amount + tx.fees
     return eur
 
 
