@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from sqlmodel import Session, select
 
-from models import CryptoTransaction
+from models import CryptoAccount, CryptoTransaction
 from models.market import MarketAsset
 from models.enums import CryptoCompositeTransactionType, CryptoTransactionType, AssetType
 from dtos import (
@@ -568,13 +568,30 @@ def create_cross_account_transfer(
     return rows
 
 
+def _account_owned_by_user(
+    session: Session,
+    account_id_bidx: str,
+    user_uuid: str,
+    master_key: str,
+) -> bool:
+    """Check that account_id_bidx belongs to one of the user's crypto accounts."""
+    user_bidx = hash_index(user_uuid, master_key)
+    accounts = session.exec(
+        select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
+    ).all()
+    return any(hash_index(acc.uuid, master_key) == account_id_bidx for acc in accounts)
+
+
 def get_crypto_transaction(
     session: Session,
     transaction_uuid: str,
+    user_uuid: str,
     master_key: str,
 ) -> TransactionResponse | None:
     transaction = session.get(CryptoTransaction, transaction_uuid)
     if not transaction:
+        return None
+    if not _account_owned_by_user(session, transaction.account_id_bidx, user_uuid, master_key):
         return None
     return _decrypt_transaction(transaction, master_key)
 
@@ -583,9 +600,11 @@ def update_crypto_transaction(
     session: Session,
     transaction: CryptoTransaction,
     data: CryptoTransactionUpdate,
+    user_uuid: str,
     master_key: str,
-) -> TransactionResponse:
-
+) -> TransactionResponse | None:
+    if not _account_owned_by_user(session, transaction.account_id_bidx, user_uuid, master_key):
+        return None
 
     if data.asset_key is not None:
         transaction.asset_key_enc = encrypt_data(data.asset_key.upper(), master_key)
@@ -621,9 +640,16 @@ def update_crypto_transaction(
     return _decrypt_transaction(transaction, master_key)
 
 
-def delete_crypto_transaction(session: Session, transaction_uuid: str) -> bool:
+def delete_crypto_transaction(
+    session: Session,
+    transaction_uuid: str,
+    user_uuid: str,
+    master_key: str,
+) -> bool:
     transaction = session.get(CryptoTransaction, transaction_uuid)
     if not transaction:
+        return False
+    if not _account_owned_by_user(session, transaction.account_id_bidx, user_uuid, master_key):
         return False
 
     if transaction.group_uuid:

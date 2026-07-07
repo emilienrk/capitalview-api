@@ -21,6 +21,19 @@ from models.market import MarketAsset
 from services.encryption import hash_index, encrypt_data, decrypt_data
 
 
+def _make_stock_account(session: Session, account_uuid: str, user_uuid: str, master_key: str) -> None:
+    """Insert a StockAccount row owned by user_uuid with a fixed uuid, so tests can
+    keep using plain account_id strings while satisfying the ownership check."""
+    account = StockAccount(
+        uuid=account_uuid,
+        user_uuid_bidx=hash_index(user_uuid, master_key),
+        name_enc=encrypt_data("Test Account", master_key),
+        account_type_enc=encrypt_data("CTO", master_key),
+    )
+    session.add(account)
+    session.commit()
+
+
 def _stock_summary(session: Session, account_id: str, master_key: str):
     txs = get_account_transactions(session, account_id, master_key)
     return get_stock_account_summary(session, txs)
@@ -72,6 +85,8 @@ def test_create_stock_transaction(session: Session, master_key: str):
 
 
 def test_get_stock_transaction(session: Session, master_key: str):
+    user_uuid = "user_get_stock_tx"
+    _make_stock_account(session, "acc_123", user_uuid, master_key)
     data = StockTransactionCreate(
         account_id="acc_123",
         asset_key="ISIN_MSFT",
@@ -83,20 +98,23 @@ def test_get_stock_transaction(session: Session, master_key: str):
     )
     _add_market_asset(session, "ISIN_MSFT", symbol="MSFT", name="Microsoft")
     created = create_stock_transaction(session, data, master_key)
-    fetched = get_stock_transaction(session, created.id, master_key)
+    fetched = get_stock_transaction(session, created.id, user_uuid, master_key)
     assert fetched is not None
     assert fetched.id == created.id
     assert fetched.asset_key == "ISIN_MSFT"
-    assert get_stock_transaction(session, "non_existent", master_key) is None
+    assert get_stock_transaction(session, "non_existent", user_uuid, master_key) is None
+    assert get_stock_transaction(session, created.id, "some_other_user", master_key) is None
     tx_db = session.get(StockTransaction, created.id)
     tx_db.executed_at_enc = encrypt_data("NOT A DATE", master_key)
     session.add(tx_db)
     session.commit()
-    fetched_bad_date = get_stock_transaction(session, created.id, master_key)
+    fetched_bad_date = get_stock_transaction(session, created.id, user_uuid, master_key)
     assert fetched_bad_date.executed_at == tx_db.created_at
 
 
 def test_update_stock_transaction(session: Session, master_key: str):
+    user_uuid = "user_update_stock_tx"
+    _make_stock_account(session, "acc_123", user_uuid, master_key)
     data = StockTransactionCreate(
         account_id="acc_123",
         asset_key="ISIN_GOOGL",
@@ -136,8 +154,9 @@ def test_update_stock_transaction(session: Session, master_key: str):
     )
     # Note: update_stock_transaction does NOT update MarketPrice symbol.
     # So returned symbol should still be "GOOGL" from initial creation.
-    updated = update_stock_transaction(session, tx_db, update_data, master_key)
-    
+    assert update_stock_transaction(session, tx_db, update_data, "some_other_user", master_key) is None
+    updated = update_stock_transaction(session, tx_db, update_data, user_uuid, master_key)
+
     assert updated.asset_key == "ISIN_GOOGL" 
     assert updated.type == "SELL"
     assert updated.amount == Decimal("10")
@@ -152,6 +171,8 @@ def test_update_stock_transaction(session: Session, master_key: str):
 
 
 def test_delete_stock_transaction(session: Session, master_key: str):
+    user_uuid = "user_delete_stock_tx"
+    _make_stock_account(session, "acc_123", user_uuid, master_key)
     data = StockTransactionCreate(
         account_id="acc_123",
         asset_key="ISIN_TSLA",
@@ -163,9 +184,11 @@ def test_delete_stock_transaction(session: Session, master_key: str):
     )
     _add_market_asset(session, "ISIN_TSLA", symbol="TSLA", name="Tesla")
     created = create_stock_transaction(session, data, master_key)
-    assert delete_stock_transaction(session, created.id) is True
+    assert delete_stock_transaction(session, created.id, "some_other_user", master_key) is False
+    assert session.get(StockTransaction, created.id) is not None
+    assert delete_stock_transaction(session, created.id, user_uuid, master_key) is True
     assert session.get(StockTransaction, created.id) is None
-    assert delete_stock_transaction(session, "non_existent") is False
+    assert delete_stock_transaction(session, "non_existent", user_uuid, master_key) is False
 
 
 def test_get_account_transactions(session: Session, master_key: str):
@@ -438,6 +461,8 @@ def test_create_sell_before_buy_raises_valueerror(session: Session, master_key: 
 
 def test_update_sell_exceeds_held(session: Session, master_key: str):
     """Mettre à jour une transaction pour vendre plus que la quantité détenue doit lever ValueError."""
+    user_uuid = "user_update_sell_exceeds_held"
+    _make_stock_account(session, "acc_upd_sell", user_uuid, master_key)
     _add_market_asset(session, "ISIN_MSFT", symbol="MSFT")
     create_stock_transaction(session, StockTransactionCreate(
         account_id="acc_upd_sell",
@@ -465,7 +490,7 @@ def test_update_sell_exceeds_held(session: Session, master_key: str):
         update_stock_transaction(session, tx2_db, StockTransactionUpdate(
             type=StockTransactionType.SELL,
             amount=Decimal("10"),
-        ), master_key)
+        ), user_uuid, master_key)
 
 def test_stock_summary_zero_current_value_is_not_none(session: Session, master_key: str):
     """An account whose only position is currently worth exactly 0 must

@@ -22,6 +22,10 @@ from config import get_settings
 NONCE_SIZE = 12
 
 
+class DecryptionError(Exception):
+    """Raised when AES-GCM decryption fails (wrong key or corrupted/tampered data)."""
+
+
 def _get_community_key_bytes() -> bytes:
     """Return the raw 32-byte community key, or raise if not configured.
 
@@ -177,7 +181,10 @@ def decrypt_data(encrypted_data: str, masterkey: str) -> str:
         masterkey: Master Key (Base64)
     
     Returns:
-        Plaintext data or error message
+        Plaintext data
+
+    Raises:
+        DecryptionError: if the key is incorrect or the data is corrupted/tampered.
     """
     privatekey_bytes = derive_subkey_bytes(masterkey=masterkey, context="data")
     aesgcm = AESGCM(privatekey_bytes)
@@ -189,8 +196,8 @@ def decrypt_data(encrypted_data: str, masterkey: str) -> str:
 
     try:
         return aesgcm.decrypt(nonce, ciphertext, None).decode("utf-8")
-    except Exception:
-        return "Error: Incorrect key or corrupted data."
+    except Exception as exc:
+        raise DecryptionError("Incorrect key or corrupted data.") from exc
 
 
 def community_encrypt(plaintext: str) -> str:

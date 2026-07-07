@@ -118,7 +118,7 @@ class RefreshToken(SQLModel, table=True):
             index=True,
         )
     )
-    token: str = Field(nullable=False, unique=True, index=True)
+    token_hash: str = Field(nullable=False, unique=True, index=True)
     expires_at: datetime = Field(nullable=False)
     revoked: bool = Field(default=False, nullable=False)
     created_at: datetime = Field(

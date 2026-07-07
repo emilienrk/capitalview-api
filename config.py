@@ -18,11 +18,11 @@ class Settings:
         
         env = os.getenv("ENV", "production")
         self.environment: str = env
-        
+        if not self.secret_key:
+            print("CRITICAL: SECRET_KEY environment variable is required")
+            sys.exit(1)
+
         if env == "production":
-            if not self.secret_key:
-                print("CRITICAL: SECRET_KEY environment variable is required")
-                sys.exit(1)
             if not self.database_url:
                 print("CRITICAL: DATABASE_URL environment variable is required")
                 sys.exit(1)
@@ -39,6 +39,7 @@ class Settings:
         ]
         self.debug: bool = os.getenv("DEBUG", "false").lower() == "true" and env != "production"
         self.app_name: str = os.getenv("APP_NAME", "CapitalView API")
+        self.trusted_proxy_count: int = int(os.getenv("TRUSTED_PROXY_COUNT", "0"))
 
         # ── Market Data ───────────────────────────────────────
         self.yahoo_user_agent: str = os.getenv(

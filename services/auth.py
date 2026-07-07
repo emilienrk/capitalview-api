@@ -1,6 +1,8 @@
 """Authentication service for JWT and password management."""
 
 import base64
+import hashlib
+import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
@@ -68,6 +70,18 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
 def create_refresh_token() -> str:
     """Generate a secure random refresh token."""
     return secrets.token_urlsafe(32)
+
+
+def hash_refresh_token(token: str) -> str:
+    """HMAC-SHA256 a refresh token with SECRET_KEY for storage/lookup.
+
+    Refresh tokens are stored hashed (never in plaintext) so that a database
+    leak alone cannot be replayed as a valid session.
+    """
+    settings = get_settings()
+    return hmac.new(
+        settings.secret_key.encode("utf-8"), token.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
 
 
 def decode_access_token(token: str) -> dict:
@@ -149,7 +163,7 @@ def create_refresh_token_db(
     
     refresh_token = RefreshToken(
         user_uuid=user_uuid,
-        token=token,
+        token_hash=hash_refresh_token(token),
         expires_at=expires_at
     )
     
@@ -173,12 +187,12 @@ def verify_refresh_token(session: Session, token: str) -> RefreshToken | None:
     """
     token_record = session.exec(
         select(RefreshToken).where(
-            RefreshToken.token == token,
+            RefreshToken.token_hash == hash_refresh_token(token),
             RefreshToken.revoked == False,  # noqa: E712
             RefreshToken.expires_at > datetime.now(timezone.utc)
         )
     ).first()
-    
+
     return token_record
 
 
@@ -221,7 +235,7 @@ def revoke_refresh_token(session: Session, token: str) -> bool:
         True if token was revoked, False if not found
     """
     token_record = session.exec(
-        select(RefreshToken).where(RefreshToken.token == token)
+        select(RefreshToken).where(RefreshToken.token_hash == hash_refresh_token(token))
     ).first()
     
     if not token_record:

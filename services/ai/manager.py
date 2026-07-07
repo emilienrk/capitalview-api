@@ -110,8 +110,7 @@ class AIProviderManager:
             if not enc_value:
                 return None
             try:
-                decrypted = decrypt_data(enc_value, master_key_str)
-                return None if decrypted.startswith("Error:") else decrypted
+                return decrypt_data(enc_value, master_key_str)
             except Exception:
                 return None
 

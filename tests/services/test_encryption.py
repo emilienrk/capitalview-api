@@ -11,6 +11,7 @@ from services.encryption import (
     hash_index,
     encrypt_data,
     decrypt_data,
+    DecryptionError,
     NONCE_SIZE
 )
 
@@ -71,8 +72,8 @@ def test_decrypt_tampered_data():
     raw_bytes[-1] ^= 0xFF
     tampered_bytes = bytes(raw_bytes)
     tampered_b64 = base64.b64encode(tampered_bytes).decode("utf-8")
-    result = decrypt_data(tampered_b64, mk)
-    assert result == "Error: Incorrect key or corrupted data."
+    with pytest.raises(DecryptionError):
+        decrypt_data(tampered_b64, mk)
 
 def test_decrypt_wrong_key():
     mk1_bytes = os.urandom(32)
@@ -81,5 +82,5 @@ def test_decrypt_wrong_key():
     mk2 = base64.b64encode(mk2_bytes).decode("utf-8")
     plaintext = "Data"
     encrypted = encrypt_data(plaintext, mk1)
-    result = decrypt_data(encrypted, mk2)
-    assert result == "Error: Incorrect key or corrupted data."
+    with pytest.raises(DecryptionError):
+        decrypt_data(encrypted, mk2)

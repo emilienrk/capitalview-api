@@ -69,6 +69,7 @@ from services.crypto_transaction import (
     delete_crypto_transaction,
     get_crypto_account_summary,
     compute_balance_warning,
+    _account_owned_by_user as _crypto_account_owned_by_user,
 )
 from dtos.crypto import FIAT_ASSET_KEYS
 
@@ -474,10 +475,10 @@ def get_transaction(
     session: Session = Depends(get_session)
 ):
     """Get a specific crypto transaction."""
-    transaction = get_crypto_transaction(session, transaction_id, master_key)
+    transaction = get_crypto_transaction(session, transaction_id, current_user.uuid, master_key)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
-        
+
     return transaction
 
 
@@ -494,6 +495,8 @@ def update_transaction(
     tx_model = session.get(CryptoTransaction, transaction_id)
     if not tx_model:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    if not _crypto_account_owned_by_user(session, tx_model.account_id_bidx, current_user.uuid, master_key):
+        raise HTTPException(status_code=404, detail="Transaction not found")
 
     # Capture old date before the update so we can rebuild from the earliest affected date.
     try:
@@ -502,7 +505,7 @@ def update_transaction(
         old_date = None
 
     try:
-        resp = update_crypto_transaction(session, tx_model, data, master_key)
+        resp = update_crypto_transaction(session, tx_model, data, current_user.uuid, master_key)
 
         new_date = data.executed_at.date() if data.executed_at and hasattr(data.executed_at, "date") else (
             data.executed_at if data.executed_at else None
@@ -543,7 +546,7 @@ def delete_transaction(
     session: Session = Depends(get_session)
 ):
     """Delete a crypto transaction."""
-    tx = get_crypto_transaction(session, transaction_id, master_key)
+    tx = get_crypto_transaction(session, transaction_id, current_user.uuid, master_key)
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
@@ -579,8 +582,8 @@ def delete_transaction(
         except Exception:
             pass
 
-    delete_crypto_transaction(session, transaction_id)
-    
+    delete_crypto_transaction(session, transaction_id, current_user.uuid, master_key)
+
     trigger_post_transaction_updates(
         session=session,
         background_tasks=background_tasks,
