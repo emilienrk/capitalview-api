@@ -409,6 +409,33 @@ def test_create_sell_asset_not_owned(session: Session, master_key: str):
         ), master_key)
 
 
+def test_create_sell_before_buy_raises_valueerror(session: Session, master_key: str):
+    """A SELL dated before its BUY must be rejected up front (as-of
+    validation), instead of passing validation and being silently skipped
+    at replay (position and cash overstated with no visible error)."""
+    _add_market_asset(session, "ISIN_ANTEDATE", symbol="ANTD")
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_antedate",
+        asset_key="ISIN_ANTEDATE",
+        type=StockTransactionType.BUY,
+        amount=Decimal("10"),
+        price_per_unit=Decimal("150"),
+        fees=Decimal("0"),
+        executed_at=datetime(2024, 3, 10),
+    ), master_key)
+
+    with pytest.raises(ValueError, match="supérieure à la position"):
+        create_stock_transaction(session, StockTransactionCreate(
+            account_id="acc_antedate",
+            asset_key="ISIN_ANTEDATE",
+            type=StockTransactionType.SELL,
+            amount=Decimal("5"),
+            price_per_unit=Decimal("150"),
+            fees=Decimal("0"),
+            executed_at=datetime(2024, 3, 5),  # before the BUY
+        ), master_key)
+
+
 def test_update_sell_exceeds_held(session: Session, master_key: str):
     """Mettre à jour une transaction pour vendre plus que la quantité détenue doit lever ValueError."""
     _add_market_asset(session, "ISIN_MSFT", symbol="MSFT")
