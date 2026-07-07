@@ -343,6 +343,16 @@ def _compute_daily_net_flow(
         and _type(tx) == "SPEND"
         and str(getattr(tx, "asset_key", "") or "").upper() not in FIAT_ASSET_KEYS
     }
+    groups_with_spend_or_deposit: set[str] = {
+        tx.group_uuid
+        for tx in day_txs
+        if getattr(tx, "group_uuid", None) and _type(tx) in ("SPEND", "DEPOSIT")
+    }
+    groups_with_anchor: set[str] = {
+        tx.group_uuid
+        for tx in day_txs
+        if getattr(tx, "group_uuid", None) and _type(tx) == "ANCHOR"
+    }
 
     for tx in day_txs:
         tx_type = _type(tx)
@@ -360,6 +370,17 @@ def _compute_daily_net_flow(
         elif tx_type == "TRANSFER":
             day_price = (price_matrix or {}).get(asset_key, {}).get(d, _ZERO)
             net_flow -= amount * day_price
+        elif (
+            tx_type == "BUY"
+            and group_uuid
+            and group_uuid in groups_with_anchor
+            and group_uuid not in groups_with_spend_or_deposit
+        ):
+            # Inbound cross-account transfer: destination BUY paired with an
+            # ANCHOR but no SPEND/DEPOSIT counterpart in the same group/day —
+            # the exclusive signature of create_cross_account_transfer.
+            day_price = (price_matrix or {}).get(asset_key, {}).get(d, _ZERO)
+            net_flow += amount * day_price
 
     return net_flow
 

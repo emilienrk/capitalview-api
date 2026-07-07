@@ -460,6 +460,96 @@ def test_compute_daily_net_flow_crypto_ignores_internal_swap_fiat_legs():
     assert net_flow == Decimal("0")
 
 
+def test_compute_daily_net_flow_crypto_inbound_transfer_counted_as_flow():
+    """A cross-account transfer inbound BUY (ANCHOR + BUY, no SPEND/DEPOSIT
+    in the same group/day) must be counted as an external inflow, symmetric
+    to the outbound TRANSFER."""
+    d = date(2024, 3, 1)
+    price_matrix = {"BTC": {d: Decimal("30000")}}
+    txs = [
+        _tx(
+            id="tx_anchor_in",
+            group_uuid="g_transfer",
+            type="ANCHOR",
+            asset_key="EUR",
+            amount=Decimal("25000"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
+        _tx(
+            id="tx_buy_in",
+            group_uuid="g_transfer",
+            type="BUY",
+            asset_key="BTC",
+            amount=Decimal("1"),
+            price_per_unit=Decimal("0"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    net_flow = _compute_daily_net_flow(
+        _AccountSnapshot(
+            account_id="acc_dest",
+            account_type=AccountCategory.CRYPTO,
+            transactions=txs,
+        ),
+        d,
+        price_matrix,
+    )
+
+    assert net_flow == Decimal("30000")
+
+
+def test_compute_daily_net_flow_crypto_deposit_group_not_matched_as_transfer():
+    """A CRYPTO_DEPOSIT group (DEPOSIT + BUY + SPEND, no real transfer) must
+    NOT be matched by the inbound-transfer rule."""
+    d = date(2024, 3, 1)
+    price_matrix = {"ETH": {d: Decimal("3000")}}
+    txs = [
+        _tx(
+            id="tx_dep",
+            group_uuid="g_deposit",
+            type="DEPOSIT",
+            asset_key="EUR",
+            amount=Decimal("3000"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
+        ),
+        _tx(
+            id="tx_buy",
+            group_uuid="g_deposit",
+            type="BUY",
+            asset_key="ETH",
+            amount=Decimal("1"),
+            price_per_unit=Decimal("0"),
+            executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
+        ),
+        _tx(
+            id="tx_spend",
+            group_uuid="g_deposit",
+            type="SPEND",
+            asset_key="EUR",
+            amount=Decimal("3000"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    net_flow = _compute_daily_net_flow(
+        _AccountSnapshot(
+            account_id="acc_dest",
+            account_type=AccountCategory.CRYPTO,
+            transactions=txs,
+        ),
+        d,
+        price_matrix,
+    )
+
+    # DEPOSIT is external (not part of a crypto SPEND group) → +3000; BUY is
+    # excluded from the inbound-transfer rule because the group has a DEPOSIT.
+    assert net_flow == Decimal("3000")
+
+
 def test_generate_missing_snapshots_bank_frozen(session: Session, master_key: str):
     """Bank account value is frozen and exported as a single EUR position."""
     user_bidx = hash_index("user_bank_test", master_key)
