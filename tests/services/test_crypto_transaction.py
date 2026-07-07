@@ -12,6 +12,8 @@ from services.crypto_transaction import (
     delete_crypto_transaction,
     get_account_transactions,
     get_crypto_account_summary,
+    get_asset_key_balance,
+    compute_balance_warning,
 )
 from dtos.crypto import CryptoTransactionCreate, CryptoTransactionUpdate, CryptoCompositeTransactionCreate
 from models.enums import CryptoTransactionType
@@ -1322,3 +1324,44 @@ def test_fee_row_valued_in_eur_at_creation(session: Session, master_key: str):
     summary = get_crypto_account_summary(session, txs, as_of=date(2024, 5, 1), db_only=True)
     pos = next(p for p in summary.positions if p.symbol == "BTC")
     assert pos.total_fees == Decimal("30.00")
+
+
+def test_get_asset_key_balance_uses_provided_transactions(session: Session, master_key: str):
+    """The transactions param must be honored instead of silently re-queried."""
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_balance_reuse", asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("2"), price_per_unit=Decimal("100"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    # An explicit empty list must short-circuit to 0, proving the function no
+    # longer silently re-queries the database.
+    balance_overridden = get_asset_key_balance(session, "acc_balance_reuse", "BTC", master_key, transactions=[])
+    assert balance_overridden == Decimal("0")
+
+    balance_real = get_asset_key_balance(session, "acc_balance_reuse", "BTC", master_key)
+    assert balance_real == Decimal("2")
+
+
+def test_compute_balance_warning_detects_negative_across_symbols(session: Session, master_key: str):
+    """Multiple debited asset keys in the same account must all be checked,
+    even after caching their transactions per account to avoid N queries."""
+    from types import SimpleNamespace
+
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_multi_warn", asset_key="BTC", type=CryptoTransactionType.SPEND,
+        amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_multi_warn", asset_key="ETH", type=CryptoTransactionType.SPEND,
+        amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2024, 1, 1),
+    ), master_key)
+
+    created_rows = [
+        SimpleNamespace(type="SPEND", asset_key="BTC"),
+        SimpleNamespace(type="SPEND", asset_key="ETH"),
+    ]
+    warning = compute_balance_warning(session, "acc_multi_warn", created_rows, master_key)
+
+    assert warning is not None
+    assert "BTC" in warning
+    assert "ETH" in warning

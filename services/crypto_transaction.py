@@ -881,11 +881,15 @@ def get_asset_key_balance(
     Debits  (SPEND, TRANSFER, WITHDRAW, FEE)
     subtract from the balance.
     ANCHOR rows are skipped (accounting reference, not a real cash flow).
+
+    If *transactions* is provided, it is used as-is instead of re-querying
+    the database (caller already has the rows loaded).
     """
-    account_bidx = hash_index(account_uuid, master_key)
-    transactions = session.exec(
-        select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == account_bidx)
-    ).all()
+    if transactions is None:
+        account_bidx = hash_index(account_uuid, master_key)
+        transactions = session.exec(
+            select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == account_bidx)
+        ).all()
 
     balance = Decimal("0")
     sym_upper = asset_key.upper()
@@ -936,9 +940,15 @@ def compute_balance_warning(
     if not to_check:
         return None
 
+    txs_by_account: dict[str, list[CryptoTransaction]] = {}
     negative: list[str] = []
     for sym, acc in sorted(to_check.items()):
-        balance = get_asset_key_balance(session, acc, sym, master_key)
+        if acc not in txs_by_account:
+            account_bidx = hash_index(acc, master_key)
+            txs_by_account[acc] = session.exec(
+                select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == account_bidx)
+            ).all()
+        balance = get_asset_key_balance(session, acc, sym, master_key, transactions=txs_by_account[acc])
         if balance < 0:
             negative.append(f"{sym} (solde\u00a0: {balance:+.8g})")
 
