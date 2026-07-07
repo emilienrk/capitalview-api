@@ -387,7 +387,11 @@ def _compute_daily_net_flow(
         ):
             # Inbound cross-account transfer: destination BUY paired with an
             # ANCHOR but no SPEND/DEPOSIT counterpart in the same group/day —
-            # the exclusive signature of create_cross_account_transfer.
+            # the characteristic signature of create_cross_account_transfer.
+            # Not provably unique: a composite BUY with no quote asset and a
+            # non-included crypto fee produces the same shape (BUY+ANCHOR+FEE,
+            # no SPEND) and would be misclassified. Low reachability today
+            # (accepted, see AUDIT_CALCULS.md follow-up).
             day_price = (price_matrix or {}).get(asset_key, {}).get(d, _ZERO)
             net_flow += amount * day_price
 
