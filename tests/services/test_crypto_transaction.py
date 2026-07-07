@@ -1219,3 +1219,45 @@ def test_summary_uses_preloaded_price_for_non_eur_fiat(session: Session, master_
 
     gbp_position = next(p for p in summary.positions if p.asset_key == "GBP")
     assert gbp_position.current_price == Decimal("1.15")
+
+
+def test_sell_to_fiat_non_eur_deposit_uses_exchange_rate(session: Session, master_key: str):
+    """A SELL_TO_FIAT with a non-EUR quote currency must value the resulting
+    fiat DEPOSIT at the real EUR exchange rate, not 1:1."""
+    account = CryptoAccount(uuid="acc_sell_usd", user_uuid_bidx=hash_index("u_sell_usd", master_key), name_enc=encrypt_data("SellUSD", master_key))
+    session.add(account)
+    session.commit()
+
+    data = CryptoCompositeTransactionCreate(
+        account_id="acc_sell_usd",
+        type="SELL_TO_FIAT",
+        asset_key="BTC",
+        amount=Decimal("0.01"),
+        quote_asset_key="USD",
+        quote_amount=Decimal("100"),
+        executed_at=datetime(2024, 1, 1),
+    )
+    rows = create_composite_crypto_transaction(session, data, master_key)
+
+    deposit_row = next(r for r in rows if r.type == "DEPOSIT" and r.asset_key == "USD")
+    assert deposit_row.price_per_unit == Decimal("0.92")
+
+
+def test_sell_to_fiat_eur_deposit_stays_at_one(session: Session, master_key: str):
+    """A SELL_TO_FIAT to EUR (the common case) is unaffected: price stays 1."""
+    account = CryptoAccount(uuid="acc_sell_eur", user_uuid_bidx=hash_index("u_sell_eur", master_key), name_enc=encrypt_data("SellEUR", master_key))
+    session.add(account)
+    session.commit()
+
+    data = CryptoCompositeTransactionCreate(
+        account_id="acc_sell_eur",
+        type="SELL_TO_FIAT",
+        asset_key="BTC",
+        amount=Decimal("0.01"),
+        eur_amount=Decimal("300"),
+        executed_at=datetime(2024, 1, 1),
+    )
+    rows = create_composite_crypto_transaction(session, data, master_key)
+
+    deposit_row = next(r for r in rows if r.type == "DEPOSIT" and r.asset_key == "EUR")
+    assert deposit_row.price_per_unit == Decimal("1")

@@ -203,12 +203,17 @@ def create_composite_crypto_transaction(
         rows.append(create_crypto_transaction(session, spend_crypto, master_key, group_uuid=group))
 
         if fiat_amount > 0:
+            fiat_price = (
+                Decimal("1")
+                if fiat_symbol == "EUR"
+                else get_exchange_rate(session, fiat_symbol, "EUR")
+            )
             deposit_fiat = CryptoTransactionCreate(
                 account_id=data.account_id,
                 asset_key=fiat_symbol,
                 type=CryptoTransactionType.DEPOSIT,
                 amount=fiat_amount,
-                price_per_unit=Decimal("1"),
+                price_per_unit=fiat_price,
                 executed_at=data.executed_at,
                 tx_hash=data.tx_hash,
                 notes=data.notes,
