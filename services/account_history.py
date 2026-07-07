@@ -367,7 +367,7 @@ def _compute_daily_net_flow(
                         net_flow += amount
                 case "WITHDRAW":
                     net_flow -= amount
-        elif tx_type == "TRANSFER":
+        elif tx_type in ("TRANSFER", "WITHDRAW"):
             day_price = (price_matrix or {}).get(asset_key, {}).get(d, _ZERO)
             net_flow -= amount * day_price
         elif (
