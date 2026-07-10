@@ -274,18 +274,16 @@ def execute_stock_rows(
     )
 
 
-@register
-class GenericStockParser(ImportParser):
-    """Any broker CSV, mapped column by column by the user."""
+class StockImportParser(ImportParser):
+    """Base class for stock parsers: shared row preview/execute plumbing.
 
-    source_id = "generic_stock"
-    label = "CSV générique (actions) avec mapping de colonnes"
+    Subclasses implement :meth:`detect` and :meth:`parse` (CSV → rows).
+    """
+
     category = ImportCategory.STOCK
-    file_hint = "n'importe quel CSV de courtier (mapping manuel des colonnes)"
-    supports_mapping = True
 
-    def detect(self, csv_content: str) -> float:
-        return 0.0  # never auto-detected
+    def parse(self, csv_content: str, options: dict) -> tuple[list[StockImportRowPreview], list[str]]:
+        raise NotImplementedError
 
     def preview(
         self,
@@ -296,7 +294,7 @@ class GenericStockParser(ImportParser):
         account_id: str | None = None,
         master_key: str | None = None,
     ) -> ImportPreviewResponse:
-        rows, warnings = parse_stock_rows(csv_content, options)
+        rows, warnings = self.parse(csv_content, options)
 
         duplicates = 0
         if account_id and master_key:
@@ -324,6 +322,22 @@ class GenericStockParser(ImportParser):
         return execute_stock_rows(
             session, account_id, payload.stock_rows or [], master_key, payload.skip_duplicates
         )
+
+
+@register
+class GenericStockParser(StockImportParser):
+    """Any broker CSV, mapped column by column by the user."""
+
+    source_id = "generic_stock"
+    label = "CSV générique (actions) avec mapping de colonnes"
+    file_hint = "n'importe quel CSV de courtier (mapping manuel des colonnes)"
+    supports_mapping = True
+
+    def detect(self, csv_content: str) -> float:
+        return 0.0  # never auto-detected
+
+    def parse(self, csv_content: str, options: dict) -> tuple[list[StockImportRowPreview], list[str]]:
+        return parse_stock_rows(csv_content, options)
 
 
 # ── Generic CRYPTO parser ────────────────────────────────────
