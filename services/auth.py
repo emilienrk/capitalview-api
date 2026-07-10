@@ -18,6 +18,12 @@ from sqlmodel import Session, select
 from config import get_settings
 from database import get_session
 from models.user import RefreshToken, User
+from services.encryption import (
+    get_masterkey,
+    init_salt,
+    unwrap_master_key,
+    wrap_master_key,
+)
 
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
@@ -36,6 +42,31 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
         return True
     except nacl.exceptions.InvalidkeyError:
         return False
+
+
+def resolve_master_key(session: Session, user: User, password: str) -> str:
+    """
+    Resolve the user's Master Key at login time.
+
+    Wrapped accounts: derive the KEK from the password and unwrap the stored MK.
+    Legacy accounts (no wrapped MK yet): derive the MK directly from the
+    password as before, then wrap it so the account is migrated transparently.
+    The MK itself never changes — no data re-encryption is ever needed.
+    """
+    if user.mk_wrapped_password and user.mk_salt_password:
+        return unwrap_master_key(user.mk_wrapped_password, password, user.mk_salt_password)
+
+    master_key = get_masterkey(password, user.auth_salt)
+    try:
+        salt = init_salt()
+        user.mk_wrapped_password = wrap_master_key(master_key, password, salt)
+        user.mk_salt_password = salt
+        session.add(user)
+        session.commit()
+    except Exception:
+        # Migration must never block a legacy login — retry at next login
+        session.rollback()
+    return master_key
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:

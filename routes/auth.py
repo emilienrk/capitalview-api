@@ -28,11 +28,17 @@ from services.auth import (
     create_refresh_token,
     create_refresh_token_db,
     get_current_user,
+    resolve_master_key,
     revoke_refresh_token,
     revoke_user_refresh_tokens,
     verify_refresh_token,
 )
-from services.encryption import get_masterkey, init_salt, hash_password
+from services.encryption import (
+    generate_random_master_key,
+    init_salt,
+    hash_password,
+    wrap_master_key,
+)
 from services.community import refresh_community_positions
 from services.account_history import run_lazy_catchup
 
@@ -132,14 +138,21 @@ async def register(
     user_uuid = str(uuid.uuid4())
     auth_salt = init_salt()
     hashed_password = hash_password(payload.password)
-    master_key = get_masterkey(payload.password, auth_salt)
-    
+    # New accounts get a random Master Key (decorrelated from the password),
+    # stored wrapped by a password-derived KEK. Changing the password later
+    # only re-wraps the MK — no data re-encryption.
+    master_key = generate_random_master_key()
+    mk_salt_password = init_salt()
+    mk_wrapped_password = wrap_master_key(master_key, payload.password, mk_salt_password)
+
     user = User(
         uuid=user_uuid,
         username=payload.username,
         email=payload.email,
         auth_salt=auth_salt,
-        password_hash=hashed_password
+        password_hash=hashed_password,
+        mk_wrapped_password=mk_wrapped_password,
+        mk_salt_password=mk_salt_password
     )
     
     session.add(user)
@@ -216,7 +229,7 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    master_key = get_masterkey(payload.password, user.auth_salt)
+    master_key = resolve_master_key(session, user, payload.password)
 
     # Update last login timestamp
     user.last_login = datetime.now(timezone.utc)
