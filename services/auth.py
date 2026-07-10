@@ -17,13 +17,15 @@ from sqlmodel import Session, select
 
 from config import get_settings
 from database import get_session
-from models.user import RefreshToken, User
+from models.user import RefreshToken, TotpBackupCode, User
 from services.encryption import (
     get_masterkey,
     init_salt,
+    server_decrypt,
     unwrap_master_key,
     wrap_master_key,
 )
+from services.totp import hash_backup_code, verify_totp
 
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
@@ -67,6 +69,42 @@ def resolve_master_key(session: Session, user: User, password: str) -> str:
         # Migration must never block a legacy login — retry at next login
         session.rollback()
     return master_key
+
+
+def verify_second_factor(session: Session, user: User, code: str | None) -> bool:
+    """
+    Verify a second factor for a 2FA-enabled user: a TOTP code (with replay
+    protection — each time step is accepted only once) or a single-use backup code.
+    """
+    if not code:
+        return False
+
+    # TOTP codes are exactly 6 digits; backup codes are 10 Base32 chars
+    if user.totp_secret_enc:
+        secret = server_decrypt(user.totp_secret_enc, "totp")
+        step = verify_totp(secret, code)
+        if step is not None:
+            if user.totp_last_used_step is not None and step <= user.totp_last_used_step:
+                return False
+            user.totp_last_used_step = step
+            session.add(user)
+            session.commit()
+            return True
+
+    record = session.exec(
+        select(TotpBackupCode).where(
+            TotpBackupCode.user_uuid == user.uuid,
+            TotpBackupCode.code_hash == hash_backup_code(code),
+            TotpBackupCode.used_at == None,  # noqa: E711
+        )
+    ).first()
+    if record:
+        record.used_at = datetime.now(timezone.utc)
+        session.add(record)
+        session.commit()
+        return True
+
+    return False
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
