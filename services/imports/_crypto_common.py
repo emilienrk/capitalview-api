@@ -20,10 +20,16 @@ from dtos.crypto import (
     BinanceImportRowPreview,
     CryptoTransactionCreate,
 )
+from dtos.imports import (
+    ImportConfirmRequest,
+    ImportConfirmResponse,
+    ImportPreviewResponse,
+)
 from models.enums import AssetType, CryptoTransactionType
 from models.market import MarketAsset, MarketPriceHistory
 from services.crypto_transaction import create_crypto_transaction
-from services.imports.dedup import Fingerprint, make_fingerprint
+from services.imports.base import ImportCategory, ImportParser
+from services.imports.dedup import Fingerprint, crypto_fingerprints, make_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +255,68 @@ def prefill_eur_amounts(session: Session, groups: list[BinanceImportGroupPreview
             _, best_price = min(price_map.items(), key=lambda x: x[0])
 
         group.eur_amount = round(float(Decimal(str(total_amount)) * best_price), 2)
+
+
+class CryptoImportParser(ImportParser):
+    """Base class for crypto parsers: shared grouped preview/execute plumbing.
+
+    Subclasses only implement :meth:`detect` and :meth:`generate` (CSV →
+    grouped preview response).
+    """
+
+    category = ImportCategory.CRYPTO
+
+    def generate(
+        self,
+        csv_content: str,
+        session: Session | None = None,
+        existing_fps: set[Fingerprint] | None = None,
+    ) -> BinanceImportPreviewResponse:
+        raise NotImplementedError
+
+    def preview(
+        self,
+        session: Session,
+        csv_content: str,
+        options: dict,
+        *,
+        account_id: str | None = None,
+        master_key: str | None = None,
+    ) -> ImportPreviewResponse:
+        existing_fps = None
+        if account_id and master_key:
+            existing_fps = crypto_fingerprints(session, account_id, master_key)
+
+        crypto = self.generate(csv_content, session=session, existing_fps=existing_fps)
+        return ImportPreviewResponse(
+            source_id=self.source_id,
+            category=self.category.value,
+            total_rows=crypto.total_rows,
+            duplicates_count=sum(1 for g in crypto.groups if g.is_duplicate),
+            crypto=crypto,
+        )
+
+    def execute(
+        self,
+        session: Session,
+        account_id: str,
+        payload: ImportConfirmRequest,
+        master_key: str,
+    ) -> ImportConfirmResponse:
+        groups = payload.crypto_groups or []
+        existing_fps = None
+        if payload.skip_duplicates:
+            existing_fps = crypto_fingerprints(session, account_id, master_key)
+        imported, skipped = execute_crypto_groups(
+            session, account_id, groups, master_key,
+            skip_duplicates=payload.skip_duplicates,
+            existing_fps=existing_fps,
+        )
+        return ImportConfirmResponse(
+            imported_count=imported,
+            skipped_duplicates=skipped,
+            groups_count=len(groups),
+        )
 
 
 def execute_crypto_groups(
