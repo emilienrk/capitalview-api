@@ -63,10 +63,11 @@ class TokenResponse(BaseModel):
 class UserResponse(BaseModel):
     """User information response."""
     model_config = ConfigDict(from_attributes=True)
-    
+
     username: str
     email: str
     is_active: bool
+    totp_enabled: bool = False
     last_username_change: datetime | None = None
     last_email_change: datetime | None = None
     last_login: datetime | None = None
@@ -131,3 +132,43 @@ class RecoverResponse(TokenResponse):
     is shown only once.
     """
     new_recovery_key: str
+
+
+class TwoFARequiredResponse(BaseModel):
+    """Login step-1 response when 2FA is enabled: complete via POST /auth/login/2fa."""
+    two_fa_required: bool = True
+    pending_token: str
+    expires_in: int
+
+
+class Login2FARequest(BaseModel):
+    """Login step 2: the pending token from step 1 plus a TOTP or backup code."""
+    pending_token: str
+    code: str
+
+
+class TwoFASetupRequest(BaseModel):
+    """Start 2FA setup (password confirmation required)."""
+    password: str
+
+
+class TwoFASetupResponse(BaseModel):
+    """Pending 2FA setup: secret + provisioning URI (rendered as a QR by the frontend)."""
+    secret: str
+    otpauth_uri: str
+
+
+class TwoFAEnableRequest(BaseModel):
+    """Confirm 2FA activation with a first valid TOTP code."""
+    code: str
+
+
+class TwoFAEnableResponse(BaseModel):
+    """2FA activated: single-use backup codes, shown once."""
+    backup_codes: list[str]
+
+
+class TwoFADisableRequest(BaseModel):
+    """Disable 2FA (password + TOTP/backup code required)."""
+    password: str
+    code: str

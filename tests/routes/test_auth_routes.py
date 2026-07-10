@@ -261,6 +261,126 @@ def test_recover_invalid_inputs(session):
     assert r3.status_code == 401
 
 
+def _register(client, username, email, password):
+    r = client.post("/auth/register", json={"username": username, "email": email, "password": password})
+    assert r.status_code == 201
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+def test_2fa_full_flow(session):
+    from services.totp import totp_code
+
+    client = TestClient(app)
+    auth = _register(client, "totpuser", "totp@example.com", "Strongpass1!")
+
+    # Setup requires the password
+    assert client.post("/auth/2fa/setup", json={"password": "bad"}, headers=auth).status_code == 401
+    r_setup = client.post("/auth/2fa/setup", json={"password": "Strongpass1!"}, headers=auth)
+    assert r_setup.status_code == 200
+    secret = r_setup.json()["secret"]
+    assert "otpauth://totp/" in r_setup.json()["otpauth_uri"]
+
+    # Login is still single-step while 2FA is pending (not enabled)
+    r_login = client.post("/auth/login", json={"email": "totp@example.com", "password": "Strongpass1!"})
+    assert r_login.status_code == 200
+    assert "access_token" in r_login.json()
+
+    # Enable with a wrong code fails, then succeeds with a valid one
+    assert client.post("/auth/2fa/enable", json={"code": "000000"}, headers=auth).status_code == 401
+    r_enable = client.post("/auth/2fa/enable", json={"code": totp_code(secret)}, headers=auth)
+    assert r_enable.status_code == 200
+    backup_codes = r_enable.json()["backup_codes"]
+    assert len(backup_codes) == 10
+
+    # /me exposes totp_enabled
+    r_me = client.get("/auth/me", headers=auth)
+    assert r_me.json()["totp_enabled"] is True
+
+    # Login now requires step 2
+    client.cookies.clear()
+    r_step1 = client.post("/auth/login", json={"email": "totp@example.com", "password": "Strongpass1!"})
+    assert r_step1.status_code == 200
+    body = r_step1.json()
+    assert body.get("two_fa_required") is True
+    assert "access_token" not in body
+    assert "refresh_token" not in r_step1.cookies
+
+    # Wrong code rejected; anti-replay: the enable code was already consumed for this step
+    pending = body["pending_token"]
+    assert client.post("/auth/login/2fa", json={"pending_token": pending, "code": "000000"}).status_code == 401
+
+    # Valid backup code completes the login
+    r_step2 = client.post(
+        "/auth/login/2fa",
+        json={"pending_token": pending, "code": backup_codes[0]},
+        headers={"X-Return-Master-Key": "true"},
+    )
+    assert r_step2.status_code == 200
+    assert "access_token" in r_step2.json()
+    assert r_step2.json()["master_key"] is not None
+    assert "refresh_token" in r_step2.cookies
+
+    # Backup code is single-use
+    r_step1b = client.post("/auth/login", json={"email": "totp@example.com", "password": "Strongpass1!"})
+    pending_b = r_step1b.json()["pending_token"]
+    assert client.post("/auth/login/2fa", json={"pending_token": pending_b, "code": backup_codes[0]}).status_code == 401
+
+    # Garbage pending token rejected
+    assert client.post("/auth/login/2fa", json={"pending_token": "garbage", "code": "123456"}).status_code == 401
+
+
+def test_2fa_disable_restores_single_step_login(session):
+    from services.totp import totp_code
+
+    client = TestClient(app)
+    auth = _register(client, "totpoff", "totpoff@example.com", "Strongpass1!")
+
+    secret = client.post("/auth/2fa/setup", json={"password": "Strongpass1!"}, headers=auth).json()["secret"]
+    r_enable = client.post("/auth/2fa/enable", json={"code": totp_code(secret)}, headers=auth)
+    assert r_enable.status_code == 200
+    backup_codes = r_enable.json()["backup_codes"]
+
+    # Disable with password + backup code
+    r_disable = client.post(
+        "/auth/2fa/disable",
+        json={"password": "Strongpass1!", "code": backup_codes[0]},
+        headers=auth,
+    )
+    assert r_disable.status_code == 200
+
+    # Login is single-step again
+    r_login = client.post("/auth/login", json={"email": "totpoff@example.com", "password": "Strongpass1!"})
+    assert r_login.status_code == 200
+    assert "access_token" in r_login.json()
+
+
+def test_2fa_required_for_password_change(session):
+    from services.totp import totp_code, TOTP_STEP_SECONDS
+
+    client = TestClient(app)
+    auth = _register(client, "totppw", "totppw@example.com", "Strongpass1!")
+
+    secret = client.post("/auth/2fa/setup", json={"password": "Strongpass1!"}, headers=auth).json()["secret"]
+    r_enable = client.post("/auth/2fa/enable", json={"code": totp_code(secret)}, headers=auth)
+    backup_codes = r_enable.json()["backup_codes"]
+
+    # Without a code → 401
+    r_no_code = client.put(
+        "/auth/me/password",
+        json={"current_password": "Strongpass1!", "new_password": "NewPass456!"},
+        headers=auth,
+    )
+    assert r_no_code.status_code == 401
+
+    # With a backup code → OK
+    r_ok = client.put(
+        "/auth/me/password",
+        json={"current_password": "Strongpass1!", "new_password": "NewPass456!", "totp_code": backup_codes[1]},
+        headers=auth,
+    )
+    assert r_ok.status_code == 200
+
+
 def test_legacy_login_lazy_migration(session):
     """A legacy account (no wrapped MK) keeps its derived MK and gets wrapped at login."""
     import uuid as uuid_mod
