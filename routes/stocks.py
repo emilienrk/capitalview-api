@@ -42,6 +42,7 @@ from services.stock_account import (
     get_all_stock_accounts_history,
 )
 from services.stock_transaction import (
+    bulk_create_stock_transactions,
     create_stock_transaction,
     create_eur_deposit,
     get_stock_transaction,
@@ -56,35 +57,6 @@ from services.account_history import trigger_post_transaction_updates
 from services.encryption import decrypt_data, hash_index
 
 router = APIRouter(prefix="/stocks", tags=["Stocks"])
-
-
-def _bulk_tx_order_key(item_with_index: tuple[int, object]) -> tuple:
-    """Deterministic processing order for bulk stock imports.
-
-    We replay transactions chronologically so SELL validation sees prior BUY rows.
-    For identical timestamps, we process cash/funding first, then inventory changes.
-    """
-    index, item = item_with_index
-    type_priority = {
-        "DEPOSIT": 0,
-        "DIVIDEND": 1,
-        "BUY": 2,
-        "SELL": 3,
-    }
-    raw_executed_at = getattr(item, "executed_at", None)
-    if isinstance(raw_executed_at, datetime):
-        executed_at = (
-            raw_executed_at.replace(tzinfo=timezone.utc)
-            if raw_executed_at.tzinfo is None
-            else raw_executed_at.astimezone(timezone.utc)
-        ).isoformat()
-        date_rank = 0
-    else:
-        executed_at = ""
-        date_rank = 1
-
-    item_type = item.type.value if hasattr(item.type, "value") else str(item.type)
-    return (date_rank, executed_at, type_priority.get(item_type, 99), index)
 
 
 # ============== ACCOUNTS ==============
@@ -409,49 +381,23 @@ def bulk_import_transactions(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    created_responses = []
-    ordered_transactions = [
-        item for _, item in sorted(enumerate(data.transactions), key=_bulk_tx_order_key)
+    created, _ = bulk_create_stock_transactions(
+        session, data.account_id, data.transactions, master_key
+    )
+    created_responses = [
+        StockTransactionBasicResponse(
+            id=resp.id,
+            account_id=data.account_id,
+            asset_key=resp.asset_key,
+            type=resp.type,
+            amount=resp.amount,
+            price_per_unit=resp.price_per_unit,
+            fees=resp.fees,
+            executed_at=resp.executed_at,
+            notes=None
+        )
+        for resp in created
     ]
-
-    for item in ordered_transactions:
-        try:
-            if item.type.value == "DEPOSIT":
-                resp = create_eur_deposit(
-                    session=session,
-                    account_uuid=data.account_id,
-                    amount=item.amount,
-                    executed_at=item.executed_at,
-                    master_key=master_key,
-                    notes=item.notes,
-                )
-            else:
-                create_dto = StockTransactionCreate(
-                    account_id=data.account_id,
-                    asset_key=item.asset_key,
-                    type=item.type,
-                    amount=item.amount,
-                    price_per_unit=item.price_per_unit,
-                    fees=item.fees,
-                    executed_at=item.executed_at,
-                    notes=item.notes
-                )
-                resp = create_stock_transaction(session, create_dto, master_key)
-            
-            basic = StockTransactionBasicResponse(
-                id=resp.id,
-                account_id=data.account_id,
-                asset_key=resp.asset_key,
-                type=resp.type,
-                amount=resp.amount,
-                price_per_unit=resp.price_per_unit,
-                fees=resp.fees,
-                executed_at=resp.executed_at,
-                notes=None 
-            )
-            created_responses.append(basic)
-        except ValueError:
-            continue
 
     past_dates = [
         item.executed_at.date() if hasattr(item.executed_at, "date") else item.executed_at
