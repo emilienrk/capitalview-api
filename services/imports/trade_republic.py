@@ -11,7 +11,6 @@ asset_key = ISIN. If the file does not match, ``generic_stock`` (manual
 column mapping) is the fallback.
 """
 
-from datetime import datetime
 from decimal import Decimal
 
 from dtos.imports import StockImportRowPreview

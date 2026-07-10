@@ -16,17 +16,17 @@ Supported operations:
 import csv
 import io
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
 from sqlmodel import Session
 
-from models.enums import CryptoTransactionType
 from dtos.crypto import (
+    BinanceImportConfirmResponse,
     BinanceImportGroupPreview,
     BinanceImportPreviewResponse,
-    BinanceImportConfirmResponse,
 )
+from models.enums import CryptoTransactionType
 from services.imports._crypto_common import (
     STABLECOIN_SYMBOLS,  # noqa: F401 — re-exported for backwards compatibility
     CryptoImportParser,
@@ -36,7 +36,6 @@ from services.imports._crypto_common import (
 )
 from services.imports.base import csv_header_line
 from services.imports.registry import register
-
 
 # ── Internal dataclass ────────────────────────────────────────
 
