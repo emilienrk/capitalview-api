@@ -16,6 +16,7 @@ from models.user import User
 from dtos.auth import (
     LoginRequest,
     MessageResponse,
+    PasswordChangeRequest,
     RegisterRequest,
     TokenResponse,
     UserResponse,
@@ -27,16 +28,22 @@ from services.auth import (
     create_access_token,
     create_refresh_token,
     create_refresh_token_db,
+    get_current_active_user,
     get_current_user,
+    get_master_key,
     resolve_master_key,
     revoke_refresh_token,
     revoke_user_refresh_tokens,
+    verify_password,
     verify_refresh_token,
+    verify_second_factor,
 )
 from services.encryption import (
+    DecryptionError,
     generate_random_master_key,
     init_salt,
     hash_password,
+    unwrap_master_key,
     wrap_master_key,
 )
 from services.community import refresh_community_positions
@@ -453,9 +460,109 @@ def update_username(
 
     current_user.username = payload.username
     current_user.last_username_change = datetime.now(timezone.utc)
-    
+
     session.add(current_user)
     session.commit()
     session.refresh(current_user)
-    
+
     return current_user
+
+
+def _set_session_cookies(response: Response, refresh_token_str: str, master_key: str) -> None:
+    """Set the HttpOnly refresh_token and master_key cookies (same policy as login)."""
+    settings = get_settings()
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token_str,
+        httponly=True,
+        secure=settings.environment == "production",
+        samesite="lax",
+        max_age=settings.refresh_token_expire_days * 86400,
+        path="/auth"
+    )
+    response.set_cookie(
+        key="master_key",
+        value=master_key,
+        httponly=True,
+        secure=settings.environment == "production",
+        samesite="lax",
+        max_age=settings.refresh_token_expire_days * 86400,
+        path="/"
+    )
+
+
+@router.put("/me/password", response_model=TokenResponse)
+async def change_password(
+    request: Request,
+    payload: PasswordChangeRequest,
+    response: Response,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session)
+):
+    """
+    Change the current user's password.
+
+    The Master Key never changes — it is simply re-wrapped with a KEK derived
+    from the new password, so all encrypted data stays readable. All refresh
+    tokens are revoked; a fresh session is returned in the response cookies.
+
+    Requires the current password, and a TOTP/backup code if 2FA is enabled.
+    """
+    await _check_rate_limit(request, "password_change", max_calls=5, window_seconds=3600)
+    settings = get_settings()
+
+    if not verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Mot de passe actuel incorrect"
+        )
+
+    if current_user.totp_enabled and not verify_second_factor(session, current_user, payload.totp_code):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Code de vérification 2FA invalide"
+        )
+
+    # Consistency guard: the MK from the cookie must match the wrapped MK.
+    # Re-wrapping a stale/foreign key would make all data unreadable.
+    if current_user.mk_wrapped_password and current_user.mk_salt_password:
+        try:
+            stored_mk = unwrap_master_key(
+                current_user.mk_wrapped_password,
+                payload.current_password,
+                current_user.mk_salt_password,
+            )
+        except DecryptionError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Mot de passe actuel incorrect"
+            )
+        if stored_mk != master_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Clé de chiffrement invalide. Veuillez vous reconnecter."
+            )
+    else:
+        # Legacy account not yet migrated: wrap on the fly with the current password
+        stored_mk = master_key
+
+    new_salt = init_salt()
+    current_user.mk_wrapped_password = wrap_master_key(stored_mk, payload.new_password, new_salt)
+    current_user.mk_salt_password = new_salt
+    current_user.password_hash = hash_password(payload.new_password)
+    session.add(current_user)
+    session.commit()
+
+    # Invalidate every existing session, then hand back a fresh one
+    revoke_user_refresh_tokens(session, current_user.uuid)
+    refresh_token_str = create_refresh_token()
+    create_refresh_token_db(session, current_user.uuid, refresh_token_str)
+    _set_session_cookies(response, refresh_token_str, stored_mk)
+
+    access_token = create_access_token(data={"sub": current_user.uuid})
+    return TokenResponse(
+        access_token=access_token,
+        token_type="bearer",
+        expires_in=settings.access_token_expire_minutes * 60
+    )

@@ -6,25 +6,26 @@ from datetime import datetime
 from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
 
 
+def validate_password_strength(v: str) -> str:
+    """Enforce password complexity rules (shared by register/change/recover)."""
+    if not re.search(r'[A-Z]', v):
+        raise ValueError('Le mot de passe doit contenir au moins une majuscule')
+    if not re.search(r'[a-z]', v):
+        raise ValueError('Le mot de passe doit contenir au moins une minuscule')
+    if not re.search(r'\d', v):
+        raise ValueError('Le mot de passe doit contenir au moins un chiffre')
+    if not re.search(r'[^A-Za-z0-9]', v):
+        raise ValueError('Le mot de passe doit contenir au moins un caractère spécial')
+    return v
+
+
 class RegisterRequest(BaseModel):
     """User registration request."""
     username: str = Field(..., min_length=3, max_length=50)
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=100)
 
-    @field_validator('password')
-    @classmethod
-    def validate_password_strength(cls, v: str) -> str:
-        """Enforce password complexity rules."""
-        if not re.search(r'[A-Z]', v):
-            raise ValueError('Le mot de passe doit contenir au moins une majuscule')
-        if not re.search(r'[a-z]', v):
-            raise ValueError('Le mot de passe doit contenir au moins une minuscule')
-        if not re.search(r'\d', v):
-            raise ValueError('Le mot de passe doit contenir au moins un chiffre')
-        if not re.search(r'[^A-Za-z0-9]', v):
-            raise ValueError('Le mot de passe doit contenir au moins un caractère spécial')
-        return v
+    _validate_password = field_validator('password')(validate_password_strength)
 
     @field_validator('username')
     @classmethod
@@ -92,3 +93,12 @@ class UsernameUpdateRequest(BaseModel):
         if not re.match(r'^[a-zA-Z0-9_-]+$', v):
             raise ValueError('Le nom d\'utilisateur ne peut contenir que des lettres, chiffres, _ et -')
         return v
+
+
+class PasswordChangeRequest(BaseModel):
+    """Password change request. TOTP code required when 2FA is enabled."""
+    current_password: str
+    new_password: str = Field(..., min_length=8, max_length=100)
+    totp_code: str | None = None
+
+    _validate_password = field_validator('new_password')(validate_password_strength)

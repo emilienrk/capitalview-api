@@ -14,9 +14,14 @@ def _override_deps(session, master_key):
     from database import get_session
     app.dependency_overrides[get_session] = _get_session
 
+    # Reset the in-memory rate limiter between tests
+    from routes.auth import _rate_hits
+    _rate_hits.clear()
+
     yield
 
     app.dependency_overrides.clear()
+    _rate_hits.clear()
 
 
 def test_register_and_me(session):
@@ -100,6 +105,80 @@ def test_register_uses_random_wrapped_master_key(session):
     assert master_key != get_masterkey("Strongpass1!", user.auth_salt)
     # Wrapped MK unwraps to the same MK
     assert unwrap_master_key(user.mk_wrapped_password, "Strongpass1!", user.mk_salt_password) == master_key
+
+
+def test_change_password_keeps_data_readable(session):
+    """Core invariant: the MK never changes, so encrypted data survives a password change."""
+    client = TestClient(app)
+    payload = {"username": "pwchange", "email": "pwchange@example.com", "password": "OldPass123!"}
+    r = client.post("/auth/register", json=payload)
+    assert r.status_code == 201
+    token = r.json()["access_token"]
+    auth = {"Authorization": f"Bearer {token}"}
+
+    # Create encrypted data (bank account) with the register session cookies
+    r_acc = client.post(
+        "/bank/accounts",
+        json={"name": "Compte Test", "account_type": "CHECKING", "balance": "1234.56"},
+        headers=auth,
+    )
+    assert r_acc.status_code == 201
+
+    # Change password
+    r_pw = client.put(
+        "/auth/me/password",
+        json={"current_password": "OldPass123!", "new_password": "NewPass456!"},
+        headers=auth,
+    )
+    assert r_pw.status_code == 200
+    new_token = r_pw.json()["access_token"]
+
+    # Old password rejected, new one accepted
+    assert client.post("/auth/login", json={"email": "pwchange@example.com", "password": "OldPass123!"}).status_code == 401
+    r_login = client.post("/auth/login", json={"email": "pwchange@example.com", "password": "NewPass456!"})
+    assert r_login.status_code == 200
+
+    # Encrypted data still readable after re-login
+    r_read = client.get("/bank/accounts", headers={"Authorization": f"Bearer {r_login.json()['access_token']}"})
+    assert r_read.status_code == 200
+    accounts = r_read.json()["accounts"]
+    assert len(accounts) == 1
+    assert accounts[0]["name"] == "Compte Test"
+    assert new_token
+
+
+def test_change_password_wrong_current_password(session):
+    client = TestClient(app)
+    payload = {"username": "pwwrong", "email": "pwwrong@example.com", "password": "OldPass123!"}
+    r = client.post("/auth/register", json=payload)
+    auth = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    r_pw = client.put(
+        "/auth/me/password",
+        json={"current_password": "WrongPass1!", "new_password": "NewPass456!"},
+        headers=auth,
+    )
+    assert r_pw.status_code == 401
+
+
+def test_change_password_revokes_old_refresh_tokens(session):
+    client = TestClient(app)
+    payload = {"username": "pwrevoke", "email": "pwrevoke@example.com", "password": "OldPass123!"}
+    r = client.post("/auth/register", json=payload)
+    auth = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    old_refresh = r.cookies["refresh_token"]
+
+    r_pw = client.put(
+        "/auth/me/password",
+        json={"current_password": "OldPass123!", "new_password": "NewPass456!"},
+        headers=auth,
+    )
+    assert r_pw.status_code == 200
+
+    # The pre-change refresh token no longer works
+    client.cookies.clear()
+    client.cookies.set("refresh_token", old_refresh)
+    assert client.post("/auth/refresh").status_code == 401
 
 
 def test_legacy_login_lazy_migration(session):
