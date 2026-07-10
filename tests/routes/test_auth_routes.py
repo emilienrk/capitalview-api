@@ -80,3 +80,58 @@ def test_login_refresh_and_logout(session):
     r4 = client.post("/auth/logout", headers={"Authorization": f"Bearer {token}"})
     assert r4.status_code == 200
     assert r4.json().get("message") == "Logged out successfully"
+
+
+def test_register_uses_random_wrapped_master_key(session):
+    """New accounts get a random MK, wrapped — not the legacy password-derived MK."""
+    from sqlmodel import select
+    from services.encryption import get_masterkey, unwrap_master_key
+
+    client = TestClient(app)
+    payload = {"username": "wrapuser", "email": "wrap@example.com", "password": "Strongpass1!"}
+    r = client.post("/auth/register", json=payload, headers={"X-Return-Master-Key": "true"})
+    assert r.status_code == 201
+    master_key = r.json()["master_key"]
+
+    user = session.exec(select(User).where(User.email == "wrap@example.com")).first()
+    assert user.mk_wrapped_password is not None
+    assert user.mk_salt_password is not None
+    # MK is random, not the legacy derivation
+    assert master_key != get_masterkey("Strongpass1!", user.auth_salt)
+    # Wrapped MK unwraps to the same MK
+    assert unwrap_master_key(user.mk_wrapped_password, "Strongpass1!", user.mk_salt_password) == master_key
+
+
+def test_legacy_login_lazy_migration(session):
+    """A legacy account (no wrapped MK) keeps its derived MK and gets wrapped at login."""
+    import uuid as uuid_mod
+    from sqlmodel import select
+    from services.encryption import get_masterkey, hash_password, init_salt
+
+    auth_salt = init_salt()
+    legacy = User(
+        uuid=str(uuid_mod.uuid4()),
+        username="legacyuser",
+        email="legacy@example.com",
+        auth_salt=auth_salt,
+        password_hash=hash_password("LegacyPass1!"),
+    )
+    session.add(legacy)
+    session.commit()
+    legacy_mk = get_masterkey("LegacyPass1!", auth_salt)
+
+    client = TestClient(app)
+    login = {"email": "legacy@example.com", "password": "LegacyPass1!"}
+    r = client.post("/auth/login", json=login, headers={"X-Return-Master-Key": "true"})
+    assert r.status_code == 200
+    # Same MK as before the migration — data stays readable
+    assert r.json()["master_key"] == legacy_mk
+
+    user = session.exec(select(User).where(User.email == "legacy@example.com")).first()
+    session.refresh(user)
+    assert user.mk_wrapped_password is not None
+
+    # Second login goes through the unwrap path and returns the same MK
+    r2 = client.post("/auth/login", json=login, headers={"X-Return-Master-Key": "true"})
+    assert r2.status_code == 200
+    assert r2.json()["master_key"] == legacy_mk
