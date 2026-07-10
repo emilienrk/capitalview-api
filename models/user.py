@@ -22,6 +22,17 @@ class User(SQLModel, table=True):
     password_hash: str = Field(nullable=False)
     is_active: bool = Field(default=True, nullable=False)
     last_login: datetime | None = Field(default=None)
+    # Wrapped Master Key: Enc(KEK, MK) where KEK = Argon2id(secret, salt).
+    # Legacy accounts (columns NULL) derive the MK directly from the password
+    # until the lazy migration wraps it at their next login.
+    mk_wrapped_password: str | None = Field(default=None, sa_column=Column(TEXT))
+    mk_salt_password: str | None = Field(default=None, sa_column=Column(TEXT))
+    mk_wrapped_recovery: str | None = Field(default=None, sa_column=Column(TEXT))
+    mk_salt_recovery: str | None = Field(default=None, sa_column=Column(TEXT))
+    # TOTP secret encrypted with a server key (must be verifiable before the MK is released)
+    totp_secret_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    totp_enabled: bool = Field(default=False, nullable=False)
+    totp_last_used_step: int | None = Field(default=None)
     created_at: datetime = Field(
         default=sa.func.now(),
         sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
@@ -101,6 +112,28 @@ class UserSettings(SQLModel, table=True):
             onupdate=sa.func.now(),
             nullable=False,
         )
+    )
+
+
+class TotpBackupCode(SQLModel, table=True):
+    """Single-use 2FA backup codes, stored as HMAC-SHA256 hashes."""
+    __tablename__ = "totp_backup_codes"
+    __table_args__ = {"extend_existing": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_uuid: str = Field(
+        sa_column=Column(
+            sa.String,
+            sa.ForeignKey("users.uuid", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    code_hash: str = Field(nullable=False, index=True)
+    used_at: datetime | None = Field(default=None)
+    created_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
     )
 
 
