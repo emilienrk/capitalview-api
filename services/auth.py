@@ -22,10 +22,13 @@ from services.encryption import (
     get_masterkey,
     init_salt,
     server_decrypt,
+    server_encrypt,
     unwrap_master_key,
     wrap_master_key,
 )
 from services.totp import hash_backup_code, verify_totp
+
+PENDING_2FA_TOKEN_EXPIRE_MINUTES = 5
 
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
@@ -139,6 +142,46 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
 def create_refresh_token() -> str:
     """Generate a secure random refresh token."""
     return secrets.token_urlsafe(32)
+
+
+def create_pending_2fa_token(user_uuid: str, master_key: str) -> str:
+    """
+    Create the short-lived token issued between login step 1 (password OK)
+    and step 2 (TOTP code). It is NOT an access token: its only use is
+    POST /auth/login/2fa. The Master Key travels inside it encrypted with a
+    server key (claim ``mkc``), so the bearer cannot read it.
+    """
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": user_uuid,
+        "type": "2fa_pending",
+        "mkc": server_encrypt(master_key, "2fa-pending"),
+        "iat": now,
+        "exp": now + timedelta(minutes=PENDING_2FA_TOKEN_EXPIRE_MINUTES),
+    }
+    return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
+
+
+def decode_pending_2fa_token(token: str) -> tuple[str, str]:
+    """
+    Decode a pending 2FA token.
+
+    Returns:
+        (user_uuid, master_key)
+
+    Raises:
+        InvalidTokenError: if the token is invalid, expired or of the wrong type.
+    """
+    settings = get_settings()
+    payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+    if payload.get("type") != "2fa_pending":
+        raise InvalidTokenError("Invalid token type")
+    user_uuid = payload.get("sub")
+    mkc = payload.get("mkc")
+    if not user_uuid or not mkc:
+        raise InvalidTokenError("Missing claims")
+    return user_uuid, server_decrypt(mkc, "2fa-pending")
 
 
 def hash_refresh_token(token: str) -> str:
