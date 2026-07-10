@@ -15,32 +15,32 @@ Supported operations:
 
 import csv
 import io
-import logging
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from datetime import date, datetime
-from uuid import uuid4
+from datetime import datetime
 
-import sqlalchemy as sa
-from sqlmodel import Session, select
+from sqlmodel import Session
 
-from models.enums import AssetType, CryptoTransactionType
-from models.market import MarketAsset, MarketPriceHistory
+from models.enums import CryptoTransactionType
 from dtos.crypto import (
-    BinanceImportRowPreview,
     BinanceImportGroupPreview,
     BinanceImportPreviewResponse,
     BinanceImportConfirmResponse,
-    CryptoTransactionCreate,
 )
-from services.crypto_transaction import create_crypto_transaction
-
-logger = logging.getLogger(__name__)
-
-
-# ── Constants ─────────────────────────────────────────────────
-
-STABLECOIN_SYMBOLS = frozenset({"USDC", "USDT", "DAI", "BUSD", "FDUSD"})
+from dtos.imports import (
+    ImportConfirmRequest,
+    ImportConfirmResponse,
+    ImportPreviewResponse,
+)
+from services.imports._crypto_common import (
+    STABLECOIN_SYMBOLS,  # noqa: F401 — re-exported for backwards compatibility
+    MappedRow,
+    build_crypto_preview,
+    execute_crypto_groups,
+)
+from services.imports.base import ImportCategory, ImportParser, csv_header_line
+from services.imports.dedup import crypto_fingerprints
+from services.imports.registry import register
 
 
 # ── Internal dataclass ────────────────────────────────────────
@@ -187,120 +187,42 @@ def _map_row(row: _BinanceRow) -> tuple[CryptoTransactionType, str, Decimal, Dec
     return CryptoTransactionType.SPEND, coin, amount, Decimal("0")
 
 
-# ── Group summary ─────────────────────────────────────────────
-
-def _group_summary(rows: list[_BinanceRow]) -> str:
-    """Human-readable one-liner for a group."""
-    out_syms: list[str] = []
-    in_syms: list[str] = []
-    for r in rows:
-        target = in_syms if r.change > 0 else out_syms
-        if r.coin not in target:
-            target.append(r.coin)
-
-    if out_syms and in_syms:
-        return f"{', '.join(out_syms)} → {', '.join(in_syms)}"
-    if in_syms:
-        return f"+ {', '.join(in_syms)}"
-    if out_syms:
-        return f"- {', '.join(out_syms)}"
-    return ", ".join({r.operation for r in rows})
-
-
-# ── Historical price pre-fill ────────────────────────────────────────────────
-
-def _prefill_eur_amounts(session: Session, groups: list[BinanceImportGroupPreview]) -> None:
-    """
-    For groups that need manual EUR input and have no eur_amount yet,
-    look up the historical CRYPTO→EUR price at the transaction date and
-    pre-fill eur_amount = total_buy_quantity × price.
-    """
-    from services.market import ensure_price_history
-
-    # Collect groups to fill and their main buy symbol
-    to_fill: list[tuple[BinanceImportGroupPreview, str, float, date]] = []
-
-    for group in groups:
-        if not group.needs_eur_input or group.eur_amount is not None:
-            continue
-
-        buy_rows = [r for r in group.rows if r.mapped_type == "BUY"]
-        if not buy_rows:
-            continue
-
-        # Pick primary symbol: prefer non-stablecoin, non-EUR
-        primary_row = next(
-            (r for r in buy_rows if r.mapped_asset_key not in STABLECOIN_SYMBOLS and r.mapped_asset_key != "EUR"),
-            buy_rows[0],
-        )
-        symbol = primary_row.mapped_asset_key
-        total_amount = sum(r.mapped_amount for r in buy_rows if r.mapped_asset_key == symbol)
-
-        tx_date = datetime.fromisoformat(group.timestamp).date()
-        to_fill.append((group, symbol, total_amount, tx_date))
-
-    if not to_fill:
-        return
-
-    # Compute min date per symbol across all groups
-    symbol_min_dates: dict[str, date] = {}
-    for _, symbol, _, tx_date in to_fill:
-        if symbol not in symbol_min_dates or tx_date < symbol_min_dates[symbol]:
-            symbol_min_dates[symbol] = tx_date
-
-    all_symbols = list(symbol_min_dates.keys())
-
-    # Query DB first — prices may already be there from a previous import
-    def _fetch_matrix(symbols: list[str]) -> dict[str, dict[date, Decimal]]:
-        if not symbols:
-            return {}
-        db_rows = session.exec(
-            select(MarketAsset.asset_key, MarketPriceHistory.price_date, MarketPriceHistory.price)
-            .join(MarketAsset, MarketPriceHistory.market_asset_id == MarketAsset.id)
-            .where(MarketAsset.asset_key.in_(symbols))
-        ).all()
-        result: dict[str, dict[date, Decimal]] = {}
-        for asset_key, price_date, price in db_rows:
-            result.setdefault(asset_key, {})[price_date] = price
-        return result
-
-    matrix = _fetch_matrix(all_symbols)
-
-    # Only call ensure_price_history for symbols that have no price data in DB yet
-    symbols_needing_backfill = [
-        symbol for symbol in all_symbols if symbol not in matrix
-    ]
-    for symbol in symbols_needing_backfill:
-        min_date = symbol_min_dates[symbol]
-        try:
-            ensure_price_history(session, symbol, AssetType.CRYPTO, min_date)
-        except Exception as exc:
-            logger.debug("_prefill_eur_amounts: ensure_price_history failed for %s: %s", symbol, exc)
-
-    # Re-fetch only for the symbols that just got backfilled
-    if symbols_needing_backfill:
-        new_entries = _fetch_matrix(symbols_needing_backfill)
-        matrix.update(new_entries)
-
-    # Fill eur_amount for each group needing it
-    for group, symbol, total_amount, tx_date in to_fill:
-        price_map = matrix.get(symbol, {})
-        if not price_map:
-            continue
-
-        # Closest price on or before tx_date; fall back to earliest known
-        candidates = [(d, p) for d, p in price_map.items() if d <= tx_date]
-        if candidates:
-            _, best_price = max(candidates, key=lambda x: x[0])
-        else:
-            _, best_price = min(price_map.items(), key=lambda x: x[0])
-
-        group.eur_amount = round(float(Decimal(str(total_amount)) * best_price), 2)
-
-
 # ── Preview ───────────────────────────────────────────────────────────────────
 
-def generate_preview(csv_content: str, session: Session | None = None) -> BinanceImportPreviewResponse:
+def _build_buckets(rows: list[_BinanceRow]) -> list[tuple[datetime, list[MappedRow]]]:
+    """Group rows by proximity (within 6 seconds) and map them."""
+    sorted_rows = sorted(rows, key=lambda r: r.utc_time)
+    buckets: list[list[_BinanceRow]] = []
+    for r in sorted_rows:
+        t = r.utc_time.replace(microsecond=0)
+        if buckets and (t - buckets[-1][0].utc_time.replace(microsecond=0)).total_seconds() <= 6:
+            buckets[-1].append(r)
+        else:
+            buckets.append([r])
+
+    result: list[tuple[datetime, list[MappedRow]]] = []
+    for group_rows in buckets:
+        mapped: list[MappedRow] = []
+        for r in group_rows:
+            tx_type, symbol, amount, price = _map_row(r)
+            mapped.append(MappedRow(
+                operation=r.operation,
+                coin=r.coin,
+                change=r.change,
+                tx_type=tx_type,
+                asset_key=symbol,
+                amount=amount,
+                price=price,
+            ))
+        result.append((group_rows[0].utc_time.replace(microsecond=0), mapped))
+    return result
+
+
+def generate_preview(
+    csv_content: str,
+    session: Session | None = None,
+    existing_fps: set | None = None,
+) -> BinanceImportPreviewResponse:
     """
     Parse a Binance CSV and return a preview of all groups
     with their mapped atomic rows, indicating which groups
@@ -316,98 +238,7 @@ def generate_preview(csv_content: str, session: Session | None = None) -> Binanc
             groups=[],
         )
 
-    # Group by proximity (within 6 seconds)
-    sorted_rows = sorted(rows, key=lambda r: r.utc_time)
-    buckets: list[list[_BinanceRow]] = []
-    for r in sorted_rows:
-        t = r.utc_time.replace(microsecond=0)
-        if buckets and (t - buckets[-1][0].utc_time.replace(microsecond=0)).total_seconds() <= 6:
-            buckets[-1].append(r)
-        else:
-            buckets.append([r])
-
-    groups: list[BinanceImportGroupPreview] = []
-    needing_eur = 0
-
-    for idx, group_rows in enumerate(buckets):
-        ts = group_rows[0].utc_time.replace(microsecond=0)
-
-        # Map every row
-        mapped: list[BinanceImportRowPreview] = []
-        has_eur = False
-        eur_out = Decimal("0")
-        eur_in = Decimal("0")
-        usdc_total = Decimal("0")
-        has_trade = False
-
-        for r in group_rows:
-            tx_type, symbol, amount, price = _map_row(r)
-
-            mapped.append(BinanceImportRowPreview(
-                operation=r.operation,
-                coin=r.coin,
-                change=float(r.change),
-                mapped_type=tx_type.value,
-                mapped_asset_key=symbol,
-                mapped_amount=float(amount),
-                mapped_price=float(price),
-            ))
-
-            if r.coin == "EUR":
-                has_eur = True
-                if r.change < 0:
-                    eur_out += abs(r.change)
-                else:
-                    eur_in += abs(r.change)
-
-            if r.coin in STABLECOIN_SYMBOLS:
-                usdc_total += abs(r.change)
-
-            if tx_type in (
-                CryptoTransactionType.BUY,
-                CryptoTransactionType.SPEND,
-            ) and symbol != "EUR":
-                has_trade = True
-
-        # Sort mapped rows: BUY first, then SPEND, then FEE, then others
-        _TYPE_ORDER = {"BUY": 0, "DEPOSIT": 1, "REWARD": 1, "SPEND": 2, "WITHDRAW": 3, "FEE": 4, "ANCHOR": 5, "TRANSFER": 6}
-        mapped.sort(key=lambda m: _TYPE_ORDER.get(m.mapped_type, 99))
-
-        # Determine EUR anchor status
-        is_reward_only = all(r.operation == "Crypto Box" for r in group_rows)
-        is_transfer_only = all(r.operation == "Withdraw" for r in group_rows)
-        needs_eur = not has_eur and not is_reward_only and not is_transfer_only and has_trade
-
-        if needs_eur:
-            needing_eur += 1
-
-        # Auto EUR amount for groups that already contain EUR
-        auto_eur = float(eur_out) if eur_out > 0 else (float(eur_in) if eur_in > 0 else None)
-
-        groups.append(BinanceImportGroupPreview(
-            group_index=idx,
-            timestamp=ts.isoformat(),
-            rows=mapped,
-            summary=_group_summary(group_rows),
-            has_eur=has_eur,
-            auto_eur_amount=auto_eur if has_eur else None,
-            needs_eur_input=needs_eur,
-            hint_usdc_amount=float(usdc_total) if usdc_total > 0 and needs_eur else None,
-            eur_amount=auto_eur if has_eur else None,
-        ))
-
-    if session is not None:
-        try:
-            _prefill_eur_amounts(session, groups)
-        except Exception as exc:
-            logger.warning("generate_preview: _prefill_eur_amounts failed: %s", exc)
-
-    return BinanceImportPreviewResponse(
-        total_groups=len(groups),
-        total_rows=sum(len(g.rows) for g in groups),
-        groups_needing_eur=needing_eur,
-        groups=groups,
-    )
+    return build_crypto_preview(_build_buckets(rows), session=session, existing_fps=existing_fps)
 
 
 # ── Confirm & execute ─────────────────────────────────────────
@@ -424,43 +255,72 @@ def execute_import(
     For groups that ``needs_eur_input`` and have a non-zero ``eur_amount``,
     an additional ANCHOR EUR row is inserted.
     """
-    total_imported = 0
-
-    for group in groups:
-        group_uuid = str(uuid4())
-        timestamp = datetime.fromisoformat(group.timestamp)
-
-        # Create one atomic row per mapped CSV line
-        for row in group.rows:
-            amount = Decimal(str(row.mapped_amount))
-            if amount <= 0:
-                continue  # safety guard
-
-            tx = CryptoTransactionCreate(
-                account_id=account_id,
-                asset_key=row.mapped_asset_key,
-                type=CryptoTransactionType(row.mapped_type),
-                amount=amount,
-                price_per_unit=Decimal(str(row.mapped_price)),
-                executed_at=timestamp,
-            )
-            create_crypto_transaction(session, tx, master_key, group_uuid=group_uuid)
-            total_imported += 1
-
-        # Add ANCHOR if group needs EUR and user provided an amount > 0
-        if group.needs_eur_input and group.eur_amount is not None and group.eur_amount > 0:
-            anchor = CryptoTransactionCreate(
-                account_id=account_id,
-                asset_key="EUR",
-                type=CryptoTransactionType.ANCHOR,
-                amount=Decimal(str(group.eur_amount)),
-                price_per_unit=Decimal("1"),
-                executed_at=timestamp,
-            )
-            create_crypto_transaction(session, anchor, master_key, group_uuid=group_uuid)
-            total_imported += 1
-
+    total_imported, _ = execute_crypto_groups(session, account_id, groups, master_key)
     return BinanceImportConfirmResponse(
         imported_count=total_imported,
         groups_count=len(groups),
     )
+
+
+# ── Registry parser ───────────────────────────────────────────
+
+@register
+class BinanceParser(ImportParser):
+    """Binance transaction-history CSV export."""
+
+    source_id = "binance"
+    label = "Binance (export historique de transactions)"
+    category = ImportCategory.CRYPTO
+    file_hint = "export CSV « Transaction History » Binance"
+
+    _HEADERS = {"user_id", "utc_time", "account", "operation", "coin", "change"}
+
+    def detect(self, csv_content: str) -> float:
+        header = csv_header_line(csv_content).lower().replace(" ", "_")
+        cols = {c.strip().strip('"') for c in header.split(",")}
+        hits = len(self._HEADERS & cols)
+        return hits / len(self._HEADERS) if hits >= 4 else 0.0
+
+    def preview(
+        self,
+        session: Session,
+        csv_content: str,
+        options: dict,
+        *,
+        account_id: str | None = None,
+        master_key: str | None = None,
+    ) -> ImportPreviewResponse:
+        existing_fps = None
+        if account_id and master_key:
+            existing_fps = crypto_fingerprints(session, account_id, master_key)
+
+        crypto = generate_preview(csv_content, session=session, existing_fps=existing_fps)
+        return ImportPreviewResponse(
+            source_id=self.source_id,
+            category=self.category.value,
+            total_rows=crypto.total_rows,
+            duplicates_count=sum(1 for g in crypto.groups if g.is_duplicate),
+            crypto=crypto,
+        )
+
+    def execute(
+        self,
+        session: Session,
+        account_id: str,
+        payload: ImportConfirmRequest,
+        master_key: str,
+    ) -> ImportConfirmResponse:
+        groups = payload.crypto_groups or []
+        existing_fps = None
+        if payload.skip_duplicates:
+            existing_fps = crypto_fingerprints(session, account_id, master_key)
+        imported, skipped = execute_crypto_groups(
+            session, account_id, groups, master_key,
+            skip_duplicates=payload.skip_duplicates,
+            existing_fps=existing_fps,
+        )
+        return ImportConfirmResponse(
+            imported_count=imported,
+            skipped_duplicates=skipped,
+            groups_count=len(groups),
+        )
