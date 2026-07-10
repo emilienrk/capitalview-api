@@ -6,5 +6,7 @@ must be listed here so its ``@register`` decorator runs.
 
 from services.imports import binance  # noqa: F401
 from services.imports import coinbase  # noqa: F401
+from services.imports import degiro  # noqa: F401
 from services.imports import generic_csv  # noqa: F401
 from services.imports import kraken  # noqa: F401
+from services.imports import trade_republic  # noqa: F401
