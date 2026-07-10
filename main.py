@@ -30,6 +30,7 @@ from routes import (
     community_router,
     market_router,
     projection_router,
+    imports_router,
 )
 
 
@@ -109,6 +110,7 @@ app.include_router(asset_router)
 app.include_router(community_router)
 app.include_router(market_router)
 app.include_router(projection_router)
+app.include_router(imports_router)
 
 
 @app.get("/")

@@ -257,6 +257,7 @@ class BinanceImportGroupPreview(BaseModel):
     needs_eur_input: bool
     hint_usdc_amount: float | None = None
     eur_amount: float | None = None
+    is_duplicate: bool = False
 
 
 class BinanceImportPreviewRequest(BaseModel):
