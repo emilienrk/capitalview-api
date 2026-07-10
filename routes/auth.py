@@ -17,6 +17,10 @@ from dtos.auth import (
     LoginRequest,
     MessageResponse,
     PasswordChangeRequest,
+    RecoverRequest,
+    RecoverResponse,
+    RecoveryKeyGenerateRequest,
+    RecoveryKeyResponse,
     RegisterRequest,
     TokenResponse,
     UserResponse,
@@ -46,6 +50,7 @@ from services.encryption import (
     unwrap_master_key,
     wrap_master_key,
 )
+from services.totp import generate_recovery_key, normalize_recovery_key
 from services.community import refresh_community_positions
 from services.account_history import run_lazy_catchup
 
@@ -565,4 +570,111 @@ async def change_password(
         access_token=access_token,
         token_type="bearer",
         expires_in=settings.access_token_expire_minutes * 60
+    )
+
+
+@router.post("/recovery-key", response_model=RecoveryKeyResponse)
+async def generate_account_recovery_key(
+    request: Request,
+    payload: RecoveryKeyGenerateRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session)
+):
+    """
+    Generate (or regenerate) the account recovery key.
+
+    The recovery key wraps the same Master Key as the password, so it can
+    restore access — and the encrypted data — if the password is forgotten.
+    It is returned ONCE and never stored in plaintext: write it down.
+    """
+    await _check_rate_limit(request, "recovery_key", max_calls=10, window_seconds=3600)
+
+    if not verify_password(payload.password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Mot de passe incorrect"
+        )
+
+    recovery_key = generate_recovery_key()
+    salt = init_salt()
+    current_user.mk_wrapped_recovery = wrap_master_key(
+        master_key, normalize_recovery_key(recovery_key), salt
+    )
+    current_user.mk_salt_recovery = salt
+    session.add(current_user)
+    session.commit()
+
+    return RecoveryKeyResponse(recovery_key=recovery_key)
+
+
+@router.post("/recover", response_model=RecoverResponse)
+async def recover_account(
+    request: Request,
+    payload: RecoverRequest,
+    response: Response,
+    session: Session = Depends(get_session)
+):
+    """
+    Reset the password using the recovery key (no SMTP required).
+
+    Unwraps the Master Key with the recovery key, re-wraps it with the new
+    password, and logs the user in. The used recovery key is single-use:
+    a replacement key is returned in the response (shown once).
+    """
+    await _check_rate_limit(request, "recover", max_calls=5, window_seconds=3600)
+    settings = get_settings()
+
+    invalid = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Email ou clé de récupération invalide"
+    )
+
+    user = session.exec(select(User).where(User.email == payload.email)).first()
+    if not user or not user.is_active or not user.mk_wrapped_recovery or not user.mk_salt_recovery:
+        raise invalid
+
+    if user.totp_enabled and not verify_second_factor(session, user, payload.totp_code):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Code de vérification 2FA invalide"
+        )
+
+    try:
+        master_key = unwrap_master_key(
+            user.mk_wrapped_recovery,
+            normalize_recovery_key(payload.recovery_key),
+            user.mk_salt_recovery,
+        )
+    except DecryptionError:
+        raise invalid
+
+    # Re-wrap with the new password
+    new_salt = init_salt()
+    user.mk_wrapped_password = wrap_master_key(master_key, payload.new_password, new_salt)
+    user.mk_salt_password = new_salt
+    user.password_hash = hash_password(payload.new_password)
+
+    # The used recovery key is consumed — issue a replacement
+    new_recovery_key = generate_recovery_key()
+    recovery_salt = init_salt()
+    user.mk_wrapped_recovery = wrap_master_key(
+        master_key, normalize_recovery_key(new_recovery_key), recovery_salt
+    )
+    user.mk_salt_recovery = recovery_salt
+    user.last_login = datetime.now(timezone.utc)
+    session.add(user)
+    session.commit()
+
+    revoke_user_refresh_tokens(session, user.uuid)
+    refresh_token_str = create_refresh_token()
+    create_refresh_token_db(session, user.uuid, refresh_token_str)
+    _set_session_cookies(response, refresh_token_str, master_key)
+
+    access_token = create_access_token(data={"sub": user.uuid})
+    return RecoverResponse(
+        access_token=access_token,
+        token_type="bearer",
+        expires_in=settings.access_token_expire_minutes * 60,
+        new_recovery_key=new_recovery_key
     )

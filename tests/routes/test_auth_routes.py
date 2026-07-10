@@ -181,6 +181,86 @@ def test_change_password_revokes_old_refresh_tokens(session):
     assert client.post("/auth/refresh").status_code == 401
 
 
+def test_recovery_key_full_flow(session):
+    """Generate a recovery key, reset the password with it, data stays readable."""
+    client = TestClient(app)
+    payload = {"username": "recouser", "email": "reco@example.com", "password": "OldPass123!"}
+    r = client.post("/auth/register", json=payload)
+    assert r.status_code == 201
+    auth = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    # Encrypted data
+    r_acc = client.post(
+        "/bank/accounts",
+        json={"name": "Compte Recovery", "account_type": "SAVINGS", "balance": "50"},
+        headers=auth,
+    )
+    assert r_acc.status_code == 201
+
+    # Generate the recovery key (wrong password rejected first)
+    assert client.post("/auth/recovery-key", json={"password": "Wrong1!"}, headers=auth).status_code == 401
+    r_key = client.post("/auth/recovery-key", json={"password": "OldPass123!"}, headers=auth)
+    assert r_key.status_code == 200
+    recovery_key = r_key.json()["recovery_key"]
+    assert len(recovery_key.split("-")) == 8
+
+    # Recover: reset password without knowing the old one
+    client.cookies.clear()
+    r_rec = client.post("/auth/recover", json={
+        "email": "reco@example.com",
+        "recovery_key": recovery_key,
+        "new_password": "Recovered456!",
+    })
+    assert r_rec.status_code == 200
+    body = r_rec.json()
+    assert body["new_recovery_key"] != recovery_key
+
+    # Old password dead, new one works, data readable
+    assert client.post("/auth/login", json={"email": "reco@example.com", "password": "OldPass123!"}).status_code == 401
+    r_login = client.post("/auth/login", json={"email": "reco@example.com", "password": "Recovered456!"})
+    assert r_login.status_code == 200
+    r_read = client.get("/bank/accounts", headers={"Authorization": f"Bearer {r_login.json()['access_token']}"})
+    assert r_read.status_code == 200
+    assert r_read.json()["accounts"][0]["name"] == "Compte Recovery"
+
+    # The consumed recovery key no longer works (single-use)
+    r_replay = client.post("/auth/recover", json={
+        "email": "reco@example.com",
+        "recovery_key": recovery_key,
+        "new_password": "Another789!",
+    })
+    assert r_replay.status_code == 401
+
+
+def test_recover_invalid_inputs(session):
+    client = TestClient(app)
+    payload = {"username": "recobad", "email": "recobad@example.com", "password": "OldPass123!"}
+    r = client.post("/auth/register", json=payload)
+    auth = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    # No recovery key generated yet → generic 401
+    r1 = client.post("/auth/recover", json={
+        "email": "recobad@example.com", "recovery_key": "AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA",
+        "new_password": "NewPass456!",
+    })
+    assert r1.status_code == 401
+
+    client.post("/auth/recovery-key", json={"password": "OldPass123!"}, headers=auth)
+
+    # Unknown email → same generic 401 (no enumeration)
+    r2 = client.post("/auth/recover", json={
+        "email": "ghost@example.com", "recovery_key": "AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA",
+        "new_password": "NewPass456!",
+    })
+    assert r2.status_code == 401
+    # Wrong key → 401
+    r3 = client.post("/auth/recover", json={
+        "email": "recobad@example.com", "recovery_key": "AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA",
+        "new_password": "NewPass456!",
+    })
+    assert r3.status_code == 401
+
+
 def test_legacy_login_lazy_migration(session):
     """A legacy account (no wrapped MK) keeps its derived MK and gets wrapped at login."""
     import uuid as uuid_mod

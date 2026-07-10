@@ -102,3 +102,32 @@ class PasswordChangeRequest(BaseModel):
     totp_code: str | None = None
 
     _validate_password = field_validator('new_password')(validate_password_strength)
+
+
+class RecoveryKeyGenerateRequest(BaseModel):
+    """Generate (or regenerate) the account recovery key."""
+    password: str
+
+
+class RecoveryKeyResponse(BaseModel):
+    """The recovery key — shown once, never stored in plaintext."""
+    recovery_key: str
+
+
+class RecoverRequest(BaseModel):
+    """Account recovery: reset the password using the recovery key."""
+    email: EmailStr
+    recovery_key: str
+    new_password: str = Field(..., min_length=8, max_length=100)
+    totp_code: str | None = None
+
+    _validate_password = field_validator('new_password')(validate_password_strength)
+
+
+class RecoverResponse(TokenResponse):
+    """Recovery response: a fresh session plus the replacement recovery key.
+
+    The used recovery key is single-use; ``new_recovery_key`` replaces it and
+    is shown only once.
+    """
+    new_recovery_key: str
