@@ -27,19 +27,14 @@ from dtos.crypto import (
     BinanceImportPreviewResponse,
     BinanceImportConfirmResponse,
 )
-from dtos.imports import (
-    ImportConfirmRequest,
-    ImportConfirmResponse,
-    ImportPreviewResponse,
-)
 from services.imports._crypto_common import (
     STABLECOIN_SYMBOLS,  # noqa: F401 — re-exported for backwards compatibility
+    CryptoImportParser,
     MappedRow,
     build_crypto_preview,
     execute_crypto_groups,
 )
-from services.imports.base import ImportCategory, ImportParser, csv_header_line
-from services.imports.dedup import crypto_fingerprints
+from services.imports.base import csv_header_line
 from services.imports.registry import register
 
 
@@ -265,12 +260,11 @@ def execute_import(
 # ── Registry parser ───────────────────────────────────────────
 
 @register
-class BinanceParser(ImportParser):
+class BinanceParser(CryptoImportParser):
     """Binance transaction-history CSV export."""
 
     source_id = "binance"
     label = "Binance (export historique de transactions)"
-    category = ImportCategory.CRYPTO
     file_hint = "export CSV « Transaction History » Binance"
 
     _HEADERS = {"user_id", "utc_time", "account", "operation", "coin", "change"}
@@ -281,46 +275,5 @@ class BinanceParser(ImportParser):
         hits = len(self._HEADERS & cols)
         return hits / len(self._HEADERS) if hits >= 4 else 0.0
 
-    def preview(
-        self,
-        session: Session,
-        csv_content: str,
-        options: dict,
-        *,
-        account_id: str | None = None,
-        master_key: str | None = None,
-    ) -> ImportPreviewResponse:
-        existing_fps = None
-        if account_id and master_key:
-            existing_fps = crypto_fingerprints(session, account_id, master_key)
-
-        crypto = generate_preview(csv_content, session=session, existing_fps=existing_fps)
-        return ImportPreviewResponse(
-            source_id=self.source_id,
-            category=self.category.value,
-            total_rows=crypto.total_rows,
-            duplicates_count=sum(1 for g in crypto.groups if g.is_duplicate),
-            crypto=crypto,
-        )
-
-    def execute(
-        self,
-        session: Session,
-        account_id: str,
-        payload: ImportConfirmRequest,
-        master_key: str,
-    ) -> ImportConfirmResponse:
-        groups = payload.crypto_groups or []
-        existing_fps = None
-        if payload.skip_duplicates:
-            existing_fps = crypto_fingerprints(session, account_id, master_key)
-        imported, skipped = execute_crypto_groups(
-            session, account_id, groups, master_key,
-            skip_duplicates=payload.skip_duplicates,
-            existing_fps=existing_fps,
-        )
-        return ImportConfirmResponse(
-            imported_count=imported,
-            skipped_duplicates=skipped,
-            groups_count=len(groups),
-        )
+    def generate(self, csv_content, session=None, existing_fps=None):
+        return generate_preview(csv_content, session=session, existing_fps=existing_fps)
