@@ -80,6 +80,111 @@ def get_masterkey(password: str, salt: str) -> str:
     return base64.b64encode(masterkey_bytes).decode("utf-8")
 
 
+def generate_random_master_key() -> str:
+    """Generates a random Master Key (32 bytes, Base64), independent from the password."""
+    return base64.b64encode(os.urandom(32)).decode("utf-8")
+
+
+def derive_kek(secret: str, salt: str) -> bytes:
+    """
+    Derives a Key-Encryption-Key (32 bytes) from a secret (password or recovery key).
+
+    Args:
+        secret: Secret in plaintext (password or normalized recovery key)
+        salt: Unique salt (Base64)
+
+    Returns:
+        Raw 32-byte KEK
+    """
+    secret_bytes = secret.encode("utf-8")
+    salt_bytes = base64.b64decode(salt)
+
+    return nacl.pwhash.argon2id.kdf(
+        32,
+        secret_bytes,
+        salt_bytes,
+        opslimit=nacl.pwhash.argon2id.OPSLIMIT_INTERACTIVE,
+        memlimit=nacl.pwhash.argon2id.MEMLIMIT_INTERACTIVE,
+    )
+
+
+def wrap_master_key(masterkey: str, secret: str, salt: str) -> str:
+    """
+    Wraps (encrypts) the Master Key with a KEK derived from a secret.
+
+    Args:
+        masterkey: Master Key (Base64)
+        secret: Secret used to derive the KEK (password or recovery key)
+        salt: Salt for the KEK derivation (Base64)
+
+    Returns:
+        Base64(nonce ‖ AES-256-GCM ciphertext of the raw MK bytes)
+    """
+    kek = derive_kek(secret, salt)
+    aesgcm = AESGCM(kek)
+    nonce = os.urandom(NONCE_SIZE)
+    ciphertext = aesgcm.encrypt(nonce, base64.b64decode(masterkey), None)
+    return base64.b64encode(nonce + ciphertext).decode("utf-8")
+
+
+def unwrap_master_key(wrapped: str, secret: str, salt: str) -> str:
+    """
+    Unwraps (decrypts) a wrapped Master Key.
+
+    Raises:
+        DecryptionError: if the secret is wrong or the data is corrupted.
+    """
+    kek = derive_kek(secret, salt)
+    aesgcm = AESGCM(kek)
+    packed = base64.b64decode(wrapped)
+    nonce = packed[:NONCE_SIZE]
+    ciphertext = packed[NONCE_SIZE:]
+    try:
+        mk_bytes = aesgcm.decrypt(nonce, ciphertext, None)
+    except Exception as exc:
+        raise DecryptionError("Incorrect secret or corrupted data.") from exc
+    return base64.b64encode(mk_bytes).decode("utf-8")
+
+
+def _derive_server_key(context: str) -> bytes:
+    """Derives a server-side 32-byte key from SECRET_KEY via HKDF for the given context."""
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=f"server-{context}".encode("utf-8"),
+    )
+    return hkdf.derive(get_settings().secret_key.encode("utf-8"))
+
+
+def server_encrypt(plaintext: str, context: str) -> str:
+    """Encrypts *plaintext* with a server key derived from SECRET_KEY (AES-256-GCM).
+
+    Used for secrets that must be readable by the server without the user's
+    Master Key (e.g. TOTP secrets, which are verified before the MK is released).
+    """
+    aesgcm = AESGCM(_derive_server_key(context))
+    nonce = os.urandom(NONCE_SIZE)
+    ciphertext = aesgcm.encrypt(nonce, plaintext.encode("utf-8"), None)
+    return base64.b64encode(nonce + ciphertext).decode("utf-8")
+
+
+def server_decrypt(encrypted: str, context: str) -> str:
+    """Decrypts data produced by :func:`server_encrypt` with the same context.
+
+    Raises:
+        DecryptionError: if the context/key is wrong or the data is corrupted.
+    """
+    aesgcm = AESGCM(_derive_server_key(context))
+    packed = base64.b64decode(encrypted)
+    nonce = packed[:NONCE_SIZE]
+    ciphertext = packed[NONCE_SIZE:]
+    try:
+        return aesgcm.decrypt(nonce, ciphertext, None).decode("utf-8")
+    except Exception as exc:
+        raise DecryptionError("Incorrect key or corrupted data.") from exc
+
+
 def derive_subkey_bytes(masterkey: str, context: str) -> bytes:
     """
     Derives a specific subkey from the Master Key via HKDF.

@@ -19,6 +19,98 @@ from services.encryption import encrypt_data, decrypt_data, hash_index
 from services.market import get_stock_info, get_or_create_market_asset
 
 
+def bulk_tx_order_key(item_with_index: tuple[int, object]) -> tuple:
+    """Deterministic processing order for bulk stock imports.
+
+    We replay transactions chronologically so SELL validation sees prior BUY rows.
+    For identical timestamps, we process cash/funding first, then inventory changes.
+    """
+    index, item = item_with_index
+    type_priority = {
+        "DEPOSIT": 0,
+        "DIVIDEND": 1,
+        "BUY": 2,
+        "SELL": 3,
+    }
+    raw_executed_at = getattr(item, "executed_at", None)
+    if isinstance(raw_executed_at, datetime):
+        executed_at = (
+            raw_executed_at.replace(tzinfo=timezone.utc)
+            if raw_executed_at.tzinfo is None
+            else raw_executed_at.astimezone(timezone.utc)
+        ).isoformat()
+        date_rank = 0
+    else:
+        executed_at = ""
+        date_rank = 1
+
+    item_type = item.type.value if hasattr(item.type, "value") else str(item.type)
+    return (date_rank, executed_at, type_priority.get(item_type, 99), index)
+
+
+def bulk_create_stock_transactions(
+    session: Session,
+    account_id: str,
+    items: list,
+    master_key: str,
+    skip_fingerprints: set | None = None,
+) -> tuple[list[TransactionResponse], int]:
+    """
+    Create many stock transactions in replay order (shared by the bulk route
+    and the CSV import parsers).
+
+    ``items`` are objects with asset_key, type, amount, price_per_unit, fees,
+    executed_at, notes. Rows whose fingerprint is in ``skip_fingerprints``
+    are skipped (duplicate protection). Rows failing business validation
+    (e.g. SELL without inventory) are silently skipped, like the bulk route.
+
+    Returns:
+        (created_responses, skipped_duplicates)
+    """
+    from services.imports.dedup import make_fingerprint
+
+    created: list[TransactionResponse] = []
+    skipped = 0
+    ordered = [item for _, item in sorted(enumerate(items), key=bulk_tx_order_key)]
+
+    for item in ordered:
+        item_type = item.type.value if hasattr(item.type, "value") else str(item.type)
+
+        if skip_fingerprints is not None:
+            fp = make_fingerprint(item.executed_at, item.asset_key, item_type, item.amount)
+            if fp in skip_fingerprints:
+                skipped += 1
+                continue
+
+        try:
+            if item_type == "DEPOSIT":
+                resp = create_eur_deposit(
+                    session=session,
+                    account_uuid=account_id,
+                    amount=item.amount,
+                    executed_at=item.executed_at,
+                    master_key=master_key,
+                    notes=item.notes,
+                )
+            else:
+                create_dto = StockTransactionCreate(
+                    account_id=account_id,
+                    asset_key=item.asset_key,
+                    type=item.type,
+                    amount=item.amount,
+                    price_per_unit=item.price_per_unit,
+                    fees=item.fees,
+                    executed_at=item.executed_at,
+                    notes=item.notes,
+                )
+                resp = create_stock_transaction(session, create_dto, master_key)
+            created.append(resp)
+        except ValueError:
+            continue
+
+    return created, skipped
+
+
 def _decrypt_transaction(tx: StockTransaction, master_key: str) -> TransactionResponse:
     """Decrypt a StockTransaction and return a response with calculated totals."""
     asset_key = decrypt_data(tx.asset_key_enc, master_key)

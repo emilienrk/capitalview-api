@@ -14,9 +14,14 @@ def _override_deps(session, master_key):
     from database import get_session
     app.dependency_overrides[get_session] = _get_session
 
+    # Reset the in-memory rate limiter between tests
+    from routes.auth import _rate_hits
+    _rate_hits.clear()
+
     yield
 
     app.dependency_overrides.clear()
+    _rate_hits.clear()
 
 
 def test_register_and_me(session):
@@ -80,3 +85,332 @@ def test_login_refresh_and_logout(session):
     r4 = client.post("/auth/logout", headers={"Authorization": f"Bearer {token}"})
     assert r4.status_code == 200
     assert r4.json().get("message") == "Logged out successfully"
+
+
+def test_register_uses_random_wrapped_master_key(session):
+    """New accounts get a random MK, wrapped — not the legacy password-derived MK."""
+    from sqlmodel import select
+    from services.encryption import get_masterkey, unwrap_master_key
+
+    client = TestClient(app)
+    payload = {"username": "wrapuser", "email": "wrap@example.com", "password": "Strongpass1!"}
+    r = client.post("/auth/register", json=payload, headers={"X-Return-Master-Key": "true"})
+    assert r.status_code == 201
+    master_key = r.json()["master_key"]
+
+    user = session.exec(select(User).where(User.email == "wrap@example.com")).first()
+    assert user.mk_wrapped_password is not None
+    assert user.mk_salt_password is not None
+    # MK is random, not the legacy derivation
+    assert master_key != get_masterkey("Strongpass1!", user.auth_salt)
+    # Wrapped MK unwraps to the same MK
+    assert unwrap_master_key(user.mk_wrapped_password, "Strongpass1!", user.mk_salt_password) == master_key
+
+
+def test_change_password_keeps_data_readable(session):
+    """Core invariant: the MK never changes, so encrypted data survives a password change."""
+    client = TestClient(app)
+    payload = {"username": "pwchange", "email": "pwchange@example.com", "password": "OldPass123!"}
+    r = client.post("/auth/register", json=payload)
+    assert r.status_code == 201
+    token = r.json()["access_token"]
+    auth = {"Authorization": f"Bearer {token}"}
+
+    # Create encrypted data (bank account) with the register session cookies
+    r_acc = client.post(
+        "/bank/accounts",
+        json={"name": "Compte Test", "account_type": "CHECKING", "balance": "1234.56"},
+        headers=auth,
+    )
+    assert r_acc.status_code == 201
+
+    # Change password
+    r_pw = client.put(
+        "/auth/me/password",
+        json={"current_password": "OldPass123!", "new_password": "NewPass456!"},
+        headers=auth,
+    )
+    assert r_pw.status_code == 200
+    new_token = r_pw.json()["access_token"]
+
+    # Old password rejected, new one accepted
+    assert client.post("/auth/login", json={"email": "pwchange@example.com", "password": "OldPass123!"}).status_code == 401
+    r_login = client.post("/auth/login", json={"email": "pwchange@example.com", "password": "NewPass456!"})
+    assert r_login.status_code == 200
+
+    # Encrypted data still readable after re-login
+    r_read = client.get("/bank/accounts", headers={"Authorization": f"Bearer {r_login.json()['access_token']}"})
+    assert r_read.status_code == 200
+    accounts = r_read.json()["accounts"]
+    assert len(accounts) == 1
+    assert accounts[0]["name"] == "Compte Test"
+    assert new_token
+
+
+def test_change_password_wrong_current_password(session):
+    client = TestClient(app)
+    payload = {"username": "pwwrong", "email": "pwwrong@example.com", "password": "OldPass123!"}
+    r = client.post("/auth/register", json=payload)
+    auth = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    r_pw = client.put(
+        "/auth/me/password",
+        json={"current_password": "WrongPass1!", "new_password": "NewPass456!"},
+        headers=auth,
+    )
+    assert r_pw.status_code == 401
+
+
+def test_change_password_revokes_old_refresh_tokens(session):
+    client = TestClient(app)
+    payload = {"username": "pwrevoke", "email": "pwrevoke@example.com", "password": "OldPass123!"}
+    r = client.post("/auth/register", json=payload)
+    auth = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    old_refresh = r.cookies["refresh_token"]
+
+    r_pw = client.put(
+        "/auth/me/password",
+        json={"current_password": "OldPass123!", "new_password": "NewPass456!"},
+        headers=auth,
+    )
+    assert r_pw.status_code == 200
+
+    # The pre-change refresh token no longer works
+    client.cookies.clear()
+    client.cookies.set("refresh_token", old_refresh)
+    assert client.post("/auth/refresh").status_code == 401
+
+
+def test_recovery_key_full_flow(session):
+    """Generate a recovery key, reset the password with it, data stays readable."""
+    client = TestClient(app)
+    payload = {"username": "recouser", "email": "reco@example.com", "password": "OldPass123!"}
+    r = client.post("/auth/register", json=payload)
+    assert r.status_code == 201
+    auth = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    # Encrypted data
+    r_acc = client.post(
+        "/bank/accounts",
+        json={"name": "Compte Recovery", "account_type": "SAVINGS", "balance": "50"},
+        headers=auth,
+    )
+    assert r_acc.status_code == 201
+
+    # Generate the recovery key (wrong password rejected first)
+    assert client.post("/auth/recovery-key", json={"password": "Wrong1!"}, headers=auth).status_code == 401
+    r_key = client.post("/auth/recovery-key", json={"password": "OldPass123!"}, headers=auth)
+    assert r_key.status_code == 200
+    recovery_key = r_key.json()["recovery_key"]
+    assert len(recovery_key.split("-")) == 8
+
+    # Recover: reset password without knowing the old one
+    client.cookies.clear()
+    r_rec = client.post("/auth/recover", json={
+        "email": "reco@example.com",
+        "recovery_key": recovery_key,
+        "new_password": "Recovered456!",
+    })
+    assert r_rec.status_code == 200
+    body = r_rec.json()
+    assert body["new_recovery_key"] != recovery_key
+
+    # Old password dead, new one works, data readable
+    assert client.post("/auth/login", json={"email": "reco@example.com", "password": "OldPass123!"}).status_code == 401
+    r_login = client.post("/auth/login", json={"email": "reco@example.com", "password": "Recovered456!"})
+    assert r_login.status_code == 200
+    r_read = client.get("/bank/accounts", headers={"Authorization": f"Bearer {r_login.json()['access_token']}"})
+    assert r_read.status_code == 200
+    assert r_read.json()["accounts"][0]["name"] == "Compte Recovery"
+
+    # The consumed recovery key no longer works (single-use)
+    r_replay = client.post("/auth/recover", json={
+        "email": "reco@example.com",
+        "recovery_key": recovery_key,
+        "new_password": "Another789!",
+    })
+    assert r_replay.status_code == 401
+
+
+def test_recover_invalid_inputs(session):
+    client = TestClient(app)
+    payload = {"username": "recobad", "email": "recobad@example.com", "password": "OldPass123!"}
+    r = client.post("/auth/register", json=payload)
+    auth = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    # No recovery key generated yet → generic 401
+    r1 = client.post("/auth/recover", json={
+        "email": "recobad@example.com", "recovery_key": "AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA",
+        "new_password": "NewPass456!",
+    })
+    assert r1.status_code == 401
+
+    client.post("/auth/recovery-key", json={"password": "OldPass123!"}, headers=auth)
+
+    # Unknown email → same generic 401 (no enumeration)
+    r2 = client.post("/auth/recover", json={
+        "email": "ghost@example.com", "recovery_key": "AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA",
+        "new_password": "NewPass456!",
+    })
+    assert r2.status_code == 401
+    # Wrong key → 401
+    r3 = client.post("/auth/recover", json={
+        "email": "recobad@example.com", "recovery_key": "AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA",
+        "new_password": "NewPass456!",
+    })
+    assert r3.status_code == 401
+
+
+def _register(client, username, email, password):
+    r = client.post("/auth/register", json={"username": username, "email": email, "password": password})
+    assert r.status_code == 201
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+def test_2fa_full_flow(session):
+    from services.totp import totp_code
+
+    client = TestClient(app)
+    auth = _register(client, "totpuser", "totp@example.com", "Strongpass1!")
+
+    # Setup requires the password
+    assert client.post("/auth/2fa/setup", json={"password": "bad"}, headers=auth).status_code == 401
+    r_setup = client.post("/auth/2fa/setup", json={"password": "Strongpass1!"}, headers=auth)
+    assert r_setup.status_code == 200
+    secret = r_setup.json()["secret"]
+    assert "otpauth://totp/" in r_setup.json()["otpauth_uri"]
+
+    # Login is still single-step while 2FA is pending (not enabled)
+    r_login = client.post("/auth/login", json={"email": "totp@example.com", "password": "Strongpass1!"})
+    assert r_login.status_code == 200
+    assert "access_token" in r_login.json()
+
+    # Enable with a wrong code fails, then succeeds with a valid one
+    assert client.post("/auth/2fa/enable", json={"code": "000000"}, headers=auth).status_code == 401
+    r_enable = client.post("/auth/2fa/enable", json={"code": totp_code(secret)}, headers=auth)
+    assert r_enable.status_code == 200
+    backup_codes = r_enable.json()["backup_codes"]
+    assert len(backup_codes) == 10
+
+    # /me exposes totp_enabled
+    r_me = client.get("/auth/me", headers=auth)
+    assert r_me.json()["totp_enabled"] is True
+
+    # Login now requires step 2
+    client.cookies.clear()
+    r_step1 = client.post("/auth/login", json={"email": "totp@example.com", "password": "Strongpass1!"})
+    assert r_step1.status_code == 200
+    body = r_step1.json()
+    assert body.get("two_fa_required") is True
+    assert "access_token" not in body
+    assert "refresh_token" not in r_step1.cookies
+
+    # Wrong code rejected; anti-replay: the enable code was already consumed for this step
+    pending = body["pending_token"]
+    assert client.post("/auth/login/2fa", json={"pending_token": pending, "code": "000000"}).status_code == 401
+
+    # Valid backup code completes the login
+    r_step2 = client.post(
+        "/auth/login/2fa",
+        json={"pending_token": pending, "code": backup_codes[0]},
+        headers={"X-Return-Master-Key": "true"},
+    )
+    assert r_step2.status_code == 200
+    assert "access_token" in r_step2.json()
+    assert r_step2.json()["master_key"] is not None
+    assert "refresh_token" in r_step2.cookies
+
+    # Backup code is single-use
+    r_step1b = client.post("/auth/login", json={"email": "totp@example.com", "password": "Strongpass1!"})
+    pending_b = r_step1b.json()["pending_token"]
+    assert client.post("/auth/login/2fa", json={"pending_token": pending_b, "code": backup_codes[0]}).status_code == 401
+
+    # Garbage pending token rejected
+    assert client.post("/auth/login/2fa", json={"pending_token": "garbage", "code": "123456"}).status_code == 401
+
+
+def test_2fa_disable_restores_single_step_login(session):
+    from services.totp import totp_code
+
+    client = TestClient(app)
+    auth = _register(client, "totpoff", "totpoff@example.com", "Strongpass1!")
+
+    secret = client.post("/auth/2fa/setup", json={"password": "Strongpass1!"}, headers=auth).json()["secret"]
+    r_enable = client.post("/auth/2fa/enable", json={"code": totp_code(secret)}, headers=auth)
+    assert r_enable.status_code == 200
+    backup_codes = r_enable.json()["backup_codes"]
+
+    # Disable with password + backup code
+    r_disable = client.post(
+        "/auth/2fa/disable",
+        json={"password": "Strongpass1!", "code": backup_codes[0]},
+        headers=auth,
+    )
+    assert r_disable.status_code == 200
+
+    # Login is single-step again
+    r_login = client.post("/auth/login", json={"email": "totpoff@example.com", "password": "Strongpass1!"})
+    assert r_login.status_code == 200
+    assert "access_token" in r_login.json()
+
+
+def test_2fa_required_for_password_change(session):
+    from services.totp import totp_code, TOTP_STEP_SECONDS
+
+    client = TestClient(app)
+    auth = _register(client, "totppw", "totppw@example.com", "Strongpass1!")
+
+    secret = client.post("/auth/2fa/setup", json={"password": "Strongpass1!"}, headers=auth).json()["secret"]
+    r_enable = client.post("/auth/2fa/enable", json={"code": totp_code(secret)}, headers=auth)
+    backup_codes = r_enable.json()["backup_codes"]
+
+    # Without a code → 401
+    r_no_code = client.put(
+        "/auth/me/password",
+        json={"current_password": "Strongpass1!", "new_password": "NewPass456!"},
+        headers=auth,
+    )
+    assert r_no_code.status_code == 401
+
+    # With a backup code → OK
+    r_ok = client.put(
+        "/auth/me/password",
+        json={"current_password": "Strongpass1!", "new_password": "NewPass456!", "totp_code": backup_codes[1]},
+        headers=auth,
+    )
+    assert r_ok.status_code == 200
+
+
+def test_legacy_login_lazy_migration(session):
+    """A legacy account (no wrapped MK) keeps its derived MK and gets wrapped at login."""
+    import uuid as uuid_mod
+    from sqlmodel import select
+    from services.encryption import get_masterkey, hash_password, init_salt
+
+    auth_salt = init_salt()
+    legacy = User(
+        uuid=str(uuid_mod.uuid4()),
+        username="legacyuser",
+        email="legacy@example.com",
+        auth_salt=auth_salt,
+        password_hash=hash_password("LegacyPass1!"),
+    )
+    session.add(legacy)
+    session.commit()
+    legacy_mk = get_masterkey("LegacyPass1!", auth_salt)
+
+    client = TestClient(app)
+    login = {"email": "legacy@example.com", "password": "LegacyPass1!"}
+    r = client.post("/auth/login", json=login, headers={"X-Return-Master-Key": "true"})
+    assert r.status_code == 200
+    # Same MK as before the migration — data stays readable
+    assert r.json()["master_key"] == legacy_mk
+
+    user = session.exec(select(User).where(User.email == "legacy@example.com")).first()
+    session.refresh(user)
+    assert user.mk_wrapped_password is not None
+
+    # Second login goes through the unwrap path and returns the same MK
+    r2 = client.post("/auth/login", json=login, headers={"X-Return-Master-Key": "true"})
+    assert r2.status_code == 200
+    assert r2.json()["master_key"] == legacy_mk

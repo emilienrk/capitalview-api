@@ -6,6 +6,11 @@ from unittest.mock import patch
 from services.encryption import (
     init_salt,
     get_masterkey,
+    generate_random_master_key,
+    wrap_master_key,
+    unwrap_master_key,
+    server_encrypt,
+    server_decrypt,
     derive_subkey_bytes,
     hash_password,
     hash_index,
@@ -84,3 +89,54 @@ def test_decrypt_wrong_key():
     encrypted = encrypt_data(plaintext, mk1)
     with pytest.raises(DecryptionError):
         decrypt_data(encrypted, mk2)
+
+
+def test_generate_random_master_key():
+    mk = generate_random_master_key()
+    assert len(base64.b64decode(mk)) == 32
+    assert mk != generate_random_master_key()
+
+
+def test_wrap_unwrap_master_key_roundtrip():
+    mk = generate_random_master_key()
+    salt = init_salt()
+    wrapped = wrap_master_key(mk, "MyPassword123!", salt)
+    assert wrapped != mk
+    assert unwrap_master_key(wrapped, "MyPassword123!", salt) == mk
+
+
+def test_unwrap_master_key_wrong_secret():
+    mk = generate_random_master_key()
+    salt = init_salt()
+    wrapped = wrap_master_key(mk, "MyPassword123!", salt)
+    with pytest.raises(DecryptionError):
+        unwrap_master_key(wrapped, "WrongPassword!", salt)
+
+
+def test_unwrap_master_key_wrong_salt():
+    mk = generate_random_master_key()
+    salt = init_salt()
+    wrapped = wrap_master_key(mk, "MyPassword123!", salt)
+    with pytest.raises(DecryptionError):
+        unwrap_master_key(wrapped, "MyPassword123!", init_salt())
+
+
+def test_wrap_same_mk_as_legacy_derivation():
+    """A legacy-derived MK can be wrapped and unwrapped unchanged (lazy migration)."""
+    salt = init_salt()
+    legacy_mk = get_masterkey("OldPassword1!", salt)
+    wrap_salt = init_salt()
+    wrapped = wrap_master_key(legacy_mk, "OldPassword1!", wrap_salt)
+    assert unwrap_master_key(wrapped, "OldPassword1!", wrap_salt) == legacy_mk
+
+
+def test_server_encrypt_decrypt_roundtrip():
+    encrypted = server_encrypt("totp-secret-value", "totp")
+    assert encrypted != "totp-secret-value"
+    assert server_decrypt(encrypted, "totp") == "totp-secret-value"
+
+
+def test_server_decrypt_wrong_context():
+    encrypted = server_encrypt("totp-secret-value", "totp")
+    with pytest.raises(DecryptionError):
+        server_decrypt(encrypted, "2fa-pending")
