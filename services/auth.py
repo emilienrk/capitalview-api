@@ -17,7 +17,18 @@ from sqlmodel import Session, select
 
 from config import get_settings
 from database import get_session
-from models.user import RefreshToken, User
+from models.user import RefreshToken, TotpBackupCode, User
+from services.encryption import (
+    get_masterkey,
+    init_salt,
+    server_decrypt,
+    server_encrypt,
+    unwrap_master_key,
+    wrap_master_key,
+)
+from services.totp import hash_backup_code, verify_totp
+
+PENDING_2FA_TOKEN_EXPIRE_MINUTES = 5
 
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
@@ -36,6 +47,67 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
         return True
     except nacl.exceptions.InvalidkeyError:
         return False
+
+
+def resolve_master_key(session: Session, user: User, password: str) -> str:
+    """
+    Resolve the user's Master Key at login time.
+
+    Wrapped accounts: derive the KEK from the password and unwrap the stored MK.
+    Legacy accounts (no wrapped MK yet): derive the MK directly from the
+    password as before, then wrap it so the account is migrated transparently.
+    The MK itself never changes — no data re-encryption is ever needed.
+    """
+    if user.mk_wrapped_password and user.mk_salt_password:
+        return unwrap_master_key(user.mk_wrapped_password, password, user.mk_salt_password)
+
+    master_key = get_masterkey(password, user.auth_salt)
+    try:
+        salt = init_salt()
+        user.mk_wrapped_password = wrap_master_key(master_key, password, salt)
+        user.mk_salt_password = salt
+        session.add(user)
+        session.commit()
+    except Exception:
+        # Migration must never block a legacy login — retry at next login
+        session.rollback()
+    return master_key
+
+
+def verify_second_factor(session: Session, user: User, code: str | None) -> bool:
+    """
+    Verify a second factor for a 2FA-enabled user: a TOTP code (with replay
+    protection — each time step is accepted only once) or a single-use backup code.
+    """
+    if not code:
+        return False
+
+    # TOTP codes are exactly 6 digits; backup codes are 10 Base32 chars
+    if user.totp_secret_enc:
+        secret = server_decrypt(user.totp_secret_enc, "totp")
+        step = verify_totp(secret, code)
+        if step is not None:
+            if user.totp_last_used_step is not None and step <= user.totp_last_used_step:
+                return False
+            user.totp_last_used_step = step
+            session.add(user)
+            session.commit()
+            return True
+
+    record = session.exec(
+        select(TotpBackupCode).where(
+            TotpBackupCode.user_uuid == user.uuid,
+            TotpBackupCode.code_hash == hash_backup_code(code),
+            TotpBackupCode.used_at == None,  # noqa: E711
+        )
+    ).first()
+    if record:
+        record.used_at = datetime.now(timezone.utc)
+        session.add(record)
+        session.commit()
+        return True
+
+    return False
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
@@ -70,6 +142,46 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
 def create_refresh_token() -> str:
     """Generate a secure random refresh token."""
     return secrets.token_urlsafe(32)
+
+
+def create_pending_2fa_token(user_uuid: str, master_key: str) -> str:
+    """
+    Create the short-lived token issued between login step 1 (password OK)
+    and step 2 (TOTP code). It is NOT an access token: its only use is
+    POST /auth/login/2fa. The Master Key travels inside it encrypted with a
+    server key (claim ``mkc``), so the bearer cannot read it.
+    """
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": user_uuid,
+        "type": "2fa_pending",
+        "mkc": server_encrypt(master_key, "2fa-pending"),
+        "iat": now,
+        "exp": now + timedelta(minutes=PENDING_2FA_TOKEN_EXPIRE_MINUTES),
+    }
+    return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
+
+
+def decode_pending_2fa_token(token: str) -> tuple[str, str]:
+    """
+    Decode a pending 2FA token.
+
+    Returns:
+        (user_uuid, master_key)
+
+    Raises:
+        InvalidTokenError: if the token is invalid, expired or of the wrong type.
+    """
+    settings = get_settings()
+    payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+    if payload.get("type") != "2fa_pending":
+        raise InvalidTokenError("Invalid token type")
+    user_uuid = payload.get("sub")
+    mkc = payload.get("mkc")
+    if not user_uuid or not mkc:
+        raise InvalidTokenError("Missing claims")
+    return user_uuid, server_decrypt(mkc, "2fa-pending")
 
 
 def hash_refresh_token(token: str) -> str:
