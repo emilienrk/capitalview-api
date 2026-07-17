@@ -79,6 +79,8 @@ class UserSettings(SQLModel, table=True):
     theme: str = Field(default="system", nullable=False)
     # IANA timezone for date display (None = follow the browser)
     display_timezone: str | None = Field(default=None, nullable=True)
+    # BCP 47 locale driving date/number formatting (None = app default, fr-FR)
+    display_locale: str | None = Field(default=None, nullable=True)
     dashboard_layout_enc: str | None = Field(sa_column=Column(TEXT))
     flat_tax_rate: Decimal = Field(default=Decimal("0.30"), max_digits=5, decimal_places=4)
     tax_pea_rate: Decimal = Field(default=Decimal("0.172"), max_digits=5, decimal_places=4)
