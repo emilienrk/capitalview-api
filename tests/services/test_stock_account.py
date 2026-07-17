@@ -1,7 +1,7 @@
 from models.market import MarketAsset
 import pytest
 from decimal import Decimal
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from sqlmodel import Session, select
 
 from services.stock_account import (
@@ -105,7 +105,7 @@ def test_delete_stock_account(session: Session, master_key: str):
         type=StockTransactionType.BUY,
         amount=Decimal(1),
         price_per_unit=Decimal(1),
-        executed_at=datetime.now()
+        executed_at=datetime.now(timezone.utc)
     )
     tx = create_stock_transaction(session, tx_data, master_key)
 

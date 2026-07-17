@@ -75,6 +75,31 @@ def test_update_settings(session, master_key):
     assert data3["crypto_show_negative_positions"] is False
 
 
+def test_update_display_timezone(session, master_key):
+    client = TestClient(app)
+
+    # Default: no preference (follow the browser)
+    r = client.get("/settings")
+    assert r.status_code == 200
+    assert r.json()["display_timezone"] is None
+
+    # Set a valid IANA timezone and check persistence
+    r2 = client.put("/settings", json={"display_timezone": "Europe/Paris"})
+    assert r2.status_code == 200
+    assert r2.json()["display_timezone"] == "Europe/Paris"
+    assert client.get("/settings").json()["display_timezone"] == "Europe/Paris"
+
+    # Invalid timezone is rejected without clobbering the stored value
+    r3 = client.put("/settings", json={"display_timezone": "Mars/Olympus_Mons"})
+    assert r3.status_code == 400
+    assert client.get("/settings").json()["display_timezone"] == "Europe/Paris"
+
+    # Explicit null resets to browser default
+    r4 = client.put("/settings", json={"display_timezone": None})
+    assert r4.status_code == 200
+    assert r4.json()["display_timezone"] is None
+
+
 def test_update_ai_api_keys(session, master_key):
     client = TestClient(app)
 

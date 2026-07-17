@@ -1,32 +1,16 @@
 """Stock account and transaction schemas."""
 
-from datetime import datetime, date
+from datetime import datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
-from typing import Annotated
-from pydantic import AfterValidator
-
-def _validate_date_bounds(v):
-    if v is None:
-        return v
-    if isinstance(v, datetime):
-        if v.year < 2000:
-            raise ValueError("La date ne peut pas être avant 2000.")
-        if v > datetime.now(tz=v.tzinfo):
-            raise ValueError("La date ne peut pas être dans le futur.")
-    elif isinstance(v, date):
-        if v.year < 2000:
-            raise ValueError("La date ne peut pas être avant 2000.")
-        if v > date.today():
-            raise ValueError("La date ne peut pas être dans le futur.")
-    return v
-
-ValidDateOpt = Annotated[date | None, AfterValidator(_validate_date_bounds)]
-ValidDateReq = Annotated[date, AfterValidator(_validate_date_bounds)]
-ValidDatetime = Annotated[datetime, AfterValidator(_validate_date_bounds)]
-ValidDatetimeOpt = Annotated[datetime | None, AfterValidator(_validate_date_bounds)]
+from dtos._dates import (
+    ValidDateOpt,
+    ValidDateReq,
+    ValidDatetime,
+    ValidDatetimeOpt,
+)
 
 
 from models.enums import StockAccountType, StockTransactionType

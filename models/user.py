@@ -77,6 +77,8 @@ class UserSettings(SQLModel, table=True):
     user_uuid_bidx: str = Field(index=True, unique=True)
     objectives_enc: str | None = Field(sa_column=Column(TEXT))
     theme: str = Field(default="system", nullable=False)
+    # IANA timezone for date display (None = follow the browser)
+    display_timezone: str | None = Field(default=None, nullable=True)
     dashboard_layout_enc: str | None = Field(sa_column=Column(TEXT))
     flat_tax_rate: Decimal = Field(default=Decimal("0.30"), max_digits=5, decimal_places=4)
     tax_pea_rate: Decimal = Field(default=Decimal("0.172"), max_digits=5, decimal_places=4)

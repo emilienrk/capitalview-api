@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlmodel import Session, select
 
 from services.stock_transaction import (
@@ -94,7 +94,7 @@ def test_get_stock_transaction(session: Session, master_key: str):
         amount=Decimal("5"),
         price_per_unit=Decimal("200"),
         fees=Decimal("1"),
-        executed_at=datetime.now()
+        executed_at=datetime.now(timezone.utc)
     )
     _add_market_asset(session, "ISIN_MSFT", symbol="MSFT", name="Microsoft")
     created = create_stock_transaction(session, data, master_key)
@@ -180,7 +180,7 @@ def test_delete_stock_transaction(session: Session, master_key: str):
         amount=Decimal("1"),
         price_per_unit=Decimal("500"),
         fees=Decimal("1"),
-        executed_at=datetime.now()
+        executed_at=datetime.now(timezone.utc)
     )
     _add_market_asset(session, "ISIN_TSLA", symbol="TSLA", name="Tesla")
     created = create_stock_transaction(session, data, master_key)
@@ -198,13 +198,13 @@ def test_get_account_transactions(session: Session, master_key: str):
     _add_market_asset(session, "ISIN_B", symbol="B")
     _add_market_asset(session, "ISIN_C", symbol="C")
     create_stock_transaction(session, StockTransactionCreate(
-        account_id=acc1, asset_key="ISIN_A", type=StockTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), fees=Decimal(0), executed_at=datetime.now()
+        account_id=acc1, asset_key="ISIN_A", type=StockTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), fees=Decimal(0), executed_at=datetime.now(timezone.utc)
     ), master_key)
     create_stock_transaction(session, StockTransactionCreate(
-        account_id=acc1, asset_key="ISIN_B", type=StockTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), fees=Decimal(0), executed_at=datetime.now()
+        account_id=acc1, asset_key="ISIN_B", type=StockTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), fees=Decimal(0), executed_at=datetime.now(timezone.utc)
     ), master_key)
     create_stock_transaction(session, StockTransactionCreate(
-        account_id=acc2, asset_key="ISIN_C", type=StockTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), fees=Decimal(0), executed_at=datetime.now()
+        account_id=acc2, asset_key="ISIN_C", type=StockTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), fees=Decimal(0), executed_at=datetime.now(timezone.utc)
     ), master_key)
     txs_1 = get_account_transactions(session, acc1, master_key)
     # Each BUY without prior EUR balance creates an auto EUR deposit → 2 BUY + 2 EUR deposits

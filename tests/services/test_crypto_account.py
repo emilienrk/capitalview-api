@@ -1,6 +1,6 @@
 import pytest
 from sqlmodel import Session, select
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from services.crypto_account import (
     create_crypto_account,
@@ -91,7 +91,7 @@ def test_delete_crypto_account_cascade(session: Session, master_key: str):
         amount=Decimal("1"),
         price_per_unit=Decimal("100"),
         fees=Decimal("1"),
-        executed_at=datetime.now()
+        executed_at=datetime.now(timezone.utc)
     )
     create_crypto_transaction(session, tx_data, master_key)
     acc_bidx = hash_index(acc.id, master_key)

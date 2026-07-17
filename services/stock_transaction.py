@@ -477,7 +477,9 @@ def get_account_transactions(
         select(StockTransaction).where(StockTransaction.account_id_bidx == account_bidx)
     ).all()
 
-    return [_decrypt_transaction(tx, master_key) for tx in transactions]
+    decoded = [_decrypt_transaction(tx, master_key) for tx in transactions]
+    decoded.sort(key=lambda tx: tx.executed_at, reverse=True)
+    return decoded
 
 def get_stock_account_summary(
     session: Session,
