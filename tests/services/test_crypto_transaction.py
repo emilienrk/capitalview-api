@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlmodel import Session
 
 from services.crypto_transaction import (
@@ -78,7 +78,7 @@ def test_get_crypto_transaction(session: Session, master_key: str):
         type=CryptoTransactionType.BUY,
         amount=Decimal("2"),
         price_per_unit=Decimal("2000"),
-        executed_at=datetime.now()
+        executed_at=datetime.now(timezone.utc)
     )
     created = create_crypto_transaction(session, data, master_key)
     fetched = get_crypto_transaction(session, created.id, user_uuid, master_key)
@@ -141,7 +141,7 @@ def test_delete_crypto_transaction(session: Session, master_key: str):
         type=CryptoTransactionType.BUY,
         amount=Decimal("100"),
         price_per_unit=Decimal("0.5"),
-        executed_at=datetime.now()
+        executed_at=datetime.now(timezone.utc)
     )
     created = create_crypto_transaction(session, data, master_key)
     assert delete_crypto_transaction(session, created.id, "some_other_user", master_key) is False
@@ -163,7 +163,7 @@ def test_delete_crypto_transaction_deletes_group(session: Session, master_key: s
             type=CryptoTransactionType.BUY,
             amount=Decimal("1"),
             price_per_unit=Decimal("0"),
-            executed_at=datetime.now(),
+            executed_at=datetime.now(timezone.utc),
         ),
         master_key,
         group_uuid=group_uuid,
@@ -176,7 +176,7 @@ def test_delete_crypto_transaction_deletes_group(session: Session, master_key: s
             type=CryptoTransactionType.SPEND,
             amount=Decimal("30000"),
             price_per_unit=Decimal("1"),
-            executed_at=datetime.now(),
+            executed_at=datetime.now(timezone.utc),
         ),
         master_key,
         group_uuid=group_uuid,
@@ -190,10 +190,10 @@ def test_delete_crypto_transaction_deletes_group(session: Session, master_key: s
 def test_get_account_transactions(session: Session, master_key: str):
     acc1 = "acc_c1"
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id=acc1, asset_key="A", type=CryptoTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), executed_at=datetime.now()
+        account_id=acc1, asset_key="A", type=CryptoTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), executed_at=datetime.now(timezone.utc)
     ), master_key)
     create_crypto_transaction(session, CryptoTransactionCreate(
-        account_id="acc_c2", asset_key="B", type=CryptoTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), executed_at=datetime.now()
+        account_id="acc_c2", asset_key="B", type=CryptoTransactionType.BUY, amount=Decimal(1), price_per_unit=Decimal(10), executed_at=datetime.now(timezone.utc)
     ), master_key)
     txs = get_account_transactions(session, acc1, master_key)
     assert len(txs) == 1

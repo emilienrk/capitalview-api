@@ -1,30 +1,15 @@
-from datetime import datetime, date
+from datetime import datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field, model_validator
 
-from typing import Annotated
-from pydantic import AfterValidator
-
-def _validate_date_bounds(v):
-    if v is None:
-        return v
-    if isinstance(v, datetime):
-        if v.year < 2000:
-            raise ValueError("La date ne peut pas être avant 2000.")
-        if v > datetime.now(tz=v.tzinfo):
-            raise ValueError("La date ne peut pas être dans le futur.")
-    elif isinstance(v, date):
-        if v.year < 2000:
-            raise ValueError("La date ne peut pas être avant 2000.")
-        if v > date.today():
-            raise ValueError("La date ne peut pas être dans le futur.")
-    return v
-
-ValidDateOpt = Annotated[date | None, AfterValidator(_validate_date_bounds)]
-ValidDateReq = Annotated[date, AfterValidator(_validate_date_bounds)]
-ValidDatetime = Annotated[datetime, AfterValidator(_validate_date_bounds)]
-ValidDatetimeOpt = Annotated[datetime | None, AfterValidator(_validate_date_bounds)]
+from dtos._dates import (
+    UtcDatetimeOut,
+    ValidDateOpt,
+    ValidDateReq,
+    ValidDatetime,
+    ValidDatetimeOpt,
+)
 
 
 from models.enums import CryptoCompositeTransactionType, CryptoTransactionType
@@ -118,7 +103,7 @@ class CryptoTransactionBasicResponse(BaseModel):
     type: CryptoTransactionType
     amount: Decimal
     price_per_unit: Decimal
-    executed_at: ValidDatetime
+    executed_at: UtcDatetimeOut
     tx_hash: str | None = None
     notes: str | None = None
 

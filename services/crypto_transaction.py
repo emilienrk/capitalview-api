@@ -703,6 +703,7 @@ def get_account_transactions(
                     tx.profit_loss = tx.current_value - tx.total_cost
                     tx.profit_loss_percentage = (tx.profit_loss / tx.total_cost) * 100
 
+    decoded.sort(key=lambda tx: tx.executed_at, reverse=True)
     return decoded
 
 

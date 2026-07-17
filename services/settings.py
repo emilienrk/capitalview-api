@@ -1,6 +1,8 @@
 """User settings service."""
 
 from decimal import Decimal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from sqlmodel import Session, select
 from fastapi import HTTPException
 
@@ -54,6 +56,7 @@ def _map_settings_to_response(
     return UserSettingsResponse(
         objectives=objectives,
         theme=settings.theme,
+        display_timezone=settings.display_timezone,
         flat_tax_rate=float(settings.flat_tax_rate),
         tax_pea_rate=float(settings.tax_pea_rate),
         yield_expectation=float(settings.yield_expectation),
@@ -136,6 +139,15 @@ def update_settings(
 
     if data.theme is not None:
         settings.theme = data.theme
+
+    if "display_timezone" in data.model_fields_set:
+        tz = data.display_timezone
+        if tz is not None:
+            try:
+                ZoneInfo(tz)
+            except (KeyError, ValueError, ZoneInfoNotFoundError):
+                raise HTTPException(status_code=400, detail=f"Fuseau horaire inconnu : '{tz}'.")
+        settings.display_timezone = tz
 
     if data.flat_tax_rate is not None:
         settings.flat_tax_rate = Decimal(str(data.flat_tax_rate))

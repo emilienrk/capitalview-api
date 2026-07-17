@@ -1,10 +1,11 @@
 """Transaction and portfolio schemas (shared between stock and crypto)."""
 
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
 from pydantic import BaseModel
 
+from dtos._dates import UtcDatetimeOut
 
 
 class TransactionResponse(BaseModel):
@@ -15,7 +16,7 @@ class TransactionResponse(BaseModel):
     amount: Decimal
     price_per_unit: Decimal
     fees: Decimal
-    executed_at: datetime
+    executed_at: UtcDatetimeOut
     currency: str = "EUR"
     
     notes: str | None = None

@@ -42,6 +42,7 @@ class UserSettingsUpdate(BaseModel):
     """Update user settings (all fields optional)."""
     objectives: str | None = None
     theme: str | None = None
+    display_timezone: str | None = None  # IANA name; None = follow the browser
     flat_tax_rate: float | None = Field(None, ge=0, le=1)
     tax_pea_rate: float | None = Field(None, ge=0, le=1)
     yield_expectation: float | None = Field(None, ge=0, le=1)
@@ -64,6 +65,7 @@ class UserSettingsResponse(BaseModel):
 
     objectives: str | None = None
     theme: str = "system"
+    display_timezone: str | None = None
     flat_tax_rate: float = 0.30
     tax_pea_rate: float = 0.172
     yield_expectation: float = 0.05
