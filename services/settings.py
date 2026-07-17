@@ -18,6 +18,9 @@ from dtos.settings import (
 from services.encryption import encrypt_data, decrypt_data, hash_index
 from services.ai.registry import PROVIDER_REGISTRY, CAPABILITY_PRIORITY, provider_supports
 
+# Locales the frontend knows how to render (see SettingsGeneral.vue).
+ALLOWED_DISPLAY_LOCALES = frozenset({"fr-FR", "en-GB", "en-US", "de-DE", "es-ES", "it-IT"})
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -57,6 +60,7 @@ def _map_settings_to_response(
         objectives=objectives,
         theme=settings.theme,
         display_timezone=settings.display_timezone,
+        display_locale=settings.display_locale,
         flat_tax_rate=float(settings.flat_tax_rate),
         tax_pea_rate=float(settings.tax_pea_rate),
         yield_expectation=float(settings.yield_expectation),
@@ -148,6 +152,12 @@ def update_settings(
             except (KeyError, ValueError, ZoneInfoNotFoundError):
                 raise HTTPException(status_code=400, detail=f"Fuseau horaire inconnu : '{tz}'.")
         settings.display_timezone = tz
+
+    if "display_locale" in data.model_fields_set:
+        locale = data.display_locale
+        if locale is not None and locale not in ALLOWED_DISPLAY_LOCALES:
+            raise HTTPException(status_code=400, detail=f"Format de date non supporté : '{locale}'.")
+        settings.display_locale = locale
 
     if data.flat_tax_rate is not None:
         settings.flat_tax_rate = Decimal(str(data.flat_tax_rate))

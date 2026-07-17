@@ -100,6 +100,29 @@ def test_update_display_timezone(session, master_key):
     assert r4.json()["display_timezone"] is None
 
 
+def test_update_display_locale(session, master_key):
+    client = TestClient(app)
+
+    # Default: app default (fr-FR handled client-side)
+    assert client.get("/settings").json()["display_locale"] is None
+
+    # Set a supported locale and check persistence
+    r = client.put("/settings", json={"display_locale": "en-GB"})
+    assert r.status_code == 200
+    assert r.json()["display_locale"] == "en-GB"
+    assert client.get("/settings").json()["display_locale"] == "en-GB"
+
+    # Unsupported locale rejected without clobbering the stored value
+    r2 = client.put("/settings", json={"display_locale": "xx-XX"})
+    assert r2.status_code == 400
+    assert client.get("/settings").json()["display_locale"] == "en-GB"
+
+    # Explicit null resets to the app default
+    r3 = client.put("/settings", json={"display_locale": None})
+    assert r3.status_code == 200
+    assert r3.json()["display_locale"] is None
+
+
 def test_update_ai_api_keys(session, master_key):
     client = TestClient(app)
 
