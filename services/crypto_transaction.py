@@ -865,8 +865,6 @@ def get_crypto_account_summary(
         elif tx.type == "WITHDRAW" and tx.asset_key in FIAT_ASSET_KEYS:
             total_withdrawals_acc += tx.amount * tx.price_per_unit
 
-    net_external_deposits = total_deposits_acc - total_withdrawals_acc
-
     crypto_positions = [p for p in positions if p.asset_key not in FIAT_ASSET_KEYS]
 
     total_invested_acc = sum(p.total_invested for p in crypto_positions)
@@ -874,11 +872,15 @@ def get_crypto_account_summary(
     current_value_acc_list = [p.current_value for p in positions if p.current_value is not None]
     current_value_acc = sum(current_value_acc_list) if current_value_acc_list else None
 
+    # Account P/L is measured on cost basis (PRU): it equals the sum of the positions'
+    # P/L and reconciles with the "Investi" card. Using net external deposits instead
+    # would diverge whenever realized gains are reinvested (cost basis > money wired in).
+    crypto_profit_loss = [p.profit_loss for p in crypto_positions if p.profit_loss is not None]
     profit_loss_acc = profit_loss_pct_acc = None
     if current_value_acc is not None:
-        profit_loss_acc = current_value_acc - net_external_deposits
-        if net_external_deposits > 0:
-            profit_loss_pct_acc = (profit_loss_acc / net_external_deposits * 100)
+        profit_loss_acc = sum(crypto_profit_loss) if crypto_profit_loss else Decimal("0")
+        if total_invested_acc > 0:
+            profit_loss_pct_acc = (profit_loss_acc / total_invested_acc * 100)
 
     return AccountSummaryResponse(
         total_invested=round(total_invested_acc, 2),
