@@ -104,7 +104,8 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
     for acc in stock_models:
         transactions = get_stock_transactions(session, acc.uuid, master_key)
         summary = get_stock_account_summary(session, transactions, as_of=date, db_only=True)
-        acc_val = summary.current_value or Decimal(0)
+        # Net worth = holdings VALEUR + idle account cash.
+        acc_val = (summary.current_value or Decimal(0)) + summary.cash_balance
         stock_current_value += acc_val
         
         if details:
@@ -126,7 +127,8 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
     for acc in crypto_models:
         transactions = get_crypto_transactions(session, acc.uuid, master_key)
         summary = get_crypto_account_summary(session, transactions, as_of=date, db_only=True)
-        acc_val = summary.current_value or Decimal(0)
+        # Net worth = holdings VALEUR + idle account cash.
+        acc_val = (summary.current_value or Decimal(0)) + summary.cash_balance
         crypto_current_value += acc_val
         
         if details:

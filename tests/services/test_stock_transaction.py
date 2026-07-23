@@ -563,3 +563,37 @@ def test_stock_summary_total_withdrawals(session: Session, master_key: str):
     summary = _stock_summary(session, "acc_stock_wd", master_key)
 
     assert summary.total_withdrawals == Decimal("300.00")
+
+
+def test_stock_summary_current_value_excludes_idle_cash(session: Session, master_key: str):
+    """VALEUR (current_value) must be holdings-only; leftover EUR cash goes to
+    cash_balance (once, no double count) and VALEUR - INVESTI == P/L."""
+    _add_market_asset(session, "ISIN_AAPL", symbol="AAPL", name="Apple Inc.")
+    create_eur_deposit(session, "acc_cash_scope", Decimal("1000"), datetime(2024, 1, 1), master_key)
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_cash_scope", asset_key="ISIN_AAPL", type=StockTransactionType.BUY,
+        amount=Decimal("10"), price_per_unit=Decimal("50"), fees=Decimal("0"),
+        executed_at=datetime(2024, 1, 2),
+    ), master_key)
+
+    txs = get_account_transactions(session, "acc_cash_scope", master_key)
+    summary = get_stock_account_summary(session, txs, preloaded_prices={"ISIN_AAPL": Decimal("80")})
+
+    assert summary.total_invested == Decimal("500")
+    assert summary.current_value == Decimal("800")     # holdings only, no EUR cash
+    assert summary.cash_balance == Decimal("500")       # 1000 deposited - 500 spent
+    assert summary.profit_loss == Decimal("300")        # VALEUR - INVESTI, not deposit-based
+    assert summary.current_value + summary.cash_balance == Decimal("1300")
+
+
+def test_stock_summary_only_cash_no_holdings(session: Session, master_key: str):
+    """An account holding only EUR cash reports current_value = 0, profit_loss = 0,
+    and the full cash in cash_balance."""
+    create_eur_deposit(session, "acc_only_cash", Decimal("1000"), datetime(2024, 1, 1), master_key)
+
+    txs = get_account_transactions(session, "acc_only_cash", master_key)
+    summary = get_stock_account_summary(session, txs)
+
+    assert summary.current_value == Decimal("0")
+    assert summary.profit_loss == Decimal("0")
+    assert summary.cash_balance == Decimal("1000")

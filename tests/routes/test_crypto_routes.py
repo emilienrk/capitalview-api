@@ -567,9 +567,10 @@ def test_account_pl_eur_cash_not_profit(mock_get_info, session, master_key):
 
     Expected account-level summary
     --------------------------------
-    total_invested  = 10 000  (net EUR wired from outside)
-    current_value   =  9 000  (7 000 BTC + 2 000 EUR cash)
-    profit_loss     = -1 000  (not +2 000 from EUR cash)
+    total_invested  =  8 000  (BTC cost basis)
+    current_value   =  7 000  (BTC holdings only — VALEUR is holdings-scoped)
+    cash_balance    =  2 000  (idle EUR cash, once)
+    profit_loss     = -1 000  (VALEUR - INVESTI, not +2 000 from EUR cash)
     """
     mock_get_info.return_value = ("Bitcoin", Decimal("7000"))
 
@@ -608,11 +609,14 @@ def test_account_pl_eur_cash_not_profit(mock_get_info, session, master_key):
     )
     # total_deposits = net external EUR wired in
     assert Decimal(str(summary["total_deposits"])) == Decimal("10000")
-    assert Decimal(str(summary["current_value"])) == Decimal("9000"), (
-        "current_value must include both BTC (7 000) and EUR cash (2 000)"
+    assert Decimal(str(summary["current_value"])) == Decimal("7000"), (
+        "current_value (VALEUR) is holdings-scoped: BTC only, no EUR cash"
+    )
+    assert Decimal(str(summary["cash_balance"])) == Decimal("2000"), (
+        "idle EUR cash surfaces once, in cash_balance"
     )
     assert Decimal(str(summary["profit_loss"])) == Decimal("-1000"), (
-        "profit_loss = current_value (9 000) - deposits (10 000) = -1 000"
+        "profit_loss = VALEUR (7 000) - INVESTI (8 000) = -1 000"
     )
 
 
@@ -678,8 +682,9 @@ def test_account_pl_exit_does_not_inflate_invested(mock_get_info, session, maste
     )
     # total_deposits = net external EUR wired in (not inflated by SELL_TO_FIAT proceeds)
     assert Decimal(str(summary["total_deposits"])) == Decimal("10000")
-    # Only EUR remains: 2 000 + 7 000 = 9 000
-    assert Decimal(str(summary["current_value"])) == Decimal("9000")
+    # No crypto holdings left → VALEUR = 0; the EUR (2 000 + 7 000) sits in cash_balance.
+    assert Decimal(str(summary["current_value"])) == Decimal("0")
+    assert Decimal(str(summary["cash_balance"])) == Decimal("9000")
     # Cost-basis P/L: no open crypto position → 0 (realized loss is not shown here).
     assert Decimal(str(summary["profit_loss"])) == Decimal("0")
 

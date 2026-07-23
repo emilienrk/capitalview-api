@@ -445,8 +445,43 @@ def test_get_crypto_account_summary_empty(session: Session, master_key: str):
     assert summary.total_invested == Decimal("0")
     assert summary.total_fees == Decimal("0")
     assert summary.current_value is None
+    assert summary.cash_balance == Decimal("0")
     assert summary.profit_loss is None
     assert len(summary.positions) == 0
+
+
+@patch("services.crypto_transaction.get_crypto_info")
+def test_crypto_summary_current_value_excludes_idle_fiat(mock_info, session: Session, master_key: str):
+    """VALEUR (current_value) must be holdings-only; leftover fiat goes to
+    cash_balance, so VALEUR - INVESTI == P/L even with cash present."""
+    mock_info.side_effect = lambda s, symbol, db_only=False, as_of=None: {
+        "BTC": ("Bitcoin", Decimal("40000.0")),
+    }.get(symbol, ("Unknown", Decimal("0")))
+
+    _make_crypto_account(session, "acc_cash_scope", "user_cash", master_key)
+    # Deposit 50000 EUR, buy 1 BTC for 30000 → 20000 EUR left idle.
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_cash_scope", asset_key="EUR", type=CryptoTransactionType.DEPOSIT,
+        amount=Decimal("50000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 1)
+    ), master_key)
+    g_buy = "group-cash-buy"
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_cash_scope", asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 2)
+    ), master_key, group_uuid=g_buy)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_cash_scope", asset_key="EUR", type=CryptoTransactionType.SPEND,
+        amount=Decimal("30000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 2)
+    ), master_key, group_uuid=g_buy)
+
+    summary = _crypto_summary(session, "acc_cash_scope", master_key)
+
+    assert summary.total_invested == Decimal("30000")
+    assert summary.current_value == Decimal("40000")      # holdings only, no EUR
+    assert summary.cash_balance == Decimal("20000")        # idle fiat, once
+    assert summary.profit_loss == Decimal("10000")         # VALEUR - INVESTI
+    # Full liquidation value reconciles as VALEUR + cash.
+    assert summary.current_value + summary.cash_balance == Decimal("60000")
 
 
 @patch("services.crypto_transaction.get_crypto_info")

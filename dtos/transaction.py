@@ -58,6 +58,7 @@ class AccountSummaryResponse(BaseModel):
     total_dividends: Decimal = Decimal("0")
     currency: str = "EUR"
     current_value: Decimal | None = None
+    cash_balance: Decimal = Decimal("0")
     profit_loss: Decimal | None = None
     profit_loss_percentage: Decimal | None = None
     positions: list[PositionResponse]

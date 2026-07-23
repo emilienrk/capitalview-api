@@ -1400,9 +1400,13 @@ def test_current_calc_version_crypto_is_bumped():
     assert _current_calc_version(AccountCategory.CRYPTO) == 1
 
 
+def test_current_calc_version_stock_is_bumped():
+    """STOCK is at version 1 (P/L moved to cost basis, cash excluded from VALEUR)."""
+    assert _current_calc_version(AccountCategory.STOCK) == 1
+
+
 def test_current_calc_version_other_types_are_zero():
-    """STOCK/BANK/ASSET have not changed formula — still version 0."""
-    assert _current_calc_version(AccountCategory.STOCK) == 0
+    """BANK/ASSET have not changed formula — still version 0."""
     assert _current_calc_version(AccountCategory.BANK) == 0
     assert _current_calc_version(AccountCategory.ASSET) == 0
 

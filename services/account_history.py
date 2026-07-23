@@ -54,7 +54,7 @@ _ZERO = Decimal("0")
 
 CURRENT_CALC_VERSION: dict[AccountCategory, int] = {
     AccountCategory.CRYPTO: 1,   # bumped: P/L now on cost basis (PRU)
-    AccountCategory.STOCK: 0,
+    AccountCategory.STOCK: 1,    # bumped: P/L now on cost basis (VALEUR - INVESTI), cash excluded from VALEUR
     AccountCategory.BANK: 0,
     AccountCategory.ASSET: 0,
 }
@@ -457,7 +457,13 @@ def _build_positions_from_summary(
             }
         )
 
-    total_value = Decimal(summary.current_value) if summary.current_value is not None else computed_total
+    # Snapshots store the full liquidation value (net worth): holdings VALEUR
+    # (current_value, now holdings-scoped) plus idle fiat cash (cash_balance).
+    cash_balance = _to_decimal(getattr(summary, "cash_balance", _ZERO))
+    if summary.current_value is not None:
+        total_value = Decimal(summary.current_value) + cash_balance
+    else:
+        total_value = computed_total
     current_invested = Decimal(summary.total_invested)
     current_deposits = Decimal(summary.total_deposits)
     current_withdrawals = Decimal(summary.total_withdrawals)
