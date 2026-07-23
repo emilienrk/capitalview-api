@@ -450,6 +450,68 @@ def test_get_crypto_account_summary_empty(session: Session, master_key: str):
 
 
 @patch("services.crypto_transaction.get_crypto_info")
+def test_account_profit_loss_uses_cost_basis_not_deposits(mock_info, session: Session, master_key: str):
+    """Account-level P/L must be current_value - total_invested (cost basis / PRU),
+    consistent with the INVESTI card and the positions table — NOT current_value minus
+    net external deposits. The two diverge whenever realized gains are reinvested."""
+    mock_info.side_effect = lambda s, symbol, db_only=False, as_of=None: {
+        "BTC": ("Bitcoin", Decimal("40000.0")),
+    }.get(symbol, ("Unknown", Decimal("0")))
+
+    _make_crypto_account(session, "acc_pl_basis", "user_pl", master_key)
+
+    # 1) External EUR deposit of 30000 (the only money that ever left the bank).
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_pl_basis", asset_key="EUR", type=CryptoTransactionType.DEPOSIT,
+        amount=Decimal("30000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 1)
+    ), master_key)
+    # 2) BUY 1 BTC for 30000 (SPEND EUR 30000) → EUR balance back to 0.
+    g_buy = "group-buy"
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_pl_basis", asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 2)
+    ), master_key, group_uuid=g_buy)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_pl_basis", asset_key="EUR", type=CryptoTransactionType.SPEND,
+        amount=Decimal("30000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 2)
+    ), master_key, group_uuid=g_buy)
+    # 3) SELL the 1 BTC for 50000 (realized gain): SPEND BTC + DEPOSIT EUR proceeds.
+    #    The proceeds deposit is NOT external money (same group as the crypto spend).
+    g_sell = "group-sell"
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_pl_basis", asset_key="BTC", type=CryptoTransactionType.SPEND,
+        amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 3)
+    ), master_key, group_uuid=g_sell)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_pl_basis", asset_key="EUR", type=CryptoTransactionType.DEPOSIT,
+        amount=Decimal("50000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 3)
+    ), master_key, group_uuid=g_sell)
+    # 4) REBUY 1 BTC for 50000 (reinvest all proceeds) → EUR balance back to 0.
+    g_rebuy = "group-rebuy"
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_pl_basis", asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 4)
+    ), master_key, group_uuid=g_rebuy)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_pl_basis", asset_key="EUR", type=CryptoTransactionType.SPEND,
+        amount=Decimal("50000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 4)
+    ), master_key, group_uuid=g_rebuy)
+
+    summary = _crypto_summary(session, "acc_pl_basis", master_key)
+
+    # Cost basis of current holdings = 50000 (funded by reinvested proceeds),
+    # while net external deposits = only 30000. The two bases diverge here.
+    assert summary.total_invested == Decimal("50000")
+    assert summary.current_value == Decimal("40000")  # 1 BTC @ 40000, no EUR left
+    # Cost-basis P/L: 40000 - 50000 = -10000  (deposits-based would give +10000)
+    assert summary.profit_loss == Decimal("-10000")
+    assert summary.profit_loss_percentage == Decimal("-20.00")
+    # The account P/L equals the sum of the positions table's P/L column.
+    crypto_pl = sum(p.profit_loss for p in summary.positions if p.asset_key != "EUR")
+    assert summary.profit_loss == crypto_pl
+
+
+@patch("services.crypto_transaction.get_crypto_info")
 def test_crypto_total_deposits_and_withdrawals_are_split_without_virtual_inference(mock_info, session: Session, master_key: str):
     """Fiat flows are explicit: no virtual deposit is inferred from negative EUR balance."""
     mock_info.return_value = ("Bitcoin", Decimal("30000"))

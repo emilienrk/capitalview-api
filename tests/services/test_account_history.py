@@ -23,9 +23,11 @@ from models.enums import AccountCategory
 from models.market import MarketAsset, MarketPriceHistory
 from services.account_history import (
     _AccountSnapshot,
+    CURRENT_CALC_VERSION,
     FrozenPosition,
     _compute_daily_net_flow,
     _build_asset_snapshots,
+    _current_calc_version,
     _fill_price_gaps,
     _generate_missing_snapshots,
     _get_snapshot_date_bounds,
@@ -50,6 +52,7 @@ def _make_history_row(
     snapshot_date: date,
     total_value: str,
     master_key: str,
+    calc_version: int = 0,
 ) -> AccountHistory:
     """Insert a minimal AccountHistory row and return it."""
     row = AccountHistory(
@@ -61,6 +64,7 @@ def _make_history_row(
         total_value_enc=encrypt_data(total_value, master_key),
         total_invested_enc=encrypt_data("1000.00", master_key),
         daily_pnl_enc=encrypt_data("0.00", master_key),
+        calc_version=calc_version,
     )
     session.add(row)
     session.commit()
@@ -182,8 +186,8 @@ def test_get_snapshot_date_bounds_returns_min_and_max_per_account(
 
     result = _get_snapshot_date_bounds(session, user_bidx)
 
-    assert result[acc1_bidx] == (date(2024, 1, 1), date(2024, 1, 5))
-    assert result[acc2_bidx] == (date(2024, 1, 3), date(2024, 1, 3))
+    assert result[acc1_bidx] == (date(2024, 1, 1), date(2024, 1, 5), 0)
+    assert result[acc2_bidx] == (date(2024, 1, 3), date(2024, 1, 3), 0)
 
 
 def test_get_snapshot_date_bounds_scoped_to_user(session: Session, master_key: str):
@@ -201,7 +205,7 @@ def test_get_snapshot_date_bounds_scoped_to_user(session: Session, master_key: s
     assert _get_snapshot_date_bounds(session, user2_bidx) == {}
     result_user1 = _get_snapshot_date_bounds(session, user1_bidx)
     assert acc_bidx in result_user1
-    assert result_user1[acc_bidx] == (date(2024, 1, 10), date(2024, 1, 10))
+    assert result_user1[acc_bidx] == (date(2024, 1, 10), date(2024, 1, 10), 0)
 
 
 def test_resolve_account_start_date_prefers_earliest_known_business_date():
@@ -1384,3 +1388,97 @@ def test_compute_daily_net_flow_stock_withdraw():
     )
 
     assert net_flow == Decimal("-200")
+
+
+# ---------------------------------------------------------------------------
+# calc_version — versioned recompute
+# ---------------------------------------------------------------------------
+
+
+def test_current_calc_version_crypto_is_bumped():
+    """CRYPTO is at version 1 (P/L moved to cost basis / PRU)."""
+    assert _current_calc_version(AccountCategory.CRYPTO) == 1
+
+
+def test_current_calc_version_other_types_are_zero():
+    """STOCK/BANK/ASSET have not changed formula — still version 0."""
+    assert _current_calc_version(AccountCategory.STOCK) == 0
+    assert _current_calc_version(AccountCategory.BANK) == 0
+    assert _current_calc_version(AccountCategory.ASSET) == 0
+
+
+def test_current_calc_version_unknown_type_defaults_to_zero():
+    """A type absent from the map is treated as legacy version 0, never stale."""
+    assert _current_calc_version("SOMETHING_UNMAPPED") == 0
+
+
+def test_get_snapshot_date_bounds_returns_min_calc_version(
+    session: Session,
+    master_key: str,
+):
+    """The bounds carry the MIN calc_version across the account's rows, so a
+    partially-rebuilt account still looks stale until fully migrated."""
+    user_bidx = "bidx_user_versions"
+    acc_bidx = "bidx_acc_versions"
+
+    _make_history_row(
+        session, user_uuid_bidx=user_bidx, account_id_bidx=acc_bidx,
+        account_type=AccountCategory.CRYPTO, snapshot_date=date(2024, 1, 1),
+        total_value="100.00", master_key=master_key, calc_version=0,
+    )
+    _make_history_row(
+        session, user_uuid_bidx=user_bidx, account_id_bidx=acc_bidx,
+        account_type=AccountCategory.CRYPTO, snapshot_date=date(2024, 1, 2),
+        total_value="110.00", master_key=master_key, calc_version=1,
+    )
+
+    result = _get_snapshot_date_bounds(session, user_bidx)
+
+    assert result[acc_bidx] == (date(2024, 1, 1), date(2024, 1, 2), 0)
+
+
+def test_generate_missing_snapshots_stamps_current_calc_version(
+    session: Session, master_key: str
+):
+    """Crypto rows are stamped with the current crypto version (1)."""
+    rows = _generate_missing_snapshots(
+        session=session,
+        user_uuid_bidx=hash_index("user_v", master_key),
+        account_id_bidx=hash_index("acc_v", master_key),
+        account_snapshot=_AccountSnapshot(
+            account_id="fake_id",
+            account_type=AccountCategory.CRYPTO,
+            frozen_positions=[],
+            total_invested=Decimal("0"),
+        ),
+        price_matrix={},
+        missing_dates=[date(2024, 6, 1)],
+        prev_value=Decimal("0"),
+        master_key=master_key,
+    )
+
+    assert rows[0]["calc_version"] == CURRENT_CALC_VERSION[AccountCategory.CRYPTO]
+    assert rows[0]["calc_version"] == 1
+
+
+def test_generate_missing_snapshots_stamps_zero_for_bank(
+    session: Session, master_key: str
+):
+    """Bank rows (unchanged formula) are stamped version 0."""
+    rows = _generate_missing_snapshots(
+        session=session,
+        user_uuid_bidx=hash_index("user_vb", master_key),
+        account_id_bidx=hash_index("acc_vb", master_key),
+        account_snapshot=_AccountSnapshot(
+            account_id="fake_bank",
+            account_type=AccountCategory.BANK,
+            frozen_positions=[FrozenPosition("EUR", Decimal("500"), Decimal("500"))],
+            total_invested=Decimal("500"),
+        ),
+        price_matrix={},
+        missing_dates=[date(2024, 6, 1)],
+        prev_value=Decimal("0"),
+        master_key=master_key,
+    )
+
+    assert rows[0]["calc_version"] == 0

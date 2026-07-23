@@ -34,6 +34,12 @@ class AccountHistory(SQLModel, table=True):
     account_id_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
     account_type: AccountCategory = Field(sa_column=Column(TEXT, nullable=False, index=True))
     snapshot_date: date = Field(sa_column=Column(sa.Date, nullable=False))
+    # Formula/schema version that produced this row (see CURRENT_CALC_VERSION).
+    # Plaintext, non-sensitive; 0 = legacy / pre-versioning.
+    calc_version: int = Field(
+        default=0,
+        sa_column=Column(sa.Integer, nullable=False, server_default="0"),
+    )
     total_value_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     total_invested_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     total_deposits_enc: str | None = Field(default=None, sa_column=Column(TEXT))

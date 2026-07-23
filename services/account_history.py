@@ -45,6 +45,27 @@ logger = logging.getLogger(__name__)
 
 _ZERO = Decimal("0")
 
+
+# ---------------------------------------------------------------------------
+# Formula versioning — bump a type's number here to invalidate & rebuild its
+# stored history on users' next login. No migration, no data script needed.
+# 0 = legacy / pre-versioning.
+# ---------------------------------------------------------------------------
+
+CURRENT_CALC_VERSION: dict[AccountCategory, int] = {
+    AccountCategory.CRYPTO: 1,   # bumped: P/L now on cost basis (PRU)
+    AccountCategory.STOCK: 0,
+    AccountCategory.BANK: 0,
+    AccountCategory.ASSET: 0,
+}
+
+
+def _current_calc_version(account_type: AccountCategory) -> int:
+    """Current formula version for an account type (0 if unmapped, so an
+    unknown type is never considered stale rather than crashing)."""
+    return CURRENT_CALC_VERSION.get(account_type, 0)
+
+
 @dataclass
 class FrozenPosition:
     """A single asset position at the moment the snapshot is taken."""
@@ -152,22 +173,29 @@ def _interpolate_asset_value(
 # ---------------------------------------------------------------------------
 
 
-def _get_snapshot_date_bounds(session: Session, user_uuid_bidx: str) -> dict[str, tuple[date, date]]:
+def _get_snapshot_date_bounds(
+    session: Session, user_uuid_bidx: str
+) -> dict[str, tuple[date, date, int]]:
     """
-    Return {account_id_bidx: (first_snapshot_date, last_snapshot_date)}
+    Return {account_id_bidx: (first_snapshot_date, last_snapshot_date, min_calc_version)}
     for every account of this user.
+
+    `min_calc_version` is the MINIMUM across the account's rows (not the latest):
+    a partially-rebuilt account still looks stale until every row is at the
+    current version.
     """
     rows = session.exec(
         sa.select(
             AccountHistory.account_id_bidx,
             sa.func.min(AccountHistory.snapshot_date).label("first_date"),
             sa.func.max(AccountHistory.snapshot_date).label("last_date"),
+            sa.func.min(AccountHistory.calc_version).label("min_calc_version"),
         )
         .where(AccountHistory.user_uuid_bidx == user_uuid_bidx)
         .group_by(AccountHistory.account_id_bidx)
     ).all()
     return {
-        row.account_id_bidx: (row.first_date, row.last_date)
+        row.account_id_bidx: (row.first_date, row.last_date, row.min_calc_version)
         for row in rows
     }
 
@@ -631,6 +659,7 @@ def _generate_missing_snapshots(
             "account_id_bidx": account_id_bidx,
             "account_type": account_snapshot.account_type.value,
             "snapshot_date": d,
+            "calc_version": _current_calc_version(account_snapshot.account_type),
             "total_value_enc": encrypt_data(str(round(total_value, 2)), master_key),
             "total_invested_enc": encrypt_data(str(round(current_invested, 2)), master_key),
             "total_deposits_enc": encrypt_data(str(round(current_deposits, 2)), master_key),
@@ -901,12 +930,19 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
             account_id_bidx = hash_index(acc_snap.account_id, master_key)
             first_and_last = snapshot_date_bounds.get(account_id_bidx)
 
-            # Auto-heal stale history starts from old logic (created_at-based).
-            # If the true account start is earlier than existing snapshots, we
-            # invalidate and rebuild the full account history once.
+            # Auto-heal stale history. Two triggers invalidate the whole account
+            # and rebuild it once from account_created_at:
+            #   1. The true account start is earlier than existing snapshots
+            #      (created_at-based drift), or
+            #   2. The stored formula version is behind the current one for this
+            #      account type (a valuation/P&L formula changed).
             if first_and_last is not None:
-                first_date, _ = first_and_last
-                if first_date > acc_snap.account_created_at:
+                first_date, _, min_calc_version = first_and_last
+                stale = (
+                    first_date > acc_snap.account_created_at
+                    or min_calc_version < _current_calc_version(acc_snap.account_type)
+                )
+                if stale:
                     session.exec(
                         sa.delete(AccountHistory).where(
                             AccountHistory.account_id_bidx == account_id_bidx,
@@ -1036,6 +1072,7 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
         stmt = stmt.on_conflict_do_update(
             constraint="uq_account_history_account_date",
             set_={
+                "calc_version": stmt.excluded.calc_version,
                 "total_value_enc": stmt.excluded.total_value_enc,
                 "total_invested_enc": stmt.excluded.total_invested_enc,
                 "total_deposits_enc": stmt.excluded.total_deposits_enc,
