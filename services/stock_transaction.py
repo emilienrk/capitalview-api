@@ -637,19 +637,26 @@ def get_stock_account_summary(
         ))
 
     stock_positions = [p for p in positions if p.asset_key != "EUR"]
+    fiat_positions = [p for p in positions if p.asset_key == "EUR"]
     total_invested_acc = sum(p.total_invested for p in stock_positions)
     total_fees_acc = sum(p.total_fees for p in stock_positions)
 
-    current_value_acc_list = [p.current_value for p in positions if p.current_value is not None]
-    current_value_acc = sum(current_value_acc_list) if current_value_acc_list else None
-
-    net_external_deposits = total_deposits_acc - total_withdrawals_acc
+    # VALEUR is holdings-scoped: EUR cash lives in cash_balance, never folded into
+    # portfolio value. This both removes the "Liquidités" double count and makes
+    # VALEUR - INVESTI == P/L (cost basis / PRU), consistent with crypto.
+    holdings_value_list = [p.current_value for p in stock_positions if p.current_value is not None]
+    cash_value_list = [p.current_value for p in fiat_positions if p.current_value is not None]
+    cash_balance_acc = sum(cash_value_list) if cash_value_list else Decimal("0")
+    if holdings_value_list or cash_value_list:
+        current_value_acc = sum(holdings_value_list) if holdings_value_list else Decimal("0")
+    else:
+        current_value_acc = None
 
     profit_loss_acc = profit_loss_pct_acc = None
     if current_value_acc is not None:
-        profit_loss_acc = current_value_acc - net_external_deposits
-        if net_external_deposits > 0:
-            profit_loss_pct_acc = (profit_loss_acc / net_external_deposits * 100)
+        profit_loss_acc = current_value_acc - total_invested_acc
+        if total_invested_acc > 0:
+            profit_loss_pct_acc = (profit_loss_acc / total_invested_acc * 100)
 
     total_dividends_acc = sum(
         v["total_dividends"] for k, v in positions_map.items() if k != "EUR"
@@ -662,6 +669,7 @@ def get_stock_account_summary(
         total_fees=round(total_fees_acc, 2),
         total_dividends=round(total_dividends_acc, 2),
         current_value=round(current_value_acc, 2) if current_value_acc is not None else None,
+        cash_balance=round(cash_balance_acc, 2),
         profit_loss=round(profit_loss_acc, 2) if profit_loss_acc is not None else None,
         profit_loss_percentage=round(profit_loss_pct_acc, 2) if profit_loss_pct_acc is not None else None,
         positions=positions,

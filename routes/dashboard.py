@@ -189,18 +189,19 @@ def get_my_portfolio(
     total_deposits = sum(a.total_deposits for a in accounts)
     total_withdrawals = sum(a.total_withdrawals for a in accounts)
     total_fees = sum(a.total_fees for a in accounts)
+    # VALEUR is holdings-scoped (idle cash sits in each account's cash_balance).
     current_value = sum(a.current_value for a in accounts if a.current_value)
-    
+
     profit_loss = None
     profit_loss_pct = None
-    
-    net_deposits = total_deposits - total_withdrawals
 
-    if current_value is not None or net_deposits != 0:
-        profit_loss = current_value - net_deposits
-        if net_deposits > 0:
-            profit_loss_pct = (profit_loss / net_deposits * 100)
-    
+    # Portfolio P/L on cost basis (PRU): VALEUR - INVESTI, matching each account.
+    account_pnl = [a.profit_loss for a in accounts if a.profit_loss is not None]
+    if account_pnl:
+        profit_loss = sum(account_pnl)
+        if total_invested > 0:
+            profit_loss_pct = (profit_loss / total_invested * 100)
+
     return PortfolioResponse(
         total_invested=round(total_invested, 2),
         total_deposits=round(total_deposits, 2),
@@ -245,10 +246,10 @@ def get_dashboard_statistics(
         stock_invested += summary.total_invested
         stock_deposits += summary.total_deposits
         stock_withdrawals += summary.total_withdrawals
-        liquidity += summary.total_deposits - summary.total_withdrawals - summary.total_invested
+        liquidity += summary.cash_balance
 
         if summary.current_value:
-            stock_current_value += stock_invested + summary.profit_loss 
+            stock_current_value += summary.current_value
 
     # ── Crypto accounts ──────────────────────────────────────
     crypto_models = session.exec(
@@ -267,10 +268,10 @@ def get_dashboard_statistics(
         crypto_invested += summary.total_invested
         crypto_deposits += summary.total_deposits
         crypto_withdrawals += summary.total_withdrawals
-        liquidity += summary.total_deposits - summary.total_withdrawals - summary.total_invested
+        liquidity += summary.cash_balance
 
         if summary.current_value:
-            crypto_current_value += summary.current_value + summary.profit_loss
+            crypto_current_value += summary.current_value
 
     investment_net_deposits = (stock_deposits + crypto_deposits) - (stock_withdrawals + crypto_withdrawals)
 

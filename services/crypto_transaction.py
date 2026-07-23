@@ -866,11 +866,21 @@ def get_crypto_account_summary(
             total_withdrawals_acc += tx.amount * tx.price_per_unit
 
     crypto_positions = [p for p in positions if p.asset_key not in FIAT_ASSET_KEYS]
+    fiat_positions = [p for p in positions if p.asset_key in FIAT_ASSET_KEYS]
 
     total_invested_acc = sum(p.total_invested for p in crypto_positions)
     total_fees_acc = sum(p.total_fees for p in crypto_positions)
-    current_value_acc_list = [p.current_value for p in positions if p.current_value is not None]
-    current_value_acc = sum(current_value_acc_list) if current_value_acc_list else None
+
+    # VALEUR is holdings-scoped: idle fiat cash lives in cash_balance, never folded
+    # into portfolio value (so VALEUR - INVESTI == P/L). current_value stays None only
+    # for a truly empty account (no valued position at all).
+    holdings_value_list = [p.current_value for p in crypto_positions if p.current_value is not None]
+    cash_value_list = [p.current_value for p in fiat_positions if p.current_value is not None]
+    cash_balance_acc = sum(cash_value_list) if cash_value_list else Decimal("0")
+    if holdings_value_list or cash_value_list:
+        current_value_acc = sum(holdings_value_list) if holdings_value_list else Decimal("0")
+    else:
+        current_value_acc = None
 
     # Account P/L is measured on cost basis (PRU): it equals the sum of the positions'
     # P/L and reconciles with the "Investi" card. Using net external deposits instead
@@ -889,6 +899,7 @@ def get_crypto_account_summary(
         total_fees=round(total_fees_acc, 2),
         currency="EUR",
         current_value=round(current_value_acc, 2) if current_value_acc is not None else None,
+        cash_balance=round(cash_balance_acc, 2),
         profit_loss=round(profit_loss_acc, 2) if profit_loss_acc is not None else None,
         profit_loss_percentage=round(profit_loss_pct_acc, 2) if profit_loss_pct_acc is not None else None,
         positions=positions,

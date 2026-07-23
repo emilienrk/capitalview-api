@@ -79,8 +79,10 @@ def _get_history_stats(
             transactions = get_crypto_transactions(session, acc.uuid, master_key)
             summary = get_crypto_account_summary(session, transactions)
 
-        if summary.current_value:
+        # Project on the full account value (holdings VALEUR + idle cash).
+        if summary.current_value is not None:
             current_value += summary.current_value
+        current_value += summary.cash_balance
 
         total_invested += summary.total_invested
 

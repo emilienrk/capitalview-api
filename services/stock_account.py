@@ -187,10 +187,11 @@ def _build_current_account_snapshot(
 
     transactions = get_account_transactions(session, account_uuid, master_key)
     summary = get_stock_account_summary(session, transactions, db_only=True)
-    if summary.current_value is None:
+    if summary.current_value is None and summary.cash_balance == 0:
         return None
 
-    total_value = Decimal(summary.current_value)
+    # Full liquidation value (net worth): holdings VALEUR + idle EUR cash.
+    total_value = Decimal(summary.current_value or 0) + Decimal(summary.cash_balance)
     total_invested = Decimal(summary.total_invested)
     total_deposits = Decimal(summary.total_deposits)
     total_withdrawals = Decimal(summary.total_withdrawals)
