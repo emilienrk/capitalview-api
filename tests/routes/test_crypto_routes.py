@@ -629,7 +629,9 @@ def test_account_pl_exit_does_not_inflate_invested(mock_get_info, session, maste
     3. Sell 1 BTC at 7 000 € (SELL_TO_FIAT)   SPEND + DEPOSIT → net_invested must stay 10 000
 
     After sell: EUR cash = 2 000 + 7 000 = 9 000, no BTC.
-    profit_loss = 9 000 - 10 000 = -1 000
+    Account P/L is measured on cost basis (PRU): with no open crypto position left,
+    there is nothing to compare against a purchase price, so profit_loss = 0.
+    (The -1 000 is a *realized* loss, which the cost-basis view intentionally does not show.)
     """
     mock_get_info.return_value = ("Bitcoin", Decimal("7000"))
 
@@ -678,7 +680,8 @@ def test_account_pl_exit_does_not_inflate_invested(mock_get_info, session, maste
     assert Decimal(str(summary["total_deposits"])) == Decimal("10000")
     # Only EUR remains: 2 000 + 7 000 = 9 000
     assert Decimal(str(summary["current_value"])) == Decimal("9000")
-    assert Decimal(str(summary["profit_loss"])) == Decimal("-1000")
+    # Cost-basis P/L: no open crypto position → 0 (realized loss is not shown here).
+    assert Decimal(str(summary["profit_loss"])) == Decimal("0")
 
 
 # ── Balance warning tests ────────────────────────────────────────────────────
