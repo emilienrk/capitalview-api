@@ -61,6 +61,8 @@ class AccountSummaryResponse(BaseModel):
     cash_balance: Decimal = Decimal("0")
     profit_loss: Decimal | None = None
     profit_loss_percentage: Decimal | None = None
+    realized_profit_loss: Decimal | None = None
+    total_profit_loss: Decimal | None = None
     positions: list[PositionResponse]
 
 

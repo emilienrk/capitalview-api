@@ -1593,3 +1593,82 @@ def test_crypto_transaction_amount_zero_still_rejected_for_non_anchor_types():
         amount=Decimal("0"), price_per_unit=Decimal("1"), executed_at=datetime(2024, 1, 1),
     )
     assert anchor.amount == Decimal("0")
+
+
+@patch("services.crypto_transaction.get_crypto_info")
+def test_crypto_realized_pnl_sell_to_fiat_then_hold(mock_info, session: Session, master_key: str):
+    """Sell BTC to fiat at a gain, keep cash: latent 0, realized = gain, total = gain."""
+    mock_info.side_effect = lambda s, symbol, db_only=False, as_of=None: {
+        "BTC": ("Bitcoin", Decimal("40000.0")),
+    }.get(symbol, ("Unknown", Decimal("0")))
+    _make_crypto_account(session, "acc_realized", "user_realized", master_key)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_realized", asset_key="EUR", type=CryptoTransactionType.DEPOSIT,
+        amount=Decimal("30000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 1)), master_key)
+    g_buy = "grp-buy"
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_realized", asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 2)), master_key, group_uuid=g_buy)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_realized", asset_key="EUR", type=CryptoTransactionType.SPEND,
+        amount=Decimal("30000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 2)), master_key, group_uuid=g_buy)
+    g_sell = "grp-sell"
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_realized", asset_key="BTC", type=CryptoTransactionType.SPEND,
+        amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 3)), master_key, group_uuid=g_sell)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_realized", asset_key="EUR", type=CryptoTransactionType.DEPOSIT,
+        amount=Decimal("50000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 3)), master_key, group_uuid=g_sell)
+
+    summary = _crypto_summary(session, "acc_realized", master_key)
+    assert summary.profit_loss == Decimal("0")                # no crypto held → latent 0
+    assert summary.realized_profit_loss == Decimal("20000")   # 50000 proceeds − 30000 cost
+    assert summary.total_profit_loss == Decimal("20000")
+
+
+@patch("services.crypto_transaction.get_crypto_info")
+def test_crypto_realized_pnl_swap(mock_info, session: Session, master_key: str):
+    """Crypto→crypto swap: realized = anchor (market value) − cost removed."""
+    mock_info.side_effect = lambda s, symbol, db_only=False, as_of=None: {
+        "BTC": ("Bitcoin", Decimal("0")), "ETH": ("Ether", Decimal("2000")),
+    }.get(symbol, ("Unknown", Decimal("0")))
+    _make_crypto_account(session, "acc_swap", "user_swap", master_key)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_swap", asset_key="EUR", type=CryptoTransactionType.DEPOSIT,
+        amount=Decimal("30000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 1)), master_key)
+    g_buy = "swap-buy"
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_swap", asset_key="BTC", type=CryptoTransactionType.BUY,
+        amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 2)), master_key, group_uuid=g_buy)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_swap", asset_key="EUR", type=CryptoTransactionType.SPEND,
+        amount=Decimal("30000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 2)), master_key, group_uuid=g_buy)
+    g_swap = "swap-grp"
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_swap", asset_key="BTC", type=CryptoTransactionType.SPEND,
+        amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 3)), master_key, group_uuid=g_swap)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_swap", asset_key="EUR", type=CryptoTransactionType.ANCHOR,
+        amount=Decimal("40000"), price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 3)), master_key, group_uuid=g_swap)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_swap", asset_key="ETH", type=CryptoTransactionType.BUY,
+        amount=Decimal("20"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 3)), master_key, group_uuid=g_swap)
+
+    summary = _crypto_summary(session, "acc_swap", master_key)
+    # Realized on the BTC leg: anchor 40000 − cost removed 30000 = 10000.
+    assert summary.realized_profit_loss == Decimal("10000")
+
+
+@patch("services.crypto_transaction.get_crypto_info")
+def test_crypto_outbound_withdraw_no_realized(mock_info, session: Session, master_key: str):
+    """Outbound crypto WITHDRAW is a transfer, not a sale → realized stays 0."""
+    mock_info.return_value = ("Bitcoin", Decimal("40000"))
+    _make_crypto_account(session, "acc_wd", "user_wd", master_key)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_wd", asset_key="BTC", type=CryptoTransactionType.DEPOSIT,
+        amount=Decimal("2"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 1)), master_key)
+    create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_wd", asset_key="BTC", type=CryptoTransactionType.WITHDRAW,
+        amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 2)), master_key)
+    summary = _crypto_summary(session, "acc_wd", master_key)
+    assert summary.realized_profit_loss == Decimal("0")

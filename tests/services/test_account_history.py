@@ -1396,13 +1396,13 @@ def test_compute_daily_net_flow_stock_withdraw():
 
 
 def test_current_calc_version_crypto_is_bumped():
-    """CRYPTO is at version 1 (P/L moved to cost basis / PRU)."""
-    assert _current_calc_version(AccountCategory.CRYPTO) == 1
+    """CRYPTO is at version 2 (cumulative_pnl now total P/L = latent + realized)."""
+    assert _current_calc_version(AccountCategory.CRYPTO) == 2
 
 
 def test_current_calc_version_stock_is_bumped():
-    """STOCK is at version 1 (P/L moved to cost basis, cash excluded from VALEUR)."""
-    assert _current_calc_version(AccountCategory.STOCK) == 1
+    """STOCK is at version 2 (cumulative_pnl now total P/L = latent + realized + dividends)."""
+    assert _current_calc_version(AccountCategory.STOCK) == 2
 
 
 def test_current_calc_version_other_types_are_zero():
@@ -1444,7 +1444,7 @@ def test_get_snapshot_date_bounds_returns_min_calc_version(
 def test_generate_missing_snapshots_stamps_current_calc_version(
     session: Session, master_key: str
 ):
-    """Crypto rows are stamped with the current crypto version (1)."""
+    """Crypto rows are stamped with the current crypto version (2)."""
     rows = _generate_missing_snapshots(
         session=session,
         user_uuid_bidx=hash_index("user_v", master_key),
@@ -1462,7 +1462,7 @@ def test_generate_missing_snapshots_stamps_current_calc_version(
     )
 
     assert rows[0]["calc_version"] == CURRENT_CALC_VERSION[AccountCategory.CRYPTO]
-    assert rows[0]["calc_version"] == 1
+    assert rows[0]["calc_version"] == 2
 
 
 def test_generate_missing_snapshots_stamps_zero_for_bank(

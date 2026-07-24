@@ -53,8 +53,8 @@ _ZERO = Decimal("0")
 # ---------------------------------------------------------------------------
 
 CURRENT_CALC_VERSION: dict[AccountCategory, int] = {
-    AccountCategory.CRYPTO: 1,   # bumped: P/L now on cost basis (PRU)
-    AccountCategory.STOCK: 1,    # bumped: P/L now on cost basis (VALEUR - INVESTI), cash excluded from VALEUR
+    AccountCategory.CRYPTO: 2,   # bumped: cumulative_pnl now total P/L (latent + realized)
+    AccountCategory.STOCK: 2,    # bumped: cumulative_pnl now total P/L (latent + realized + dividends)
     AccountCategory.BANK: 0,
     AccountCategory.ASSET: 0,
 }
@@ -486,7 +486,12 @@ def _build_positions_from_summary(
             }
         )
 
-    cumulative_pnl_raw = getattr(summary, "profit_loss", None)
+    # Curve = total P/L (latent + realized [+ dividends]) so it stays continuous when
+    # positions are sold out. Fall back to latent, then to deposits math, for summaries
+    # that predate the field.
+    cumulative_pnl_raw = getattr(summary, "total_profit_loss", None)
+    if cumulative_pnl_raw is None:
+        cumulative_pnl_raw = getattr(summary, "profit_loss", None)
     if cumulative_pnl_raw is not None:
         cumulative_pnl = _to_decimal(cumulative_pnl_raw)
     else:
