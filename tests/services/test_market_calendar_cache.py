@@ -32,6 +32,7 @@ from services.market import (
     _is_market_open,
     _last_market_close,
     _upsert_price,
+    get_non_trading_days,
     get_stock_price,
 )
 
@@ -289,6 +290,39 @@ class TestIsPriceStillValidStock:
         entry_stale = _price_entry(session, ma.id, Decimal("100"), _NOW - CACHE_DURATION - timedelta(minutes=5))
         assert _is_cache_fresh(ma, entry_fresh, _now=_NOW) is True
         assert _is_cache_fresh(ma, entry_stale, _now=_NOW) is False
+
+
+# ---------------------------------------------------------------------------
+# get_non_trading_days — chart weekend/holiday stripping
+# ---------------------------------------------------------------------------
+
+
+class TestGetNonTradingDays:
+    def test_weekend_and_holiday_dropped_xpar(self):
+        # 2026-01-01 New Year (XPAR closed), 01-03 Sat & 01-04 Sun weekend;
+        # 01-02 Fri and 01-05 Mon are trading sessions.
+        days = get_non_trading_days(["XPAR"], date(2026, 1, 1), date(2026, 1, 5))
+        assert date(2026, 1, 1) in days
+        assert date(2026, 1, 3) in days
+        assert date(2026, 1, 4) in days
+        assert date(2026, 1, 2) not in days
+        assert date(2026, 1, 5) not in days
+
+    def test_union_keeps_day_open_on_one_exchange(self):
+        # 2026-05-01 Labour Day (Friday): XPAR closed, XNYS open.
+        d = date(2026, 5, 1)
+        assert d in get_non_trading_days(["XPAR"], d, d)               # XPAR only → closed
+        assert d not in get_non_trading_days(["XPAR", "XNYS"], d, d)   # union → open on XNYS
+
+    def test_unknown_mic_returns_empty(self):
+        # No usable calendar → never filter (don't hide days we're unsure about).
+        assert get_non_trading_days(["XXXX_UNKNOWN"], date(2026, 1, 1), date(2026, 1, 5)) == []
+
+    def test_no_mic_returns_empty(self):
+        assert get_non_trading_days([], date(2026, 1, 1), date(2026, 1, 5)) == []
+
+    def test_inverted_range_returns_empty(self):
+        assert get_non_trading_days(["XPAR"], date(2026, 1, 5), date(2026, 1, 1)) == []
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -11,7 +11,7 @@ from database import get_session
 from models import User
 from models.enums import AssetType
 from services.auth import get_current_user, get_master_key
-from services.market import backfill_price_history, get_all_assets
+from services.market import backfill_price_history, get_all_assets, get_non_trading_days
 
 router = APIRouter(prefix="/market", tags=["Market"])
 
@@ -107,4 +107,30 @@ def get_market_assets(
         asset_type=asset_type,
         limit=limit,
     )
+
+
+class NonTradingDaysResponse(BaseModel):
+    """Dates closed on every requested exchange over the range."""
+
+    days: list[date]
+
+
+@router.get(
+    "/non-trading-days",
+    response_model=NonTradingDaysResponse,
+    summary="Jours non cotés (weekends + fériés)",
+    description=(
+        "Renvoie les dates de `[from_date, to_date]` fermées sur **toutes** les "
+        "places boursières demandées (union des sessions). Permet de retirer les "
+        "segments plats (weekends, jours fériés) des graphes actions. "
+        "Sans MIC connu/supporté, renvoie une liste vide (aucun filtrage)."
+    ),
+)
+def non_trading_days(
+    current_user: Annotated[User, Depends(get_current_user)],
+    from_date: date,
+    to_date: date,
+    mic: Annotated[list[str], Query()] = [],
+) -> NonTradingDaysResponse:
+    return NonTradingDaysResponse(days=get_non_trading_days(mic, from_date, to_date))
 
