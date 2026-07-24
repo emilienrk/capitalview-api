@@ -665,12 +665,17 @@ def get_stock_account_summary(
         v["total_dividends"] for k, v in positions_map.items() if k != "EUR"
     )
 
-    # Total P/L folds in realized gains and dividend income. Dividends are counted
-    # once here (already accumulated into total_dividends), never into realized/latent.
+    # Realized P/L = closed-position gains (SELLs) + dividend income actually
+    # received. Dividends are cash that left the position, so without folding them
+    # in here they would only surface as extra cash, never as P/L.
+    realized_profit_loss_acc = realized_acc + total_dividends_acc
+
+    # Total P/L = latent + realized (which already includes dividends). Dividends
+    # are counted exactly once, never double-counted into total.
     if profit_loss_acc is not None:
-        total_profit_loss_acc = profit_loss_acc + realized_acc + total_dividends_acc
+        total_profit_loss_acc = profit_loss_acc + realized_profit_loss_acc
     else:
-        total_profit_loss_acc = realized_acc + total_dividends_acc
+        total_profit_loss_acc = realized_profit_loss_acc
 
     return AccountSummaryResponse(
         total_invested=round(total_invested_acc, 2),
@@ -682,7 +687,7 @@ def get_stock_account_summary(
         cash_balance=round(cash_balance_acc, 2),
         profit_loss=round(profit_loss_acc, 2) if profit_loss_acc is not None else None,
         profit_loss_percentage=round(profit_loss_pct_acc, 2) if profit_loss_pct_acc is not None else None,
-        realized_profit_loss=round(realized_acc, 2),
+        realized_profit_loss=round(realized_profit_loss_acc, 2),
         total_profit_loss=round(total_profit_loss_acc, 2),
         positions=positions,
     )
