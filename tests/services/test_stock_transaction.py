@@ -597,3 +597,60 @@ def test_stock_summary_only_cash_no_holdings(session: Session, master_key: str):
     assert summary.current_value == Decimal("0")
     assert summary.profit_loss == Decimal("0")
     assert summary.cash_balance == Decimal("1000")
+
+
+@patch("services.stock_transaction.get_stock_info")
+def test_stock_realized_pnl_sell_at_gain(mock_market, session: Session, master_key: str):
+    """Partial SELL at a gain: realized = proceeds − cost removed; latent on the rest."""
+    mock_market.side_effect = lambda s, asset_key, db_only=False, as_of=None: {
+        "ISIN_AAPL": ("Apple Inc.", Decimal("150.0")),
+    }.get(asset_key, (None, None))
+    _make_stock_account(session, "acc_realized", "user_realized", master_key)
+    _add_market_asset(session, "ISIN_AAPL", symbol="AAPL", name="Apple Inc.")
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_realized", asset_key="ISIN_AAPL", type=StockTransactionType.DEPOSIT,
+        amount=Decimal("2000"), price_per_unit=Decimal("1"), fees=Decimal("0"),
+        executed_at=datetime(2024, 1, 1)), master_key)
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_realized", asset_key="ISIN_AAPL", type=StockTransactionType.BUY,
+        amount=Decimal("10"), price_per_unit=Decimal("100"), fees=Decimal("0"),
+        executed_at=datetime(2024, 1, 2)), master_key)
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_realized", asset_key="ISIN_AAPL", type=StockTransactionType.SELL,
+        amount=Decimal("4"), price_per_unit=Decimal("150"), fees=Decimal("0"),
+        executed_at=datetime(2024, 1, 3)), master_key)
+
+    summary = _stock_summary(session, "acc_realized", master_key)
+    # SELL 4 @ 150 → proceeds 600; cost removed 1000 * 0.4 = 400 → realized 200.
+    assert summary.realized_profit_loss == Decimal("200")
+    # 6 held @ 150 vs cost 600 → latent 300.
+    assert summary.profit_loss == Decimal("300")
+    assert summary.total_profit_loss == Decimal("500")  # 300 + 200 + 0 dividends
+
+
+@patch("services.stock_transaction.get_stock_info")
+def test_stock_dividend_counted_once_in_total(mock_market, session: Session, master_key: str):
+    """DIVIDEND income lands in total via total_dividends, never in realized/latent."""
+    mock_market.side_effect = lambda s, asset_key, db_only=False, as_of=None: {
+        "ISIN_AAPL": ("Apple Inc.", Decimal("100.0")),
+    }.get(asset_key, (None, None))
+    _make_stock_account(session, "acc_div", "user_div", master_key)
+    _add_market_asset(session, "ISIN_AAPL", symbol="AAPL", name="Apple Inc.")
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_div", asset_key="ISIN_AAPL", type=StockTransactionType.DEPOSIT,
+        amount=Decimal("1000"), price_per_unit=Decimal("1"), fees=Decimal("0"),
+        executed_at=datetime(2024, 1, 1)), master_key)
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_div", asset_key="ISIN_AAPL", type=StockTransactionType.BUY,
+        amount=Decimal("10"), price_per_unit=Decimal("100"), fees=Decimal("0"),
+        executed_at=datetime(2024, 1, 2)), master_key)
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id="acc_div", asset_key="ISIN_AAPL", type=StockTransactionType.DIVIDEND,
+        amount=Decimal("50"), price_per_unit=Decimal("1"), fees=Decimal("0"),
+        executed_at=datetime(2024, 1, 3)), master_key)
+
+    summary = _stock_summary(session, "acc_div", master_key)
+    assert summary.total_dividends == Decimal("50")
+    assert summary.realized_profit_loss == Decimal("0")   # dividend is not realized
+    assert summary.profit_loss == Decimal("0")            # 10 @ 100 vs cost 1000
+    assert summary.total_profit_loss == Decimal("50")     # 0 + 0 + 50, counted once

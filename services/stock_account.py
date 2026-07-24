@@ -232,8 +232,8 @@ def _build_current_account_snapshot(
         total_dividends=Decimal(summary.total_dividends),
         daily_pnl=None,
         cumulative_pnl=round(
-            Decimal(summary.profit_loss)
-            if summary.profit_loss is not None
+            Decimal(summary.total_profit_loss)
+            if summary.total_profit_loss is not None
             else (total_value - total_deposits + total_withdrawals),
             2,
         ),

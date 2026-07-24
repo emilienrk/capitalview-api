@@ -723,6 +723,8 @@ def get_crypto_account_summary(
     buy_group_cost: dict[str, Decimal] = {}
     anchor_by_group: dict[str, Decimal] = {}
     fiat_spend_by_group: dict[str, Decimal] = {}
+    fiat_deposit_by_group: dict[str, Decimal] = {}
+    cost_removed_by_group: dict[str, Decimal] = {}
     groups_with_crypto_spend: set[str] = set()
     for tx in transactions:
         if tx.group_uuid:
@@ -734,6 +736,10 @@ def get_crypto_account_summary(
                 fiat_spend_by_group[tx.group_uuid] += tx.amount * tx.price_per_unit
             elif tx.type == "SPEND" and tx.asset_key not in FIAT_ASSET_KEYS:
                 groups_with_crypto_spend.add(tx.group_uuid)
+            elif tx.type == "DEPOSIT" and tx.asset_key in FIAT_ASSET_KEYS:
+                # Fiat received in a group; the proceeds side of a sell-to-fiat.
+                fiat_deposit_by_group.setdefault(tx.group_uuid, Decimal("0"))
+                fiat_deposit_by_group[tx.group_uuid] += tx.amount * tx.price_per_unit
 
     for tx in transactions:
         if tx.type == "BUY" and tx.group_uuid:
@@ -778,9 +784,16 @@ def get_crypto_account_summary(
                     fraction = tx.amount / pos["total_amount"]
                     if fraction > Decimal("1"):
                         fraction = Decimal("1")
-                    pos["cost_basis"] -= pos["cost_basis"] * fraction
+                    cost_removed = pos["cost_basis"] * fraction
+                    pos["cost_basis"] -= cost_removed
                     if pos["cost_basis"] < 0:
                         pos["cost_basis"] = Decimal("0")
+                    # A crypto SPEND in a group is a disposal (sale or swap): track the
+                    # basis it removes so realized P/L = proceeds − cost_removed. TRANSFER
+                    # is a move, not a sale → excluded.
+                    if tx.type == "SPEND" and tx.group_uuid and tx.asset_key not in FIAT_ASSET_KEYS:
+                        cost_removed_by_group.setdefault(tx.group_uuid, Decimal("0"))
+                        cost_removed_by_group[tx.group_uuid] += cost_removed
                 pos["total_amount"] -= tx.amount
             case "FEE":
                 pos["total_amount"] -= tx.amount
@@ -892,6 +905,24 @@ def get_crypto_account_summary(
         if total_invested_acc > 0:
             profit_loss_pct_acc = (profit_loss_acc / total_invested_acc * 100)
 
+    # Realized P/L: for each disposal group, proceeds − cost removed. Proceeds is the
+    # fiat received (sell-to-fiat) or the EUR anchor (crypto→crypto swap). Transfers and
+    # outbound WITHDRAW carry no proceeds and never reach cost_removed_by_group.
+    realized_acc = Decimal("0")
+    for group in groups_with_crypto_spend:
+        if group in fiat_deposit_by_group:
+            proceeds = fiat_deposit_by_group[group]
+        elif group in anchor_by_group:
+            proceeds = anchor_by_group[group]
+        else:
+            proceeds = Decimal("0")
+        realized_acc += proceeds - cost_removed_by_group.get(group, Decimal("0"))
+
+    if profit_loss_acc is not None:
+        total_profit_loss_acc = profit_loss_acc + realized_acc
+    else:
+        total_profit_loss_acc = realized_acc
+
     return AccountSummaryResponse(
         total_invested=round(total_invested_acc, 2),
         total_deposits=round(total_deposits_acc, 2),
@@ -902,6 +933,8 @@ def get_crypto_account_summary(
         cash_balance=round(cash_balance_acc, 2),
         profit_loss=round(profit_loss_acc, 2) if profit_loss_acc is not None else None,
         profit_loss_percentage=round(profit_loss_pct_acc, 2) if profit_loss_pct_acc is not None else None,
+        realized_profit_loss=round(realized_acc, 2),
+        total_profit_loss=round(total_profit_loss_acc, 2),
         positions=positions,
     )
 

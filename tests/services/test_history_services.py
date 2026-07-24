@@ -140,6 +140,7 @@ class TestGetStockAccountHistory:
                 current_value=Decimal("9000"),
                 profit_loss=Decimal("4000"),
                 profit_loss_percentage=Decimal("80"),
+                total_profit_loss=Decimal("4000"),
                 positions=[position],
             )
     
@@ -552,6 +553,7 @@ class TestCryptoAccountHistory:
                 current_value=Decimal("9000"),
                 profit_loss=Decimal("4000"),
                 profit_loss_percentage=Decimal("80"),
+                total_profit_loss=Decimal("4000"),
                 positions=[position],
             )
 
@@ -636,6 +638,7 @@ class TestCryptoAccountHistory:
                     current_value=Decimal("9000"),
                     profit_loss=Decimal("1000"),
                     profit_loss_percentage=Decimal("12.5"),
+                    total_profit_loss=Decimal("1000"),
                     positions=[
                         PositionResponse(
                             symbol="BTC",
@@ -659,6 +662,7 @@ class TestCryptoAccountHistory:
                 current_value=Decimal("3500"),
                 profit_loss=Decimal("500"),
                 profit_loss_percentage=Decimal("16.67"),
+                total_profit_loss=Decimal("500"),
                 positions=[
                     PositionResponse(
                         symbol="ETH",
@@ -864,3 +868,37 @@ class TestAssetPortfolioHistory:
 
         result_a = get_asset_portfolio_history(session, user_a, master_key)
         assert result_a == []
+
+
+def test_snapshot_cumulative_pnl_is_total_pnl():
+    """The stored cumulative_pnl must be total P/L (latent + realized [+ dividends]),
+    so the curve stays continuous when positions are sold out."""
+    from services.account_history import _build_positions_from_summary
+
+    summary = SimpleNamespace(
+        positions=[],
+        current_value=Decimal("100"),
+        cash_balance=Decimal("0"),
+        total_invested=Decimal("80"),
+        total_deposits=Decimal("80"),
+        total_withdrawals=Decimal("0"),
+        total_fees=Decimal("0"),
+        total_dividends=Decimal("0"),
+        profit_loss=Decimal("20"),          # latent
+        total_profit_loss=Decimal("35"),    # latent 20 + realized 15
+    )
+    payload = _build_positions_from_summary(summary)
+    assert payload["cumulative_pnl"] == Decimal("35")
+
+
+def test_snapshot_cumulative_pnl_falls_back_to_latent_then_deposits():
+    """No total_profit_loss (legacy summary) → latent; neither → deposits math."""
+    from services.account_history import _build_positions_from_summary
+
+    latent_only = SimpleNamespace(
+        positions=[], current_value=Decimal("100"), cash_balance=Decimal("0"),
+        total_invested=Decimal("80"), total_deposits=Decimal("80"),
+        total_withdrawals=Decimal("0"), total_fees=Decimal("0"),
+        total_dividends=Decimal("0"), profit_loss=Decimal("20"),
+    )
+    assert _build_positions_from_summary(latent_only)["cumulative_pnl"] == Decimal("20")

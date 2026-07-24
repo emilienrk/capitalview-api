@@ -500,6 +500,7 @@ def get_stock_account_summary(
 
     total_deposits_acc = Decimal("0")
     total_withdrawals_acc = Decimal("0")
+    realized_acc = Decimal("0")
 
     positions_map: dict[str, dict] = {
         "EUR": {
@@ -561,6 +562,8 @@ def get_stock_account_summary(
         elif tx.type == "SELL" and pos["total_amount"] > 0:
             fraction = min(tx.amount / pos["total_amount"], Decimal("1"))
             proceeds = (tx.amount * tx.price_per_unit) - tx.fees
+            cost_removed = pos["total_cost"] * fraction
+            realized_acc += proceeds - cost_removed
             pos["total_amount"] = max(pos["total_amount"] - tx.amount, Decimal("0"))
             pos["total_cost"] = max(pos["total_cost"] * (Decimal("1") - fraction), Decimal("0"))
             pos["total_fees"] += tx.fees
@@ -662,6 +665,13 @@ def get_stock_account_summary(
         v["total_dividends"] for k, v in positions_map.items() if k != "EUR"
     )
 
+    # Total P/L folds in realized gains and dividend income. Dividends are counted
+    # once here (already accumulated into total_dividends), never into realized/latent.
+    if profit_loss_acc is not None:
+        total_profit_loss_acc = profit_loss_acc + realized_acc + total_dividends_acc
+    else:
+        total_profit_loss_acc = realized_acc + total_dividends_acc
+
     return AccountSummaryResponse(
         total_invested=round(total_invested_acc, 2),
         total_deposits=round(total_deposits_acc, 2),
@@ -672,5 +682,7 @@ def get_stock_account_summary(
         cash_balance=round(cash_balance_acc, 2),
         profit_loss=round(profit_loss_acc, 2) if profit_loss_acc is not None else None,
         profit_loss_percentage=round(profit_loss_pct_acc, 2) if profit_loss_pct_acc is not None else None,
+        realized_profit_loss=round(realized_acc, 2),
+        total_profit_loss=round(total_profit_loss_acc, 2),
         positions=positions,
     )
