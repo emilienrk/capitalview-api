@@ -64,6 +64,50 @@ def _last_market_close(mic: str) -> datetime | None:
         return None
 
 
+def get_non_trading_days(
+    mics: list[str],
+    from_date: date,
+    to_date: date,
+) -> list[date]:
+    """
+    Days in [from_date, to_date] closed on **every** given exchange (weekends +
+    holidays), for stripping flat segments from stock charts.
+
+    Union semantics: a day is a trading day if at least one held exchange has a
+    session that day, so a mixed portfolio (e.g. XPAR + XNYS) only drops days
+    where all its exchanges are shut. When no MIC is known/supported, returns an
+    empty list — we never hide a day we are unsure about.
+    """
+    if to_date < from_date:
+        return []
+
+    open_dates: set[date] = set()
+    queried_ok = False
+    for mic in {m for m in mics if m}:
+        cal = _get_calendar(mic)
+        if cal is None:
+            continue  # unknown/unsupported MIC → ignore, don't let it filter
+        try:
+            sessions = cal.sessions_in_range(pd.Timestamp(from_date), pd.Timestamp(to_date))
+        except Exception:
+            continue
+        queried_ok = True  # successful query; an empty result means "all closed", which is valid
+        for ts in sessions:
+            open_dates.add(ts.date())
+
+    # No usable calendar at all → don't filter anything (never hide unsure days).
+    if not queried_ok:
+        return []
+
+    result: list[date] = []
+    day = from_date
+    while day <= to_date:
+        if day not in open_dates:
+            result.append(day)
+        day += timedelta(days=1)
+    return result
+
+
 def _is_cache_fresh(
     asset: MarketAsset,
     price_entry: MarketPriceHistory,
