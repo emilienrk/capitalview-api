@@ -143,12 +143,16 @@ def _apply_pending_cashflows(
     cashflows: list,
     master_key: str,
     get_cashflow_occurrences_fn,
+    auto_sync_enabled: bool,
 ) -> None:
     """Apply cashflow occurrences that have fired since balance_updated_at.
 
     On the first call (balance_updated_at is None), we just stamp today without
     applying anything — this prevents retroactively adjusting a manually-entered balance.
     Subsequent calls apply all occurrences in (balance_updated_at, today].
+
+    Inactive cashflows and a disabled global switch skip the balance update but
+    still advance the stamp: a paused period must never be caught up later.
     """
     today = date.today()
 
@@ -164,7 +168,11 @@ def _apply_pending_cashflows(
         return  # Already up to date
 
     # Filter cashflows linked to this account
-    linked = [cf for cf in cashflows if cf.bank_account_id == account.uuid]
+    linked = [
+        cf for cf in cashflows
+        if cf.bank_account_id == account.uuid and cf.is_active
+    ] if auto_sync_enabled else []
+
     if not linked:
         account.balance_updated_at = today
         session.add(account)
@@ -201,16 +209,21 @@ def get_user_bank_accounts(
     """Get all bank accounts for a user, applying pending cashflows first."""
     # Lazy import to avoid circular dependency
     from services.cashflow import get_all_user_cashflows, get_cashflow_occurrences
+    from services.settings import get_or_create_settings
 
     user_bidx = hash_index(user_uuid, master_key)
     accounts = session.exec(
         select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
     ).all()
 
+    auto_sync_enabled = get_or_create_settings(session, user_uuid, master_key).bank_auto_sync_enabled
+
     # Fetch cashflows once and apply pending ones to each linked account
     cashflows = get_all_user_cashflows(session, user_uuid, master_key)
     for account in accounts:
-        _apply_pending_cashflows(session, account, cashflows, master_key, get_cashflow_occurrences)
+        _apply_pending_cashflows(
+            session, account, cashflows, master_key, get_cashflow_occurrences, auto_sync_enabled
+        )
 
     responses = [_map_to_response(acc, master_key) for acc in accounts]
     total_balance = sum(acc.balance for acc in responses)

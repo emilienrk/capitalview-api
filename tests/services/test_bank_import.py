@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 from services.imports.bank_csv import parse_bank_points
+from services.imports.registry import get_parser
 
 BALANCE_CSV = textwrap.dedent("""\
     Date;Solde
@@ -53,3 +54,53 @@ def test_bank_unreadable_rows_warn():
     })
     assert len(points) == 1
     assert warnings and "illisible" in warnings[0]
+
+
+NATIVE_CSV = textwrap.dedent("""\
+    snapshot_date,value
+    2024-01-31,12500.00
+    2024-02-29,13200.50
+""")
+
+NATIVE_FR_CSV = textwrap.dedent("""\
+    snapshot_date;value
+    31/01/2024;12 500,00
+    29/02/2024;13200,50
+""")
+
+
+def test_native_parser_is_registered():
+    assert get_parser("native_bank") is not None
+
+
+def test_native_parser_detects_its_own_header():
+    parser = get_parser("native_bank")
+    assert parser.detect(NATIVE_CSV) == 1.0
+    assert parser.detect("Date;Solde\n15/01/2024;1000,00\n") == 0.0
+
+
+def test_native_parser_offers_a_template():
+    parser = get_parser("native_bank")
+    assert parser.template_csv is not None
+    assert parser.template_csv.splitlines()[0] == "snapshot_date,value"
+
+
+def test_native_points_parsed_without_mapping():
+    parser = get_parser("native_bank")
+    points, _ = parse_bank_points(NATIVE_CSV, parser.effective_options({}))
+    assert [p.snapshot_date for p in points] == [date(2024, 1, 31), date(2024, 2, 29)]
+    assert points[0].value == Decimal("12500.00")
+
+
+def test_native_points_accept_french_dates_and_decimals():
+    parser = get_parser("native_bank")
+    points, _ = parse_bank_points(NATIVE_FR_CSV, parser.effective_options({}))
+    assert [p.snapshot_date for p in points] == [date(2024, 1, 31), date(2024, 2, 29)]
+    assert points[0].value == Decimal("12500.00")
+    assert points[1].value == Decimal("13200.50")
+
+
+def test_native_missing_columns_yields_no_points():
+    parser = get_parser("native_bank")
+    points, _ = parse_bank_points("foo,bar\n1,2\n", parser.effective_options({}))
+    assert points == []

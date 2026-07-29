@@ -30,6 +30,8 @@ class ImportParser(ABC):
     category: ImportCategory
     file_hint: str
     supports_mapping: bool = False
+    # Ready-to-fill CSV skeleton offered as a download; None = no template.
+    template_csv: str | None = None
 
     @abstractmethod
     def detect(self, csv_content: str) -> float:
