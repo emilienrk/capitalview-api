@@ -25,6 +25,7 @@ def list_parsers() -> list[ImportSourceInfo]:
             category=p.category.value,
             file_hint=p.file_hint,
             supports_mapping=p.supports_mapping,
+            template_csv=p.template_csv,
         )
         for p in sorted(_PARSERS.values(), key=lambda p: (p.category.value, p.source_id))
     ]
