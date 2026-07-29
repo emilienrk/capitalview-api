@@ -17,6 +17,7 @@ class CashflowCreate(BaseModel):
     frequency: Frequency
     transaction_date: date
     bank_account_id: str | None = None
+    is_active: bool = True
 
 
 class CashflowUpdate(BaseModel):
@@ -28,6 +29,7 @@ class CashflowUpdate(BaseModel):
     frequency: Frequency | None = None
     transaction_date: date | None = None
     bank_account_id: str | None = None
+    is_active: bool | None = None
 
 
 class CashflowResponse(BaseModel):
@@ -44,6 +46,7 @@ class CashflowResponse(BaseModel):
 
     monthly_amount: Decimal  # Amount normalized to monthly
     bank_account_id: str | None = None  # Linked bank account UUID
+    is_active: bool = True  # False = excluded from the automatic bank balance sync
 
 
 class CashflowCategoryResponse(BaseModel):

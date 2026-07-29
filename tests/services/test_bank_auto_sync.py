@@ -9,15 +9,18 @@ from sqlmodel import Session
 
 from dtos.bank import BankAccountCreate, BankAccountUpdate
 from dtos.cashflow import CashflowCreate, CashflowUpdate
+from dtos.settings import UserSettingsUpdate
 from models.bank import BankAccount
+from models.cashflow import Cashflow
 from models.enums import BankAccountType, FlowType, Frequency
 from services.bank import (
     create_bank_account,
     get_user_bank_accounts,
     update_bank_account,
 )
-from services.cashflow import create_cashflow
+from services.cashflow import create_cashflow, update_cashflow
 from services.encryption import decrypt_data
+from services.settings import update_settings
 
 
 # ─── Helpers ─────────────────────────────────────────────────
@@ -33,7 +36,8 @@ def _make_account(session, master_key, user_uuid="sync_user", balance=Decimal("1
     return session.get(BankAccount, resp.id)
 
 
-def _link_cashflow(session, master_key, account_id, amount, flow_type, frequency, transaction_date, user_uuid="sync_user"):
+def _link_cashflow(session, master_key, account_id, amount, flow_type, frequency,
+                   transaction_date, user_uuid="sync_user", is_active=True):
     return create_cashflow(
         session,
         CashflowCreate(
@@ -44,6 +48,7 @@ def _link_cashflow(session, master_key, account_id, amount, flow_type, frequency
             frequency=frequency,
             transaction_date=transaction_date,
             bank_account_id=account_id,
+            is_active=is_active,
         ),
         user_uuid,
         master_key,
@@ -264,3 +269,94 @@ class TestManualBalanceReset:
 
         session.refresh(acc)
         assert acc.balance_updated_at == today
+
+
+# ─── Inactive cashflows & global switch ──────────────────────
+
+
+class TestInactiveCashflows:
+    def test_inactive_cashflow_is_ignored(self, session: Session, master_key: str):
+        user_uuid = "inactive_cf_user"
+        acc = _make_account(session, master_key, user_uuid=user_uuid, balance=Decimal("1000"))
+        acc.balance_updated_at = date(2026, 2, 1)
+        session.add(acc)
+        session.commit()
+
+        _link_cashflow(session, master_key, acc.uuid, Decimal("500"), FlowType.OUTFLOW,
+                       Frequency.MONTHLY, date(2026, 1, 10), user_uuid=user_uuid, is_active=False)
+
+        with patch("services.bank.date") as mock_date:
+            mock_date.today.return_value = date(2026, 3, 21)
+            summary = get_user_bank_accounts(session, user_uuid, master_key)
+
+        assert summary.accounts[0].balance == Decimal("1000")
+        session.refresh(acc)
+        assert acc.balance_updated_at == date(2026, 3, 21)
+
+    def test_active_and_inactive_mixed(self, session: Session, master_key: str):
+        user_uuid = "mixed_cf_user"
+        acc = _make_account(session, master_key, user_uuid=user_uuid, balance=Decimal("1000"))
+        acc.balance_updated_at = date(2026, 2, 28)
+        session.add(acc)
+        session.commit()
+
+        _link_cashflow(session, master_key, acc.uuid, Decimal("3000"), FlowType.INFLOW,
+                       Frequency.MONTHLY, date(2026, 1, 1), user_uuid=user_uuid)
+        _link_cashflow(session, master_key, acc.uuid, Decimal("1200"), FlowType.OUTFLOW,
+                       Frequency.MONTHLY, date(2026, 1, 5), user_uuid=user_uuid, is_active=False)
+
+        with patch("services.bank.date") as mock_date:
+            mock_date.today.return_value = date(2026, 3, 21)
+            summary = get_user_bank_accounts(session, user_uuid, master_key)
+
+        # Only the active inflow fires on Mar 1 → 1000 + 3000
+        assert summary.accounts[0].balance == Decimal("4000")
+
+    def test_reactivation_does_not_backfill_missed_occurrences(self, session: Session, master_key: str):
+        """The point of the flag: a paused period is skipped for good, never caught up."""
+        user_uuid = "no_backfill_user"
+        acc = _make_account(session, master_key, user_uuid=user_uuid, balance=Decimal("1000"))
+        acc.balance_updated_at = date(2026, 1, 1)
+        session.add(acc)
+        session.commit()
+
+        cf = _link_cashflow(session, master_key, acc.uuid, Decimal("100"), FlowType.OUTFLOW,
+                            Frequency.MONTHLY, date(2026, 1, 15), user_uuid=user_uuid, is_active=False)
+
+        # Two months pass with the cashflow disabled
+        with patch("services.bank.date") as mock_date:
+            mock_date.today.return_value = date(2026, 3, 20)
+            get_user_bank_accounts(session, user_uuid, master_key)
+
+        update_cashflow(session, session.get(Cashflow, cf.id),
+                        CashflowUpdate(is_active=True), master_key, user_uuid)
+
+        with patch("services.bank.date") as mock_date:
+            mock_date.today.return_value = date(2026, 4, 20)
+            summary = get_user_bank_accounts(session, user_uuid, master_key)
+
+        # Only Apr 15 fires; Jan/Feb/Mar occurrences are gone for good
+        assert summary.accounts[0].balance == Decimal("900")
+
+
+class TestGlobalAutoSyncSwitch:
+    def test_disabled_switch_freezes_balance_but_advances_stamp(self, session: Session, master_key: str):
+        user_uuid = "global_off_user"
+        acc = _make_account(session, master_key, user_uuid=user_uuid, balance=Decimal("1000"))
+        acc.balance_updated_at = date(2026, 2, 1)
+        session.add(acc)
+        session.commit()
+
+        _link_cashflow(session, master_key, acc.uuid, Decimal("500"), FlowType.OUTFLOW,
+                       Frequency.MONTHLY, date(2026, 1, 10), user_uuid=user_uuid)
+
+        update_settings(session, user_uuid, master_key,
+                        UserSettingsUpdate(bank_auto_sync_enabled=False))
+
+        with patch("services.bank.date") as mock_date:
+            mock_date.today.return_value = date(2026, 3, 21)
+            summary = get_user_bank_accounts(session, user_uuid, master_key)
+
+        assert summary.accounts[0].balance == Decimal("1000")
+        session.refresh(acc)
+        assert acc.balance_updated_at == date(2026, 3, 21)

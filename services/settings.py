@@ -69,6 +69,7 @@ def _map_settings_to_response(
         crypto_mode=settings.crypto_mode,
         crypto_show_negative_positions=settings.crypto_show_negative_positions,
         bank_module_enabled=settings.bank_module_enabled,
+        bank_auto_sync_enabled=settings.bank_auto_sync_enabled,
         cashflow_module_enabled=settings.cashflow_module_enabled,
         wealth_module_enabled=settings.wealth_module_enabled,
         ai_feature_enabled=settings.ai_feature_enabled,
@@ -183,6 +184,9 @@ def update_settings(
 
     if data.bank_module_enabled is not None:
         settings.bank_module_enabled = data.bank_module_enabled
+
+    if data.bank_auto_sync_enabled is not None:
+        settings.bank_auto_sync_enabled = data.bank_auto_sync_enabled
 
     if data.cashflow_module_enabled is not None:
         settings.cashflow_module_enabled = data.cashflow_module_enabled
