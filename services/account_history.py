@@ -32,6 +32,7 @@ from models.enums import AccountCategory, AssetType
 from models.market import MarketAsset, MarketPriceHistory
 from models import BankAccount, CryptoAccount, StockAccount
 from dtos.crypto import FIAT_ASSET_KEYS
+from services.analytics.flows import stock_external_flow_for_day
 from services.encryption import decrypt_data, encrypt_data, hash_index
 from services.settings import get_or_create_settings
 from models.enums import CryptoTransactionType, StockTransactionType
@@ -360,17 +361,7 @@ def _compute_daily_net_flow(
     net_flow = _ZERO
 
     if account_snapshot.account_type == AccountCategory.STOCK:
-        for tx in day_txs:
-            asset_key = str(getattr(tx, "asset_key", "") or "").upper()
-            if asset_key != "EUR":
-                continue
-            amount = _to_decimal(getattr(tx, "amount", _ZERO))
-            match _type(tx):
-                case "DEPOSIT":
-                    net_flow += amount
-                case "WITHDRAW":
-                    net_flow -= amount
-        return net_flow
+        return stock_external_flow_for_day(day_txs, d)
 
     # CRYPTO
     groups_with_crypto_spend: set[str] = {
