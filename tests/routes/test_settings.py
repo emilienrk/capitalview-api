@@ -197,3 +197,16 @@ def test_update_ai_api_keys(session, master_key):
     providers4 = {p["provider"]: p for p in data4["ai_providers"]}
     assert providers4["anthropic"]["has_key"] is False
     assert providers4["deepseek"]["has_key"] is True
+
+
+def test_bank_auto_sync_defaults_to_true_and_can_be_disabled(session, master_key):
+    client = TestClient(app)
+
+    initial = client.get("/settings").json()
+    assert initial["bank_auto_sync_enabled"] is True
+
+    updated = client.put("/settings", json={"bank_auto_sync_enabled": False}).json()
+    assert updated["bank_auto_sync_enabled"] is False
+
+    reread = client.get("/settings").json()
+    assert reread["bank_auto_sync_enabled"] is False
