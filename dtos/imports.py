@@ -15,6 +15,7 @@ class ImportSourceInfo(BaseModel):
     category: str  # "crypto" | "stock" | "bank"
     file_hint: str
     supports_mapping: bool = False
+    template_csv: str | None = None
 
 
 class ImportSourcesResponse(BaseModel):

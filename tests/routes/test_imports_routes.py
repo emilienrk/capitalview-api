@@ -151,3 +151,10 @@ def test_csv_too_large_413(client_with_user):
         headers=auth,
     )
     assert r.status_code == 413
+
+
+def test_sources_expose_optional_template(client_with_user):
+    client, auth = client_with_user
+    sources = client.get("/imports/sources", headers=auth).json()["sources"]
+    # Every source declares the field; only some carry a template.
+    assert all("template_csv" in s for s in sources)
