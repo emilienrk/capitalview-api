@@ -312,3 +312,87 @@ def test_bank_account_id_not_exposed_across_users(session: Session, master_key: 
     )
     # user_B cannot access user_A's cashflow at all
     assert get_cashflow(session, cf.id, user_b, master_key) is None
+
+
+class TestCashflowIsActive:
+    def test_new_cashflow_is_active_by_default(self, session: Session, master_key: str):
+        created = create_cashflow(
+            session,
+            CashflowCreate(
+                name="Salaire",
+                flow_type=FlowType.INFLOW,
+                category="salaire",
+                amount=Decimal("3000"),
+                frequency=Frequency.MONTHLY,
+                transaction_date=date(2026, 1, 1),
+            ),
+            "is_active_user",
+            master_key,
+        )
+        assert created.is_active is True
+
+    def test_can_be_deactivated_and_reactivated(self, session: Session, master_key: str):
+        created = create_cashflow(
+            session,
+            CashflowCreate(
+                name="Netflix",
+                flow_type=FlowType.OUTFLOW,
+                category="loisirs",
+                amount=Decimal("15"),
+                frequency=Frequency.MONTHLY,
+                transaction_date=date(2026, 1, 1),
+            ),
+            "toggle_user",
+            master_key,
+        )
+        row = session.get(Cashflow, created.id)
+
+        off = update_cashflow(session, row, CashflowUpdate(is_active=False), master_key, "toggle_user")
+        assert off.is_active is False
+
+        on = update_cashflow(session, row, CashflowUpdate(is_active=True), master_key, "toggle_user")
+        assert on.is_active is True
+
+    def test_legacy_row_without_flag_is_active(self, session: Session, master_key: str):
+        created = create_cashflow(
+            session,
+            CashflowCreate(
+                name="Loyer",
+                flow_type=FlowType.OUTFLOW,
+                category="logement",
+                amount=Decimal("800"),
+                frequency=Frequency.MONTHLY,
+                transaction_date=date(2026, 1, 1),
+            ),
+            "legacy_user",
+            master_key,
+        )
+        # Simulate a row created before the column existed
+        row = session.get(Cashflow, created.id)
+        row.is_active_enc = None
+        session.add(row)
+        session.commit()
+
+        fetched = get_cashflow(session, created.id, "legacy_user", master_key)
+        assert fetched.is_active is True
+
+    def test_update_without_is_active_preserves_it(self, session: Session, master_key: str):
+        created = create_cashflow(
+            session,
+            CashflowCreate(
+                name="Prime",
+                flow_type=FlowType.INFLOW,
+                category="salaire",
+                amount=Decimal("500"),
+                frequency=Frequency.YEARLY,
+                transaction_date=date(2026, 1, 1),
+                is_active=False,
+            ),
+            "preserve_user",
+            master_key,
+        )
+        assert created.is_active is False
+
+        row = session.get(Cashflow, created.id)
+        renamed = update_cashflow(session, row, CashflowUpdate(name="Prime annuelle"), master_key, "preserve_user")
+        assert renamed.is_active is False

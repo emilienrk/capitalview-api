@@ -58,6 +58,10 @@ def _map_cashflow_to_response(
     if cashflow.bank_account_uuid_bidx and bank_bidx_map:
         bank_account_id = bank_bidx_map.get(cashflow.bank_account_uuid_bidx)
 
+    is_active = True
+    if cashflow.is_active_enc:
+        is_active = decrypt_data(cashflow.is_active_enc, master_key) == "true"
+
     return CashflowResponse(
         id=cashflow.uuid,
         name=name,
@@ -68,6 +72,7 @@ def _map_cashflow_to_response(
         transaction_date=transaction_date,
         monthly_amount=get_monthly_amount(amount, frequency),
         bank_account_id=bank_account_id,
+        is_active=is_active,
         created_at=cashflow.created_at,
         updated_at=cashflow.updated_at,
     )
@@ -89,7 +94,8 @@ def create_cashflow(
     frequency_enc = encrypt_data(data.frequency.value, master_key)
     date_enc = encrypt_data(data.transaction_date.isoformat(), master_key)
     bank_acc_bidx = hash_index(data.bank_account_id, master_key) if data.bank_account_id else None
-    
+    is_active_enc = encrypt_data("true" if data.is_active else "false", master_key)
+
     cashflow = Cashflow(
         user_uuid_bidx=user_bidx,
         name_enc=name_enc,
@@ -99,6 +105,7 @@ def create_cashflow(
         frequency_enc=frequency_enc,
         transaction_date_enc=date_enc,
         bank_account_uuid_bidx=bank_acc_bidx,
+        is_active_enc=is_active_enc,
     )
     
     session.add(cashflow)
@@ -138,7 +145,10 @@ def update_cashflow(
     if data.bank_account_id is not None:
         # Empty string means unlinking the account
         cashflow.bank_account_uuid_bidx = hash_index(data.bank_account_id, master_key) if data.bank_account_id else None
-        
+
+    if data.is_active is not None:
+        cashflow.is_active_enc = encrypt_data("true" if data.is_active else "false", master_key)
+
     session.add(cashflow)
     session.commit()
     session.refresh(cashflow)
