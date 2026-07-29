@@ -52,6 +52,7 @@ class UserSettingsUpdate(BaseModel):
     crypto_mode: str | None = None
     crypto_show_negative_positions: bool | None = None
     bank_module_enabled: bool | None = None
+    bank_auto_sync_enabled: bool | None = None
     cashflow_module_enabled: bool | None = None
     wealth_module_enabled: bool | None = None
     ai_feature_enabled: bool | None = None
@@ -76,6 +77,7 @@ class UserSettingsResponse(BaseModel):
     crypto_mode: str = "SINGLE"
     crypto_show_negative_positions: bool = False
     bank_module_enabled: bool = False
+    bank_auto_sync_enabled: bool = True
     cashflow_module_enabled: bool = True
     wealth_module_enabled: bool = False
     ai_feature_enabled: bool = False
