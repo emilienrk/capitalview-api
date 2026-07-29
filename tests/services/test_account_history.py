@@ -419,6 +419,67 @@ def test_generate_missing_snapshots_stock_values(session: Session, master_key: s
     assert decrypt_data(rows[1]["daily_pnl_enc"], master_key) == "50.00"
 
 
+def test_generate_missing_snapshots_stock_counts_auto_provision_as_external_flow(
+    session: Session, master_key: str
+):
+    """An auto-provisioned DEPOSIT is still an external flow on the snapshot path.
+
+    The app writes these rows itself one second before a BUY (services/stock_transaction.py,
+    note "Provision automatique"). The analytics exclude them, snapshots must not: dropping
+    them here would turn the provisioned amount into phantom P/L on the purchase day.
+    """
+    user_bidx = hash_index("user_stock_autoprov", master_key)
+    acc_bidx = hash_index("acc_stock_autoprov", master_key)
+
+    transactions = [
+        _tx(
+            type="DEPOSIT",
+            asset_key="EUR",
+            amount=Decimal("1800"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 9, 59, 59, tzinfo=timezone.utc),
+            notes="Provision automatique",
+        ),
+        _tx(
+            type="BUY",
+            asset_key="US0378331005",
+            amount=Decimal("10"),
+            price_per_unit=Decimal("180"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
+    ]
+    price_matrix = {"US0378331005": {date(2024, 3, 1): Decimal("180.00")}}
+
+    rows = _generate_missing_snapshots(
+        session=session,
+        user_uuid_bidx=user_bidx,
+        account_id_bidx=acc_bidx,
+        account_snapshot=_AccountSnapshot(
+            account_id="fake_id",
+            account_type=AccountCategory.STOCK,
+            transactions=transactions,
+        ),
+        price_matrix=price_matrix,
+        missing_dates=[date(2024, 3, 1)],
+        prev_value=Decimal("0"),
+        master_key=master_key,
+    )
+
+    assert len(rows) == 1
+    assert decrypt_data(rows[0]["total_value_enc"], master_key) == "1800.00"
+    # 1800 - 0 - 1800 = 0. Excluding the provision would report 1800.00 of P/L.
+    assert decrypt_data(rows[0]["daily_pnl_enc"], master_key) == "0.00"
+
+    assert _compute_daily_net_flow(
+        _AccountSnapshot(
+            account_id="fake_id",
+            account_type=AccountCategory.STOCK,
+            transactions=transactions,
+        ),
+        date(2024, 3, 1),
+    ) == Decimal("1800")
+
+
 def test_compute_daily_net_flow_crypto_ignores_internal_swap_fiat_legs():
     """EUR legs tied to a crypto BUY group are internal and must not affect net flow."""
     d = date(2024, 3, 1)

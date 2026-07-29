@@ -35,7 +35,8 @@ def test_buys_and_sells_are_not_external_flows():
     txs = [
         _Tx("BUY", "IE00B4L5Y983", 5, D1),
         _Tx("SELL", "IE00B4L5Y983", 2, D1),
-        _Tx("DIVIDEND", "IE00B4L5Y983", 3, D1),
+        # EUR-keyed, so it survives the EUR filter and reaches the type dispatch
+        _Tx("DIVIDEND", "EUR", 3, D1),
     ]
     assert stock_external_flow_for_day(txs, D1) == Decimal("0")
 
@@ -67,5 +68,10 @@ def test_auto_provisions_included_by_default_excluded_on_request():
 
 
 def test_days_without_external_flow_are_absent_from_the_mapping():
-    txs = [_Tx("BUY", "IE00B4L5Y983", 5, D1)]
+    # A day that nets to zero is dropped, not reported as a zero entry
+    txs = [
+        _Tx("DEPOSIT", "EUR", 500, D1),
+        _Tx("WITHDRAW", "EUR", 500, D1),
+        _Tx("BUY", "IE00B4L5Y983", 5, D1),
+    ]
     assert stock_external_flows(txs) == {}
