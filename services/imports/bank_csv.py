@@ -12,6 +12,10 @@ Two modes via ``options["bank_mode"]``:
   accumulated chronologically from ``options["initial_balance"]``.
 
 Mapping: {"date": ..., "balance": ...} or {"date": ..., "amount": ...}.
+
+Two parsers share that machinery: ``generic_bank`` takes the mapping from the
+user, ``native_bank`` hardcodes the ``snapshot_date``/``value`` shape the app
+documents and is auto-detected from its header.
 """
 
 from decimal import Decimal
@@ -25,7 +29,7 @@ from dtos.imports import (
     ImportConfirmResponse,
     ImportPreviewResponse,
 )
-from services.imports.base import ImportCategory, ImportParser
+from services.imports.base import ImportCategory, ImportParser, csv_header_line
 from services.imports.dedup import bank_existing_dates
 from services.imports.generic_csv import (
     get_mapped,
@@ -80,18 +84,14 @@ def parse_bank_points(csv_content: str, options: dict) -> tuple[list[BankImportP
     )
 
 
-@register
-class GenericBankParser(ImportParser):
-    """Any bank statement CSV, converted into a balance curve."""
+class _BankHistoryParser(ImportParser):
+    """Shared preview/execute for bank parsers; subclasses supply the effective options."""
 
-    source_id = "generic_bank"
-    label = "CSV générique (relevé bancaire) avec mapping de colonnes"
     category = ImportCategory.BANK
-    file_hint = "relevé CSV bancaire (mode solde ou mode mouvements)"
-    supports_mapping = True
 
-    def detect(self, csv_content: str) -> float:
-        return 0.0  # never auto-detected
+    def effective_options(self, options: dict) -> dict:
+        """Options actually handed to :func:`parse_bank_points`."""
+        return options
 
     def preview(
         self,
@@ -102,7 +102,7 @@ class GenericBankParser(ImportParser):
         account_id: str | None = None,
         master_key: str | None = None,
     ) -> ImportPreviewResponse:
-        points, warnings = parse_bank_points(csv_content, options)
+        points, warnings = parse_bank_points(csv_content, self.effective_options(options))
 
         duplicates = 0
         if account_id and master_key:
@@ -142,3 +142,41 @@ class GenericBankParser(ImportParser):
             session, account, entries, master_key, overwrite=payload.overwrite
         )
         return ImportConfirmResponse(imported_count=written)
+
+
+@register
+class GenericBankParser(_BankHistoryParser):
+    """Any bank statement CSV, converted into a balance curve."""
+
+    source_id = "generic_bank"
+    label = "CSV générique (relevé bancaire) avec mapping de colonnes"
+    file_hint = "relevé CSV bancaire (mode solde ou mode mouvements)"
+    supports_mapping = True
+
+    def detect(self, csv_content: str) -> float:
+        return 0.0  # never auto-detected
+
+
+@register
+class NativeBankParser(_BankHistoryParser):
+    """The CSV shape CapitalView itself documents: one balance per date."""
+
+    source_id = "native_bank"
+    label = "Format CapitalView (snapshot_date, value)"
+    file_hint = "CSV à deux colonnes : snapshot_date, value"
+    supports_mapping = False
+    template_csv = (
+        "snapshot_date,value\n"
+        "2024-01-31,12500.00\n"
+        "2024-02-29,13200.50\n"
+        "2024-03-31,11800.00\n"
+    )
+
+    _MAPPING = {"date": "snapshot_date", "balance": "value"}
+
+    def detect(self, csv_content: str) -> float:
+        header = csv_header_line(csv_content).lower()
+        return 1.0 if "snapshot_date" in header and "value" in header else 0.0
+
+    def effective_options(self, options: dict) -> dict:
+        return {**options, "mapping": self._MAPPING, "bank_mode": "balance"}
