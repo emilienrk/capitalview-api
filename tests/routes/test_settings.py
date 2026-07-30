@@ -241,3 +241,13 @@ def test_investment_plan_is_stored_encrypted(session, master_key):
     assert row.investment_plan_enc is not None
     # "500" alone could collide with base64 by chance; a 14-char key cannot.
     assert "monthly_target" not in row.investment_plan_enc
+
+
+def test_an_empty_benchmark_resets_to_the_default(session, master_key):
+    client = TestClient(app)
+
+    client.put("/settings", json={"benchmark_asset_key": "IE00BK5BQT80"})
+    assert client.get("/settings").json()["benchmark_asset_key"] == "IE00BK5BQT80"
+
+    client.put("/settings", json={"benchmark_asset_key": "  "})
+    assert client.get("/settings").json()["benchmark_asset_key"] is None
