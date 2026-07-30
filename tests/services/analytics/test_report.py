@@ -180,6 +180,9 @@ def _run_blocks(transactions, snapshots=None, window_end=None):
         patch("services.analytics.window.first_quote_date", return_value=date(2010, 1, 1)),
         patch("services.analytics.report.get_price_matrix", return_value=matrix),
         patch("services.analytics.report.fill_price_gaps", side_effect=lambda m, *_a, **_k: m),
+        # No exchange calendar here: execution falls back to quoted days, which is
+        # what the fixture provides.
+        patch("services.analytics.report.resolve_trading_days", return_value={}),
     ):
         return build_investor_analytics(None, "user_1", "key")
 

@@ -24,7 +24,11 @@ from sqlmodel import Session, select
 
 from models.enums import AssetType
 from models.market import MarketAsset, MarketPriceHistory
-from services.market import ensure_price_history, get_historical_exchange_rates_db
+from services.market import (
+    ensure_price_history,
+    get_historical_exchange_rates_db,
+    get_non_trading_days,
+)
 
 _BUY = "BUY"
 _EUR = "EUR"
@@ -156,3 +160,42 @@ def calendar_days(from_date: date, to_date: date) -> list[date]:
     if to_date < from_date:
         return []
     return [from_date + timedelta(days=n) for n in range((to_date - from_date).days + 1)]
+
+
+def resolve_trading_days(
+    session: Session,
+    asset_keys: list[str],
+    from_date: date,
+    to_date: date,
+) -> dict[str, list[date]]:
+    """Sessions per asset, taken from its exchange calendar.
+
+    Quoted days are a serviceable fallback — a quote implies a session — but they
+    also carry the holes of a backfill that failed for a day, and a day the market
+    was open is a day the order could have been placed. Assets whose MIC is
+    unknown are simply left out, so callers keep falling back to quoted days for
+    them rather than being handed a wrong calendar.
+    """
+    if not asset_keys or to_date < from_date:
+        return {}
+
+    exchanges = session.exec(
+        select(MarketAsset.asset_key, MarketAsset.exchange).where(
+            MarketAsset.asset_key.in_(asset_keys)
+        )
+    ).all()
+
+    days = calendar_days(from_date, to_date)
+    sessions: dict[str, list[date]] = {}
+    by_mic: dict[str, list[date]] = {}
+    for asset_key, mic in exchanges:
+        if not mic:
+            continue
+        if mic not in by_mic:
+            closed = set(get_non_trading_days([mic], from_date, to_date))
+            # An empty result means the MIC is unknown to the calendar library:
+            # it never claims a range is entirely closed.
+            by_mic[mic] = [d for d in days if d not in closed] if closed else []
+        if by_mic[mic]:
+            sessions[asset_key] = by_mic[mic]
+    return sessions
