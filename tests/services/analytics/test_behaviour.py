@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -291,3 +291,133 @@ def test_turnover_needs_capital_to_divide_by():
 
     assert result.annual_rate is None
     assert result.is_measurable is False
+
+
+# ── 3.2 · exits: disposition, euro cost, closed episodes ──────────────
+
+TODAY = date(2026, 7, 30)
+
+
+def _quotes(asset_key, start, days, start_price=100, drift=0.0):
+    from datetime import timedelta as _td
+
+    return {
+        asset_key: {
+            start + _td(days=n): Decimal(str(round(start_price * (1 + drift * n), 4)))
+            for n in range(days)
+        }
+    }
+
+
+def test_selling_only_winners_pushes_the_ratio_above_one():
+    from services.analytics.behaviour import analyse_exits
+
+    txs = [
+        _buy(date(2024, 1, 5), amount="10", price="100"),
+        _Tx("BUY", "FR0000120271", date(2024, 1, 5), amount="10", price="100"),
+        # The first line doubled, the second halved; only the winner is sold.
+        _Tx("SELL", "IE00B4L5Y983", date(2024, 6, 5), amount="10", price="200"),
+    ]
+    matrix = {"FR0000120271": {date(2024, 6, 5): Decimal("50")}}
+
+    exits = analyse_exits(txs, matrix, today=TODAY)
+
+    assert exits.realised_gains == 1
+    assert exits.realised_losses == 0
+    assert exits.paper_losses == 1
+    assert exits.pgr == Decimal("1")
+    assert exits.plr == Decimal("0")
+
+
+def test_three_sales_stay_under_the_realisation_gate():
+    from services.analytics.behaviour import analyse_exits
+
+    txs = [_buy(date(2024, 1, 5), amount="30", price="100")]
+    for n in range(3):
+        txs.append(_Tx("SELL", "IE00B4L5Y983", date(2024, 6 + n, 5), amount="1", price="150"))
+
+    exits = analyse_exits(txs, {}, today=TODAY)
+
+    assert exits.realisations == 3
+    assert exits.is_measurable is False
+
+
+def test_a_portfolio_that_never_sells_still_returns_a_block():
+    from services.analytics.behaviour import analyse_exits
+
+    exits = analyse_exits(_monthly_buys(12), {}, today=TODAY)
+
+    assert exits is not None
+    assert exits.realisations == 0
+    assert exits.episodes == []
+    assert exits.is_measurable is False
+
+
+def test_a_recent_sale_is_excluded_from_the_euro_cost_and_counted():
+    from services.analytics.behaviour import analyse_exits
+
+    recent = TODAY - timedelta(days=60)
+    txs = [
+        _buy(date(2024, 1, 5), amount="10", price="100"),
+        _Tx("SELL", "IE00B4L5Y983", recent, amount="10", price="150"),
+    ]
+
+    exits = analyse_exits(txs, {}, today=TODAY)
+
+    assert exits.recent_sales == 1
+    assert exits.measured_sales == 0
+    assert exits.cost_eur is None
+
+
+def test_selling_a_line_that_then_beat_the_index_shows_a_positive_cost():
+    from services.analytics.behaviour import analyse_exits
+
+    sold_on = date(2024, 6, 5)
+    # The sold line doubles over the year, the index is flat.
+    asset = {
+        "IE00B4L5Y983": {sold_on: Decimal("100"), sold_on + timedelta(days=365): Decimal("200")}
+    }
+    benchmark = {sold_on: Decimal("50"), sold_on + timedelta(days=365): Decimal("50")}
+    txs = [
+        _buy(date(2024, 1, 5), amount="10", price="100"),
+        _Tx("SELL", "IE00B4L5Y983", sold_on, amount="10", price="100"),
+    ]
+
+    exits = analyse_exits(txs, asset, benchmark, today=TODAY)
+
+    assert exits.measured_sales == 1
+    # 1000 EUR sold, the line then gained 100% against a flat index.
+    assert exits.cost_eur == pytest.approx(Decimal("1000"), abs=Decimal("1"))
+
+
+def test_buying_back_a_closed_line_opens_a_second_episode():
+    from services.analytics.behaviour import analyse_exits
+
+    txs = [
+        _buy(date(2024, 1, 5), amount="10", price="100"),
+        _Tx("SELL", "IE00B4L5Y983", date(2024, 3, 5), amount="10", price="120"),
+        _buy(date(2024, 6, 5), amount="10", price="130"),
+        _Tx("SELL", "IE00B4L5Y983", date(2024, 9, 5), amount="10", price="110"),
+    ]
+
+    exits = analyse_exits(txs, {}, today=TODAY)
+
+    assert len(exits.episodes) == 2
+    assert exits.episodes[0].profit == Decimal("200")
+    assert exits.episodes[1].profit == Decimal("-200")
+    assert exits.hit_rate == Decimal("0.5")
+    assert exits.payoff_ratio == Decimal("1")
+
+
+def test_a_partial_sale_does_not_close_an_episode():
+    from services.analytics.behaviour import analyse_exits
+
+    txs = [
+        _buy(date(2024, 1, 5), amount="10", price="100"),
+        _Tx("SELL", "IE00B4L5Y983", date(2024, 3, 5), amount="4", price="120"),
+    ]
+
+    exits = analyse_exits(txs, {}, today=TODAY)
+
+    assert exits.episodes == []
+    assert exits.has_episodes is False
