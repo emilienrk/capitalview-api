@@ -5,6 +5,7 @@ series and the same benchmark. Splitting the API per block would recompute all o
 it several times per page load.
 """
 
+import json
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -60,6 +61,7 @@ from services.analytics.window import (
     resolve_trading_days,
     resolve_window,
 )
+from services.encryption import decrypt_data
 from services.settings import get_or_create_settings
 from services.stock_account import get_all_stock_accounts_history, get_user_stock_accounts
 from services.stock_transaction import get_account_transactions
@@ -87,7 +89,9 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
     # The replay blocks are driven by transactions and prices alone. They must not
     # be gated behind daily snapshots, which are rebuilt by a background job and
     # can legitimately lag behind a freshly imported ledger.
-    blocks, benchmark_ensured = _replay_blocks(session, transactions, benchmark_key, settings)
+    blocks, benchmark_ensured = _replay_blocks(
+        session, transactions, benchmark_key, _declared_plan(settings, master_key)
+    )
 
     if len(series) < 2:
         blocks["investor_gap"] = None
@@ -169,7 +173,23 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
     }
 
 
-def _replay_blocks(session: Session, transactions, benchmark_key: str, settings=None) -> tuple[dict, bool]:
+def _declared_plan(settings, master_key: str) -> dict | None:
+    """The stored plan, decrypted.
+
+    get_or_create_settings returns the ORM row, which only ever carries the
+    encrypted blob — reading a plaintext `investment_plan` off it silently
+    yields None and the plan block vanishes without a word.
+    """
+    blob = getattr(settings, "investment_plan_enc", None) if settings else None
+    if not blob:
+        return None
+    try:
+        return json.loads(decrypt_data(blob, master_key))
+    except Exception:
+        return None
+
+
+def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_plan=None) -> tuple[dict, bool]:
     """Resolve the window once, then feed every replay-based block from it.
 
     The window backfills prices and rates over the user's own span, so this is the
@@ -235,7 +255,7 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, settings=
     turnover = analyse_turnover(transactions, window, _average_capital(holdings, price_end))
 
     plan_payload, plan_error = _plan_block(
-        settings, transactions, concentration, price_end, window, benchmark_quotes
+        declared_plan, transactions, concentration, price_end, window, benchmark_quotes
     )
 
     bridge_payload = _bridge_payload(bridge)
@@ -267,9 +287,8 @@ def _average_capital(holdings: dict, prices: dict) -> Decimal:
     ) or _ZERO
 
 
-def _plan_block(settings, transactions, concentration, price_end, window, benchmark_quotes):
+def _plan_block(raw, transactions, concentration, price_end, window, benchmark_quotes):
     """Score the declared plan, or surface why it cannot be scored."""
-    raw = getattr(settings, "investment_plan", None) if settings else None
     if not raw:
         return None, None
 
@@ -904,13 +923,13 @@ def _concentration_verdict(concentration, effective, bets) -> str:
     if bets < Decimal("1.5") and lines > 1:
         return (
             f"Tu détiens {lines} lignes. Pondérées, ça fait {effective} positions effectives. "
-            f"Statistiquement, ça fait {bets} pari indépendant : ta diversification est une "
+            f"Statistiquement, ça fait {round(bets, 1)} pari indépendant : ta diversification est une "
             f"illusion de comptage.{correlation_note} Ajouter un ETF de plus sur le même univers "
             "ne changera rien ; seul un actif décorrélé le ferait."
         )
     return (
-        f"Tu détiens {lines} lignes, soit {effective} positions effectives et {bets} paris "
-        f"réellement indépendants.{correlation_note}"
+        f"Tu détiens {lines} lignes, soit {effective} positions effectives et {round(bets, 1)} "
+        f"paris réellement indépendants.{correlation_note}"
     )
 
 

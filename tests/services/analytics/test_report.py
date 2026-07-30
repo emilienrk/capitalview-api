@@ -346,10 +346,21 @@ def test_the_fee_block_always_carries_the_ter_note():
     assert "5 %" in report["fees"]["projection_note"]
 
 
-def test_an_unusable_plan_is_reported_not_dropped():
+def test_an_unusable_plan_is_reported_not_dropped(master_key):
+    """The stored plan is encrypted: the report has to decrypt it, not read a field.
+
+    A stub carrying a plaintext `investment_plan` would pass while production
+    silently found nothing — which is exactly what happened before this test.
+    """
+    import json
+
+    from services.encryption import encrypt_data
+
     class _Settings:
         benchmark_asset_key = None
-        investment_plan = {"monthly_target": "500", "allocation": {"AAA": "90"}}
+        investment_plan_enc = encrypt_data(
+            json.dumps({"monthly_target": "500", "allocation": {"AAA": "90"}}), master_key
+        )
 
     with (
         patch("services.analytics.report.get_or_create_settings", return_value=_Settings()),
@@ -370,10 +381,44 @@ def test_an_unusable_plan_is_reported_not_dropped():
         patch("services.analytics.report.fill_price_gaps", side_effect=lambda m, *_a, **_k: m),
         patch("services.analytics.report.resolve_trading_days", return_value={}),
     ):
-        report = build_investor_analytics(None, "user_1", "key")
+        report = build_investor_analytics(None, "user_1", master_key)
 
     plan = report["plan"]
     assert plan is not None
     assert plan["error"] is not None
     assert "90" in plan["error"]
     assert plan["adherence_ratio"]["value"] is None
+
+
+def test_a_valid_plan_is_decrypted_and_scored(master_key):
+    import json
+
+    from services.encryption import encrypt_data
+
+    class _Settings:
+        benchmark_asset_key = None
+        investment_plan_enc = encrypt_data(
+            json.dumps({"monthly_target": "500", "allocation": {BENCH: "100"}}), master_key
+        )
+
+    transactions = _monthly_buys(24)
+    with (
+        patch("services.analytics.report.get_or_create_settings", return_value=_Settings()),
+        patch("services.analytics.report.get_user_stock_accounts", return_value=[_Account()]),
+        patch("services.analytics.report.get_account_transactions", return_value=transactions),
+        patch("services.analytics.report.get_all_stock_accounts_history", return_value=[]),
+        patch("services.analytics.report.get_benchmark_series", return_value={}),
+        patch("services.analytics.window.ensure_price_history"),
+        patch("services.analytics.window.get_historical_exchange_rates_db"),
+        patch("services.analytics.window.first_quote_date", return_value=date(2010, 1, 1)),
+        patch("services.analytics.report.get_price_matrix", return_value=_quotes(transactions)),
+        patch("services.analytics.report.fill_price_gaps", side_effect=lambda m, *_a, **_k: m),
+        patch("services.analytics.report.resolve_trading_days", return_value={}),
+    ):
+        report = build_investor_analytics(None, "user_1", master_key)
+
+    plan = report["plan"]
+    assert plan is not None and plan["error"] is None
+    assert plan["monthly_target"] == Decimal("500")
+    assert plan["adherence_ratio"]["value"] is not None
+    assert plan["months"]
