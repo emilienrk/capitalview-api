@@ -9,7 +9,7 @@ between money arriving and money being put to work.
 """
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from services.analytics.flows import is_auto_provision
@@ -409,3 +409,232 @@ def analyse_deposit_regularity(transactions, window) -> PurchaseRegularity | Non
     if not events or window is None or window.start is None or window.end is None:
         return None
     return _series_regularity(events, window.start, window.end)
+
+
+# ── 3.2 · what you do with your exits ─────────────────────────────────
+
+_SELL = "SELL"
+
+# Odean's measure needs occasions, not sales: twelve is where the ratio of two
+# proportions stops being three coin flips.
+MIN_REALISATIONS = 12
+# A hit rate under twenty closed episodes is "three winners out of five".
+MIN_EPISODES = 20
+# Horizon for the forward comparison, in calendar days. Fixed and stated: "the
+# future return" means nothing without one.
+EXIT_HORIZON_DAYS = 365
+
+
+@dataclass(frozen=True)
+class Episode:
+    asset_key: str
+    opened: date
+    closed: date
+    invested: Decimal
+    proceeds: Decimal
+
+    @property
+    def profit(self) -> Decimal:
+        return self.proceeds - self.invested
+
+
+@dataclass(frozen=True)
+class Exits:
+    realised_gains: int
+    realised_losses: int
+    paper_gains: int
+    paper_losses: int
+    pgr: Decimal | None
+    plr: Decimal | None
+    ratio: Decimal | None
+    """PGR/PLR. Above one means gains are cut and losses are kept."""
+    unpriced: int
+    """Sale days a position could not be valued on — reported, not ignored."""
+    cost_eur: Decimal | None
+    """What the sales gave up against the benchmark over the horizon."""
+    measured_sales: int
+    recent_sales: int
+    """Sales too recent to have a full horizon: excluded, never measured short."""
+    episodes: list[Episode]
+    hit_rate: Decimal | None
+    payoff_ratio: Decimal | None
+
+    @property
+    def realisations(self) -> int:
+        return self.realised_gains + self.realised_losses
+
+    @property
+    def is_measurable(self) -> bool:
+        return self.realisations >= MIN_REALISATIONS
+
+    @property
+    def has_episodes(self) -> bool:
+        return len(self.episodes) >= MIN_EPISODES
+
+
+def _price_on(quotes: dict[date, Decimal], day: date) -> Decimal | None:
+    """Last quote at or before a day. Sales happen on closed days too."""
+    if not quotes:
+        return None
+    if day in quotes:
+        return quotes[day]
+    earlier = [d for d in quotes if d <= day]
+    return quotes[max(earlier)] if earlier else None
+
+
+def _forward_return(quotes: dict[date, Decimal], start: date, horizon: date) -> Decimal | None:
+    first = _price_on(quotes, start)
+    last = _price_on(quotes, horizon)
+    if first is None or last is None or first <= _ZERO:
+        return None
+    return last / first - Decimal("1")
+
+
+def analyse_exits(transactions, price_matrix, benchmark_series=None, today=None) -> Exits | None:
+    """Everything the ledger says about how positions are closed.
+
+    Three readings of one behaviour, under one gate:
+
+    - **PGR/PLR** (Odean 1998), the canonical frequency measure. Cost basis is the
+      weighted average, matching what the rest of the app calls a realised gain —
+      a different basis here would make this page contradict the account summary
+      on the very same sales.
+    - **The euro cost**, because a ratio is not actionable. Each sale is compared
+      with the benchmark over a fixed one-year horizon; sales too recent for that
+      horizon are excluded and counted rather than measured over three weeks.
+    - **Closed episodes**, a full round trip from first purchase to complete
+      exit, giving a hit rate and a payoff ratio.
+    """
+    today = today or date.today()
+    ordered = sorted(
+        (tx for tx in transactions or () if _tx_day(tx) is not None),
+        key=lambda tx: getattr(tx, "executed_at"),
+    )
+    if not ordered:
+        return None
+
+    positions: dict[str, dict] = {}
+    realised_gains = realised_losses = paper_gains = paper_losses = 0
+    unpriced = 0
+    cost = _ZERO
+    measured_sales = 0
+    recent_sales = 0
+    episodes: list[Episode] = []
+    benchmark = benchmark_series or {}
+
+    for tx in ordered:
+        key = str(getattr(tx, "asset_key", "") or "").upper()
+        if not key or key == _EUR:
+            continue
+        day = _tx_day(tx)
+        quantity = _dec(getattr(tx, "amount", None))
+        price = _dec(getattr(tx, "price_per_unit", None))
+        kind = _tx_type(tx)
+
+        if kind == _BUY:
+            position = positions.setdefault(
+                key,
+                {"quantity": _ZERO, "cost": _ZERO, "opened": day, "invested": _ZERO, "proceeds": _ZERO},
+            )
+            if position["quantity"] <= _ZERO:
+                # A line bought back after a full exit opens a new episode.
+                position["opened"] = day
+            position["quantity"] += quantity
+            position["cost"] += quantity * price
+            position["invested"] += quantity * price
+            continue
+
+        if kind != _SELL:
+            continue
+
+        position = positions.get(key)
+        if position is None or position["quantity"] <= _ZERO:
+            continue
+
+        average_cost = position["cost"] / position["quantity"]
+        sold = min(quantity, position["quantity"])
+
+        # Realised: this line, on this day. Available but not realised: every
+        # other line held that day, valued at its own quote.
+        if price > average_cost:
+            realised_gains += 1
+        elif price < average_cost:
+            realised_losses += 1
+
+        for other_key, other in positions.items():
+            if other_key == key or other["quantity"] <= _ZERO:
+                continue
+            quote = _price_on(price_matrix.get(other_key) or {}, day)
+            if quote is None:
+                unpriced += 1
+                continue
+            other_average = other["cost"] / other["quantity"]
+            if quote > other_average:
+                paper_gains += 1
+            elif quote < other_average:
+                paper_losses += 1
+
+        horizon = day + timedelta(days=EXIT_HORIZON_DAYS)
+        if horizon > today:
+            recent_sales += 1
+        else:
+            asset_forward = _forward_return(price_matrix.get(key) or {}, day, horizon)
+            benchmark_forward = _forward_return(benchmark, day, horizon)
+            if asset_forward is not None and benchmark_forward is not None:
+                # Positive means the sold line went on to beat the index: the exit
+                # gave that difference up.
+                cost += (asset_forward - benchmark_forward) * sold * price
+                measured_sales += 1
+
+        position["quantity"] -= sold
+        position["cost"] -= average_cost * sold
+        position["proceeds"] += sold * price
+        if position["quantity"] <= _ZERO:
+            episodes.append(
+                Episode(
+                    asset_key=key,
+                    opened=position["opened"],
+                    closed=day,
+                    invested=position["invested"],
+                    proceeds=position["proceeds"],
+                )
+            )
+            position["quantity"] = _ZERO
+            position["cost"] = _ZERO
+            position["invested"] = _ZERO
+            position["proceeds"] = _ZERO
+
+    pgr = _proportion(realised_gains, paper_gains)
+    plr = _proportion(realised_losses, paper_losses)
+    ratio = pgr / plr if pgr is not None and plr is not None and plr > _ZERO else None
+
+    winners = [e for e in episodes if e.profit > _ZERO]
+    losers = [e for e in episodes if e.profit < _ZERO]
+    hit_rate = Decimal(len(winners)) / Decimal(len(episodes)) if episodes else None
+    payoff = None
+    if winners and losers:
+        average_win = sum(e.profit for e in winners) / Decimal(len(winners))
+        average_loss = abs(sum(e.profit for e in losers) / Decimal(len(losers)))
+        payoff = average_win / average_loss if average_loss > _ZERO else None
+
+    return Exits(
+        realised_gains=realised_gains,
+        realised_losses=realised_losses,
+        paper_gains=paper_gains,
+        paper_losses=paper_losses,
+        pgr=pgr,
+        plr=plr,
+        ratio=ratio,
+        unpriced=unpriced,
+        cost_eur=cost if measured_sales else None,
+        measured_sales=measured_sales,
+        recent_sales=recent_sales,
+        episodes=episodes,
+        hit_rate=hit_rate,
+        payoff_ratio=payoff,
+    )
+
+
+def _proportion(realised: int, available: int) -> Decimal | None:
+    total = realised + available
+    return Decimal(realised) / Decimal(total) if total else None
