@@ -38,9 +38,56 @@ class InvestorGapResponse(BaseModel):
     verdict: str
 
 
+class BridgeStepOut(BaseModel):
+    key: str
+    label: str
+    amount: Decimal
+    """Euros this decision added or removed, versus the step before it."""
+
+
+class CounterfactualResponse(BaseModel):
+    baseline: Decimal
+    """What a robot buying the benchmark monthly would hold today."""
+    steps: list[BridgeStepOut]
+    residual: Decimal
+    """Whatever the steps fail to explain. Shown, never absorbed into a step."""
+    final: Decimal
+    behaviour_cost: Decimal
+    covered_from: date
+    covered_days: int
+    truncated: bool
+    """True when the benchmark is younger than the history and the window moved."""
+    order: list[str]
+    """The substitution order. The decomposition is path dependent, so it is stated."""
+    verdict: str
+
+
+class SlippageDistributionOut(BaseModel):
+    minimum: Decimal
+    q1: Decimal
+    median: Decimal
+    q3: Decimal
+    maximum: Decimal
+
+
+class ExecutionResponse(BaseModel):
+    slippage_bps: MetricOut
+    """Notional-weighted gap between prices paid and each order's monthly average."""
+    cost_eur: MetricOut
+    order_count: int
+    distribution: SlippageDistributionOut | None = None
+    p_value: Decimal | None = None
+    percentile: Decimal | None = None
+    is_detectable: bool = False
+    """False means the pattern is indistinguishable from chance — say nothing."""
+    verdict: str
+
+
 class InvestorAnalyticsResponse(BaseModel):
     period_start: date | None = None
     period_end: date | None = None
     days: int
     benchmark_asset_key: str
     investor_gap: InvestorGapResponse | None = None
+    counterfactual: CounterfactualResponse | None = None
+    execution: ExecutionResponse | None = None
