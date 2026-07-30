@@ -45,15 +45,26 @@ def test_twr_chains_daily_returns():
 
 
 def test_twr_skips_days_with_a_non_positive_base_instead_of_zeroing_them():
+    # Day 1 is dormant: base = 0 + 0, no capital and no flow, so nothing to measure.
     series = [
         (_days(0), Decimal("0")),
-        (_days(1), Decimal("500")),
+        (_days(1), Decimal("0")),
         (_days(2), Decimal("550")),
     ]
-    result = time_weighted_return(series, {_days(1): Decimal("500")})
+    result = time_weighted_return(series, {_days(2): Decimal("500")})
     assert result.skipped_days == 1
     assert result.days == 1
     assert result.total_return == pytest.approx(Decimal("0.10"), abs=1e-9)
+
+
+def test_first_funded_day_earns_a_real_return_and_is_not_skipped():
+    # Opening at 0 is not a reason to skip: the 500 funded that day rode a +10%
+    # move and that return is real. Only a non-positive base is unmeasurable.
+    series = [(_days(0), Decimal("0")), (_days(1), Decimal("550"))]
+    result = time_weighted_return(series, {_days(1): Decimal("500")})
+    assert result.total_return == pytest.approx(Decimal("0.10"), abs=1e-9)
+    assert result.skipped_days == 0
+    assert result.days == 1
 
 
 def test_xirr_on_a_simple_one_year_flow():
@@ -74,7 +85,9 @@ def test_mwr_equals_twr_when_there_are_no_intermediate_flows():
 
 def test_money_arriving_after_the_rise_drags_mwr_below_twr():
     # 1000 rides a +50% move; a second 1000 lands after it and rides the flat rest.
-    # The window is a full year so the annualised MWR and the total TWR compare.
+    # The window must stay exactly 365 days: xirr is annualised while
+    # total_return is cumulative, and only a one-year window puts them on the
+    # same footing. Shortening it makes the comparison meaningless, not simpler.
     series = [
         (_days(0), Decimal("1000")),
         (_days(180), Decimal("1500")),
