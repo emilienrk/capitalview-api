@@ -1,0 +1,350 @@
+"""What the investor actually does, measured on purchases.
+
+Depositing money and investing it are different decisions, and confusing them
+produces a false verdict (spec section 0 bis): erratic deposits with immediate
+buying is a disciplined investor, regular deposits with opportunistic buying is
+market timing dressed as a plan. Everything that judges investing behaviour is
+therefore computed on BUY rows. Deposits appear in one place only — the lag
+between money arriving and money being put to work.
+"""
+
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
+
+from services.analytics.flows import is_auto_provision
+
+_BUY = "BUY"
+_DEPOSIT = "DEPOSIT"
+_EUR = "EUR"
+_ZERO = Decimal("0")
+
+# Six months of purchases is the least that can show a rhythm; two years is where
+# a coefficient of variation stops being driven by one unusual month.
+MIN_MONTHS = 6
+SOLID_MONTHS = 24
+MIN_PURCHASES = 3
+# The day-of-month dispersion is a distribution in its own right and needs more
+# than a handful of points before it means anything.
+MIN_PURCHASES_FOR_DAY_OF_MONTH = 10
+
+
+@dataclass(frozen=True)
+class MonthlyAmount:
+    year: int
+    month: int
+    amount: Decimal
+
+
+@dataclass(frozen=True)
+class PurchaseRegularity:
+    monthly: list[MonthlyAmount]
+    """Every month of the window, zeros included — a gap is the information."""
+    months_total: int
+    months_invested: int
+    invested_share: Decimal | None
+    variation_coefficient: Decimal | None
+    longest_gap_months: int
+    temporal_hhi: Decimal | None
+    equivalent_monthly_purchases: Decimal | None
+    day_of_month_spread: Decimal | None
+    """Interquartile range of the day the month's main purchase lands on."""
+    median_day_of_month: int | None
+    purchase_count: int
+    total_invested: Decimal
+
+    @property
+    def is_measurable(self) -> bool:
+        return self.months_total >= MIN_MONTHS and self.purchase_count >= MIN_PURCHASES
+
+
+def _tx_type(tx) -> str:
+    raw = getattr(tx, "type", None)
+    return str(getattr(raw, "value", raw) or "")
+
+
+def _tx_day(tx) -> date | None:
+    executed_at = getattr(tx, "executed_at", None)
+    return executed_at.date() if executed_at is not None else None
+
+
+def _dec(value) -> Decimal:
+    if value is None:
+        return _ZERO
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return _ZERO
+
+
+def purchase_amounts(transactions) -> list[tuple[date, Decimal]]:
+    """Every real purchase as (day, euros). EUR cash rows are not purchases."""
+    out: list[tuple[date, Decimal]] = []
+    for tx in transactions or ():
+        if _tx_type(tx) != _BUY:
+            continue
+        if str(getattr(tx, "asset_key", "") or "").upper() == _EUR:
+            continue
+        day = _tx_day(tx)
+        if day is None:
+            continue
+        amount = _dec(getattr(tx, "amount", None)) * _dec(getattr(tx, "price_per_unit", None))
+        if amount > _ZERO:
+            out.append((day, amount))
+    return sorted(out)
+
+
+def deposit_amounts(transactions, *, include_auto_provisions: bool = False) -> list[tuple[date, Decimal]]:
+    """Real external deposits as (day, euros).
+
+    Auto-provisions are excluded by default: the app writes them one second
+    before a BUY, so their date is the purchase's, not the transfer's.
+    """
+    out: list[tuple[date, Decimal]] = []
+    for tx in transactions or ():
+        if _tx_type(tx) != _DEPOSIT:
+            continue
+        if str(getattr(tx, "asset_key", "") or "").upper() != _EUR:
+            continue
+        if not include_auto_provisions and is_auto_provision(tx):
+            continue
+        day = _tx_day(tx)
+        amount = _dec(getattr(tx, "amount", None))
+        if day is not None and amount > _ZERO:
+            out.append((day, amount))
+    return sorted(out)
+
+
+def _months_between(first: date, last: date) -> list[tuple[int, int]]:
+    months: list[tuple[int, int]] = []
+    year, month = first.year, first.month
+    while (year, month) <= (last.year, last.month):
+        months.append((year, month))
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return months
+
+
+def _standard_deviation(values: list[Decimal], mean: Decimal) -> Decimal:
+    """Population standard deviation, in Decimal.
+
+    Population rather than sample: these months are the whole history, not a
+    draw from a larger one.
+    """
+    variance = sum((v - mean) ** 2 for v in values) / Decimal(len(values))
+    return Decimal(str(float(variance) ** 0.5))
+
+
+def _quartile(ordered: list[int], fraction: float) -> Decimal:
+    """Linear-interpolated quantile over a sorted list of integers."""
+    if not ordered:
+        return _ZERO
+    position = fraction * (len(ordered) - 1)
+    low = int(position)
+    high = min(low + 1, len(ordered) - 1)
+    weight = Decimal(str(position - low))
+    return Decimal(ordered[low]) + weight * (Decimal(ordered[high]) - Decimal(ordered[low]))
+
+
+def _series_regularity(
+    events: list[tuple[date, Decimal]],
+    first_month: date,
+    last_month: date,
+) -> PurchaseRegularity:
+    months = _months_between(first_month, last_month)
+    per_month: dict[tuple[int, int], Decimal] = {m: _ZERO for m in months}
+    for day, amount in events:
+        key = (day.year, day.month)
+        if key in per_month:
+            per_month[key] += amount
+
+    amounts = [per_month[m] for m in months]
+    total = sum(amounts)
+    invested_months = sum(1 for a in amounts if a > _ZERO)
+
+    invested_share = (
+        Decimal(invested_months) / Decimal(len(months)) if months else None
+    )
+
+    mean = total / Decimal(len(months)) if months else _ZERO
+    variation = (
+        _standard_deviation(amounts, mean) / mean if mean > _ZERO else None
+    )
+
+    longest_gap = 0
+    current_gap = 0
+    for amount in amounts:
+        if amount > _ZERO:
+            current_gap = 0
+        else:
+            current_gap += 1
+            longest_gap = max(longest_gap, current_gap)
+
+    hhi = None
+    equivalent = None
+    if total > _ZERO:
+        hhi = sum((a / total) ** 2 for a in amounts)
+        equivalent = Decimal("1") / hhi if hhi > _ZERO else None
+
+    # The main purchase of each month is the largest one: a 500 EUR order and a
+    # 20 EUR top-up are not the same habit.
+    main_days: list[int] = []
+    by_month: dict[tuple[int, int], tuple[Decimal, int]] = {}
+    for day, amount in events:
+        key = (day.year, day.month)
+        best = by_month.get(key)
+        if best is None or amount > best[0]:
+            by_month[key] = (amount, day.day)
+    main_days = sorted(day for _, day in by_month.values())
+
+    spread = None
+    median_day = None
+    if len(main_days) >= MIN_PURCHASES_FOR_DAY_OF_MONTH:
+        spread = _quartile(main_days, 0.75) - _quartile(main_days, 0.25)
+        median_day = int(_quartile(main_days, 0.5))
+
+    return PurchaseRegularity(
+        monthly=[MonthlyAmount(y, m, per_month[(y, m)]) for y, m in months],
+        months_total=len(months),
+        months_invested=invested_months,
+        invested_share=invested_share,
+        variation_coefficient=variation,
+        longest_gap_months=longest_gap,
+        temporal_hhi=hhi,
+        equivalent_monthly_purchases=equivalent,
+        day_of_month_spread=spread,
+        median_day_of_month=median_day,
+        purchase_count=len(events),
+        total_invested=total,
+    )
+
+
+def analyse_purchase_regularity(transactions, window) -> PurchaseRegularity | None:
+    """Monthly rhythm of the money actually invested.
+
+    The denominator is every month of the analysis window, not just the months
+    something happened: a six-month gap is the finding, and dropping empty months
+    would turn an intermittent investor into a regular one.
+
+    The temporal HHI applies the Herfindahl-Hirschman concentration index to the
+    time axis of purchases. The index is standard; using it on time is this
+    project's own reading, and the UI says so.
+    """
+    events = purchase_amounts(transactions)
+    if not events or window is None or window.start is None or window.end is None:
+        return None
+    return _series_regularity(events, window.start, window.end)
+
+
+@dataclass(frozen=True)
+class DepositLag:
+    median_days: Decimal | None
+    q1_days: Decimal | None
+    q3_days: Decimal | None
+    p90_days: Decimal | None
+    matched_eur: Decimal
+    unmatched_eur: Decimal
+    """Purchase euros no real deposit could have funded."""
+    never_invested_eur: Decimal
+    """Deposited and still sitting there at the end of the window."""
+    pairs: int
+
+    @property
+    def unmatched_share(self) -> Decimal:
+        total = self.matched_eur + self.unmatched_eur
+        return self.unmatched_eur / total if total > _ZERO else _ZERO
+
+    @property
+    def is_measurable(self) -> bool:
+        """False once most purchases cannot be traced back to a real transfer.
+
+        Auto-provisions are dated on the purchase, so a ledger dominated by them
+        hides the only thing this metric measures — how long the money waited.
+        """
+        return self.pairs > 0 and self.unmatched_share <= Decimal("0.5")
+
+
+def _weighted_quantile(pairs: list[tuple[Decimal, Decimal]], fraction: Decimal) -> Decimal | None:
+    """Quantile of (value, weight) pairs, weights being euros."""
+    if not pairs:
+        return None
+    ordered = sorted(pairs)
+    total = sum(weight for _, weight in ordered)
+    if total <= _ZERO:
+        return None
+    target = total * fraction
+    cumulative = _ZERO
+    for value, weight in ordered:
+        cumulative += weight
+        if cumulative >= target:
+            return value
+    return ordered[-1][0]
+
+
+def analyse_deposit_lag(transactions) -> DepositLag | None:
+    """How long each deposited euro waits before it is invested.
+
+    Deposits are matched to purchases FIFO over the cash balance: the oldest euro
+    in the account is the one being spent. Only deposits dated on or before a
+    purchase can fund it — anything else would manufacture a negative delay.
+
+    Purchase euros with no eligible deposit left are *not* matched to something
+    further away to make the queue balance. They are counted apart, because that
+    is exactly what an auto-provisioned purchase looks like: money whose real
+    arrival date the ledger never recorded.
+    """
+    deposits = deposit_amounts(transactions)
+    purchases = purchase_amounts(transactions)
+    if not purchases:
+        return None
+
+    queue: list[list] = [[day, amount] for day, amount in deposits]
+    index = 0
+    matched: list[tuple[Decimal, Decimal]] = []
+    matched_eur = _ZERO
+    unmatched_eur = _ZERO
+
+    for buy_day, amount in purchases:
+        remaining = amount
+        while remaining > _ZERO and index < len(queue):
+            deposit_day, available = queue[index]
+            if deposit_day > buy_day:
+                break
+            if available <= _ZERO:
+                index += 1
+                continue
+            used = min(available, remaining)
+            queue[index][1] = available - used
+            remaining -= used
+            matched.append((Decimal((buy_day - deposit_day).days), used))
+            matched_eur += used
+            if queue[index][1] <= _ZERO:
+                index += 1
+        if remaining > _ZERO:
+            unmatched_eur += remaining
+
+    never_invested = sum(available for _, available in queue[index:] if available > _ZERO)
+
+    return DepositLag(
+        median_days=_weighted_quantile(matched, Decimal("0.5")),
+        q1_days=_weighted_quantile(matched, Decimal("0.25")),
+        q3_days=_weighted_quantile(matched, Decimal("0.75")),
+        p90_days=_weighted_quantile(matched, Decimal("0.9")),
+        matched_eur=matched_eur,
+        unmatched_eur=unmatched_eur,
+        never_invested_eur=Decimal(str(never_invested)),
+        pairs=len(matched),
+    )
+
+
+def analyse_deposit_regularity(transactions, window) -> PurchaseRegularity | None:
+    """The same five indicators, on real deposits.
+
+    Same computation on purpose: section 2.4 compares the two rhythms, and a
+    comparison between two different measures would not be a comparison.
+    """
+    events = deposit_amounts(transactions)
+    if not events or window is None or window.start is None or window.end is None:
+        return None
+    return _series_regularity(events, window.start, window.end)
