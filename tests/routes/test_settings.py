@@ -210,3 +210,34 @@ def test_bank_auto_sync_defaults_to_true_and_can_be_disabled(session, master_key
 
     reread = client.get("/settings").json()
     assert reread["bank_auto_sync_enabled"] is False
+
+
+def test_benchmark_and_investment_plan_round_trip(session, master_key):
+    client = TestClient(app)
+
+    response = client.put(
+        "/settings",
+        json={
+            "benchmark_asset_key": "IE00B4L5Y983",
+            "investment_plan": {"monthly_target": "500", "allocation": {"IE00B4L5Y983": "100"}},
+        },
+    )
+    assert response.status_code == 200
+
+    body = client.get("/settings").json()
+    assert body["benchmark_asset_key"] == "IE00B4L5Y983"
+    assert body["investment_plan"]["monthly_target"] == "500"
+
+
+def test_investment_plan_is_stored_encrypted(session, master_key):
+    from sqlmodel import select
+
+    from models.user import UserSettings
+
+    client = TestClient(app)
+    client.put("/settings", json={"investment_plan": {"monthly_target": "500"}})
+
+    row = session.exec(select(UserSettings)).first()
+    assert row.investment_plan_enc is not None
+    # "500" alone could collide with base64 by chance; a 14-char key cannot.
+    assert "monthly_target" not in row.investment_plan_enc

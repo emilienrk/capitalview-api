@@ -59,6 +59,8 @@ class UserSettingsUpdate(BaseModel):
     ai_vision_provider: str | None = None
     ai_chat_provider: str | None = None
     usd_eur_rate: float | None = Field(None, gt=0, le=10)
+    benchmark_asset_key: str | None = None
+    investment_plan: dict | None = None
 
 
 class UserSettingsResponse(BaseModel):
@@ -85,5 +87,7 @@ class UserSettingsResponse(BaseModel):
     ai_chat_provider: str | None = None
     ai_providers: list[AIProviderConfig] = []  # configured providers with key state
     usd_eur_rate: float | None = None
+    benchmark_asset_key: str | None = None
+    investment_plan: dict | None = None
     created_at: datetime
     updated_at: datetime
