@@ -170,6 +170,117 @@ class MarketConditioningResponse(BaseModel):
     verdict: str
 
 
+class TurnoverOut(BaseModel):
+    annual_rate: MetricOut
+    purchases_eur: Decimal
+    sales_eur: Decimal
+
+
+class WeightOut(BaseModel):
+    asset_key: str
+    weight: Decimal
+
+
+class CorrelationOut(BaseModel):
+    left: str
+    right: str
+    value: Decimal
+
+
+class ConcentrationResponse(BaseModel):
+    """Lines held, effective positions, and independent bets."""
+
+    lines: int
+    effective_positions: MetricOut
+    independent_bets: MetricOut
+    """Capped at "indicatif": two years of daily returns is a noisy PCA."""
+    weights: list[WeightOut] = []
+    correlations: list[CorrelationOut] = []
+    max_correlation: Decimal | None = None
+    overlap: int
+    dropped: list[str] = []
+    """Lines held but too thinly quoted to enter the covariance."""
+    verdict: str
+
+
+class FeesResponse(BaseModel):
+    total_fees: MetricOut
+    fee_share: MetricOut
+    annual_bps: MetricOut
+    threshold_order_size: MetricOut
+    """Order size below which entry fees exceed 25 bps."""
+    orders_below_threshold: int
+    cost_below_threshold: Decimal
+    invested_below_threshold: Decimal
+    average_fee: Decimal | None = None
+    average_order: Decimal | None = None
+    order_count: int
+    projection_eur: Decimal | None = None
+    projection_note: str
+    ter_note: str
+    """Never conditional: brokerage is not the main cost of a buy-and-hold ETF."""
+    verdict: str
+
+
+class EpisodeOut(BaseModel):
+    asset_key: str
+    opened: date
+    closed: date
+    profit: Decimal
+
+
+class ExitsResponse(BaseModel):
+    """Disposition effect, what the exits cost, and the closed round trips."""
+
+    pgr: MetricOut
+    plr: MetricOut
+    ratio: MetricOut
+    cost_eur: MetricOut
+    realisations: int
+    recent_sales: int
+    """Sales too recent for the one-year horizon: excluded, never measured short."""
+    measured_sales: int
+    horizon_days: int
+    hit_rate: MetricOut
+    payoff_ratio: MetricOut
+    episode_count: int
+    episodes: list[EpisodeOut] = []
+    verdict: str
+
+
+class MonthlyAdherenceOut(BaseModel):
+    year: int
+    month: int
+    target: Decimal
+    invested: Decimal
+
+
+class AllocationDriftOut(BaseModel):
+    asset_key: str
+    target: Decimal
+    actual: Decimal
+
+
+class PlanResponse(BaseModel):
+    """Only present when a plan is declared."""
+
+    monthly_target: Decimal
+    since: date
+    months: list[MonthlyAdherenceOut] = []
+    total_target: Decimal
+    total_invested: Decimal
+    adherence_ratio: MetricOut
+    average_monthly: MetricOut
+    drift: list[AllocationDriftOut] = []
+    drift_l1: MetricOut
+    rebalance_eur: Decimal | None = None
+    under_invested_months: int
+    under_in_down_months: int
+    verdict: str
+    error: str | None = None
+    """Why a declared plan could not be scored, when that is the case."""
+
+
 class InvestorAnalyticsResponse(BaseModel):
     period_start: date | None = None
     period_end: date | None = None
@@ -181,5 +292,10 @@ class InvestorAnalyticsResponse(BaseModel):
     counterfactual: CounterfactualResponse | None = None
     execution: ExecutionResponse | None = None
     regularity: RegularityResponse | None = None
+    turnover: TurnoverOut | None = None
     deposit_lag: DepositLagResponse | None = None
     market_conditioning: MarketConditioningResponse | None = None
+    concentration: ConcentrationResponse | None = None
+    fees: FeesResponse | None = None
+    exits: ExitsResponse | None = None
+    plan: PlanResponse | None = None
