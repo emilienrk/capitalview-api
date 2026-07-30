@@ -17,7 +17,7 @@ from services.analytics.flows import is_auto_provision, stock_external_flows
 from services.analytics.prices import fill_price_gaps, get_price_matrix
 from services.analytics.reliability import Metric
 from services.analytics.returns import annualize, time_weighted_return, xirr
-from services.analytics.window import calendar_days, resolve_window
+from services.analytics.window import calendar_days, resolve_trading_days, resolve_window
 from services.settings import get_or_create_settings
 from services.stock_account import get_all_stock_accounts_history, get_user_stock_accounts
 from services.stock_transaction import get_account_transactions
@@ -150,7 +150,11 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str):
     }
 
     bridge = build_bridge(window, transactions, sparse, price_end)
-    execution = analyse_execution(transactions, sparse)
+    execution = analyse_execution(
+        transactions,
+        sparse,
+        trading_days=resolve_trading_days(session, window.asset_keys, window.start, window.end),
+    )
     return _bridge_payload(bridge), _execution_payload(execution, window), True
 
 

@@ -153,3 +153,52 @@ def test_effective_start_is_the_clamp_when_the_benchmark_is_short():
 
     assert window.effective_start == launched
     assert window.effective_days == (YESTERDAY - launched).days
+
+
+# ── resolve_trading_days ──────────────────────────────────────────────
+
+
+def _seed_asset(session, asset_key, exchange):
+    from models.enums import AssetType
+    from models.market import MarketAsset
+
+    session.add(
+        MarketAsset(
+            asset_key=asset_key,
+            symbol=asset_key,
+            name=asset_key,
+            asset_type=AssetType.STOCK,
+            exchange=exchange,
+        )
+    )
+    session.commit()
+
+
+def test_trading_days_come_from_the_exchange_calendar(session):
+    from services.analytics.window import resolve_trading_days
+
+    _seed_asset(session, "IE00B4L5Y983", "XPAR")
+
+    days = resolve_trading_days(
+        session, ["IE00B4L5Y983"], date(2026, 1, 1), date(2026, 1, 12)
+    )
+
+    sessions = days["IE00B4L5Y983"]
+    assert date(2026, 1, 3) not in sessions  # Saturday
+    assert date(2026, 1, 4) not in sessions  # Sunday
+    assert date(2026, 1, 5) in sessions  # Monday
+
+
+def test_an_asset_without_a_known_exchange_is_left_out(session):
+    from services.analytics.window import resolve_trading_days
+
+    _seed_asset(session, "NOMIC", None)
+    _seed_asset(session, "UNKNOWN_MIC", "XXXX_UNKNOWN")
+
+    days = resolve_trading_days(
+        session, ["NOMIC", "UNKNOWN_MIC"], date(2026, 1, 1), date(2026, 1, 12)
+    )
+
+    # Absent rather than empty: callers must fall back to quoted days, not to a
+    # calendar that says nothing ever traded.
+    assert days == {}

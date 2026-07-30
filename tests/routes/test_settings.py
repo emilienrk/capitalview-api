@@ -251,3 +251,13 @@ def test_an_empty_benchmark_resets_to_the_default(session, master_key):
 
     client.put("/settings", json={"benchmark_asset_key": "  "})
     assert client.get("/settings").json()["benchmark_asset_key"] is None
+
+
+def test_an_empty_plan_clears_the_stored_one(session, master_key):
+    client = TestClient(app)
+
+    client.put("/settings", json={"investment_plan": {"monthly_target": "500"}})
+    assert client.get("/settings").json()["investment_plan"]["monthly_target"] == "500"
+
+    client.put("/settings", json={"investment_plan": {}})
+    assert client.get("/settings").json()["investment_plan"] is None

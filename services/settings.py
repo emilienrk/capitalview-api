@@ -234,7 +234,14 @@ def update_settings(
         settings.benchmark_asset_key = data.benchmark_asset_key.strip() or None
 
     if data.investment_plan is not None:
-        settings.investment_plan_enc = encrypt_data(json.dumps(data.investment_plan), master_key)
+        # An empty object means "no plan any more", same escape hatch as the
+        # benchmark above: a plan that cannot be deleted would keep scoring the
+        # user against an intention they have abandoned.
+        settings.investment_plan_enc = (
+            encrypt_data(json.dumps(data.investment_plan), master_key)
+            if data.investment_plan
+            else None
+        )
 
     session.add(settings)
     session.commit()
