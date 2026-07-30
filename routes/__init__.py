@@ -13,6 +13,7 @@ from .community import router as community_router
 from .market import router as market_router
 from .projection import router as projection_router
 from .imports import router as imports_router
+from .analytics import router as analytics_router
 
 __all__ = [
     "auth_router",
@@ -27,4 +28,5 @@ __all__ = [
     "community_router",
     "market_router",
     "projection_router",
+    "analytics_router",
 ]
