@@ -84,3 +84,54 @@ def test_the_response_model_exposes_every_bridge_field(session, master_key):
         "order",
         "verdict",
     } <= set(CounterfactualResponse.model_fields)
+
+
+def test_the_response_model_exposes_every_m3_block(session, master_key):
+    """FastAPI drops payload keys the response model does not declare.
+
+    A block computed but undeclared disappears in silence, which is how M2 lost
+    fields before a test locked their shape.
+    """
+    from dtos.analytics import (
+        DepositLagResponse,
+        InvestorAnalyticsResponse,
+        MarketConditioningResponse,
+        RegularityResponse,
+    )
+
+    assert {
+        "verdict",
+        "regularity",
+        "deposit_lag",
+        "market_conditioning",
+    } <= set(InvestorAnalyticsResponse.model_fields)
+    assert {
+        "monthly",
+        "invested_share",
+        "temporal_hhi",
+        "equivalent_monthly_purchases",
+        "day_of_month_spread",
+        "verdict",
+    } <= set(RegularityResponse.model_fields)
+    assert {
+        "median_days",
+        "unmatched_share",
+        "deposit_variation",
+        "purchase_variation",
+        "idle_cash_opportunity",
+    } <= set(DepositLagResponse.model_fields)
+    assert {
+        "weighted_drawdown",
+        "unconditional_drawdown",
+        "density",
+        "points",
+        "yearly",
+        "p_value",
+        "is_detectable",
+    } <= set(MarketConditioningResponse.model_fields)
+
+
+def test_the_endpoint_always_carries_a_verdict(session, master_key):
+    body = TestClient(app).get("/analytics/investor").json()
+
+    assert isinstance(body["verdict"], str) and body["verdict"]

@@ -254,3 +254,65 @@ def test_the_replay_blocks_survive_missing_snapshots():
     assert report["investor_gap"] is None
     assert report["counterfactual"] is not None
     assert report["execution"] is not None
+
+
+# ── M3 · behaviour blocks and the global verdict ──────────────────────
+
+
+def test_the_new_blocks_are_assembled_for_a_two_year_buyer():
+    report = _run_blocks(_monthly_buys(24))
+
+    regularity = report["regularity"]
+    assert regularity["months_invested"] == 24
+    assert regularity["equivalent_monthly_purchases"]["value"] is not None
+    assert len(regularity["monthly"]) == regularity["months_total"]
+    assert report["deposit_lag"] is not None
+    assert report["market_conditioning"] is not None
+
+
+def test_too_few_purchases_withholds_every_regularity_value_and_its_heatmap():
+    # Two purchases is under the three-purchase floor: a window can be long and
+    # still hold no rhythm to read.
+    report = _run_blocks(_monthly_buys(2))
+
+    regularity = report["regularity"]
+    assert regularity["equivalent_monthly_purchases"]["value"] is None
+    assert regularity["temporal_hhi"]["value"] is None
+    assert regularity["invested_share"]["value"] is None
+    # A heatmap is the same numbers in another shape: withheld here too.
+    assert regularity["monthly"] == []
+    assert "pas encore de quoi dire" in regularity["verdict"]
+
+
+def test_the_conditioning_block_withholds_its_chart_data_when_gated():
+    report = _run_blocks(_monthly_buys(6))
+
+    conditioning = report["market_conditioning"]
+    if conditioning is not None:
+        assert conditioning["weighted_drawdown"]["value"] is None
+        assert conditioning["density"] == []
+        assert conditioning["points"] == []
+        assert conditioning["p_value"] is None
+
+
+def test_the_global_verdict_falls_back_when_nothing_passed_its_gate():
+    report = _run_blocks([_Cash("DEPOSIT", START)], snapshots=[])
+
+    assert "Pas encore assez d'historique" in report["verdict"]
+
+
+def test_the_global_verdict_never_quotes_a_withheld_number():
+    report = _run_blocks(_monthly_buys(2))
+
+    regularity = report["regularity"]
+    assert regularity["equivalent_monthly_purchases"]["value"] is None
+    # The equivalent-purchases sentence is the one this block contributes; with
+    # the value withheld, none of its wording may appear.
+    assert "achats mensuels égaux" not in report["verdict"]
+
+
+def test_a_flat_response_still_carries_a_verdict_string():
+    report = _run([_Snapshot(START, "1000")], [])
+
+    assert isinstance(report["verdict"], str)
+    assert report["verdict"]
