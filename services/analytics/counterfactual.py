@@ -46,6 +46,8 @@ class Bridge:
     steps: list[BridgeStep]
     residual: Decimal
     final: Decimal
+    idle_cash: Decimal
+    idle_cash_opportunity: Decimal | None
     covered_from: date
     covered_days: int
     truncated: bool
@@ -53,7 +55,12 @@ class Bridge:
 
     @property
     def behaviour_cost(self) -> Decimal:
-        """Everything between the robot and the real portfolio."""
+        """Everything between the robot and the real portfolio.
+
+        Both ends carry the same uninvested cash, so this is the sum of the
+        decision terms and nothing else. Letting idle cash into this number would
+        make a large untouched deposit read as brilliant investing.
+        """
         return self.final - self.baseline
 
 
@@ -204,7 +211,6 @@ def build_bridge(
         BridgeStep("timing", "Ton calendrier d'achats", v1 - v0),
         BridgeStep("selection", "Tes actifs plutôt que l'indice", v2 - v1),
         BridgeStep("execution", "Tes prix d'exécution", v3 - v2),
-        BridgeStep("cash_drag", "Ton cash resté dormant", idle_cash),
         BridgeStep("fees", "Tes frais", -fees_total),
         BridgeStep("exits", "Tes ventes et arbitrages", exits),
     ]
@@ -215,15 +221,41 @@ def build_bridge(
     cash_end = deposits - withdrawals + sell_proceeds + dividends - buy_costs - fees_total
     final = sum(units * _dec(price_end.get(key)) for key, units in held_units.items()) + cash_end
 
-    residual = final - (v0 + sum(step.amount for step in steps))
+    # The robot is handed the same leftover cash, because it invests the capital
+    # actually deployed and nothing more. Without this the comparison would credit
+    # an untouched deposit as investing skill.
+    baseline = v0 + idle_cash
+    residual = final - (baseline + sum(step.amount for step in steps))
 
     return Bridge(
-        baseline=v0,
+        baseline=baseline,
         steps=steps,
         residual=residual,
         final=final,
+        idle_cash=idle_cash,
+        idle_cash_opportunity=_idle_opportunity(idle_cash, benchmark_quotes, start, benchmark_end),
         covered_from=start,
         covered_days=covered_days,
         truncated=not window.benchmark_covers_window,
         order=[step.key for step in steps],
     )
+
+
+def _idle_opportunity(
+    idle_cash: Decimal,
+    benchmark_quotes: dict[date, Decimal],
+    start: date,
+    benchmark_end: Decimal,
+) -> Decimal | None:
+    """What the uninvested cash would have earned on the benchmark.
+
+    This is the real cost of cash drag, and it is reported next to the bridge
+    rather than inside it: it is an opportunity forgone, not a euro that moved,
+    so adding it to the chain would break the reconciliation it must preserve.
+    """
+    if idle_cash <= _ZERO or not benchmark_quotes:
+        return None
+    opening = _month_twap(benchmark_quotes, start)
+    if not opening or opening <= _ZERO:
+        return None
+    return idle_cash * (benchmark_end / opening - Decimal("1"))

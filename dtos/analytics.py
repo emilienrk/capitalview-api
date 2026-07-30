@@ -53,6 +53,11 @@ class CounterfactualResponse(BaseModel):
     """Whatever the steps fail to explain. Shown, never absorbed into a step."""
     final: Decimal
     behaviour_cost: Decimal
+    """Sum of the decision terms. Idle cash sits on both ends, so it is excluded."""
+    idle_cash: Decimal
+    """Money deposited but never deployed. Not a decision term — reported apart."""
+    idle_cash_opportunity: Decimal | None = None
+    """What that idle cash would have earned on the benchmark."""
     covered_from: date
     covered_days: int
     truncated: bool

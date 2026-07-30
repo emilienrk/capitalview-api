@@ -42,6 +42,13 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
     history = get_all_stock_accounts_history(session, user_uuid, master_key)
     series = [(snap.snapshot_date, Decimal(snap.total_value)) for snap in history]
 
+    # The replay blocks are driven by transactions and prices alone. They must not
+    # be gated behind daily snapshots, which are rebuilt by a background job and
+    # can legitimately lag behind a freshly imported ledger.
+    counterfactual, execution, benchmark_ensured = _replay_blocks(
+        session, transactions, benchmark_key
+    )
+
     if len(series) < 2:
         return {
             "period_start": series[0][0] if series else None,
@@ -49,8 +56,8 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
             "days": 0,
             "benchmark_asset_key": benchmark_key,
             "investor_gap": None,
-            "counterfactual": None,
-            "execution": None,
+            "counterfactual": counterfactual,
+            "execution": execution,
         }
 
     series.sort(key=lambda point: point[0])
@@ -74,7 +81,7 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
         gap_eur = gap * average_capital
 
     benchmark_annual = _benchmark_annual_return(
-        session, benchmark_key, period_start, period_end, span_days
+        session, benchmark_key, period_start, period_end, span_days, benchmark_ensured
     )
 
     def gated(value, unit):
@@ -97,8 +104,6 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
 
     gap_metric = gated(gap, "ratio_annuel")
     gap_eur_metric = gated(gap_eur, "EUR")
-
-    counterfactual, execution = _replay_blocks(session, transactions, benchmark_key)
 
     return {
         "period_start": period_start,
@@ -131,7 +136,7 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str):
     """
     window = resolve_window(session, transactions, benchmark_key)
     if window.is_empty:
-        return None, None
+        return None, None, False
 
     keys = sorted({*window.asset_keys, benchmark_key})
     sparse = get_price_matrix(session, keys, window.start, window.end)
@@ -146,7 +151,7 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str):
 
     bridge = build_bridge(window, transactions, sparse, price_end)
     execution = analyse_execution(transactions, sparse)
-    return _bridge_payload(bridge), _execution_payload(execution, window)
+    return _bridge_payload(bridge), _execution_payload(execution, window), True
 
 
 def _bridge_payload(bridge) -> dict | None:
@@ -161,6 +166,12 @@ def _bridge_payload(bridge) -> dict | None:
         "residual": round(bridge.residual, 2),
         "final": round(bridge.final, 2),
         "behaviour_cost": round(bridge.behaviour_cost, 2),
+        "idle_cash": round(bridge.idle_cash, 2),
+        "idle_cash_opportunity": (
+            round(bridge.idle_cash_opportunity, 2)
+            if bridge.idle_cash_opportunity is not None
+            else None
+        ),
         "covered_from": bridge.covered_from,
         "covered_days": bridge.covered_days,
         "truncated": bridge.truncated,
@@ -177,14 +188,22 @@ def _bridge_verdict(bridge) -> str:
             f" La comparaison ne démarre qu'au {bridge.covered_from:%d/%m/%Y} : "
             "l'indice de référence n'existait pas avant."
         )
+
+    drag = ""
+    if bridge.idle_cash_opportunity is not None and bridge.idle_cash > _ZERO:
+        drag = (
+            f" À côté de ça, {round(bridge.idle_cash)} € sont restés en liquidités : "
+            f"placés sur l'indice, ils auraient rapporté {round(bridge.idle_cash_opportunity)} €."
+        )
+
     if cost < 0:
         return (
-            f"Un robot qui aurait acheté l'indice tous les mois, sans jamais réfléchir, "
-            f"aurait {abs(cost)} € de plus que toi.{truncation}"
+            f"À capital investi égal, un robot qui aurait acheté l'indice tous les mois, sans "
+            f"jamais réfléchir, aurait {abs(cost)} € de plus que toi.{truncation}{drag}"
         )
     return (
-        f"Tes décisions te rapportent {cost} € de plus qu'un robot qui aurait acheté "
-        f"l'indice tous les mois.{truncation}"
+        f"À capital investi égal, tes décisions te rapportent {cost} € de plus qu'un robot qui "
+        f"aurait acheté l'indice tous les mois.{truncation}{drag}"
     )
 
 
@@ -271,13 +290,16 @@ def _benchmark_annual_return(
     period_start: date,
     period_end: date,
     span_days: int,
+    already_ensured: bool = False,
 ):
     """Annualised total return of the benchmark over the exact same window.
 
     The benchmark is an accumulating ETF, so its quoted price already compounds
     dividends: first and last quote are all it takes.
     """
-    series = get_benchmark_series(session, benchmark_key, period_start, period_end)
+    series = get_benchmark_series(
+        session, benchmark_key, period_start, period_end, ensure=not already_ensured
+    )
     start_price = series.get(period_start)
     end_price = series.get(period_end)
     if not start_price or not end_price or start_price <= _ZERO:

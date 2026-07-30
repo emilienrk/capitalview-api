@@ -64,3 +64,23 @@ def test_investor_analytics_reports_a_gap_for_a_funded_account(_ensure, session,
     # No daily snapshots exist in the test DB, so the gap must be withheld rather
     # than invented — that is the reliability gate doing its job.
     assert body["investor_gap"] is None or body["investor_gap"]["twr"]["value"] is None
+
+
+def test_the_response_model_exposes_every_bridge_field(session, master_key):
+    """A field missing from the DTO is silently dropped by FastAPI."""
+    from dtos.analytics import CounterfactualResponse
+
+    assert {
+        "baseline",
+        "steps",
+        "residual",
+        "final",
+        "behaviour_cost",
+        "idle_cash",
+        "idle_cash_opportunity",
+        "covered_from",
+        "covered_days",
+        "truncated",
+        "order",
+        "verdict",
+    } <= set(CounterfactualResponse.model_fields)
