@@ -38,9 +38,9 @@ def time_weighted_return(
     """Chain daily returns, neutralising external cash flows.
 
     Start-of-day convention (daily Modified Dietz): a flow is assumed to land
-    before the day's performance, so it belongs in the denominator. Days that
-    open with no capital at risk carry no measurable return and are skipped
-    rather than counted as zero — zeroing would silently dilute the chain.
+    before the day's performance, so it belongs in the denominator. Days whose
+    base is not positive carry no measurable return and are skipped rather than
+    counted as zero — zeroing would silently dilute the chain.
     """
     if len(series) < 2:
         return TwrResult(None, 0, 0)
@@ -53,9 +53,7 @@ def time_weighted_return(
     for (_, previous_value), (day, value) in zip(ordered, ordered[1:], strict=False):
         flow = Decimal(str(flows.get(day, _ZERO)))
         base = previous_value + flow
-        # A day funded from nothing has no opening capital to earn a return on,
-        # even though the flow makes its denominator positive.
-        if previous_value <= _ZERO or base <= _ZERO:
+        if base <= _ZERO:
             skipped += 1
             continue
         growth *= Decimal("1") + (value - previous_value - flow) / base
