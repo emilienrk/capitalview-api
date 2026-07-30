@@ -127,7 +127,16 @@ Test `tests/services/analytics/test_prices.py`
       doivent passer **inchangés** — c'est le contrat de non-régression du refactor.
 - [ ] Ajouter les tests de `prices.py` : matrice creuse, forward-fill, seed depuis une cotation
       antérieure à la fenêtre, actif totalement inconnu.
-- [ ] `uv run pytest -q` — même nombre de succès qu'avant la tâche.
+- [ ] **Duplication trouvée en revue de plan, à corriger dans cette même tâche :**
+      `services/analytics/benchmark.py::get_benchmark_series` (écrit en M1) réimplémente son propre
+      forward-fill au lieu d'utiliser `_get_price_matrix`/`_fill_price_gaps`, et **sans** leur filet
+      de sécurité : si la première date de la fenêtre n'a pas de cotation, ces jours restent vides
+      au lieu d'être amorcés depuis la dernière cotation antérieure. Rebrancher
+      `get_benchmark_series` sur `get_price_matrix` + `fill_price_gaps` (un seul actif dans la
+      liste), pour qu'il ne reste plus qu'une définition du forward-fill dans le repo. Ajouter un
+      test qui couvre précisément ce cas : fenêtre démarrant un jour non coté, avec une cotation
+      antérieure disponible en base — doit être comblée, pas laissée vide.
+- [ ] `uv run pytest -q` — même nombre de succès qu'avant la tâche, plus les nouveaux tests.
 
 ---
 
