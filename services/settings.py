@@ -229,7 +229,9 @@ def update_settings(
             settings.usd_eur_rate = None
 
     if data.benchmark_asset_key is not None:
-        settings.benchmark_asset_key = data.benchmark_asset_key
+        # An empty string means "back to the application default" — without it
+        # there would be no way out of a custom benchmark once one is set.
+        settings.benchmark_asset_key = data.benchmark_asset_key.strip() or None
 
     if data.investment_plan is not None:
         settings.investment_plan_enc = encrypt_data(json.dumps(data.investment_plan), master_key)
