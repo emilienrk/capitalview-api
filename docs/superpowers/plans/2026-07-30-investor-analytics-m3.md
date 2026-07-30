@@ -34,6 +34,7 @@ trente chiffres que la spec s'interdit explicitement (§12), et que `Analysis.vu
 | Tests de composants front | **Non.** Pas de `@vue/test-utils`, pas de jsdom, aucune nouvelle dépendance frontend — cohérent avec M1 et M2. L'invariant de la gate reste garanti côté API par les tests, et côté rendu par la vérification navigateur de fin de jalon. C'est une limite assumée, à réinscrire dans les limites connues. |
 | Formulaire de plan cible | **En tête de `/analyse`**, comme le sélecteur de benchmark en M2, et pour la même raison : l'onglet « Finances » de `Settings.vue:34-39` est commenté, donc désactivé — y poser le formulaire le rendrait invisible. |
 | Allocation cible | **Par `asset_key` (ISIN) uniquement.** Un libellé libre imposerait une table de correspondance libellé → lignes détenues, sans laquelle la dérive d'allocation n'est pas calculable. |
+| Ajouts actés en cours d'exécution | **Taux de rotation** (Task 2), **coût des sorties en euros** et **épisodes clos** (Task 10) — les deux derniers fondus dans un bloc « sorties » unique plutôt qu'en blocs séparés. Les trois portent sur les sorties, que le terme *f* du pont chiffre déjà : la concordance des signes devient un test bloquant. |
 
 **Conséquence de la décision « pas de tests de composants » :** chaque bloc front de ce plan doit
 appliquer l'invariant de la gate **dans le template lui-même** (`v-if="metric.value !== null"` sur la
@@ -182,6 +183,13 @@ jamais sur les dépôts (§0 bis) :
       10 achats.
 - [ ] Sortie : la série mensuelle complète (`[(année, mois, montant)]`) accompagne les cinq
       chiffres — c'est la source de la heatmap, et elle suit la gate comme le reste.
+- [ ] **Taux de rotation** (ajout acté après rédaction du plan) : `min(achats, ventes) / capital
+      moyen`, **annualisé** — sans annualisation le chiffre n'est comparable à aucune littérature.
+      C'est la variable canonique de Barber & Odean (2000), déjà en référence de la spec, et elle
+      coûte presque rien puisque les achats sont déjà agrégés. **Le verdict « tu trades trop » ne
+      sort que si le chiffre est élevé** : sur un accumulateur d'ETF il sortira proche de zéro, et
+      la phrase correcte est alors « tu ne tournes pas ton portefeuille, ce n'est pas là que ça se
+      joue ».
 - [ ] Tests : 24 mois à montant identique ⇒ CV 0, HHI = 1/24, équivalent 24 ; tout le capital sur un
       mois ⇒ HHI 1, équivalent 1 ; trou de 5 mois détecté ; achats systématiquement le 5 ⇒
       dispersion faible ; fenêtre de 3 mois ⇒ `insuffisant` et **aucune valeur sérialisée**.
@@ -405,27 +413,71 @@ contributions à la variance : `N_ent = exp(−Σ pᵢ ln pᵢ)`).
 
 ---
 
-## Task 10 · §3.2 — effet de disposition, sous conditions
+## Task 10 · §3.2 — ce que tu fais de tes sorties
+
+*Périmètre élargi après rédaction du plan : PGR/PLR, le coût en euros et les épisodes clos vivent
+dans **un seul bloc** sous **une seule gate**. Ils mesurent la même chose — comment les sorties sont
+gérées — sur la même donnée. Trois blocs afficheraient trois fois « données insuffisantes » sur un
+portefeuille d'accumulateur.*
 
 **Files:** Modify `services/analytics/behaviour.py` ·
 Test `tests/services/analytics/test_behaviour.py`
 
-**Produces:** `Disposition` et `analyse_disposition(transactions, price_matrix) -> Disposition`
+**Produces:** `Exits` et `analyse_exits(transactions, price_matrix, benchmark_series) -> Exits`
 
-Mesure canonique d'Odean (1998) : à chaque jour de vente, compter les gains latents **réalisés** vs
-**disponibles** (PGR) et les pertes latentes réalisées vs disponibles (PLR). `PGR/PLR > 1` ⇒ tu
-coupes tes gains et gardes tes pertes.
+### 10a · Effet de disposition (PGR/PLR) — la mesure canonique
+
+Odean (1998) : à chaque jour de vente, compter les gains latents **réalisés** vs **disponibles**
+(PGR) et les pertes latentes réalisées vs disponibles (PLR). `PGR/PLR > 1` ⇒ tu coupes tes gains et
+gardes tes pertes.
 
 - [ ] **Base de coût = coût moyen pondéré**, alignée sur `get_stock_account_summary` (voir le tableau
       des conventions). Toute autre base ferait diverger `/analyse` et `/stock` sur les mêmes ventes.
 - [ ] Le prix du jour de vente vient de la matrice ; une ligne sans cotation ce jour-là est comptée
       dans les « non évaluables », pas silencieusement ignorée.
-- [ ] **Gate à 12 occasions de réalisation.** En dessous, aucun chiffre — et le message d'insuffisance
-      est lui-même le verdict : « tu as vendu 3 fois en 2 ans, c'est trop peu pour mesurer quoi que ce
-      soit. **C'est en soi l'information : tu es un accumulateur, pas un arbitragiste.** L'effet de
-      disposition n'est pas ton problème — les métriques d'apport le sont. »
-- [ ] Tests : ventes systématiques en gain ⇒ PGR/PLR > 1 ; 3 ventes ⇒ `insuffisant`, aucune valeur, et
-      le verdict d'accumulateur ; portefeuille sans vente ⇒ bloc présent avec son message, pas absent.
+- [ ] **On le garde**, malgré le chiffrage en euros de 10b : sans lui, 450 € ne se diagnostiquent pas
+      — habitude de couper les gains, ou une seule sortie ratée ? Le ratio dit lequel.
+
+### 10b · Le coût des sorties, en euros
+
+Odean mesure exactement ça : le rendement des titres vendus contre celui des titres conservés, à
+84 / 252 / 504 jours. Un ratio ne s'actionne pas, un montant si.
+
+- [ ] **Horizon fixe et affiché : 1 an, tronqué à aujourd'hui.** « Le rendement futur » n'existe pas
+      sans horizon. Les ventes trop récentes pour avoir l'horizon sont **exclues et comptées**, jamais
+      évaluées sur trois semaines.
+- [ ] **Base de comparaison : le benchmark**, pas « le reste du portefeuille ». Le reste change de
+      composition pendant l'horizon — c'est une cible mouvante, et sur un portefeuille à deux lignes
+      « le reste » est une ligne. La série du benchmark est déjà chargée. La variante « vs reste du
+      portefeuille » peut être exposée en second, **jamais en chiffre-titre**.
+- [ ] Coût = `(rendement du titre vendu − rendement du benchmark) × montant vendu`, sommé.
+- [ ] **Plafonné à `indicatif`, jamais `solide`** : trois ventes qui produisent un montant à trois
+      chiffres, c'est précisément la fausse confiance que le §2 existe pour empêcher.
+
+### 10c · Épisodes clos : hit rate et payoff ratio
+
+Un épisode va du premier achat d'une ligne à sa revente **totale**. Combien sont gagnants (hit rate),
+et les gagnants couvrent-ils les perdants (payoff ratio) ?
+
+- [ ] Gate propre : **20 épisodes clos minimum**. En dessous, « tu as raison 60 % du temps » veut dire
+      trois gagnantes sur cinq. Un accumulateur d'ETF en aura zéro, et c'est un résultat.
+- [ ] Un rachat de la même ligne après une revente totale ouvre un **nouvel** épisode.
+
+### Gate et cohérence du bloc
+
+- [ ] **Gate unique à 12 occasions de réalisation** pour 10a et 10b ; 10c porte sa propre gate à 20
+      épisodes. Sous le seuil, aucun chiffre — et le message d'insuffisance est lui-même le verdict :
+      « tu as vendu 3 fois en 2 ans, c'est trop peu pour mesurer quoi que ce soit. **C'est en soi
+      l'information : tu es un accumulateur, pas un arbitragiste.** L'effet de disposition n'est pas
+      ton problème — les métriques d'apport le sont. »
+- [ ] **Test bloquant de cohérence inter-blocs** : le coût des sorties de 10b et le **terme *f***
+      (« effet des sorties ») du pont contrefactuel mesurent le même phénomène. Leurs signes doivent
+      concorder sur le même jeu de données, sinon la page se contredit d'un bloc à l'autre — même
+      contrôle que celui déjà exigé entre `execution.py` et le terme *c*.
+- [ ] Tests : ventes systématiques en gain ⇒ PGR/PLR > 1 ; 3 ventes ⇒ `insuffisant`, aucune valeur et
+      verdict d'accumulateur ; portefeuille sans vente ⇒ bloc présent avec son message, pas absent ;
+      vente d'il y a deux mois ⇒ exclue de 10b et comptée ; ligne revendue puis rachetée ⇒ deux
+      épisodes.
 
 ---
 

@@ -253,3 +253,41 @@ def test_no_purchase_at_all_yields_nothing():
     from services.analytics.behaviour import analyse_deposit_lag
 
     assert analyse_deposit_lag([_deposit(date(2024, 1, 1), "100")]) is None
+
+
+# ── turnover ──────────────────────────────────────────────────────────
+
+
+def _sell(day, amount="1", price="100"):
+    return _Tx("SELL", "IE00B4L5Y983", day, amount=amount, price=price)
+
+
+def test_a_buy_and_hold_portfolio_has_no_turnover():
+    from services.analytics.behaviour import analyse_turnover
+
+    result = analyse_turnover(_monthly_buys(24), _window_over(24), Decimal("10000"))
+
+    assert result.sales_eur == Decimal("0")
+    assert result.annual_rate == Decimal("0")
+
+
+def test_turnover_takes_the_smaller_side_and_annualises_it():
+    from services.analytics.behaviour import analyse_turnover
+
+    # Over roughly two years: 2400 bought, 1200 sold, 1000 average capital.
+    txs = _monthly_buys(24, amount="1") + [_sell(date(2025, 6, 5), amount="12")]
+    result = analyse_turnover(txs, _window_over(24), Decimal("1000"))
+
+    assert result.purchases_eur == Decimal("2400")
+    assert result.sales_eur == Decimal("1200")
+    # min(2400, 1200) / 1000 = 1.2 over ~1.9 years.
+    assert result.annual_rate == pytest.approx(Decimal("0.63"), abs=Decimal("0.03"))
+
+
+def test_turnover_needs_capital_to_divide_by():
+    from services.analytics.behaviour import analyse_turnover
+
+    result = analyse_turnover(_monthly_buys(24), _window_over(24), Decimal("0"))
+
+    assert result.annual_rate is None
+    assert result.is_measurable is False

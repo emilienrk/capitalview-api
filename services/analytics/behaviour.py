@@ -238,6 +238,67 @@ def analyse_purchase_regularity(transactions, window) -> PurchaseRegularity | No
 
 
 @dataclass(frozen=True)
+class Turnover:
+    annual_rate: Decimal | None
+    """min(purchases, sales) over average capital, per year."""
+    purchases_eur: Decimal
+    sales_eur: Decimal
+    average_capital: Decimal
+    years: Decimal
+
+    @property
+    def is_measurable(self) -> bool:
+        return self.annual_rate is not None
+
+
+def sale_amounts(transactions) -> list[tuple[date, Decimal]]:
+    """Every real sale as (day, euros)."""
+    out: list[tuple[date, Decimal]] = []
+    for tx in transactions or ():
+        if _tx_type(tx) != "SELL":
+            continue
+        if str(getattr(tx, "asset_key", "") or "").upper() == _EUR:
+            continue
+        day = _tx_day(tx)
+        if day is None:
+            continue
+        amount = _dec(getattr(tx, "amount", None)) * _dec(getattr(tx, "price_per_unit", None))
+        if amount > _ZERO:
+            out.append((day, amount))
+    return sorted(out)
+
+
+def analyse_turnover(transactions, window, average_capital: Decimal) -> Turnover | None:
+    """Annual portfolio turnover: min(bought, sold) over average capital.
+
+    The minimum of the two sides, not their sum: buying and holding forever is
+    not rotation, and a portfolio that only grows has a turnover of zero however
+    much it buys. This is the variable Barber and Odean (2000) found to track
+    underperformance, and it is reported annualised so it can be compared with
+    anything published.
+    """
+    if window is None or window.start is None or window.end is None:
+        return None
+
+    purchases = sum(amount for _, amount in purchase_amounts(transactions))
+    sales = sum(amount for _, amount in sale_amounts(transactions))
+    days = (window.end - window.start).days
+    years = Decimal(days) / Decimal("365") if days > 0 else _ZERO
+
+    rate = None
+    if average_capital > _ZERO and years > _ZERO:
+        rate = (min(purchases, sales) / average_capital) / years
+
+    return Turnover(
+        annual_rate=rate,
+        purchases_eur=Decimal(str(purchases)),
+        sales_eur=Decimal(str(sales)),
+        average_capital=average_capital,
+        years=years,
+    )
+
+
+@dataclass(frozen=True)
 class DepositLag:
     median_days: Decimal | None
     q1_days: Decimal | None
