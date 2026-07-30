@@ -4,8 +4,8 @@ Tests for services/account_history.py
 Cover the core pure and DB-backed helpers:
     - _get_snapshot_date_bounds
     - _resolve_account_start_date
-  - _get_price_matrix
-  - _fill_price_gaps
+  - get_price_matrix (services/analytics/prices.py)
+  - fill_price_gaps (services/analytics/prices.py)
   - _generate_missing_snapshots
 """
 
@@ -28,13 +28,12 @@ from services.account_history import (
     _compute_daily_net_flow,
     _build_asset_snapshots,
     _current_calc_version,
-    _fill_price_gaps,
     _generate_missing_snapshots,
     _get_snapshot_date_bounds,
     _resolve_account_start_date,
     _interpolate_asset_value,
-    _get_price_matrix,
 )
+from services.analytics.prices import fill_price_gaps, get_price_matrix
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 
@@ -223,13 +222,13 @@ def test_resolve_account_start_date_prefers_earliest_known_business_date():
 
 
 # ---------------------------------------------------------------------------
-# _get_price_matrix
+# get_price_matrix
 # ---------------------------------------------------------------------------
 
 
 def test_get_price_matrix_empty_asset_keys(session: Session):
     """Returns empty dict immediately when the asset_keys list is empty."""
-    result = _get_price_matrix(session, [], date(2024, 1, 1), date(2024, 1, 7))
+    result = get_price_matrix(session, [], date(2024, 1, 1), date(2024, 1, 7))
     assert result == {}
 
 
@@ -239,7 +238,7 @@ def test_get_price_matrix_basic(session: Session):
     _make_price(session, asset.id, Decimal("180.00"), date(2024, 1, 2))
     _make_price(session, asset.id, Decimal("182.50"), date(2024, 1, 3))
 
-    result = _get_price_matrix(session, ["US_AAPL_TEST"], date(2024, 1, 1), date(2024, 1, 7))
+    result = get_price_matrix(session, ["US_AAPL_TEST"], date(2024, 1, 1), date(2024, 1, 7))
 
     assert "US_AAPL_TEST" in result
     assert result["US_AAPL_TEST"][date(2024, 1, 2)] == Decimal("180.00")
@@ -255,7 +254,7 @@ def test_get_price_matrix_out_of_range_excluded(session: Session):
     _make_price(session, asset.id, Decimal("55.00"), date(2024, 1, 5))   # in range
     _make_price(session, asset.id, Decimal("60.00"), date(2024, 1, 10))  # after range
 
-    result = _get_price_matrix(session, ["US_RANGE_TEST"], date(2024, 1, 3), date(2024, 1, 7))
+    result = get_price_matrix(session, ["US_RANGE_TEST"], date(2024, 1, 3), date(2024, 1, 7))
 
     sym = result.get("US_RANGE_TEST", {})
     assert date(2024, 1, 5) in sym
@@ -270,7 +269,7 @@ def test_get_price_matrix_multiple_asset_keys(session: Session):
     _make_price(session, asset_a.id, Decimal("10.00"), date(2024, 2, 1))
     _make_price(session, asset_b.id, Decimal("20.00"), date(2024, 2, 1))
 
-    result = _get_price_matrix(session, ["SYM_AA", "SYM_BB"], date(2024, 2, 1), date(2024, 2, 1))
+    result = get_price_matrix(session, ["SYM_AA", "SYM_BB"], date(2024, 2, 1), date(2024, 2, 1))
 
     assert result["SYM_AA"][date(2024, 2, 1)] == Decimal("10.00")
     assert result["SYM_BB"][date(2024, 2, 1)] == Decimal("20.00")
@@ -278,12 +277,12 @@ def test_get_price_matrix_multiple_asset_keys(session: Session):
 
 def test_get_price_matrix_unknown_asset_key(session: Session):
     """An unknown asset key yields no entry in the result (no error)."""
-    result = _get_price_matrix(session, ["DOES_NOT_EXIST"], date(2024, 1, 1), date(2024, 1, 5))
+    result = get_price_matrix(session, ["DOES_NOT_EXIST"], date(2024, 1, 1), date(2024, 1, 5))
     assert result == {}
 
 
 # ---------------------------------------------------------------------------
-# _fill_price_gaps
+# fill_price_gaps
 # ---------------------------------------------------------------------------
 
 
@@ -296,7 +295,7 @@ def test_fill_price_gaps_no_action_when_all_covered(session: Session):
             date(2024, 1, 2): Decimal("41000.00"),
         }
     }
-    result = _fill_price_gaps(matrix, ["BTC"], missing_dates, session)
+    result = fill_price_gaps(matrix, ["BTC"], missing_dates, session)
     assert result["BTC"][date(2024, 1, 1)] == Decimal("40000.00")
     assert result["BTC"][date(2024, 1, 2)] == Decimal("41000.00")
 
@@ -306,7 +305,7 @@ def test_fill_price_gaps_propagates_price_forward(session: Session):
     missing_dates = [date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)]
     matrix = {"BTC": {date(2024, 1, 1): Decimal("40000.00")}}
 
-    result = _fill_price_gaps(matrix, ["BTC"], missing_dates, session)
+    result = fill_price_gaps(matrix, ["BTC"], missing_dates, session)
 
     assert result["BTC"][date(2024, 1, 2)] == Decimal("40000.00")
     assert result["BTC"][date(2024, 1, 3)] == Decimal("40000.00")
@@ -321,7 +320,7 @@ def test_fill_price_gaps_new_price_overrides_carry(session: Session):
             date(2024, 1, 3): Decimal("2500.00"),
         }
     }
-    result = _fill_price_gaps(matrix, ["ETH"], missing_dates, session)
+    result = fill_price_gaps(matrix, ["ETH"], missing_dates, session)
 
     # Jan 2 carries Jan 1 price
     assert result["ETH"][date(2024, 1, 2)] == Decimal("2000.00")
@@ -338,7 +337,7 @@ def test_fill_price_gaps_fallback_from_db(session: Session):
     missing_dates = [date(2024, 1, 1), date(2024, 1, 2)]
     matrix: dict = {}  # SOL has no in-range prices
 
-    result = _fill_price_gaps(matrix, ["SOL_FALLBACK"], missing_dates, session)
+    result = fill_price_gaps(matrix, ["SOL_FALLBACK"], missing_dates, session)
 
     assert result["SOL_FALLBACK"][date(2024, 1, 1)] == Decimal("100.00")
     assert result["SOL_FALLBACK"][date(2024, 1, 2)] == Decimal("100.00")
@@ -349,7 +348,7 @@ def test_fill_price_gaps_no_fallback_available(session: Session):
     missing_dates = [date(2024, 1, 1)]
     matrix: dict = {}
 
-    result = _fill_price_gaps(matrix, ["UNKNOWN_COIN"], missing_dates, session)
+    result = fill_price_gaps(matrix, ["UNKNOWN_COIN"], missing_dates, session)
 
     # Symbol may be absent or map to an empty dict — no price should exist
     assert not result.get("UNKNOWN_COIN")
