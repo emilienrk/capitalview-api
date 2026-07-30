@@ -135,3 +135,29 @@ def test_the_endpoint_always_carries_a_verdict(session, master_key):
     body = TestClient(app).get("/analytics/investor").json()
 
     assert isinstance(body["verdict"], str) and body["verdict"]
+
+
+def test_the_response_model_exposes_every_part_b_block(session, master_key):
+    from dtos.analytics import (
+        ConcentrationResponse,
+        ExitsResponse,
+        FeesResponse,
+        InvestorAnalyticsResponse,
+        PlanResponse,
+    )
+
+    assert {"concentration", "fees", "exits", "plan", "turnover"} <= set(
+        InvestorAnalyticsResponse.model_fields
+    )
+    assert {"lines", "effective_positions", "independent_bets", "correlations", "dropped"} <= set(
+        ConcentrationResponse.model_fields
+    )
+    assert {"threshold_order_size", "orders_below_threshold", "ter_note", "projection_note"} <= set(
+        FeesResponse.model_fields
+    )
+    assert {"pgr", "plr", "ratio", "cost_eur", "hit_rate", "payoff_ratio", "horizon_days"} <= set(
+        ExitsResponse.model_fields
+    )
+    assert {"adherence_ratio", "drift_l1", "rebalance_eur", "since", "error"} <= set(
+        PlanResponse.model_fields
+    )

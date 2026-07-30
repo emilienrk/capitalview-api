@@ -11,14 +11,36 @@ from decimal import Decimal
 from sqlmodel import Session
 
 from services.analytics.behaviour import (
+    EXIT_HORIZON_DAYS,
+    MIN_EPISODES,
     MIN_MONTHS,
     MIN_PURCHASES,
     MIN_PURCHASES_FOR_DAY_OF_MONTH,
+    MIN_REALISATIONS,
     SOLID_MONTHS,
     analyse_deposit_lag,
     analyse_deposit_regularity,
+    analyse_exits,
     analyse_purchase_regularity,
+    analyse_turnover,
     purchase_amounts,
+)
+from services.analytics.concentration import (
+    MIN_OVERLAP,
+    analyse_concentration,
+    holdings_from_transactions,
+)
+from services.analytics.fees import (
+    MIN_ORDERS as FEES_MIN_ORDERS,
+    PROJECTION_RATE,
+    PROJECTION_YEARS,
+    SOLID_ORDERS as FEES_SOLID_ORDERS,
+    analyse_fees,
+)
+from services.analytics.plan import (
+    MIN_MONTHS as PLAN_MIN_MONTHS,
+    PlanError,
+    analyse_plan,
 )
 from services.analytics.benchmark import get_benchmark_series, resolve_benchmark_key
 from services.analytics.counterfactual import build_bridge
@@ -65,7 +87,7 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
     # The replay blocks are driven by transactions and prices alone. They must not
     # be gated behind daily snapshots, which are rebuilt by a background job and
     # can legitimately lag behind a freshly imported ledger.
-    blocks, benchmark_ensured = _replay_blocks(session, transactions, benchmark_key)
+    blocks, benchmark_ensured = _replay_blocks(session, transactions, benchmark_key, settings)
 
     if len(series) < 2:
         blocks["investor_gap"] = None
@@ -147,7 +169,7 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
     }
 
 
-def _replay_blocks(session: Session, transactions, benchmark_key: str) -> tuple[dict, bool]:
+def _replay_blocks(session: Session, transactions, benchmark_key: str, settings=None) -> tuple[dict, bool]:
     """Resolve the window once, then feed every replay-based block from it.
 
     The window backfills prices and rates over the user's own span, so this is the
@@ -159,8 +181,13 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str) -> tuple[
         "counterfactual": None,
         "execution": None,
         "regularity": None,
+        "turnover": None,
         "deposit_lag": None,
         "market_conditioning": None,
+        "concentration": None,
+        "fees": None,
+        "exits": None,
+        "plan": None,
     }
     window = resolve_window(session, transactions, benchmark_key)
     if window.is_empty:
@@ -201,11 +228,22 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str) -> tuple[
         purchases, benchmark_quotes, sorted(benchmark_quotes)
     )
 
+    holdings = holdings_from_transactions(transactions)
+    concentration = analyse_concentration(holdings, price_end, sparse)
+    fees = analyse_fees(transactions, window)
+    exits = analyse_exits(transactions, sparse, benchmark_quotes)
+    turnover = analyse_turnover(transactions, window, _average_capital(holdings, price_end))
+
+    plan_payload, plan_error = _plan_block(
+        settings, transactions, concentration, price_end, window, benchmark_quotes
+    )
+
     bridge_payload = _bridge_payload(bridge)
     return {
         "counterfactual": bridge_payload,
         "execution": _execution_payload(execution, window),
         "regularity": _regularity_payload(regularity),
+        "turnover": _turnover_payload(turnover),
         "deposit_lag": _deposit_lag_payload(
             lag,
             regularity,
@@ -213,7 +251,41 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str) -> tuple[
             bridge_payload["idle_cash_opportunity"] if bridge_payload else None,
         ),
         "market_conditioning": _conditioning_payload(conditioning),
+        "concentration": _concentration_payload(concentration),
+        "fees": _fees_payload(fees),
+        "exits": _exits_payload(exits),
+        "plan": _plan_payload(plan_payload, plan_error),
     }, True
+
+
+def _average_capital(holdings: dict, prices: dict) -> Decimal:
+    """Portfolio value at the end of the window, as the turnover denominator."""
+    return sum(
+        quantity * prices[key]
+        for key, quantity in holdings.items()
+        if key in prices and prices[key] > _ZERO
+    ) or _ZERO
+
+
+def _plan_block(settings, transactions, concentration, price_end, window, benchmark_quotes):
+    """Score the declared plan, or surface why it cannot be scored."""
+    raw = getattr(settings, "investment_plan", None) if settings else None
+    if not raw:
+        return None, None
+
+    purchases = [
+        (day, "", amount) for day, amount in purchase_amounts(transactions)
+    ]
+    weights = concentration.weights if concentration else []
+    portfolio_value = _average_capital(holdings_from_transactions(transactions), price_end)
+    try:
+        return (
+            analyse_plan(raw, purchases, weights, portfolio_value, window, benchmark_quotes),
+            None,
+        )
+    except PlanError as error:
+        # A plan that cannot be scored is stated, never silently dropped.
+        return None, str(error)
 
 
 def _regularity_payload(regularity) -> dict | None:
@@ -733,6 +805,446 @@ def _auto_provision_share(transactions) -> Decimal:
     return round(auto / total, 4) if total > _ZERO else _ZERO
 
 
+def _turnover_payload(turnover) -> dict | None:
+    if turnover is None:
+        return None
+    rate = _as_metric(
+        Metric.gated(
+            turnover.annual_rate,
+            unit="ratio_annuel",
+            sample_size=int(turnover.years * 12),
+            minimum=MIN_MONTHS,
+            solid_at=SOLID_MONTHS,
+            caveat_insufficient="Historique trop court pour un taux de rotation annuel.",
+            caveat_indicative="Moins de deux ans — tendance, pas preuve.",
+        )
+    )
+    return {
+        "annual_rate": rate,
+        "purchases_eur": round(turnover.purchases_eur, 2),
+        "sales_eur": round(turnover.sales_eur, 2),
+    }
+
+
+def _concentration_payload(concentration) -> dict | None:
+    if concentration is None:
+        return None
+
+    effective = _as_metric(
+        Metric.gated(
+            round(concentration.effective_positions, 2)
+            if concentration.effective_positions is not None
+            else None,
+            unit="positions",
+            sample_size=concentration.lines,
+            minimum=1,
+            solid_at=2,
+            caveat_insufficient="Aucune ligne détenue.",
+        )
+    )
+    # Capped at "indicatif" on purpose: two years of daily returns make a noisy
+    # covariance, and a PCA over a handful of assets is sensitive (spec 2.3).
+    bets = _as_metric(
+        Metric.gated(
+            concentration.independent_bets,
+            unit="paris",
+            sample_size=concentration.overlap,
+            minimum=MIN_OVERLAP,
+            solid_at=10**9,
+            caveat_insufficient=(
+                f"{concentration.overlap} rendements journaliers communs : il en faut "
+                f"{MIN_OVERLAP} pour estimer une corrélation."
+            ),
+            caveat_indicative=(
+                "Deux ans de rendements journaliers font une estimation bruitée : "
+                "l'ordre de grandeur, pas la décimale."
+            ),
+        )
+    )
+    show = bets["value"] is not None
+
+    return {
+        "lines": concentration.lines,
+        "effective_positions": effective,
+        "independent_bets": bets,
+        "weights": [
+            {"asset_key": key, "weight": round(weight, 4)}
+            for key, weight in concentration.weights
+        ],
+        "correlations": (
+            [
+                {"left": left, "right": right, "value": value}
+                for left, right, value in concentration.correlations
+            ]
+            if show
+            else []
+        ),
+        "max_correlation": concentration.max_correlation if show else None,
+        "overlap": concentration.overlap,
+        "dropped": concentration.dropped,
+        "verdict": _concentration_verdict(concentration, effective["value"], bets["value"]),
+    }
+
+
+def _concentration_verdict(concentration, effective, bets) -> str:
+    lines = concentration.lines
+    if bets is None:
+        if effective is None:
+            return "Aucune ligne détenue à analyser."
+        return (
+            f"Tu détiens {lines} ligne(s), soit {effective} position(s) effective(s) une fois "
+            "pondérées. Pas encore assez d'historique commun pour dire combien de paris "
+            "réellement distincts ça représente."
+        )
+    correlation_note = ""
+    if concentration.max_correlation is not None and concentration.max_correlation > Decimal("0.9"):
+        correlation_note = (
+            f" Tes deux lignes les plus proches corrèlent à {concentration.max_correlation}."
+        )
+    if bets < Decimal("1.5") and lines > 1:
+        return (
+            f"Tu détiens {lines} lignes. Pondérées, ça fait {effective} positions effectives. "
+            f"Statistiquement, ça fait {bets} pari indépendant : ta diversification est une "
+            f"illusion de comptage.{correlation_note} Ajouter un ETF de plus sur le même univers "
+            "ne changera rien ; seul un actif décorrélé le ferait."
+        )
+    return (
+        f"Tu détiens {lines} lignes, soit {effective} positions effectives et {bets} paris "
+        f"réellement indépendants.{correlation_note}"
+    )
+
+
+def _fees_payload(fees) -> dict | None:
+    if fees is None:
+        return None
+
+    def gated(value, unit, *, insufficient: str):
+        return _as_metric(
+            Metric.gated(
+                value,
+                unit=unit,
+                sample_size=fees.order_count,
+                minimum=FEES_MIN_ORDERS,
+                solid_at=FEES_SOLID_ORDERS,
+                caveat_insufficient=insufficient,
+                caveat_indicative="Moins de vingt ordres — l'ordre de grandeur, pas la précision.",
+            )
+        )
+
+    too_few = f"{fees.order_count} ordres : trop peu pour décrire une habitude de frais."
+    threshold = gated(
+        round(fees.threshold_order_size, 2) if fees.threshold_order_size is not None else None,
+        "EUR",
+        insufficient=too_few,
+    )
+
+    return {
+        "total_fees": gated(round(fees.total_fees, 2), "EUR", insufficient=too_few),
+        "fee_share": gated(
+            round(fees.fee_share, 6) if fees.fee_share is not None else None,
+            "ratio",
+            insufficient=too_few,
+        ),
+        "annual_bps": gated(
+            round(fees.annual_bps, 2) if fees.annual_bps is not None else None,
+            "bps",
+            insufficient=too_few,
+        ),
+        "threshold_order_size": threshold,
+        "orders_below_threshold": fees.orders_below_threshold,
+        "cost_below_threshold": round(fees.cost_below_threshold, 2),
+        "invested_below_threshold": round(fees.invested_below_threshold, 2),
+        "average_fee": round(fees.average_fee, 2) if fees.average_fee is not None else None,
+        "average_order": round(fees.average_order, 2) if fees.average_order is not None else None,
+        "order_count": fees.order_count,
+        "projection_eur": fees.projection_eur,
+        "projection_note": (
+            f"Projection sur {PROJECTION_YEARS} ans à hypothèse constante : même cadence de "
+            f"versement qu'aujourd'hui, {int(PROJECTION_RATE * 100)} % de rendement annuel. "
+            "C'est le coût d'opportunité de tes frais, pas les frais eux-mêmes."
+        ),
+        "ter_note": fees.ter_note,
+        "verdict": _fees_verdict(fees, threshold["value"]),
+    }
+
+
+def _fees_verdict(fees, threshold) -> str:
+    if threshold is None:
+        if fees.total_fees <= _ZERO:
+            return "Tu ne paies aucun frais d'ordre. " + fees.ter_note
+        return f"{fees.order_count} ordres : trop peu pour dire si tes frais sont un sujet."
+    if fees.orders_below_threshold == 0:
+        return (
+            f"Ton courtier te prend {round(fees.average_fee, 2)} € par ordre. En dessous de "
+            f"{round(threshold)} € par ordre tu dépasserais 25 bps de frais d'entrée : aucun de "
+            f"tes {fees.order_count} ordres n'est sous ce seuil."
+        )
+    return (
+        f"Ton courtier te prend en moyenne {round(fees.average_fee, 2)} € par ordre. En dessous "
+        f"de {round(threshold)} € par ordre, tu dépasses 25 bps de frais d'entrée. "
+        f"{fees.orders_below_threshold} de tes {fees.order_count} ordres sont sous ce seuil — ils "
+        f"t'ont coûté {round(fees.cost_below_threshold)} € pour "
+        f"{round(fees.invested_below_threshold)} € investis. Regroupe-les."
+    )
+
+
+def _exits_payload(exits) -> dict | None:
+    if exits is None:
+        return None
+
+    measurable = exits.is_measurable
+
+    def gated(value, unit):
+        return _as_metric(
+            Metric.gated(
+                value if measurable else None,
+                unit=unit,
+                sample_size=exits.realisations,
+                minimum=MIN_REALISATIONS,
+                # Never solid: a handful of sales cannot carry a firm conclusion.
+                solid_at=10**9,
+                caveat_insufficient=(
+                    f"{exits.realisations} occasions de réalisation : trop peu pour mesurer "
+                    "quoi que ce soit."
+                ),
+                caveat_indicative="Peu de ventes — le sens se lit, pas l'amplitude.",
+            )
+        )
+
+    def episode_metric(value, unit):
+        return _as_metric(
+            Metric.gated(
+                value if exits.has_episodes else None,
+                unit=unit,
+                sample_size=len(exits.episodes),
+                minimum=MIN_EPISODES,
+                solid_at=10**9,
+                caveat_insufficient=(
+                    f"{len(exits.episodes)} positions entièrement soldées : sous "
+                    f"{MIN_EPISODES}, un taux de réussite ne veut rien dire."
+                ),
+                caveat_indicative="Peu d'épisodes clos — indicatif.",
+            )
+        )
+
+    ratio = gated(round(exits.ratio, 3) if exits.ratio is not None else None, "ratio")
+
+    return {
+        "pgr": gated(round(exits.pgr, 4) if exits.pgr is not None else None, "ratio"),
+        "plr": gated(round(exits.plr, 4) if exits.plr is not None else None, "ratio"),
+        "ratio": ratio,
+        "cost_eur": gated(
+            round(exits.cost_eur, 2) if exits.cost_eur is not None else None, "EUR"
+        ),
+        "realisations": exits.realisations,
+        "recent_sales": exits.recent_sales,
+        "measured_sales": exits.measured_sales,
+        "horizon_days": EXIT_HORIZON_DAYS,
+        "hit_rate": episode_metric(
+            round(exits.hit_rate, 4) if exits.hit_rate is not None else None, "ratio"
+        ),
+        "payoff_ratio": episode_metric(
+            round(exits.payoff_ratio, 3) if exits.payoff_ratio is not None else None, "ratio"
+        ),
+        "episode_count": len(exits.episodes),
+        "episodes": (
+            [
+                {
+                    "asset_key": episode.asset_key,
+                    "opened": episode.opened,
+                    "closed": episode.closed,
+                    "profit": round(episode.profit, 2),
+                }
+                for episode in exits.episodes
+            ]
+            if exits.has_episodes
+            else []
+        ),
+        "verdict": _exits_verdict(exits, ratio["value"]),
+    }
+
+
+def _exits_verdict(exits, ratio) -> str:
+    if ratio is None:
+        return (
+            f"Tu as vendu {exits.realisations} fois. C'est trop peu pour mesurer quoi que ce "
+            "soit — et c'est en soi l'information : tu es un accumulateur, pas un arbitragiste. "
+            "L'effet de disposition n'est pas ton problème, les métriques d'apport le sont."
+        )
+
+    cost = ""
+    if exits.cost_eur is not None and exits.measured_sales:
+        if exits.cost_eur > _ZERO:
+            cost = (
+                f" Sur {exits.measured_sales} ventes évaluables à un an, ce que tu as vendu a fait "
+                f"mieux que l'indice ensuite : {round(exits.cost_eur)} € abandonnés."
+            )
+        else:
+            cost = (
+                f" Sur {exits.measured_sales} ventes évaluables à un an, sortir t'a évité "
+                f"{abs(round(exits.cost_eur))} € de moins-value par rapport à l'indice."
+            )
+
+    episodes = ""
+    if exits.has_episodes and exits.hit_rate is not None and exits.payoff_ratio is not None:
+        episodes = (
+            f" Tu as raison {round(exits.hit_rate * 100)} % du temps, et tes gagnantes rapportent "
+            f"{round(exits.payoff_ratio, 1)} fois ce que tes perdantes coûtent."
+        )
+
+    if ratio > Decimal("1"):
+        return (
+            f"Tu réalises tes gains {round(ratio, 1)} fois plus volontiers que tes pertes : tu "
+            f"coupes ce qui monte et gardes ce qui baisse.{cost}{episodes}"
+        )
+    return (
+        f"Tu ne coupes pas tes gains plus vite que tes pertes (ratio {round(ratio, 1)}).{cost}"
+        f"{episodes}"
+    )
+
+
+def _plan_payload(plan, error: str | None) -> dict | None:
+    if error is not None:
+        return {
+            "monthly_target": _ZERO,
+            "since": date.today(),
+            "months": [],
+            "total_target": _ZERO,
+            "total_invested": _ZERO,
+            "adherence_ratio": _as_metric(
+                Metric.gated(
+                    None,
+                    unit="ratio",
+                    sample_size=0,
+                    minimum=1,
+                    solid_at=2,
+                    caveat_insufficient=error,
+                )
+            ),
+            "average_monthly": _as_metric(
+                Metric.gated(
+                    None, unit="EUR", sample_size=0, minimum=1, solid_at=2,
+                    caveat_insufficient=error,
+                )
+            ),
+            "drift": [],
+            "drift_l1": _as_metric(
+                Metric.gated(
+                    None, unit="points", sample_size=0, minimum=1, solid_at=2,
+                    caveat_insufficient=error,
+                )
+            ),
+            "rebalance_eur": None,
+            "under_invested_months": 0,
+            "under_in_down_months": 0,
+            "verdict": error,
+            "error": error,
+        }
+
+    if plan is None:
+        return None
+
+    months = len(plan.months)
+
+    def gated(value, unit):
+        return _as_metric(
+            Metric.gated(
+                value,
+                unit=unit,
+                sample_size=months,
+                minimum=PLAN_MIN_MONTHS,
+                solid_at=12,
+                caveat_insufficient=(
+                    f"{months} mois complets depuis le début de ton plan : trop tôt pour juger."
+                ),
+                caveat_indicative="Moins d'un an de plan — tendance, pas preuve.",
+            )
+        )
+
+    adherence = gated(
+        round(plan.adherence_ratio, 4) if plan.adherence_ratio is not None else None, "ratio"
+    )
+
+    return {
+        "monthly_target": plan.monthly_target,
+        "since": plan.since,
+        "months": [
+            {
+                "year": row.year,
+                "month": row.month,
+                "target": round(row.target, 2),
+                "invested": round(row.invested, 2),
+            }
+            for row in plan.months
+        ],
+        "total_target": round(plan.total_target, 2),
+        "total_invested": round(plan.total_invested, 2),
+        "adherence_ratio": adherence,
+        "average_monthly": gated(
+            round(plan.average_monthly, 2) if plan.average_monthly is not None else None, "EUR"
+        ),
+        "drift": [
+            {
+                "asset_key": row.asset_key,
+                "target": round(row.target, 2),
+                "actual": round(row.actual, 2),
+            }
+            for row in plan.drift
+        ],
+        "drift_l1": _as_metric(
+            Metric.gated(
+                round(plan.drift_l1, 2) if plan.drift_l1 is not None else None,
+                unit="points",
+                sample_size=len(plan.drift),
+                minimum=1,
+                solid_at=2,
+                caveat_insufficient="Aucune allocation cible déclarée.",
+            )
+        ),
+        "rebalance_eur": round(plan.rebalance_eur, 2) if plan.rebalance_eur is not None else None,
+        "under_invested_months": plan.under_invested_months,
+        "under_in_down_months": plan.under_in_down_months,
+        "verdict": _plan_verdict(plan, adherence["value"]),
+        "error": None,
+    }
+
+
+def _plan_verdict(plan, adherence) -> str:
+    if adherence is None:
+        return (
+            f"Ton plan court depuis {plan.since:%m/%Y} : pas encore assez de mois complets pour "
+            "dire si tu le tiens."
+        )
+
+    drift = ""
+    if plan.drift_l1 is not None and plan.drift_l1 > Decimal("10") and plan.rebalance_eur:
+        drift = (
+            f" Ton allocation dérive de {round(plan.drift_l1)} points de ta cible : "
+            f"{round(plan.rebalance_eur)} € à rééquilibrer."
+        )
+
+    timing = ""
+    if plan.under_invested_months and plan.under_in_down_months:
+        share = round(plan.under_in_down_months * 100 / plan.under_invested_months)
+        if share >= 50:
+            timing = (
+                f" Et les mois où tu as sous-investi sont à {share} % des mois de baisse du "
+                "marché."
+            )
+
+    if adherence >= Decimal("0.98"):
+        return (
+            f"Ton plan dit {round(plan.monthly_target)} €/mois investis. Tu as investi "
+            f"{round(plan.total_invested)} € en {len(plan.months)} mois : tu le tiens.{drift}"
+        )
+    gap = round((Decimal("1") - adherence) * 100)
+    return (
+        f"Ton plan dit {round(plan.monthly_target)} €/mois investis. Tu as investi "
+        f"{round(plan.total_invested)} € en {len(plan.months)} mois, soit "
+        f"{round(plan.average_monthly)} €/mois réels — {gap} % sous ton propre plan.{drift}{timing}"
+    )
+
+
 def build_global_verdict(blocks: dict) -> str:
     """The page's opening statement, three to five sentences.
 
@@ -808,6 +1320,48 @@ def build_global_verdict(blocks: dict) -> str:
             f"Ton argent attend en médiane {round(lag['median_days']['value'])} jours entre le "
             "virement et l'investissement."
         )
+
+    fees = blocks.get("fees")
+    if fees and fees["threshold_order_size"]["value"] is not None and fees["orders_below_threshold"]:
+        costed.append(
+            (
+                fees["cost_below_threshold"],
+                f"{fees['orders_below_threshold']} de tes ordres sont sous le seuil de "
+                f"{round(fees['threshold_order_size']['value'])} € où les frais dépassent "
+                f"25 bps : {round(fees['cost_below_threshold'])} € de frais évitables.",
+            )
+        )
+
+    exits = blocks.get("exits")
+    if exits and exits["cost_eur"]["value"] is not None and exits["cost_eur"]["value"] > _ZERO:
+        costed.append(
+            (
+                exits["cost_eur"]["value"],
+                f"Ce que tu as vendu a ensuite battu l'indice : "
+                f"{round(exits['cost_eur']['value'])} € abandonnés en sortant.",
+            )
+        )
+
+    plan = blocks.get("plan")
+    if plan and plan["adherence_ratio"]["value"] is not None:
+        shortfall = plan["total_target"] - plan["total_invested"]
+        if shortfall > _ZERO:
+            costed.append(
+                (
+                    shortfall,
+                    f"Tu as investi {round(shortfall)} € de moins que ce que ton propre plan "
+                    "prévoyait.",
+                )
+            )
+
+    concentration = blocks.get("concentration")
+    if concentration and concentration["independent_bets"]["value"] is not None:
+        bets = concentration["independent_bets"]["value"]
+        if bets < Decimal("1.5") and concentration["lines"] > 1:
+            structural.append(
+                f"Tes {concentration['lines']} lignes ne font que {bets} pari indépendant : ta "
+                "diversification est une illusion de comptage."
+            )
 
     conditioning = blocks.get("market_conditioning")
     if conditioning and conditioning["weighted_drawdown"]["value"] is not None:
