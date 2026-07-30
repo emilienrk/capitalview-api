@@ -588,3 +588,89 @@ matrice de corrélation.
   connues du jalon.
 - Tout ce que le §5 écarte : Sharpe, Sortino, ratio d'information, alpha/bêta, max drawdown en
   chiffre-titre, Brinson–Fachler sectoriel.
+
+---
+
+## Résultats de l'exécution
+
+Toutes les tâches sont exécutées et poussées sur `claude/investor-analytics-m3-plan-fhs6l7` dans les
+deux dépôts. Le point de coupe après la Task 7 a été franchi sans incident : la partie A a été
+poussée seule et vérifiée avant que la partie B ne démarre.
+
+- Backend **761 passed / 0 failed** (677 au départ de M3, 714 au point de coupe)
+- Frontend **25 passed**, `type-check` et `build` clean
+- **Cohérence inter-blocs** : trois tests bloquants dans `test_cross_block_coherence.py` — une sortie
+  qui détruit de la valeur est négative dans le pont *et* positive en coût dans le bloc sorties, et
+  réciproquement ; le slippage en bps et le terme *c* du pont gardent des signes opposés
+- **Calibration des permutations** : conservée depuis M2, et le nouveau bloc §2.2 sort `p = 0,73`
+  sur des achats non conditionnés — « rien de détectable », comme attendu
+- **Vérification navigateur complète** sur PostgreSQL local avec un portefeuille de 96 transactions :
+  9 titres de blocs rendus, 10 graphiques, 24 valeurs `—` pour les métriques gatées, zéro erreur de
+  page. Le cycle complet du plan cible a été rejoué à l'écran : allocation à 70 % refusée, plan
+  enregistré → bloc affiché, plan supprimé → bloc disparu, les autres blocs intacts.
+
+### Task 13 tranchée : toujours pas de cache serveur
+
+Mesure du calcul pur, prix déjà en base (`scratchpad/bench.py`, market et base stubés) :
+
+| Scénario | Temps |
+|---|---|
+| Contrôle M2 — 35 ordres, 2 actifs, 2 ans | **0,053 s** |
+| Réaliste — 200 ordres, 6 actifs, 3 ans | **0,159 s** |
+| Stress — 500 ordres, 10 actifs, 5 ans | **0,352 s** |
+
+Très en dessous du seuil de ~1 s, même en ajoutant l'ACP et les 5 000 permutations du §2.2. Le TTL
+client d'1 h suffit, et la décision de M2 tient : un cache serveur mal invalidé servirait des
+chiffres périmés, défaut pire que la lenteur qu'il corrigerait.
+
+**En revanche la latence réelle observée est de 40 s**, intégralement passée dans
+`ensure_price_history` qui retente le réseau à chaque requête même quand la base est à jour. C'est
+le défaut préexistant signalé en fin de M2 ; il est maintenant chiffré en conditions réelles, et
+c'est le seul levier de performance qui compte.
+
+## Défauts trouvés pendant l'exécution et corrigés
+
+1. **Les blocs M2 étaient invisibles côté front** quand `investor_gap` était `null` — le correctif
+   backend n°3 de M2 s'était arrêté à mi-chemin. Chaque bloc se rend désormais sur ses propres
+   données (Task 1).
+2. **Le calendrier d'échange n'était jamais consulté** : `report.py` n'a jamais passé `trading_days`
+   à `analyse_execution`. Câblé via `resolve_trading_days` (Task 1).
+3. **Le plan cible ne pouvait pas être supprimé** — un dict vide efface désormais le champ (Task 1).
+4. **Le plus-haut glissant du §2.2 n'existait pas au début de la fenêtre.** `resolve_window`
+   backfille maintenant le benchmark un an plus tôt, et les séances sans année glissante complète
+   sont écartées. Sans ça, les premiers mois affichaient un drawdown quasi nul et se lisaient comme
+   des achats dans le creux.
+5. **Double backfill du benchmark quand il est aussi une ligne détenue** : une seule requête, à la
+   date la plus ancienne des deux besoins.
+6. **`report.py` lisait `investment_plan` sur le modèle ORM**, qui ne porte que
+   `investment_plan_enc`. Le bloc plan restait donc muet en production alors que les tests
+   passaient — le stub de test exposait un champ en clair qui n'existe nulle part. Trouvé par la
+   vérification navigateur, pas par la suite. Le test utilise désormais un vrai chiffrement.
+7. **Le formulaire de plan plantait au clic sur « Enregistrer »** : `BaseInput` en `type="number"`
+   émet un nombre, et le formulaire appelait `.trim()` dessus. Le bouton ne faisait rien, sans
+   message d'erreur.
+8. **Le verdict de concentration affichait « 1.3627 pari indépendant »** — quatre décimales dans une
+   phrase. Arrondi dans la prose, précision conservée dans la métrique.
+9. **Les parts et taux s'affichaient signés** (« +53,85 % de mois investis ») : `formatPercent`
+   signe toujours, et une part n'est pas une variation.
+
+## Limites connues, assumées
+
+- **Toujours pas de test de composant** sur les `.vue` : décision actée en tête de plan. L'invariant
+  de la gate est garanti côté API par les tests et côté rendu par la vérification navigateur. Le
+  défaut n°7 ci-dessus est exactement ce qu'un test de composant aurait attrapé sans navigateur —
+  c'est le coût de la décision, et il est réel.
+- **`ensure_price_history` retente le réseau à chaque requête**, d'où 40 s de latence pour 0,2 s de
+  calcul. Hors périmètre M3, mais désormais chiffré.
+- **Le hit rate et le payoff ratio n'ont rien à mesurer** sur un portefeuille d'accumulateur : zéro
+  épisode clos. Le bloc le dit plutôt que de rester vide, et sa gate à 20 épisodes tiendra le jour
+  où des positions seront réellement soldées.
+- **La vérification navigateur a tourné sur des prix synthétiques** : le conteneur n'a pas d'accès
+  aux marchés, les séries ont donc été générées en base. Les formes, les gates et les verdicts sont
+  vérifiés ; les montants affichés ne le sont pas.
+
+## Ce que M3 ne fait pas
+
+Le look-through des ETF, le journal de décision structuré et l'horodatage de décision (§6 de la
+spec) restent signalés et non construits. La crypto reste hors périmètre. Tout ce que le §5 écarte
+est désormais listé à l'écran dans la section repliable « ce que cette page ne calcule pas ».
