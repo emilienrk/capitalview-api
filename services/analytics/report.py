@@ -11,9 +11,13 @@ from decimal import Decimal
 from sqlmodel import Session
 
 from services.analytics.benchmark import get_benchmark_series, resolve_benchmark_key
+from services.analytics.counterfactual import build_bridge
+from services.analytics.execution import MIN_ORDERS, SOLID_ORDERS, analyse_execution
 from services.analytics.flows import is_auto_provision, stock_external_flows
+from services.analytics.prices import fill_price_gaps, get_price_matrix
 from services.analytics.reliability import Metric
 from services.analytics.returns import annualize, time_weighted_return, xirr
+from services.analytics.window import calendar_days, resolve_window
 from services.settings import get_or_create_settings
 from services.stock_account import get_all_stock_accounts_history, get_user_stock_accounts
 from services.stock_transaction import get_account_transactions
@@ -45,6 +49,8 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
             "days": 0,
             "benchmark_asset_key": benchmark_key,
             "investor_gap": None,
+            "counterfactual": None,
+            "execution": None,
         }
 
     series.sort(key=lambda point: point[0])
@@ -92,11 +98,15 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
     gap_metric = gated(gap, "ratio_annuel")
     gap_eur_metric = gated(gap_eur, "EUR")
 
+    counterfactual, execution = _replay_blocks(session, transactions, benchmark_key)
+
     return {
         "period_start": period_start,
         "period_end": period_end,
         "days": span_days,
         "benchmark_asset_key": benchmark_key,
+        "counterfactual": counterfactual,
+        "execution": execution,
         "investor_gap": {
             "twr": gated(twr.total_return, "ratio"),
             "twr_annualised": gated(twr_annual, "ratio_annuel"),
@@ -111,6 +121,148 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
             "verdict": _verdict(gap_metric["value"], gap_eur_metric["value"], auto_share),
         },
     }
+
+
+def _replay_blocks(session: Session, transactions, benchmark_key: str):
+    """Resolve the window once, then feed both replay-based blocks from it.
+
+    The window backfills prices and rates over the user's own span, so this is the
+    only place that talks to the market layer for these two blocks.
+    """
+    window = resolve_window(session, transactions, benchmark_key)
+    if window.is_empty:
+        return None, None
+
+    keys = sorted({*window.asset_keys, benchmark_key})
+    sparse = get_price_matrix(session, keys, window.start, window.end)
+    days = calendar_days(window.start, window.end)
+    # Two views of the same data: the sparse matrix carries real sessions, which
+    # is what a monthly average must average; the filled one is only used to read
+    # the terminal price of each asset.
+    filled = fill_price_gaps({k: dict(v) for k, v in sparse.items()}, keys, days, session)
+    price_end = {
+        key: quotes[window.end] for key, quotes in filled.items() if window.end in quotes
+    }
+
+    bridge = build_bridge(window, transactions, sparse, price_end)
+    execution = analyse_execution(transactions, sparse)
+    return _bridge_payload(bridge), _execution_payload(execution, window)
+
+
+def _bridge_payload(bridge) -> dict | None:
+    if bridge is None:
+        return None
+    return {
+        "baseline": round(bridge.baseline, 2),
+        "steps": [
+            {"key": step.key, "label": step.label, "amount": round(step.amount, 2)}
+            for step in bridge.steps
+        ],
+        "residual": round(bridge.residual, 2),
+        "final": round(bridge.final, 2),
+        "behaviour_cost": round(bridge.behaviour_cost, 2),
+        "covered_from": bridge.covered_from,
+        "covered_days": bridge.covered_days,
+        "truncated": bridge.truncated,
+        "order": bridge.order,
+        "verdict": _bridge_verdict(bridge),
+    }
+
+
+def _bridge_verdict(bridge) -> str:
+    cost = round(bridge.behaviour_cost)
+    truncation = ""
+    if bridge.truncated:
+        truncation = (
+            f" La comparaison ne démarre qu'au {bridge.covered_from:%d/%m/%Y} : "
+            "l'indice de référence n'existait pas avant."
+        )
+    if cost < 0:
+        return (
+            f"Un robot qui aurait acheté l'indice tous les mois, sans jamais réfléchir, "
+            f"aurait {abs(cost)} € de plus que toi.{truncation}"
+        )
+    return (
+        f"Tes décisions te rapportent {cost} € de plus qu'un robot qui aurait acheté "
+        f"l'indice tous les mois.{truncation}"
+    )
+
+
+def _execution_payload(execution, window) -> dict | None:
+    if execution is None or execution.sample_size == 0:
+        return None
+
+    orders = execution.sample_size
+    slippage = _as_metric(
+        Metric.gated(
+            execution.weighted_slippage_bps,
+            unit="bps",
+            sample_size=orders,
+            minimum=MIN_ORDERS,
+            solid_at=SOLID_ORDERS,
+            caveat_insufficient=f"{orders} achats : trop peu pour lire une habitude.",
+            caveat_indicative="Moins de trente achats — la moyenne reste sensible à un ou deux ordres.",
+        )
+    )
+    cost = _as_metric(
+        Metric.gated(
+            round(execution.cost_eur, 2) if execution.cost_eur is not None else None,
+            unit="EUR",
+            sample_size=orders,
+            minimum=MIN_ORDERS,
+            solid_at=SOLID_ORDERS,
+            caveat_insufficient=f"{orders} achats : trop peu pour chiffrer un coût.",
+        )
+    )
+
+    permutation = execution.permutation
+    # The distribution is a picture of the same withheld numbers, so it follows
+    # the gate rather than leaking a shape the metric refused to state.
+    distribution = None
+    if execution.quartiles and slippage["value"] is not None:
+        low, q1, median, q3, high = execution.quartiles
+        distribution = {
+            "minimum": low,
+            "q1": q1,
+            "median": median,
+            "q3": q3,
+            "maximum": high,
+        }
+
+    return {
+        "slippage_bps": slippage,
+        "cost_eur": cost,
+        "order_count": orders,
+        "distribution": distribution,
+        "p_value": round(Decimal(str(permutation.p_value)), 4) if permutation else None,
+        "percentile": round(Decimal(str(permutation.percentile)), 1) if permutation else None,
+        "is_detectable": bool(permutation and permutation.is_detectable),
+        "verdict": _execution_verdict(slippage["value"], cost["value"], orders, permutation),
+    }
+
+
+def _execution_verdict(slippage_bps, cost_eur, orders: int, permutation) -> str:
+    if slippage_bps is None or cost_eur is None:
+        return (
+            f"Seulement {orders} achats : pas de quoi dire si tu paies trop cher ou non."
+        )
+    if permutation is None or not permutation.is_detectable:
+        return (
+            f"Slippage moyen de {round(slippage_bps)} bps, mais le test de permutation ne le "
+            "distingue pas du hasard. Ton timing d'exécution ne te coûte rien et ne te rapporte "
+            "rien : ce n'est pas là qu'il faut chercher."
+        )
+    if slippage_bps > _ZERO:
+        return (
+            f"Sur {orders} achats, tu paies en moyenne {round(slippage_bps)} bps au-dessus du prix "
+            f"moyen du mois, soit {round(cost_eur)} €. Le test de permutation le classe au "
+            f"{round(permutation.percentile)}ᵉ centile : tu achètes systématiquement après la hausse."
+        )
+    return (
+        f"Sur {orders} achats, tu paies en moyenne {abs(round(slippage_bps))} bps sous le prix moyen "
+        f"du mois, soit {abs(round(cost_eur))} € gagnés. Sur cette durée, c'est autant de la chance "
+        "que du talent."
+    )
 
 
 def _benchmark_annual_return(
