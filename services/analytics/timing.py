@@ -203,7 +203,8 @@ def analyse_market_conditioning(
 
     permutation = None
     if weighted_dd is not None and len(matched) >= 2:
-        generator = rng if rng is not None else default_rng()
+        # `rng` shadows the module helper here, hence the direct call.
+        generator = rng if rng is not None else np.random.default_rng(DEFAULT_SEED)
         pool = np.asarray([float(state.drawdown) for state in states], dtype=np.float64)
         amounts = np.asarray([float(w) for w in weights], dtype=np.float64)
         total = amounts.sum()
