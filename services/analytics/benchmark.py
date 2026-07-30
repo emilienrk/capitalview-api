@@ -30,6 +30,8 @@ def get_benchmark_series(
     asset_key: str,
     from_date: date,
     to_date: date,
+    *,
+    ensure: bool = True,
 ) -> dict[date, Decimal]:
     """Daily EUR price per calendar day, forward-filled across closed sessions.
 
@@ -39,7 +41,10 @@ def get_benchmark_series(
     fill_price_gaps seeds it from the last quote before the window, which is why
     this shares the snapshot rebuild's implementation rather than rolling its own.
     """
-    ensure_price_history(session, asset_key, AssetType.STOCK, from_date)
+    # Backfilling is a network round trip. A caller that already ensured this
+    # asset over the same window opts out rather than paying for it twice.
+    if ensure:
+        ensure_price_history(session, asset_key, AssetType.STOCK, from_date)
 
     if to_date < from_date:
         return {}

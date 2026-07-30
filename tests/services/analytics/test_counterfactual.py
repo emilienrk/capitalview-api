@@ -102,7 +102,12 @@ def test_fees_always_subtract():
     assert {s.key: s.amount for s in bridge.steps}["fees"] == Decimal("-25")
 
 
-def test_money_deposited_but_never_invested_shows_as_cash_drag():
+def test_idle_cash_sits_on_both_sides_rather_than_inside_the_chain():
+    """A large untouched deposit must not read as investing skill.
+
+    The robot is handed the same leftover cash, so the headline cost reflects
+    decisions only; the forgone return on that cash is reported separately.
+    """
     txs = [
         _Tx("DEPOSIT", "EUR", START, amount="5000", price="1"),
         _Tx("BUY", BENCH, date(2024, 3, 5), amount="10", price="100"),
@@ -110,7 +115,20 @@ def test_money_deposited_but_never_invested_shows_as_cash_drag():
     bridge = build_bridge(_window(), txs, _flat_quotes([BENCH]), {BENCH: Decimal("100")})
 
     # 5000 in, 1000 deployed.
-    assert {s.key: s.amount for s in bridge.steps}["cash_drag"] == Decimal("4000")
+    assert bridge.idle_cash == Decimal("4000")
+    assert "cash_drag" not in {s.key for s in bridge.steps}
+    assert abs(bridge.behaviour_cost) < Decimal("0.01")
+
+
+def test_idle_cash_reports_the_return_it_forwent():
+    txs = [
+        _Tx("DEPOSIT", "EUR", START, amount="5000", price="1"),
+        _Tx("BUY", BENCH, date(2024, 3, 5), amount="10", price="100"),
+    ]
+    # Index doubled over the window: the idle 4000 gave up 4000.
+    bridge = build_bridge(_window(), txs, _flat_quotes([BENCH]), {BENCH: Decimal("200")})
+
+    assert bridge.idle_cash_opportunity == Decimal("4000")
 
 
 def test_selling_before_a_rise_shows_a_negative_exit_effect():
@@ -133,7 +151,7 @@ def test_the_substitution_order_is_part_of_the_output():
     ]
     bridge = build_bridge(_window(), txs, _flat_quotes([BENCH]), {BENCH: Decimal("100")})
 
-    assert bridge.order == ["timing", "selection", "execution", "cash_drag", "fees", "exits"]
+    assert bridge.order == ["timing", "selection", "execution", "fees", "exits"]
 
 
 def test_a_window_shorter_than_a_year_is_refused():

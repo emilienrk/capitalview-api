@@ -198,7 +198,7 @@ def test_a_two_year_buying_history_produces_both_blocks():
     execution = report["execution"]
 
     assert bridge is not None and execution is not None
-    assert bridge["order"] == ["timing", "selection", "execution", "cash_drag", "fees", "exits"]
+    assert bridge["order"] == ["timing", "selection", "execution", "fees", "exits"]
     assert execution["order_count"] == 24
     assert bridge["verdict"] and execution["verdict"]
 
@@ -242,3 +242,12 @@ def test_buying_at_a_flat_price_is_not_detectable():
 
     assert execution["is_detectable"] is False
     assert "pas là qu'il faut chercher" in execution["verdict"]
+
+
+def test_the_replay_blocks_survive_missing_snapshots():
+    """Snapshots are rebuilt asynchronously; the replay blocks do not need them."""
+    report = _run_blocks(_monthly_buys(24), snapshots=[])
+
+    assert report["investor_gap"] is None
+    assert report["counterfactual"] is not None
+    assert report["execution"] is not None
