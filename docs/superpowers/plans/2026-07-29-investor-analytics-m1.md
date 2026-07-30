@@ -52,7 +52,7 @@
 - Consumes: rien.
 - Produces: `Reliability` (enum : `SOLID="solide"`, `INDICATIVE="indicatif"`, `INSUFFICIENT="insuffisant"`), `Metric` (dataclass frozen : `value: Decimal | None`, `unit: str`, `sample_size: int`, `reliability: Reliability`, `caveat: str | None`), et le constructeur `Metric.gated(value, unit, sample_size, *, minimum, solid_at, caveat_insufficient, caveat_indicative=None) -> Metric`.
 
-- [ ] **Step 1: Créer la branche et le package**
+- [x] **Step 1: Créer la branche et le package**
 
 ```bash
 cd capitalview-api && git checkout -b feat/investor-analytics
@@ -60,7 +60,7 @@ mkdir -p services/analytics tests/services/analytics
 touch services/analytics/__init__.py
 ```
 
-- [ ] **Step 2: Écrire le test qui échoue**
+- [x] **Step 2: Écrire le test qui échoue**
 
 Créer `capitalview-api/tests/services/analytics/test_reliability.py` :
 
@@ -116,12 +116,12 @@ def test_none_value_is_always_insufficient():
     assert metric.value is None
 ```
 
-- [ ] **Step 3: Lancer le test pour vérifier qu'il échoue**
+- [x] **Step 3: Lancer le test pour vérifier qu'il échoue**
 
 Run: `uv run pytest tests/services/analytics/test_reliability.py -v` (sandbox désactivé)
 Expected: FAIL — `ModuleNotFoundError: No module named 'services.analytics.reliability'`
 
-- [ ] **Step 4: Écrire l'implémentation**
+- [x] **Step 4: Écrire l'implémentation**
 
 Créer `capitalview-api/services/analytics/reliability.py` :
 
@@ -175,12 +175,12 @@ class Metric:
 
 Note : le test appelle `Metric.gated(value, unit=..., ...)` avec `value` positionnel — garder `value` en positionnel et tout le reste en keyword-only.
 
-- [ ] **Step 5: Lancer les tests**
+- [x] **Step 5: Lancer les tests**
 
 Run: `uv run pytest tests/services/analytics/test_reliability.py -v`
 Expected: 4 PASSED
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add services/analytics tests/services/analytics
@@ -206,7 +206,7 @@ git commit -m "feat(analytics): add reliability gating for investor metrics"
 
 Les `transactions` sont des `dtos.transaction.TransactionResponse` (attributs `asset_key`, `type`, `amount`, `executed_at`, `notes`).
 
-- [ ] **Step 1: Écrire le test qui échoue**
+- [x] **Step 1: Écrire le test qui échoue**
 
 Créer `capitalview-api/tests/services/analytics/test_flows.py` :
 
@@ -284,12 +284,12 @@ def test_days_without_external_flow_are_absent_from_the_mapping():
     assert stock_external_flows(txs) == {}
 ```
 
-- [ ] **Step 2: Lancer le test pour vérifier qu'il échoue**
+- [x] **Step 2: Lancer le test pour vérifier qu'il échoue**
 
 Run: `uv run pytest tests/services/analytics/test_flows.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'services.analytics.flows'`
 
-- [ ] **Step 3: Écrire l'implémentation**
+- [x] **Step 3: Écrire l'implémentation**
 
 Créer `capitalview-api/services/analytics/flows.py` :
 
@@ -400,12 +400,12 @@ def stock_external_flows(
     return {day: total for day, total in grouped.items() if total != _ZERO}
 ```
 
-- [ ] **Step 4: Lancer les tests**
+- [x] **Step 4: Lancer les tests**
 
 Run: `uv run pytest tests/services/analytics/test_flows.py -v`
 Expected: 6 PASSED
 
-- [ ] **Step 5: Rebrancher `account_history.py` sur la source unique**
+- [x] **Step 5: Rebrancher `account_history.py` sur la source unique**
 
 Dans `capitalview-api/services/account_history.py`, remplacer la branche STOCK de `_compute_daily_net_flow` (actuellement lignes 362-373) :
 
@@ -439,17 +439,17 @@ from services.analytics.flows import stock_external_flow_for_day
 
 `include_auto_provisions` reste à son défaut `True` : le comportement des snapshots est strictement inchangé.
 
-- [ ] **Step 6: Vérifier la non-régression**
+- [x] **Step 6: Vérifier la non-régression**
 
 Run: `uv run pytest tests/services/test_account_history.py tests/services/test_history_services.py -v`
 Expected: tous PASSED, aucun test modifié.
 
-- [ ] **Step 7: Lancer la suite backend complète**
+- [x] **Step 7: Lancer la suite backend complète**
 
 Run: `uv run pytest -q`
 Expected: même nombre de succès qu'avant la tâche, 0 échec.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add services/analytics/flows.py services/account_history.py tests/services/analytics/test_flows.py
@@ -472,7 +472,7 @@ git commit -m "refactor(analytics): extract stock external flows as the single d
   - `xirr(cashflows: Sequence[tuple[date, Decimal]]) -> Decimal | None`
   - `annualize(total_return: Decimal, days: int) -> Decimal | None`
 
-- [ ] **Step 1: Écrire le test qui échoue**
+- [x] **Step 1: Écrire le test qui échoue**
 
 Créer `capitalview-api/tests/services/analytics/test_returns.py` :
 
@@ -574,12 +574,12 @@ def test_annualize_refuses_a_degenerate_window():
     assert annualize(Decimal("0.21"), 0) is None
 ```
 
-- [ ] **Step 2: Lancer le test pour vérifier qu'il échoue**
+- [x] **Step 2: Lancer le test pour vérifier qu'il échoue**
 
 Run: `uv run pytest tests/services/analytics/test_returns.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'services.analytics.returns'`
 
-- [ ] **Step 3: Écrire l'implémentation**
+- [x] **Step 3: Écrire l'implémentation**
 
 Créer `capitalview-api/services/analytics/returns.py` :
 
@@ -699,12 +699,12 @@ def annualize(total_return: Decimal, days: int) -> Decimal | None:
     return Decimal(str(annual))
 ```
 
-- [ ] **Step 4: Lancer les tests**
+- [x] **Step 4: Lancer les tests**
 
 Run: `uv run pytest tests/services/analytics/test_returns.py -v`
 Expected: 10 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add services/analytics/returns.py tests/services/analytics/test_returns.py
@@ -726,7 +726,7 @@ git commit -m "feat(analytics): add time-weighted and money-weighted return engi
 - Consumes: rien.
 - Produces: `UserSettings.benchmark_asset_key: str | None`, `UserSettings.investment_plan_enc: str | None`, exposés en API sous `benchmark_asset_key` et `investment_plan` (JSON déchiffré, `dict | None`).
 
-- [ ] **Step 1: Écrire le test qui échoue**
+- [x] **Step 1: Écrire le test qui échoue**
 
 Ajouter à la fin de `capitalview-api/tests/routes/test_settings.py` :
 
@@ -764,12 +764,12 @@ def test_investment_plan_is_stored_encrypted(session, master_key):
 
 Reprendre en tête du fichier les imports déjà présents (`TestClient`, `app`) — ils y sont.
 
-- [ ] **Step 2: Lancer le test pour vérifier qu'il échoue**
+- [x] **Step 2: Lancer le test pour vérifier qu'il échoue**
 
 Run: `uv run pytest tests/routes/test_settings.py -k "benchmark or investment_plan" -v`
 Expected: FAIL — le champ est ignoré et absent de la réponse (`KeyError: 'benchmark_asset_key'`).
 
-- [ ] **Step 3: Ajouter les colonnes au modèle**
+- [x] **Step 3: Ajouter les colonnes au modèle**
 
 Dans `capitalview-api/models/user.py`, dans `UserSettings`, juste après le bloc `usd_eur_rate` (ligne 107) :
 
@@ -782,7 +782,7 @@ Dans `capitalview-api/models/user.py`, dans `UserSettings`, juste après le bloc
     investment_plan_enc: str | None = Field(default=None, sa_column=Column(TEXT, nullable=True))
 ```
 
-- [ ] **Step 4: Écrire la migration**
+- [x] **Step 4: Écrire la migration**
 
 Créer `capitalview-api/alembic/versions/a1b2c3d4e5f6_add_analytics_settings.py` :
 
@@ -812,7 +812,7 @@ def downgrade() -> None:
     op.drop_column("user_settings", "benchmark_asset_key")
 ```
 
-- [ ] **Step 5: Étendre les DTOs**
+- [x] **Step 5: Étendre les DTOs**
 
 Dans `capitalview-api/dtos/settings.py`, ajouter à `UserSettingsUpdate` :
 
@@ -828,7 +828,7 @@ et à `UserSettingsResponse` :
     investment_plan: dict | None = None
 ```
 
-- [ ] **Step 6: Câbler le service**
+- [x] **Step 6: Câbler le service**
 
 Dans `capitalview-api/services/settings.py`, dans la fonction de mapping vers la réponse (autour de la ligne 72, où `bank_auto_sync_enabled` est passé), ajouter :
 
@@ -852,12 +852,12 @@ et dans la fonction de mise à jour (autour de la ligne 189, où `bank_auto_sync
 
 Vérifier que `json`, `encrypt_data` et `decrypt_data` sont importés en tête du fichier ; les ajouter sinon.
 
-- [ ] **Step 7: Lancer les tests**
+- [x] **Step 7: Lancer les tests**
 
 Run: `uv run pytest tests/routes/test_settings.py -v`
 Expected: tous PASSED, dont les deux nouveaux.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add models/user.py dtos/settings.py services/settings.py alembic/versions/a1b2c3d4e5f6_add_analytics_settings.py tests/routes/test_settings.py
@@ -879,7 +879,7 @@ git commit -m "feat(settings): add benchmark and encrypted investment plan field
   - `resolve_benchmark_key(settings) -> str`
   - `get_benchmark_series(session, asset_key: str, from_date: date, to_date: date) -> dict[date, Decimal]` — série journalière en EUR, **forward-fill** sur les jours non cotés, dict vide si l'actif est introuvable.
 
-- [ ] **Step 1: Écrire le test qui échoue**
+- [x] **Step 1: Écrire le test qui échoue**
 
 Créer `capitalview-api/tests/services/analytics/test_benchmark.py` :
 
@@ -944,12 +944,12 @@ def test_unknown_asset_yields_an_empty_series(_ensure, session):
     assert get_benchmark_series(session, "NOPE", date(2026, 1, 2), date(2026, 1, 6)) == {}
 ```
 
-- [ ] **Step 2: Lancer le test pour vérifier qu'il échoue**
+- [x] **Step 2: Lancer le test pour vérifier qu'il échoue**
 
 Run: `uv run pytest tests/services/analytics/test_benchmark.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'services.analytics.benchmark'`
 
-- [ ] **Step 3: Écrire l'implémentation**
+- [x] **Step 3: Écrire l'implémentation**
 
 Créer `capitalview-api/services/analytics/benchmark.py` :
 
@@ -1024,12 +1024,12 @@ def get_benchmark_series(
     return series
 ```
 
-- [ ] **Step 4: Lancer les tests**
+- [x] **Step 4: Lancer les tests**
 
 Run: `uv run pytest tests/services/analytics/test_benchmark.py -v`
 Expected: 4 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add services/analytics/benchmark.py tests/services/analytics/test_benchmark.py
@@ -1055,7 +1055,7 @@ git commit -m "feat(analytics): add benchmark price series resolution"
 
 Le contenu exact de `dtos/analytics.py` est donné au Step 3.
 
-- [ ] **Step 1: Écrire le test qui échoue**
+- [x] **Step 1: Écrire le test qui échoue**
 
 Créer `capitalview-api/tests/routes/test_analytics_routes.py` :
 
@@ -1128,12 +1128,12 @@ def test_investor_analytics_reports_a_gap_for_a_funded_account(_ensure, session,
     assert body["investor_gap"] is None or body["investor_gap"]["twr"]["value"] is None
 ```
 
-- [ ] **Step 2: Lancer le test pour vérifier qu'il échoue**
+- [x] **Step 2: Lancer le test pour vérifier qu'il échoue**
 
 Run: `uv run pytest tests/routes/test_analytics_routes.py -v`
 Expected: FAIL — 404, la route n'existe pas.
 
-- [ ] **Step 3: Écrire les DTOs**
+- [x] **Step 3: Écrire les DTOs**
 
 Créer `capitalview-api/dtos/analytics.py` :
 
@@ -1205,7 +1205,7 @@ et ajouter à `__all__`, à la suite du bloc Community :
     "InvestorAnalyticsResponse",
 ```
 
-- [ ] **Step 4: Écrire `report.py`**
+- [x] **Step 4: Écrire `report.py`**
 
 Créer `capitalview-api/services/analytics/report.py` :
 
@@ -1401,7 +1401,7 @@ def _verdict(gap, gap_eur, auto_share: Decimal) -> str:
     )
 ```
 
-- [ ] **Step 5: Écrire la route**
+- [x] **Step 5: Écrire la route**
 
 Créer `capitalview-api/routes/analytics.py` :
 
@@ -1432,21 +1432,21 @@ def get_investor_analytics(
     return build_investor_analytics(session, current_user.uuid, master_key)
 ```
 
-- [ ] **Step 6: Enregistrer la route**
+- [x] **Step 6: Enregistrer la route**
 
 Dans `capitalview-api/routes/__init__.py`, ajouter `from .analytics import router as analytics_router` et `"analytics_router"` dans `__all__`. Dans `capitalview-api/main.py`, ajouter `analytics_router` à l'import depuis `routes` (ligne 20-36) et `app.include_router(analytics_router)` à la suite des autres (ligne 113).
 
-- [ ] **Step 7: Lancer les tests**
+- [x] **Step 7: Lancer les tests**
 
 Run: `uv run pytest tests/routes/test_analytics_routes.py -v`
 Expected: 2 PASSED
 
-- [ ] **Step 8: Lancer la suite backend complète**
+- [x] **Step 8: Lancer la suite backend complète**
 
 Run: `uv run pytest -q`
 Expected: 0 échec.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add services/analytics/report.py dtos/analytics.py dtos/__init__.py routes/analytics.py routes/__init__.py main.py tests/routes/test_analytics_routes.py
@@ -1466,13 +1466,13 @@ git commit -m "feat(analytics): expose GET /analytics/investor with the MWR-TWR 
 - Consumes: `GET /analytics/investor` (T6), `apiClient`, `getOrFetchCached` de `@/services/cache`.
 - Produces: types `MetricOut`, `InvestorGapResponse`, `InvestorAnalyticsResponse` ; store `useAnalysisStore` avec `{ data, isLoading, error, fetchAnalytics(force?), reset() }`.
 
-- [ ] **Step 1: Créer la branche frontend**
+- [x] **Step 1: Créer la branche frontend**
 
 ```bash
 cd capitalview-web && git checkout -b feat/investor-analytics
 ```
 
-- [ ] **Step 2: Ajouter les types**
+- [x] **Step 2: Ajouter les types**
 
 À la fin de `capitalview-web/src/types/index.ts` :
 
@@ -1509,7 +1509,7 @@ export interface InvestorAnalyticsResponse {
 }
 ```
 
-- [ ] **Step 3: Écrire le test qui échoue**
+- [x] **Step 3: Écrire le test qui échoue**
 
 Créer `capitalview-web/src/stores/__tests__/analysis.spec.ts` :
 
@@ -1563,12 +1563,12 @@ describe('useAnalysisStore', () => {
 })
 ```
 
-- [ ] **Step 4: Lancer le test pour vérifier qu'il échoue**
+- [x] **Step 4: Lancer le test pour vérifier qu'il échoue**
 
 Run: `pnpm test src/stores/__tests__/analysis.spec.ts`
 Expected: FAIL — module `@/stores/analysis` introuvable.
 
-- [ ] **Step 5: Écrire le store**
+- [x] **Step 5: Écrire le store**
 
 Créer `capitalview-web/src/stores/analysis.ts` :
 
@@ -1615,12 +1615,12 @@ export const useAnalysisStore = defineStore('analysis', () => {
 })
 ```
 
-- [ ] **Step 6: Lancer les tests**
+- [x] **Step 6: Lancer les tests**
 
 Run: `pnpm test src/stores/__tests__/analysis.spec.ts`
 Expected: 2 PASSED
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/stores/analysis.ts src/stores/__tests__/analysis.spec.ts src/types/index.ts
@@ -1642,7 +1642,7 @@ git commit -m "feat(analysis): add investor analytics store and types"
 - Consumes: `useAnalysisStore` (T7), `MetricOut` (T7), `BaseCard`/`BaseAlert`/`BaseSpinner`/`BaseEmptyState` de `@/components`, `useFormatters`, `usePrivacyMode`.
 - Produces: route nommée `analysis` sur `/analyse`.
 
-- [ ] **Step 1: Écrire `ReliabilityBadge.vue`**
+- [x] **Step 1: Écrire `ReliabilityBadge.vue`**
 
 Créer `capitalview-web/src/components/analytics/ReliabilityBadge.vue` :
 
@@ -1678,7 +1678,7 @@ const tone = computed(() => ({
 
 Les tokens `bg-success/10 text-success` et `bg-warning/10 text-warning` sont ceux de `BaseBadge.vue:15-16` — déjà en place, rien à ajouter à la config Tailwind.
 
-- [ ] **Step 2: Écrire `Analysis.vue`**
+- [x] **Step 2: Écrire `Analysis.vue`**
 
 Créer `capitalview-web/src/pages/Analysis.vue`. La page affiche : le `PageHeader`, un état de chargement, le verdict en tête, puis les quatre métriques (TWR annualisé, MWR, écart, écart en €) — **chacune ne rendant sa valeur que si `value !== null`**, sinon le `ReliabilityBadge` seul avec le caveat.
 
@@ -1769,7 +1769,7 @@ onMounted(() => analysis.fetchAnalytics())
 </template>
 ```
 
-- [ ] **Step 3: Enregistrer la route**
+- [x] **Step 3: Enregistrer la route**
 
 Dans `capitalview-web/src/router/index.ts`, ajouter le lazy import à la suite des autres (ligne 17) :
 
@@ -1788,7 +1788,7 @@ et la route avant `/settings` :
   },
 ```
 
-- [ ] **Step 4: Ajouter l'entrée de navigation**
+- [x] **Step 4: Ajouter l'entrée de navigation**
 
 Dans `capitalview-web/src/layouts/DefaultLayout.vue` : ajouter `Microscope` à l'import `lucide-vue-next` (ligne 6), ajouter à `BASE_NAV_ITEMS` juste après l'entrée Bourse :
 
@@ -1806,7 +1806,7 @@ et dans `navItems` (ligne 97), juste après `items.push(byPath('/stock'))` :
   items.push(byPath('/analyse'))
 ```
 
-- [ ] **Step 5: Câbler le reset de session**
+- [x] **Step 5: Câbler le reset de session**
 
 Dans `capitalview-web/src/services/sessionReset.ts`, trois ajouts dans `resetAllSessionState`. Dans le tableau déstructuré (ligne 15-26), après `{ useImportsStore }` :
 
@@ -1828,16 +1828,16 @@ et à la suite des appels (ligne 51), après `useImportsStore().reset()` :
 
 L'ordre des deux listes doit rester aligné : la déstructuration positionnelle casse silencieusement sinon.
 
-- [ ] **Step 6: Vérifier types et tests**
+- [x] **Step 6: Vérifier types et tests**
 
 Run: `pnpm type-check && pnpm test`
 Expected: 0 erreur de type, tous les tests PASSED.
 
-- [ ] **Step 7: Vérifier dans le navigateur**
+- [x] **Step 7: Vérifier dans le navigateur**
 
 Lancer `pnpm dev`, se connecter, ouvrir `/analyse`. Vérifier : la page se charge, l'état vide s'affiche proprement si l'historique est court, et une métrique `insuffisant` affiche bien `—` et son caveat, **jamais un nombre**.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/pages/Analysis.vue src/components/analytics/ReliabilityBadge.vue src/router/index.ts src/layouts/DefaultLayout.vue src/services/sessionReset.ts
@@ -1848,11 +1848,22 @@ git commit -m "feat(analysis): add the investor analysis page with reliability g
 
 ## Vérification finale de M1
 
-- [ ] `cd capitalview-api && uv run pytest -q` — 0 échec, la suite existante inchangée
-- [ ] `cd capitalview-web && pnpm type-check && pnpm test` — 0 erreur
-- [ ] Migration appliquée : `docker compose exec backend alembic upgrade head`
-- [ ] Les courbes de `/stock` sont identiques à avant le refactor R1 (contrôle visuel : évolution, P/L journalier, P/L cumulé)
-- [ ] `/analyse` affiche un verdict cohérent, et aucune métrique `insuffisant` ne montre de valeur
+Toutes les tâches sont exécutées et poussées sur `feat/investor-analytics` dans les deux dépôts.
+
+- [x] `cd capitalview-api && uv run pytest -q` — **616 passed, 0 failed** (609 avant M1)
+- [x] `cd capitalview-web && pnpm type-check && pnpm test` — 0 erreur de type, 25 tests passed
+- [x] Migration appliquée — chaîne complète rejouée sur une base PostgreSQL vierge : 33 migrations,
+      une seule tête (`9c4f1ab73e20`), colonnes `benchmark_asset_key` et `investment_plan_enc`
+      créées. `downgrade -1` puis `upgrade head` vérifiés aller-retour.
+- [x] Les courbes de `/stock` sont inchangées par le refactor R1 — **vérifié par équivalence de code
+      plutôt que visuellement** : `day_txs` est déjà filtré par `tx.executed_at.date() == d`, et
+      `stock_external_flow_for_day` réapplique exactement le même prédicat. Le filtre ajouté est donc
+      un no-op strict, et `include_auto_provisions` reste à `True` côté snapshots.
+- [x] `/analyse` affiche un verdict cohérent, et aucune métrique `insuffisant` ne montre de valeur —
+      parcours navigateur réel (login → nav → page) contre une API et une base live : entrée de nav
+      présente, `GET /analytics/investor` → 200, état vide correct. Invariant de la gate vérifié sur
+      un payload mixte : les deux métriques `insuffisant` rendent `—` avec leur caveat, sans qu'aucun
+      chiffre ne fuite ; les trois autres rendent leur valeur formatée. Zéro erreur de page.
 
 ## Ce que M1 ne fait pas
 
