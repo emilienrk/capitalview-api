@@ -33,6 +33,10 @@ from services.market import (
 _BUY = "BUY"
 _EUR = "EUR"
 
+# Extra benchmark history fetched before the window, so a one-year trailing high
+# exists from its very first day (spec section 2.2).
+LOOKBACK_DAYS = 365
+
 
 @dataclass(frozen=True)
 class AnalysisWindow:
@@ -128,8 +132,12 @@ def resolve_window(session: Session, transactions, benchmark_key: str) -> Analys
         }
     )
 
-    for asset_key in {*asset_keys, benchmark_key}:
+    for asset_key in asset_keys:
         ensure_price_history(session, asset_key, AssetType.STOCK, start)
+    # The benchmark reaches a year further back: the market-conditioning block
+    # reads a one-year trailing high, and without that year the first months
+    # would show a drawdown of nearly zero and read as contrarian buying.
+    ensure_price_history(session, benchmark_key, AssetType.STOCK, start - timedelta(days=LOOKBACK_DAYS))
 
     # Stock prices are already stored in EUR (services/market.py converts on
     # backfill using per-date historical rates), so these rates are only needed
