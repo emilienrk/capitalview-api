@@ -54,5 +54,21 @@ def test_series_forward_fills_non_trading_days(_ensure, session):
 
 
 @patch("services.analytics.benchmark.ensure_price_history")
+def test_a_window_opening_on_a_closed_day_is_seeded_from_the_last_prior_quote(_ensure, session):
+    """Analysis windows start on the user's first buy, rarely a trading day.
+
+    Without seeding from the previous quote the opening days would be missing,
+    and the counterfactual would silently lose its starting point.
+    """
+    _seed(session, {date(2025, 12, 31): "99", date(2026, 1, 5): "102"})
+
+    series = get_benchmark_series(session, "IE00B4L5Y983", date(2026, 1, 2), date(2026, 1, 5))
+
+    assert series[date(2026, 1, 2)] == Decimal("99")
+    assert series[date(2026, 1, 4)] == Decimal("99")
+    assert series[date(2026, 1, 5)] == Decimal("102")
+
+
+@patch("services.analytics.benchmark.ensure_price_history")
 def test_unknown_asset_yields_an_empty_series(_ensure, session):
     assert get_benchmark_series(session, "NOPE", date(2026, 1, 2), date(2026, 1, 6)) == {}

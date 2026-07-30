@@ -33,6 +33,7 @@ from models.market import MarketAsset, MarketPriceHistory
 from models import BankAccount, CryptoAccount, StockAccount
 from dtos.crypto import FIAT_ASSET_KEYS
 from services.analytics.flows import stock_external_flow_for_day
+from services.analytics.prices import fill_price_gaps, get_price_matrix
 from services.encryption import decrypt_data, encrypt_data, hash_index
 from services.settings import get_or_create_settings
 from models.enums import CryptoTransactionType, StockTransactionType
@@ -231,102 +232,6 @@ def _resolve_account_start_date(
 
     return resolved
 
-
-def _get_price_matrix(
-    session: Session,
-    asset_keys: list[str],
-    from_date: date,
-    to_date: date,
-) -> dict[str, dict[date, Decimal]]:
-    """
-    Return {asset_key: {date: price}} for every (asset_key, date) pair in the range.
-
-    Uses a single JOIN query. For dates where a price is missing, the matrix
-    is left sparse — callers must handle gaps (use the nearest earlier price).
-    """
-    if not asset_keys:
-        return {}
-
-    rows = session.exec(
-        select(MarketAsset.asset_key, MarketPriceHistory.price_date, MarketPriceHistory.price)
-        .join(MarketAsset, MarketPriceHistory.market_asset_id == MarketAsset.id)
-        .where(
-            MarketAsset.asset_key.in_(asset_keys),
-            MarketPriceHistory.price_date >= from_date,
-            MarketPriceHistory.price_date <= to_date,
-        )
-    ).all()
-
-    matrix: dict[str, dict[date, Decimal]] = {}
-    for asset_key, price_date, price in rows:
-        matrix.setdefault(asset_key, {})[price_date] = price
-
-    return matrix
-
-
-def _fill_price_gaps(
-    matrix: dict[str, dict[date, Decimal]],
-    asset_keys: list[str],
-    missing_dates: list[date],
-    session: Session,
-) -> dict[str, dict[date, Decimal]]:
-    """
-    Ensure every asset_key has a price for every date in missing_dates via forward-fill.
-    For asset_keys with no price at or before missing_dates[0], a SQL fallback fetches
-    the most recent known price before the range to seed the forward-fill.
-    """
-    if not missing_dates:
-        return matrix
-
-    first_date = missing_dates[0]
-
-    # Seed needed: no data at all, OR earliest entry is after first_date
-    asset_keys_needing_seed = [
-        s for s in asset_keys
-        if not matrix.get(s) or min(matrix[s].keys()) > first_date
-    ]
-
-    if asset_keys_needing_seed:
-        subq = (
-            sa.select(
-                MarketAsset.asset_key.label("asset_key"),
-                sa.func.max(MarketPriceHistory.price_date).label("max_date"),
-            )
-            .join(MarketAsset, MarketPriceHistory.market_asset_id == MarketAsset.id)
-            .where(
-                MarketAsset.asset_key.in_(asset_keys_needing_seed),
-                MarketPriceHistory.price_date < first_date,
-            )
-            .group_by(MarketAsset.asset_key)
-            .subquery()
-        )
-
-        fallback_rows = session.exec(
-            sa.select(MarketAsset.asset_key, MarketPriceHistory.price)
-            .join(MarketAsset, MarketPriceHistory.market_asset_id == MarketAsset.id)
-            .join(
-                subq,
-                sa.and_(
-                    MarketAsset.asset_key == subq.c.asset_key,
-                    MarketPriceHistory.price_date == subq.c.max_date,
-                ),
-            )
-        ).all()
-
-        for asset_key, price in fallback_rows:
-            matrix.setdefault(asset_key, {})[first_date] = price
-
-    # Forward-fill across all missing_dates for every asset_key
-    for asset_key in asset_keys:
-        prices_for_asset_key = matrix.setdefault(asset_key, {})
-        last_price: Decimal | None = None
-        for d in missing_dates:
-            if d in prices_for_asset_key:
-                last_price = prices_for_asset_key[d]
-            elif last_price is not None:
-                prices_for_asset_key[d] = last_price
-
-    return matrix
 
 def _compute_daily_net_flow(
     account_snapshot: _AccountSnapshot,
@@ -1028,12 +933,12 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
 
         price_matrix: dict[str, dict[date, Decimal]] = {}
         if all_asset_keys and all_missing_dates_sorted:
-            price_matrix = _get_price_matrix(
+            price_matrix = get_price_matrix(
                 session, all_asset_keys,
                 all_missing_dates_sorted[0],
                 all_missing_dates_sorted[-1],
             )
-            price_matrix = _fill_price_gaps(price_matrix, all_asset_keys, all_missing_dates_sorted, session)
+            price_matrix = fill_price_gaps(price_matrix, all_asset_keys, all_missing_dates_sorted, session)
 
         # ── 6. Generate rows for every account × its own missing dates ─────────
         all_rows: list[dict] = []
