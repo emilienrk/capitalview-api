@@ -1,13 +1,13 @@
 """add benchmark_asset_key and investment_plan_enc to user_settings
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: 9c4f1ab73e20
 Revises: ff6a7b8c9d0e
 Create Date: 2026-07-29
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = "a1b2c3d4e5f6"
+revision = "9c4f1ab73e20"
 down_revision = "ff6a7b8c9d0e"
 branch_labels = None
 depends_on = None
