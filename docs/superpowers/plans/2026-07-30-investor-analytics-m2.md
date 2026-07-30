@@ -120,14 +120,14 @@ Test `tests/services/analytics/test_prices.py`
 - `fill_price_gaps(session, matrix, asset_keys, days) -> dict[str, dict[date, Decimal]]`
 - `daily_series(matrix, asset_key, days) -> list[Decimal | None]`
 
-- [ ] Déplacer les deux fonctions **sans changer une ligne de leur corps**, ré-exporter depuis
+- [x] Déplacer les deux fonctions **sans changer une ligne de leur corps**, ré-exporter depuis
       `account_history.py` (`from services.analytics.prices import ...`) et supprimer les
       définitions privées.
-- [ ] Les tests existants `tests/services/test_account_history.py` et `test_history_services.py`
+- [x] Les tests existants `tests/services/test_account_history.py` et `test_history_services.py`
       doivent passer **inchangés** — c'est le contrat de non-régression du refactor.
-- [ ] Ajouter les tests de `prices.py` : matrice creuse, forward-fill, seed depuis une cotation
+- [x] Ajouter les tests de `prices.py` : matrice creuse, forward-fill, seed depuis une cotation
       antérieure à la fenêtre, actif totalement inconnu.
-- [ ] **Duplication trouvée en revue de plan, à corriger dans cette même tâche :**
+- [x] **Duplication trouvée en revue de plan, à corriger dans cette même tâche :**
       `services/analytics/benchmark.py::get_benchmark_series` (écrit en M1) réimplémente son propre
       forward-fill au lieu d'utiliser `_get_price_matrix`/`_fill_price_gaps`, et **sans** leur filet
       de sécurité : si la première date de la fenêtre n'a pas de cotation, ces jours restent vides
@@ -136,7 +136,7 @@ Test `tests/services/analytics/test_prices.py`
       liste), pour qu'il ne reste plus qu'une définition du forward-fill dans le repo. Ajouter un
       test qui couvre précisément ce cas : fenêtre démarrant un jour non coté, avec une cotation
       antérieure disponible en base — doit être comblée, pas laissée vide.
-- [ ] `uv run pytest -q` — même nombre de succès qu'avant la tâche, plus les nouveaux tests.
+- [x] `uv run pytest -q` — même nombre de succès qu'avant la tâche, plus les nouveaux tests.
 
 ---
 
@@ -166,19 +166,19 @@ AnalysisWindow:
     clamped_start: date | None    # start effectif si le benchmark ne couvre pas tout
 ```
 
-- [ ] `start` est la date du **premier `BUY`**, pas du premier dépôt : le contrefactuel compare des
+- [x] `start` est la date du **premier `BUY`**, pas du premier dépôt : le contrefactuel compare des
       décisions d'investissement (§0 bis de la spec). Le cash drag (terme *d*) réintroduit les
       dépôts, il est le seul à le faire.
-- [ ] Appeler `ensure_price_history` pour chaque `asset_key` détenu **et** pour le benchmark, avec
+- [x] Appeler `ensure_price_history` pour chaque `asset_key` détenu **et** pour le benchmark, avec
       `from_date=start` — donc la profondeur exacte de l'utilisateur, ni plus ni moins.
-- [ ] Appeler `get_historical_exchange_rates_db` pour chaque devise non-EUR rencontrée, sur
+- [x] Appeler `get_historical_exchange_rates_db` pour chaque devise non-EUR rencontrée, sur
       `[start, end]`. Note : `_backfill_stock_prices` (`services/market.py:946-964`) convertit déjà
       les cours en EUR via des taux historiques par date, donc `market_price_history.price` est en
       EUR et le rejeu n'a pas de conversion à refaire. Les taux ne servent qu'aux actifs dont la
       devise de cotation diffère et qui ne passeraient pas par ce chemin.
-- [ ] **Couverture du benchmark** : lire sa première cotation en base après backfill. Si elle est
+- [x] **Couverture du benchmark** : lire sa première cotation en base après backfill. Si elle est
       postérieure à `start`, poser `benchmark_covers_window=False` et `clamped_start` à cette date.
-- [ ] Tests : historique de 3 ans → fenêtre de 3 ans ; benchmark lancé au milieu → `clamped_start`
+- [x] Tests : historique de 3 ans → fenêtre de 3 ans ; benchmark lancé au milieu → `clamped_start`
       posé et `benchmark_covers_window=False` ; aucun `BUY` → fenêtre nulle proprement gérée ;
       vérifier par mock que `ensure_price_history` reçoit bien `start` et pas une constante.
 
@@ -192,14 +192,14 @@ Test `tests/services/analytics/test_timing.py`
 **Produces:** `permutation_test(observed, null_samples) -> PermutationResult`
 (`p_value`, `percentile`, `n_draws`) et `draw_null_distribution(...)`.
 
-- [ ] Ajouter `"numpy>=2.4"` aux `dependencies` de `pyproject.toml`, puis `uv lock` (la version
+- [x] Ajouter `"numpy>=2.4"` aux `dependencies` de `pyproject.toml`, puis `uv lock` (la version
       2.4.2 est déjà résolue dans `uv.lock`, la lock ne devrait pas bouger).
-- [ ] Le moteur est **générique** : il reçoit une statistique observée et un tableau de tirages
+- [x] Le moteur est **générique** : il reçoit une statistique observée et un tableau de tirages
       nuls, il ne connaît rien au slippage. C'est ce qui permettra à M3 de le réutiliser pour §2.2
       sans le réécrire.
-- [ ] Seed RNG **fixe et documenté** (`np.random.default_rng(0)`) : sans ça, deux chargements de la
+- [x] Seed RNG **fixe et documenté** (`np.random.default_rng(0)`) : sans ça, deux chargements de la
       page donnent deux p-values différentes, et l'utilisateur perd confiance à juste titre.
-- [ ] **Test de calibration exigé par §11 de la spec** : sur des données synthétiques à biais nul,
+- [x] **Test de calibration exigé par §11 de la spec** : sur des données synthétiques à biais nul,
       la p-value doit être approximativement uniforme sur [0,1]. Vérifier sur 200 jeux synthétiques
       que la proportion de `p < 0.05` reste dans un intervalle raisonnable (bornes larges, ce test
       ne doit pas flapper).
@@ -221,20 +221,20 @@ Test `tests/services/analytics/test_execution.py`
 - Agrégat pondéré par le notionnel EUR : `Σ(wᵢ·slippageᵢ) / Σwᵢ` avec `wᵢ = amountᵢ × price_per_unitᵢ`.
 - Distribution complète (min, Q1, médiane, Q3, max) pour le box plot.
 
-- [ ] **Nommage honnête (§1.3)** : c'est un **TWAP sur clôtures journalières**, pas un VWAP. Le mot
+- [x] **Nommage honnête (§1.3)** : c'est un **TWAP sur clôtures journalières**, pas un VWAP. Le mot
       VWAP ne doit apparaître nulle part, ni dans le code ni dans l'UI.
-- [ ] `price_per_unit` est **déjà en EUR** pour les comptes titres — tout le service traite
+- [x] `price_per_unit` est **déjà en EUR** pour les comptes titres — tout le service traite
       `amount × price_per_unit` comme un coût EUR (`services/stock_transaction.py:216-220, 310`) —
       et `market_price_history.price` aussi. Aucune conversion, mais l'écrire en commentaire : c'est
       exactement le genre d'hypothèse qui se casse en silence.
-- [ ] **Permutation** : chaque achat est re-daté uniformément parmi les jours de bourse de **son
+- [x] **Permutation** : chaque achat est re-daté uniformément parmi les jours de bourse de **son
       propre mois**, montant et actif constants, 5 000 tirages, prix rejoué = clôture du jour tiré.
       Les jours de bourse viennent de `get_non_trading_days` (`services/market.py:67`, adossé à
       `exchange_calendars`, déjà dépendance directe) avec le MIC de `MarketAsset.exchange` ;
       repli sur les jours présents dans la matrice si le MIC est inconnu.
-- [ ] Gate : `insuffisant` sous 10 achats, `indicatif` sous 30, `solide` au-delà. Si
+- [x] Gate : `insuffisant` sous 10 achats, `indicatif` sous 30, `solide` au-delà. Si
       `p > 0.10`, le verdict devient « rien de détectable » — **jamais** « tu es bon ».
-- [ ] Tests : slippage nul quand le prix payé = TWAP ; signe correct sur un achat au plus haut du
+- [x] Tests : slippage nul quand le prix payé = TWAP ; signe correct sur un achat au plus haut du
       mois ; pondération (un gros ordre pèse plus qu'un petit) ; mois à une seule cotation ;
       p-value élevée sur des achats aléatoires.
 
@@ -264,20 +264,20 @@ Test `tests/services/analytics/test_counterfactual.py`
 | V6 | tes ventes et arbitrages | *f* sorties |
 | Vréel | valeur réelle du portefeuille | — |
 
-- [ ] **Réconciliation exacte, test bloquant (§11)** : `V0 + a + b + c + d + e + f + résidu == Vréel`
+- [x] **Réconciliation exacte, test bloquant (§11)** : `V0 + a + b + c + d + e + f + résidu == Vréel`
       à l'euro près. Le résidu est **toujours** exposé comme une barre « non expliqué », jamais
       absorbé silencieusement dans un terme voisin.
-- [ ] Le terme *c* doit être **cohérent avec `execution.py`** : les deux mesurent le même écart
+- [x] Le terme *c* doit être **cohérent avec `execution.py`** : les deux mesurent le même écart
       prix payé / prix moyen du mois. Un test doit vérifier que le signe concorde, sinon la page se
       contredit elle-même d'un bloc à l'autre.
-- [ ] **Dépendance au chemin assumée** : l'ordre des substitutions est un choix, le réordonner
+- [x] **Dépendance au chemin assumée** : l'ordre des substitutions est un choix, le réordonner
       déplace quelques points entre termes adjacents. L'ordre retenu est exposé dans le DTO et
       affiché en note de méthode.
-- [ ] **Gate de couverture** : si `window.benchmark_covers_window is False`, le pont est calculé
+- [x] **Gate de couverture** : si `window.benchmark_covers_window is False`, le pont est calculé
       sur `clamped_start` et porte un caveat explicite nommant la date de départ réelle ; si la
       partie couverte fait moins de 12 mois, le bloc entier passe `insuffisant` et **aucune valeur
       ne franchit le fil**.
-- [ ] Tests : portefeuille qui n'achète que le benchmark aux dates du robot ⇒ tous les termes nuls ;
+- [x] Tests : portefeuille qui n'achète que le benchmark aux dates du robot ⇒ tous les termes nuls ;
       un seul achat en fin de période ⇒ terme timing fortement négatif ; réconciliation exacte sur
       un cas construit à la main ; benchmark plus jeune que l'historique ⇒ gate déclenchée.
 
@@ -288,17 +288,17 @@ Test `tests/services/analytics/test_counterfactual.py`
 **Files:** Modify `dtos/analytics.py`, `services/analytics/report.py` ·
 Test `tests/services/analytics/test_report.py`, `tests/routes/test_analytics_routes.py`
 
-- [ ] Étendre `InvestorAnalyticsResponse` avec `execution: ExecutionResponse | None` et
+- [x] Étendre `InvestorAnalyticsResponse` avec `execution: ExecutionResponse | None` et
       `counterfactual: CounterfactualResponse | None`. Réutiliser `MetricOut` tel quel — le
       contrat de gate est déjà le bon.
-- [ ] `report.py` reste de l'**assemblage pur** : il orchestre `window` → `prices` →
+- [x] `report.py` reste de l'**assemblage pur** : il orchestre `window` → `prices` →
       `counterfactual` / `execution`, il ne calcule rien lui-même. Toute logique qui grossit
       `report.py` est au mauvais endroit.
-- [ ] **Le piège de M1, à ne pas refaire** : les verdicts doivent être rédigés à partir des
+- [x] **Le piège de M1, à ne pas refaire** : les verdicts doivent être rédigés à partir des
       **valeurs filtrées par la gate**, jamais des valeurs brutes. En M1, `_verdict` lisait
       `gap`/`gap_eur` bruts et produisait une phrase affirmative sur des chiffres que la gate venait
       de retenir. Un test par bloc doit couvrir « historique court ⇒ verdict de repli ».
-- [ ] Étendre les tests de `test_report.py` (sources de données stubées, pattern déjà en place) pour
+- [x] Étendre les tests de `test_report.py` (sources de données stubées, pattern déjà en place) pour
       couvrir la branche complète des deux nouveaux blocs, pas seulement l'état vide.
 
 ---
@@ -308,17 +308,17 @@ Test `tests/services/analytics/test_report.py`, `tests/routes/test_analytics_rou
 **Files:** Modify `src/types/index.ts`, `src/pages/Analysis.vue` ·
 Create `src/components/analytics/AttributionWaterfall.vue`, `SlippageDistribution.vue`
 
-- [ ] Types miroir des nouveaux DTOs, à la suite du bloc `// ── Analytics ──` existant.
-- [ ] Les deux graphes suivent le pattern maison : `use([...])` tree-shaken, `VChart`, et
+- [x] Types miroir des nouveaux DTOs, à la suite du bloc `// ── Analytics ──` existant.
+- [x] Les deux graphes suivent le pattern maison : `use([...])` tree-shaken, `VChart`, et
       `useChartResize` — voir `src/components/charts/InvestmentComparisonBarChart.vue` comme
       référence.
-- [ ] Le waterfall affiche la barre « non expliqué » quand le résidu est non nul, et l'ordre des
+- [x] Le waterfall affiche la barre « non expliqué » quand le résidu est non nul, et l'ordre des
       substitutions en légende.
-- [ ] **L'invariant de M1 s'applique aux nouveaux blocs** : une métrique `insuffisant` affiche `—`
+- [x] **L'invariant de M1 s'applique aux nouveaux blocs** : une métrique `insuffisant` affiche `—`
       et son caveat, **jamais un nombre**, et un graphe dont la métrique est retenue ne se rend pas
       du tout — il est remplacé par le `ReliabilityBadge` et son explication. Un graphe vide est
       plus honnête qu'un graphe faux.
-- [ ] Note de méthode repliable en bas de page : convention TWAP (pas VWAP), dépendance au chemin du
+- [x] Note de méthode repliable en bas de page : convention TWAP (pas VWAP), dépendance au chemin du
       waterfall, seed fixe des permutations, et la couverture réelle du benchmark.
 
 ---
@@ -332,16 +332,16 @@ Create `src/components/analytics/AttributionWaterfall.vue`, `SlippageDistributio
 `src/pages/Settings.vue:34-39` est **commenté**, donc désactivé volontairement — y poser le
 sélecteur le rendrait invisible. Le mettre en tête de `/analyse` le place là où il sert.
 
-- [ ] Liste **curatée d'ETF capitalisants**, avec `IE00B4L5Y983` en défaut. Le caractère
+- [x] Liste **curatée d'ETF capitalisants**, avec `IE00B4L5Y983` en défaut. Le caractère
       capitalisant est une **contrainte de correction, pas une préférence** (§7.1) : un ETF
       distribuant a besoin d'une série total-return que l'app ne stocke pas, et donnerait des
       chiffres faux en silence.
-- [ ] Saisie libre d'un ISIN autorisée, mais avec avertissement explicite sur les deux risques :
+- [x] Saisie libre d'un ISIN autorisée, mais avec avertissement explicite sur les deux risques :
       distribuant, et historique plus court que le portefeuille. La gate de couverture de la Task 2
       est ce qui rend cette liberté sûre.
-- [ ] Changer le benchmark écrit `benchmark_asset_key` via `PUT /settings` (le champ existe depuis
+- [x] Changer le benchmark écrit `benchmark_asset_key` via `PUT /settings` (le champ existe depuis
       M1) puis invalide le cache du store et relance `fetchAnalytics(force=true)`.
-- [ ] **Limite connue à traiter** : `update_settings` (`services/settings.py:231`) garde
+- [x] **Limite connue à traiter** : `update_settings` (`services/settings.py:231`) garde
       `if data.benchmark_asset_key is not None`, donc le champ ne peut pas être remis à `null`.
       Ajouter le retour au défaut, ou documenter que « défaut » = choisir explicitement
       `IE00B4L5Y983` dans la liste.
@@ -354,7 +354,7 @@ La spec (§8) prévoit un mémo serveur clé sur `max(updated_at)` des transacti
 jour. M1 ne l'a pas construit : le calcul tenait en quelques millisecondes. M2 ajoute 5 000
 permutations et un rejeu multi-actifs sur plusieurs années.
 
-- [ ] Mesurer d'abord sur un portefeuille réaliste (~200 achats, 3 ans). **Si le temps de réponse
+- [x] Mesurer d'abord sur un portefeuille réaliste (~200 achats, 3 ans). **Si le temps de réponse
       reste sous ~1 s, ne pas construire le cache** : le TTL client d'1 h de `stores/analysis.ts`
       suffit, et un cache serveur mal invalidé sert des chiffres périmés — un défaut pire que la
       lenteur qu'il corrige.
@@ -363,20 +363,66 @@ permutations et un rejeu multi-actifs sur plusieurs années.
 
 ## Vérification finale de M2
 
-- [ ] `cd capitalview-api && uv run pytest -q` — 0 échec, les 616 tests de M1 inchangés
-- [ ] `cd capitalview-web && pnpm type-check && pnpm test && pnpm build` — 0 erreur
-- [ ] **Réconciliation du waterfall** : test bloquant vert (somme des termes = valeur réelle)
-- [ ] **Calibration des permutations** : p-value uniforme sur données à biais nul
-- [ ] **Cohérence inter-blocs** : le terme *exécution* du pont et le slippage agrégé de
+- [x] `cd capitalview-api && uv run pytest -q` — 0 échec, les 616 tests de M1 inchangés
+- [x] `cd capitalview-web && pnpm type-check && pnpm test && pnpm build` — 0 erreur
+- [x] **Réconciliation du waterfall** : test bloquant vert (somme des termes = valeur réelle)
+- [x] **Calibration des permutations** : p-value uniforme sur données à biais nul
+- [x] **Cohérence inter-blocs** : le terme *exécution* du pont et le slippage agrégé de
       `execution.py` ont le même signe sur le même jeu de données
-- [ ] **Vérification navigateur**, comme en fin de M1 : Postgres local + API + `pnpm dev`, login,
+- [x] **Vérification navigateur**, comme en fin de M1 : Postgres local + API + `pnpm dev`, login,
       `/analyse`. Contrôler qu'une métrique `insuffisant` rend `—` sans qu'aucun chiffre ne fuite,
       que les graphes correspondants ne se rendent pas, et que changer le benchmark recharge bien
       les deux blocs. Le scénario Playwright de M1 (login → nav → interception de
       `/analytics/investor` avec un payload mixte) est le point de départ à étendre.
-- [ ] Fenêtre : vérifier sur un compte à 3 ans d'historique que `ensure_price_history` est appelé
+- [x] Fenêtre : vérifier sur un compte à 3 ans d'historique que `ensure_price_history` est appelé
       avec la date du premier achat, et sur un benchmark récent que la gate de couverture se
       déclenche au lieu de produire un chiffre.
+
+## Résultats de l'exécution
+
+Toutes les tâches sont exécutées et poussées sur `feat/investor-analytics` dans les deux dépôts.
+
+- Backend **677 passed / 0 failed** (625 au départ de M2, 616 au départ de M1)
+- Frontend **25 passed**, `type-check` et `build` clean
+- Réconciliation du waterfall : exacte, résidu `0.00` sur données réelles PostgreSQL
+- Calibration des permutations : p-values uniformes sur données à biais nul
+- Cohérence inter-blocs : signes opposés confirmés (bps positif ⇔ euros négatifs)
+- Vérification navigateur complète sur base live : deux graphes rendus, sélecteur fonctionnel,
+  note de méthode conforme, zéro erreur de page
+
+**Task 9 tranchée : pas de cache serveur.** Mesure sur le portefeuille de contrôle (35 achats,
+760 jours, 2 actifs) : **0,235 s** de calcul une fois les prix stockés, dont 0,28 s au pire pour
+5 000 permutations sur 216 ordres après vectorisation numpy. Très en dessous du seuil de ~1 s, et
+le TTL client d'1 h suffit. Un cache serveur mal invalidé servirait des chiffres périmés — pire
+défaut que la lenteur qu'il corrigerait.
+
+## Défauts trouvés pendant l'exécution et corrigés
+
+1. **Duplication du forward-fill** (prévue au plan) : `benchmark.py` perdait les premiers jours
+   d'une fenêtre ouvrant un jour non coté. Rebranché sur `prices.py`.
+2. **Le cash dormant faussait le verdict du pont.** `behaviour_cost` valait 45 901 € sur le jeu de
+   contrôle, dont 45 716 € de simple dépôt non investi — un compte laissé dormant se lisait comme
+   du talent. Le robot reçoit désormais les mêmes liquidités, `behaviour_cost` ne porte que les
+   termes de décision (185,60 €), et le coût d'opportunité du cash est chiffré à part.
+3. **Blocs M2 bloqués par les snapshots.** Ils étaient derrière la sortie anticipée
+   `len(series) < 2` alors qu'ils ne dépendent que des transactions et des prix. Un utilisateur dont
+   le job de snapshots n'a pas encore tourné ne voyait rien.
+4. **Double backfill du benchmark** : `resolve_window` et `get_benchmark_series` appelaient tous
+   deux `ensure_price_history`, soit un aller-retour réseau de trop par requête.
+5. **Champs absents du DTO** silencieusement filtrés par FastAPI — un test verrouille désormais la
+   forme de `CounterfactualResponse`.
+6. **Waterfall illisible** : ancré sur la baseline du portefeuille, chaque terme se rendait en trait
+   de un pixel. Recadré sur les termes de décision, endpoints absolus en texte à côté.
+
+## Limites connues, assumées
+
+- **Pas de test de composant** sur les nouveaux `.vue` : le dépôt web n'a toujours ni
+  `@vue/test-utils` ni jsdom, et M2 s'interdit toute dépendance frontend. L'invariant de la gate est
+  garanti côté API par les tests, et côté rendu par la vérification navigateur.
+- **`ensure_price_history` retente le réseau à chaque requête**, même après un échec immédiat. Sans
+  réseau, l'endpoint met ~26 s à répondre alors qu'il calcule en 0,235 s. Comportement préexistant
+  de la couche marché, hors périmètre M2 — mais c'est le premier levier si la latence devient un
+  sujet en production.
 
 ## Ce que M2 ne fait pas
 
