@@ -1,104 +1,79 @@
-# Handoff — Analyse comportementale investisseur, jalon M1
+# Handoff — Analyse comportementale investisseur, jalon M1 : **CLÔTURÉ**
 
-**Date de l'arrêt :** 2026-07-30
-**Pour :** l'agent qui reprend cette session
-**Branches poussées :** `feat/investor-analytics` dans `capitalview-api` **et** `capitalview-web` (deux repos git distincts, mêmes noms de branche)
+**Dernière mise à jour :** 2026-07-30
+**Branches :** `feat/investor-analytics` dans `capitalview-api` **et** `capitalview-web`
 
-Lis ce document en entier avant de toucher au code. Il contient tout ce que la session précédente savait et que le ledger ne dit pas.
-
----
-
-## 0. Comment on est arrivés là
-
-L'utilisateur a demandé une analyse comportementale de son investissement boursier (2 ans d'historique PEA/CTO). Déroulé :
-
-1. **Brainstorming** (skill `superpowers:brainstorming`) → design doc complet :
-   `docs/superpowers/specs/2026-07-29-investor-behaviour-analytics-design.md`
-   Ce doc définit **9 métriques réparties en 3 tiers**, dont une seule (l'écart investisseur MWR−TWR) est construite dans ce jalon M1. Lis-le si tu as besoin du "pourquoi" derrière une métrique — le plan d'implémentation ne le répète pas.
-
-2. **Deux corrections importantes de l'utilisateur pendant le brainstorming**, déjà intégrées au design doc, mais capitales pour comprendre le code :
-   - **« Achat ≠ dépôt »** (§0 bis du design doc) : la discipline d'investissement se mesure sur les **achats**, jamais sur les dépôts. Un dépôt erratique suivi d'un achat systématique en fin de mois, c'est un investisseur discipliné — pas l'inverse. Conséquence directe dans le code : `include_auto_provisions` (voir §2).
-   - **Prix bruts + dividendes saisis manuellement** : ce modèle de données existant est correct et volontaire, on n'y touche pas. Le seul vrai défaut trouvé est que le backfill Yahoo utilise `auto_adjust=True` par défaut (prix ajusté dividendes) alors que le cron nocturne stocke du brut — mais ça ne joue que sur les actifs **distribuants**. Le benchmark est donc contraint à être un ETF **capitalisant** (`IE00B4L5Y983`, iShares Core MSCI World Acc), ce qui rend le problème nul pour lui. **Hors périmètre, pas corrigé, pas à corriger dans ce jalon.**
-
-3. **Plan écrit** (skill `superpowers:writing-plans`) pour le jalon M1 seul (pas M2/M3) :
-   `docs/superpowers/plans/2026-07-29-investor-analytics-m1.md`
-   8 tâches. Auto-révision faite avant dispatch (code mort supprimé, un test qui aurait flappé corrigé, deux instructions vagues rendues concrètes).
-
-4. **Exécution** via `superpowers:subagent-driven-development` : un agent implémenteur par tâche, une revue par tâche, boucle de correction si besoin. C'est là qu'on s'est arrêtés.
+> Ce document a d'abord servi à reprendre une session interrompue. M1 est terminé depuis ;
+> il est conservé comme trace de clôture. Le plan exécuté est
+> `docs/superpowers/plans/2026-07-29-investor-analytics-m1.md`, dont la section
+> « Vérification finale » porte le détail des contrôles.
 
 ---
 
-## 1. État exact — À VÉRIFIER TOI-MÊME AVANT TOUTE ACTION
+## 1. État final
 
-Ne fais confiance à personne sur ce point, vérifie :
+Les 8 tâches du plan M1 sont codées, testées, revues et poussées.
 
-```bash
-cd capitalview-api  && git log --oneline main..feat/investor-analytics && git status --short
-cd capitalview-web  && git log --oneline main..feat/investor-analytics && git status --short
-```
+| # | Tâche | Statut |
+|---|---|---|
+| 1 | Cadre de fiabilité (`reliability.py`) | Terminée |
+| 2 | Flux externes / refactor R1 (`flows.py` + `account_history.py`) | Terminée |
+| 3 | TWR + XIRR (`returns.py`) | Terminée |
+| 4 | Réglages benchmark + plan (`user_settings`) | Terminée, revue faite |
+| 5 | Série benchmark (`benchmark.py`) | Terminée, revue faite |
+| 6 | Assemblage + endpoint (`report.py`, DTOs, route) | Terminée |
+| 7 | Store + types frontend (`stores/analysis.ts`) | Terminée |
+| 8 | Page `/analyse` | Terminée |
 
-Au moment de l'écriture de ce document :
-- `capitalview-api` @ `3877215`, arbre propre, poussé sur `origin/feat/investor-analytics`
-- `capitalview-web` @ `9fd75c3`, arbre propre, poussé sur `origin/feat/investor-analytics`
-- Suite backend : **609 passed, 0 failed** (dernière exécution complète, commit `3877215`)
-- Suite frontend : 25 passed (dernière exécution connue, commit `9fd75c3` — avant l'ajout de Task 5 côté API, ce qui ne la concerne pas)
+Suites : backend **616 passed / 0 failed** ; frontend **25 passed**, `type-check` clean, build OK.
 
-## 2. Tableau d'avancement des 8 tâches du plan M1
+## 2. Ce que les revues de clôture ont trouvé
 
-| # | Tâche | Code | Tests | Revue | Statut réel |
-|---|---|---|---|---|---|
-| 1 | Cadre de fiabilité (`reliability.py`) | ✅ `2cd6d00` | ✅ | ✅ propre | **TERMINÉE** |
-| 2 | Flux externes / refactor R1 (`flows.py` + `account_history.py`) | ✅ `37c8742`+`073df73` | ✅ | ✅ propre (2 findings corrigés, mutation-vérifiés) | **TERMINÉE** |
-| 3 | TWR + XIRR (`returns.py`) | ✅ `e5d6ed4`+`4610d59` | ✅ 609 dans la suite globale | ✅ propre (voir §3 — arbitrage important) | **TERMINÉE** |
-| 4 | Réglages benchmark + plan (`user_settings`) | ✅ `c317ddc`+`37c1a94` | ✅ | ⚠️ **PAS DE RE-REVUE** après le fix — voir §4 | **CODE FAIT, RE-REVUE À LANCER** |
-| 5 | Série benchmark (`benchmark.py`) | ✅ `3877215` | ✅ 4/4, suite 609 | ❌ **AUCUNE REVUE LANCÉE** | **CODE FAIT, PREMIÈRE REVUE À LANCER** |
-| 6 | Assemblage + endpoint (`report.py`, DTOs, route) | ❌ | ❌ | ❌ | **PAS COMMENCÉE** |
-| 7 | Store + types frontend (`stores/analysis.ts`) | ✅ `4f1a9e1`+`9fd75c3` | ✅ | ✅ propre | **TERMINÉE** |
-| 8 | Page `/analyse` | ❌ | ❌ | ❌ | **PAS COMMENCÉE** — un dispatch a été tenté et est mort sur une erreur serveur 529 avant d'écrire quoi que ce soit. Le repo web est intact, aucune trace résiduelle à nettoyer. |
+**Task 4 — collision d'ID Alembic : correctif confirmé.** La chaîne complète a été reparsée en
+tenant compte des deux formes de déclaration (`revision = "..."` et `revision: str = '...'`) — la
+vérification d'origine ne couvrait que la première et ne voyait donc qu'un tiers des fichiers.
+Résultat sur les 33 migrations : aucun ID dupliqué, aucun point de branche, aucun parent manquant,
+une racine, **une seule tête** (`9c4f1ab73e20`). Rejeu complet sur PostgreSQL vierge : OK, plus
+`downgrade`/`upgrade` aller-retour.
 
-**Prochaine action concrète, dans l'ordre :**
-1. Lancer la revue de Task 4 sur `4610d59..37c1a94` (le fix du contrôleur, voir §4)
-2. Lancer la revue de Task 5 sur `3877215` (jamais revue)
-3. Dispatcher Task 6, puis Task 8
-4. Revue finale de branche complète (`superpowers:requesting-code-review`, modèle le plus capable)
-5. `superpowers:finishing-a-development-branch`
+**Task 5 — `benchmark.py` : rien à signaler.** Le point vérifié était la docstring « prix EUR » :
+`_backfill_stock_prices` convertit bien via des taux de change historiques par date, donc
+`MarketPriceHistory.price` est en EUR et l'affirmation est exacte.
 
-## 3. Un arbitrage technique important que tu dois connaître — Task 3
+**Refactor R1 — équivalence prouvée.** `day_txs` est déjà filtré par `tx.executed_at.date() == d` ;
+`stock_external_flow_for_day` réapplique le même prédicat. Le filtre ajouté est un no-op strict :
+les snapshots sont inchangés par construction, pas seulement en pratique.
 
-Le plan M1 (écrit par la session précédente) contenait un test dont les données étaient incohérentes avec son propre nom (`test_twr_skips_days_with_a_non_positive_base...` fournissait un cas où la base était positive). Le premier implémenteur a résolu ça en élargissant la condition de skip à `previous_value <= 0 or base <= 0`.
+**Task 6 — un défaut trouvé et corrigé.** Le `_verdict` était rédigé à partir des valeurs *brutes*
+`gap`/`gap_eur` au lieu des valeurs filtrées par la gate. Avec un historique court, toutes les
+métriques basculaient bien en `insuffisant` et affichaient `—`, mais la page servait quand même une
+phrase affirmative (« Ta stratégie fait mieux que toi… 0 € ») construite sur des chiffres que la
+gate venait de juger non affichables — le mode d'échec exact que §2 de la spec existe pour empêcher.
+Le verdict lit désormais les métriques filtrées.
 
-**Le contrôleur a annulé ce choix et restreint la condition à `base <= 0` seul.** Raison : sauter tous les jours qui *ouvrent* à zéro fait perdre un vrai rendement (un compte financé à 500€ qui clôture le même jour à 550€ a un vrai +10%, en convention Modified Dietz journalière start-of-day). C'était un défaut dans les **données de test du plan**, pas dans l'implémentation.
+## 3. Limites connues, assumées
 
-**Cet arbitrage a été confirmé indépendamment par un reviewer dédié** (raisonnement de méthodologie standard, pas seulement "je fais confiance au contrôleur"). Voir `services/analytics/returns.py::time_weighted_return`, la garde `if base <= _ZERO:`. **Ne pas revenir dessus sans relire tout `.superpowers/sdd/2026-07-29-investor-analytics-m1/progress.md` autour de "Task 3".**
+- **Pas de test de composant sur `Analysis.vue`.** Le dépôt web n'a ni `@vue/test-utils` ni jsdom, et
+  le plan interdit toute nouvelle dépendance en M1. L'invariant « une métrique `insuffisant`
+  n'affiche jamais de nombre » est donc garanti côté API par les tests, et côté rendu seulement par
+  la vérification navigateur manuelle décrite dans le plan. À réévaluer en M2.
+- **Le contrôle des courbes `/stock` est un argument de code, pas un contrôle visuel.** Voir §2.
+- **`benchmark_asset_key` et `investment_plan` ne peuvent pas être remis à `null`** via `PUT
+  /settings` (garde `if data.X is not None`). Sans conséquence en M1 : aucun formulaire ne les
+  expose encore. À traiter quand le formulaire de plan cible arrivera (M3).
 
-## 4. Un défaut Critical trouvé et corrigé — Task 4, migration Alembic
+## 4. Environnement — piège connu
 
-Le plan avait inventé l'ID de révision Alembic `a1b2c3d4e5f6` sans vérifier qu'il était libre. **Il collisionnait avec une migration existante déjà committée** (`a1b2c3d4e5f6_add_position_to_notes.py`, au milieu de la chaîne). Deux fichiers avec le même `revision` cassent `alembic upgrade`/`history`/`heads` pour **tout le repo**, pas juste cette migration.
+Le conteneur de développement n'a que **Python 3.14.0rc2**, alors que pydantic 2.12.5 appelle
+`typing._eval_type(..., prefer_fwd_module=True)`, paramètre qui n'existe qu'à partir de 3.14 final.
+Toute la suite backend échoue au collect. `uv python install 3.14` ne propose que rc2. Contournement
+appliqué dans le `.venv` uniquement (non versionné, à refaire dans un conteneur neuf) : ne passer le
+kwarg que si `typing._eval_type` l'accepte. Les tests ont aussi besoin des variables d'environnement
+de `.github/workflows/ci.yml` (`SECRET_KEY`, `DATABASE_URL`, `ENCRYPTION_KEY`…).
 
-Trois tentatives de dispatch pour corriger ont échoué sur des erreurs serveur 529 consécutives. **Le contrôleur a fait le correctif lui-même** (renommage mécanique) plutôt que de continuer à brûler des tentatives : `revision = "a1b2c3d4e5f6"` → `"9c4f1ab73e20"`, fichier renommé via `git mv`, `down_revision` inchangé. Vérifié statiquement (script Python dans le ledger, sous "Task 4: fix round 1/5") : 0 doublon, 0 branche, une seule tête = la nouvelle migration. Suite complète relancée : 605 passed à ce moment-là.
+## 5. Suite
 
-**Ce correctif n'a jamais eu de revue formelle** (ni initiale — le contrôleur l'a fait directement — ni scoped re-review). C'est la toute première chose à faire en reprenant : générer le package de revue sur `4610d59..37c1a94` avec `scripts/review-package`, et dispatcher un reviewer dessus avant de considérer Task 4 comme terminée.
-
-**Leçon pour le reste du plan (M2/M3) :** si tu dois inventer un ID de révision Alembic dans un futur plan, grep `revision` ET `down_revision` sur `alembic/versions/*.py` avant de l'écrire dans le plan — l'erreur vient d'avoir seulement vérifié `down_revision`.
-
-## 5. Comment reprendre — mécanique SDD
-
-Tout est dans `capitalview-api/.superpowers/sdd/2026-07-29-investor-analytics-m1/` (gitignoré, c'est le workspace de travail de la skill, normal qu'il ne soit pas dans les commits) :
-
-- `progress.md` — **le ledger, source de vérité**. Sa première ligne nomme le plan. Chaque tâche a une ligne "complete" ou l'historique de ses rounds de correction. Lis-le en entier, il est plus détaillé que ce document.
-- `task-N-brief.md` — l'énoncé exact extrait du plan pour chaque tâche, déjà généré pour les tâches 1-5, 7, 8.
-- `task-N-report.md` — rapport de l'implémenteur, avec les rounds de fix ajoutés à la suite.
-- `review-*.diff` — packages de diff déjà générés pour les revues passées.
-
-Pour relancer la skill : invoque `superpowers:subagent-driven-development` avec ce plan :
-`docs/superpowers/plans/2026-07-29-investor-analytics-m1.md`. Elle détectera le ledger existant et **doit reprendre à la première tâche sans ligne "complete"**, pas repartir de zéro — c'est exactement pour ça que le ledger existe.
-
-Rappel de contrainte du plan : **deux repos git séparés**, `capitalview-api` (tâches 1-6) et `capitalview-web` (tâches 7-8), même nom de branche dans les deux. Ne jamais lancer deux agents implémenteurs en parallèle sur le même repo (conflits d'index git) — mais un agent API et un agent web en parallèle sont sans risque, ils ne partagent aucun fichier.
-
-## 6. Modèle et effort
-
-Session précédente : agent principal en Opus/xhigh, subagents en Opus/medium (demande explicite de l'utilisateur). **Le `/model` a été changé en Sonnet 5 juste avant cette pause** — c'est une commande locale de l'utilisateur, pas une décision de l'agent. Décide en reprenant si tu gardes Opus pour les subagents ou si tu suis le nouveau défaut ; note que Task 5 est passée sans souci en Sonnet quand Opus était indisponible (529 répétés), donc Sonnet est un choix raisonnable pour les tâches de pure transcription — le plan contient déjà tout le code.
-
-## 7. Ce que M1 ne construit pas (rappel du plan)
-
-Le pont contrefactuel, le coût d'exécution, la régularité des achats, le décalage dépôt→achat, le conditionnement au marché, les paris indépendants, les frais, l'effet de disposition, et le bloc plan cible sont tous **hors scope de M1** — ils arrivent en M2/M3, non planifiés à ce jour. Le formulaire de saisie du plan cible n'existe pas non plus ; seul le champ de stockage (`investment_plan_enc`) a été ajouté en Task 4.
+M2 et M3 n'existent qu'à l'état d'une ligne de tableau chacun au §10 de la spec — **aucun document
+de plan n'a été écrit pour eux**. M2 couvre le pont contrefactuel (§1.2) et le coût d'exécution
+(§1.3) ; il introduit la première dépendance à numpy, que M1 s'interdisait. Écrire le plan M2 est un
+travail préalable à part entière.
