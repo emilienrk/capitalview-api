@@ -58,9 +58,20 @@ def test_three_years_of_history_yields_a_three_year_window():
     assert window.start == start
     assert window.end == YESTERDAY
     assert window.days == (YESTERDAY - start).days
-    # Prices are fetched for exactly the user's own depth, never a fixed lookback.
-    for call in ensure.call_args_list:
-        assert call.args[3] == start
+    # Prices are fetched for exactly the user's own depth, never a fixed lookback
+    # — except the benchmark, which needs a further year to have a trailing high
+    # on the window's first day.
+    from services.analytics.window import LOOKBACK_DAYS
+
+    fetched = {call.args[1]: call.args[3] for call in ensure.call_args_list}
+    assert fetched["IE00B4L5Y983"] == start - timedelta(days=LOOKBACK_DAYS)
+
+    held_only, _ensure_held, _fx = _run(
+        [_Tx("BUY", "FR0000120271", start)], benchmark_first_quote=date(2010, 1, 1)
+    )
+    assert held_only.asset_keys == ["FR0000120271"]
+    held_calls = {call.args[1]: call.args[3] for call in _ensure_held.call_args_list}
+    assert held_calls["FR0000120271"] == start
 
 
 def test_the_window_opens_on_the_first_buy_not_the_first_deposit():
