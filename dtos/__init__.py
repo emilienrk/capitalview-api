@@ -120,6 +120,13 @@ from .community import (
     AvailablePositionsResponse,
 )
 
+# Analytics
+from .analytics import (
+    InvestorAnalyticsResponse,
+    InvestorGapResponse,
+    MetricOut,
+)
+
 
 __all__ = [
     # Bank
@@ -213,5 +220,9 @@ __all__ = [
     "CommunitySettingsResponse",
     "AvailablePosition",
     "AvailablePositionsResponse",
+    # Analytics
+    "MetricOut",
+    "InvestorGapResponse",
+    "InvestorAnalyticsResponse",
 ]
 
