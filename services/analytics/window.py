@@ -132,12 +132,16 @@ def resolve_window(session: Session, transactions, benchmark_key: str) -> Analys
         }
     )
 
-    for asset_key in asset_keys:
-        ensure_price_history(session, asset_key, AssetType.STOCK, start)
     # The benchmark reaches a year further back: the market-conditioning block
     # reads a one-year trailing high, and without that year the first months
-    # would show a drawdown of nearly zero and read as contrarian buying.
-    ensure_price_history(session, benchmark_key, AssetType.STOCK, start - timedelta(days=LOOKBACK_DAYS))
+    # would show a drawdown of nearly zero and read as contrarian buying. Held
+    # assets keep the user's own depth, no more.
+    fetch_from = {asset_key: start for asset_key in asset_keys}
+    fetch_from[benchmark_key] = min(
+        fetch_from.get(benchmark_key, start), start - timedelta(days=LOOKBACK_DAYS)
+    )
+    for asset_key, from_date in fetch_from.items():
+        ensure_price_history(session, asset_key, AssetType.STOCK, from_date)
 
     # Stock prices are already stored in EUR (services/market.py converts on
     # backfill using per-date historical rates), so these rates are only needed
