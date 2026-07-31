@@ -4,8 +4,8 @@ Tests for services/account_history.py
 Cover the core pure and DB-backed helpers:
     - _get_snapshot_date_bounds
     - _resolve_account_start_date
-  - _get_price_matrix
-  - _fill_price_gaps
+  - get_price_matrix (services/analytics/prices.py)
+  - fill_price_gaps (services/analytics/prices.py)
   - _generate_missing_snapshots
 """
 
@@ -28,13 +28,12 @@ from services.account_history import (
     _compute_daily_net_flow,
     _build_asset_snapshots,
     _current_calc_version,
-    _fill_price_gaps,
     _generate_missing_snapshots,
     _get_snapshot_date_bounds,
     _resolve_account_start_date,
     _interpolate_asset_value,
-    _get_price_matrix,
 )
+from services.analytics.prices import fill_price_gaps, get_price_matrix
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 
@@ -223,13 +222,13 @@ def test_resolve_account_start_date_prefers_earliest_known_business_date():
 
 
 # ---------------------------------------------------------------------------
-# _get_price_matrix
+# get_price_matrix
 # ---------------------------------------------------------------------------
 
 
 def test_get_price_matrix_empty_asset_keys(session: Session):
     """Returns empty dict immediately when the asset_keys list is empty."""
-    result = _get_price_matrix(session, [], date(2024, 1, 1), date(2024, 1, 7))
+    result = get_price_matrix(session, [], date(2024, 1, 1), date(2024, 1, 7))
     assert result == {}
 
 
@@ -239,7 +238,7 @@ def test_get_price_matrix_basic(session: Session):
     _make_price(session, asset.id, Decimal("180.00"), date(2024, 1, 2))
     _make_price(session, asset.id, Decimal("182.50"), date(2024, 1, 3))
 
-    result = _get_price_matrix(session, ["US_AAPL_TEST"], date(2024, 1, 1), date(2024, 1, 7))
+    result = get_price_matrix(session, ["US_AAPL_TEST"], date(2024, 1, 1), date(2024, 1, 7))
 
     assert "US_AAPL_TEST" in result
     assert result["US_AAPL_TEST"][date(2024, 1, 2)] == Decimal("180.00")
@@ -255,7 +254,7 @@ def test_get_price_matrix_out_of_range_excluded(session: Session):
     _make_price(session, asset.id, Decimal("55.00"), date(2024, 1, 5))   # in range
     _make_price(session, asset.id, Decimal("60.00"), date(2024, 1, 10))  # after range
 
-    result = _get_price_matrix(session, ["US_RANGE_TEST"], date(2024, 1, 3), date(2024, 1, 7))
+    result = get_price_matrix(session, ["US_RANGE_TEST"], date(2024, 1, 3), date(2024, 1, 7))
 
     sym = result.get("US_RANGE_TEST", {})
     assert date(2024, 1, 5) in sym
@@ -270,7 +269,7 @@ def test_get_price_matrix_multiple_asset_keys(session: Session):
     _make_price(session, asset_a.id, Decimal("10.00"), date(2024, 2, 1))
     _make_price(session, asset_b.id, Decimal("20.00"), date(2024, 2, 1))
 
-    result = _get_price_matrix(session, ["SYM_AA", "SYM_BB"], date(2024, 2, 1), date(2024, 2, 1))
+    result = get_price_matrix(session, ["SYM_AA", "SYM_BB"], date(2024, 2, 1), date(2024, 2, 1))
 
     assert result["SYM_AA"][date(2024, 2, 1)] == Decimal("10.00")
     assert result["SYM_BB"][date(2024, 2, 1)] == Decimal("20.00")
@@ -278,12 +277,12 @@ def test_get_price_matrix_multiple_asset_keys(session: Session):
 
 def test_get_price_matrix_unknown_asset_key(session: Session):
     """An unknown asset key yields no entry in the result (no error)."""
-    result = _get_price_matrix(session, ["DOES_NOT_EXIST"], date(2024, 1, 1), date(2024, 1, 5))
+    result = get_price_matrix(session, ["DOES_NOT_EXIST"], date(2024, 1, 1), date(2024, 1, 5))
     assert result == {}
 
 
 # ---------------------------------------------------------------------------
-# _fill_price_gaps
+# fill_price_gaps
 # ---------------------------------------------------------------------------
 
 
@@ -296,7 +295,7 @@ def test_fill_price_gaps_no_action_when_all_covered(session: Session):
             date(2024, 1, 2): Decimal("41000.00"),
         }
     }
-    result = _fill_price_gaps(matrix, ["BTC"], missing_dates, session)
+    result = fill_price_gaps(matrix, ["BTC"], missing_dates, session)
     assert result["BTC"][date(2024, 1, 1)] == Decimal("40000.00")
     assert result["BTC"][date(2024, 1, 2)] == Decimal("41000.00")
 
@@ -306,7 +305,7 @@ def test_fill_price_gaps_propagates_price_forward(session: Session):
     missing_dates = [date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)]
     matrix = {"BTC": {date(2024, 1, 1): Decimal("40000.00")}}
 
-    result = _fill_price_gaps(matrix, ["BTC"], missing_dates, session)
+    result = fill_price_gaps(matrix, ["BTC"], missing_dates, session)
 
     assert result["BTC"][date(2024, 1, 2)] == Decimal("40000.00")
     assert result["BTC"][date(2024, 1, 3)] == Decimal("40000.00")
@@ -321,7 +320,7 @@ def test_fill_price_gaps_new_price_overrides_carry(session: Session):
             date(2024, 1, 3): Decimal("2500.00"),
         }
     }
-    result = _fill_price_gaps(matrix, ["ETH"], missing_dates, session)
+    result = fill_price_gaps(matrix, ["ETH"], missing_dates, session)
 
     # Jan 2 carries Jan 1 price
     assert result["ETH"][date(2024, 1, 2)] == Decimal("2000.00")
@@ -338,7 +337,7 @@ def test_fill_price_gaps_fallback_from_db(session: Session):
     missing_dates = [date(2024, 1, 1), date(2024, 1, 2)]
     matrix: dict = {}  # SOL has no in-range prices
 
-    result = _fill_price_gaps(matrix, ["SOL_FALLBACK"], missing_dates, session)
+    result = fill_price_gaps(matrix, ["SOL_FALLBACK"], missing_dates, session)
 
     assert result["SOL_FALLBACK"][date(2024, 1, 1)] == Decimal("100.00")
     assert result["SOL_FALLBACK"][date(2024, 1, 2)] == Decimal("100.00")
@@ -349,7 +348,7 @@ def test_fill_price_gaps_no_fallback_available(session: Session):
     missing_dates = [date(2024, 1, 1)]
     matrix: dict = {}
 
-    result = _fill_price_gaps(matrix, ["UNKNOWN_COIN"], missing_dates, session)
+    result = fill_price_gaps(matrix, ["UNKNOWN_COIN"], missing_dates, session)
 
     # Symbol may be absent or map to an empty dict — no price should exist
     assert not result.get("UNKNOWN_COIN")
@@ -417,6 +416,67 @@ def test_generate_missing_snapshots_stock_values(session: Session, master_key: s
     assert decrypt_data(rows[1]["total_value_enc"], master_key) == "1850.00"
     # PnL = 1850 - 1800 = 50
     assert decrypt_data(rows[1]["daily_pnl_enc"], master_key) == "50.00"
+
+
+def test_generate_missing_snapshots_stock_counts_auto_provision_as_external_flow(
+    session: Session, master_key: str
+):
+    """An auto-provisioned DEPOSIT is still an external flow on the snapshot path.
+
+    The app writes these rows itself one second before a BUY (services/stock_transaction.py,
+    note "Provision automatique"). The analytics exclude them, snapshots must not: dropping
+    them here would turn the provisioned amount into phantom P/L on the purchase day.
+    """
+    user_bidx = hash_index("user_stock_autoprov", master_key)
+    acc_bidx = hash_index("acc_stock_autoprov", master_key)
+
+    transactions = [
+        _tx(
+            type="DEPOSIT",
+            asset_key="EUR",
+            amount=Decimal("1800"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 9, 59, 59, tzinfo=timezone.utc),
+            notes="Provision automatique",
+        ),
+        _tx(
+            type="BUY",
+            asset_key="US0378331005",
+            amount=Decimal("10"),
+            price_per_unit=Decimal("180"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
+    ]
+    price_matrix = {"US0378331005": {date(2024, 3, 1): Decimal("180.00")}}
+
+    rows = _generate_missing_snapshots(
+        session=session,
+        user_uuid_bidx=user_bidx,
+        account_id_bidx=acc_bidx,
+        account_snapshot=_AccountSnapshot(
+            account_id="fake_id",
+            account_type=AccountCategory.STOCK,
+            transactions=transactions,
+        ),
+        price_matrix=price_matrix,
+        missing_dates=[date(2024, 3, 1)],
+        prev_value=Decimal("0"),
+        master_key=master_key,
+    )
+
+    assert len(rows) == 1
+    assert decrypt_data(rows[0]["total_value_enc"], master_key) == "1800.00"
+    # 1800 - 0 - 1800 = 0. Excluding the provision would report 1800.00 of P/L.
+    assert decrypt_data(rows[0]["daily_pnl_enc"], master_key) == "0.00"
+
+    assert _compute_daily_net_flow(
+        _AccountSnapshot(
+            account_id="fake_id",
+            account_type=AccountCategory.STOCK,
+            transactions=transactions,
+        ),
+        date(2024, 3, 1),
+    ) == Decimal("1800")
 
 
 def test_compute_daily_net_flow_crypto_ignores_internal_swap_fiat_legs():

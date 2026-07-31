@@ -1,5 +1,6 @@
 """User settings service."""
 
+import json
 from decimal import Decimal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -77,6 +78,12 @@ def _map_settings_to_response(
         ai_chat_provider=settings.ai_chat_provider,
         ai_providers=provider_configs,
         usd_eur_rate=float(settings.usd_eur_rate) if settings.usd_eur_rate is not None else None,
+        benchmark_asset_key=settings.benchmark_asset_key,
+        investment_plan=(
+            json.loads(decrypt_data(settings.investment_plan_enc, master_key))
+            if settings.investment_plan_enc
+            else None
+        ),
         created_at=settings.created_at,
         updated_at=settings.updated_at,
     )
@@ -220,6 +227,21 @@ def update_settings(
             settings.usd_eur_rate = Decimal(str(data.usd_eur_rate))
         else:
             settings.usd_eur_rate = None
+
+    if data.benchmark_asset_key is not None:
+        # An empty string means "back to the application default" — without it
+        # there would be no way out of a custom benchmark once one is set.
+        settings.benchmark_asset_key = data.benchmark_asset_key.strip() or None
+
+    if data.investment_plan is not None:
+        # An empty object means "no plan any more", same escape hatch as the
+        # benchmark above: a plan that cannot be deleted would keep scoring the
+        # user against an intention they have abandoned.
+        settings.investment_plan_enc = (
+            encrypt_data(json.dumps(data.investment_plan), master_key)
+            if data.investment_plan
+            else None
+        )
 
     session.add(settings)
     session.commit()

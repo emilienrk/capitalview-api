@@ -23,6 +23,33 @@ API docs:
 
 - http://localhost:8000/docs
 
+## Database migrations
+
+Always let Alembic generate the migration. `env.py` wires `target_metadata` to
+`SQLModel.metadata`, so autogenerate works off the models:
+
+```bash
+alembic revision --autogenerate -m "add benchmark to user settings"
+alembic upgrade head
+```
+
+Review the generated file before committing — autogenerate detects added and dropped
+columns reliably, but not renames or data backfills.
+
+**Never hand-write a revision id.** Alembic picks a random one and resolves
+`down_revision` to the current head; invented ids do neither. Two migrations sharing a
+revision id break `upgrade`, `history` and `heads` for the whole repository, not just the
+offending file — and it has already happened here, because two hand-written ids followed
+the same sequential pattern and collided. If you must edit a migration by hand, keep the
+generated header intact.
+
+To check the chain is sound:
+
+```bash
+alembic heads     # must print exactly one head
+alembic history   # must be linear, no branch points
+```
+
 ## Tests
 
 ```bash
