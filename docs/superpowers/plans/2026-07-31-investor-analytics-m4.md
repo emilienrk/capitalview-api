@@ -240,3 +240,134 @@ Trois contraintes à ne pas perdre de vue le jour où ce sera fait :
    échelle le défaut corrigé en clôture de M1.
 3. **Appel à la demande**, jamais bloquant au chargement : la page a déjà un poste de latence, il
    ne faut pas en ajouter un second.
+
+---
+
+# Addendum — constats sur données réelles (2026-07-31)
+
+La page a enfin été confrontée à un portefeuille réel : PEA BoursoBank, 5 lignes (4 ETF + Air
+Liquide), 9 781,75 € investis, 11 930,77 € de valeur, 77 achats sur 31 mois, 5 ventes. Jusqu'ici
+toutes les vérifications tournaient sur des prix synthétiques, donc les *mécanismes* étaient
+validés mais pas les *chiffres*. Ce qui suit vient de ce croisement.
+
+## Ce qui est vérifié juste
+
+**Les paris indépendants ne sont pas un bug.** Le soupçon initial était qu'un `N_ent` de 1,1 sur
+5 lignes dont certaines corrèlent à 0,17 était trop bas. Recalcul indépendant à partir de la matrice
+de corrélation et des poids réels affichés : **1,04** à volatilités égales, **1,08** à volatilités
+réalistes (15-25 %). La page affiche 1,1. Le calcul est correct.
+
+L'explication est le comportement attendu de la mesure de Meucci sur un portefeuille long-only : la
+première composante principale porte 98-99 % de la variance **du portefeuille**. Les corrélations
+faibles concernent des composantes auxquelles un portefeuille long sur tout n'est presque pas
+exposé.
+
+**Conséquence à écrire dans les limites, pas à corriger** : la métrique ne discrimine quasiment pas
+entre deux portefeuilles actions long-only — presque tous sortiront entre 1,0 et 1,5. Elle répond à
+« combien de paris distincts ? » par « un seul : les actions », ce qui est vrai et peu actionnable.
+La note de méthode doit le dire, sinon l'utilisateur croit à un défaut de son portefeuille alors que
+c'est une propriété de la mesure.
+
+**Les frais sont arithmétiquement exacts** : 0,68 €/ordre × 77 = 52,39 € ; 52,39 / 10 480,86 =
+0,50 % ; seuil 0,68 / 0,0025 = 272 €. Tout tombe juste.
+
+**Le taux de rotation** (2,60 %, avec 10 481 € achetés contre 771 € vendus) se lit correctement
+comme un profil d'accumulateur.
+
+## Task 8 · Le conseil sur les frais se contredit lui-même
+
+**Files:** `services/analytics/report.py` (`_fees_verdict`), `services/analytics/fees.py` ·
+Test `tests/services/analytics/test_fees.py`
+
+Sur le portefeuille réel, la carte affiche simultanément une tuile « coût annuel **+20 bps** » et un
+texte « en dessous de 272 € par ordre tu dépasses **25 bps** de frais d'entrée — 77 de tes 77 ordres
+sont sous ce seuil, **regroupe-les** ». Les deux chiffres sont justes mais le conseil est faux : la
+charge totale (20 bps/an) est **déjà sous le seuil** que la page utilise pour juger.
+
+Le seuil de 25 bps a été calibré pour un courtier à ~4,20 €/ordre. À 0,68 €/ordre, conseiller de
+grouper les ordres revient à demander de casser une discipline de DCA pour économiser une
+cinquantaine d'euros sur deux ans et demi.
+
+- [ ] **Ne pas émettre le conseil de regroupement quand la charge annuelle est déjà sous la cible.**
+      Condition d'émission : `annual_bps > TARGET_BPS`. En dessous, le constat reste affiché (frais,
+      part du capital, seuil théorique) mais sans injonction.
+- [ ] Reformuler pour que les deux chiffres cohabitent sans se contredire : le seuil par ordre est
+      une **information de calibrage**, la charge annuelle est le **verdict**.
+- [ ] Test : courtier à 0,68 €/ordre avec 20 bps annuels ⇒ aucun « regroupe-les » ; courtier à
+      4,20 €/ordre avec 60 bps annuels ⇒ conseil émis.
+
+## Task 9 · Le slippage à −129 bps : suspicion de place de cotation
+
+**Files:** `services/analytics/execution.py`, `services/market.py` (résolution du symbole) ·
+Diagnostic avant correction
+
+La page annonce **−129 bps, p = 0,000 sur 77 achats** : un achat systématiquement 1,29 % sous le
+prix moyen du mois, statistiquement indiscutable. L'utilisateur confirme acheter sur les baisses,
+donc le signe est plausible — **l'amplitude ne l'est pas**, et le box plot montre des moustaches de
+−1000 à +1500 bps, soit 25 % d'amplitude intra-mensuelle sur des ETF larges. Ce n'est pas normal
+hors krach.
+
+**Hypothèse principale : discordance de place de cotation.** Une des lignes est référencée XFRA
+(Francfort) alors que les ordres passent chez un courtier français. Si `market_price_history` a été
+alimenté depuis une place différente de celle où l'ordre a été exécuté, l'écart devient systématique
+et le test de permutation le certifie — il compare des jours entre eux, pas des sources entre elles.
+
+- [ ] **Diagnostiquer avant de corriger.** Pour trois ou quatre achats précis : comparer
+      `price_per_unit` payé et la clôture stockée pour cet ISIN à cette date exacte. Un écart
+      systématique de même signe sur toutes les lignes d'une même place confirme l'hypothèse.
+- [ ] Selon le résultat : soit résoudre le symbole sur la place de l'ordre, soit — si la place n'est
+      pas connue — **gater le bloc exécution** quand la cohérence prix payé / prix stocké n'est pas
+      établie. Un slippage faux est pire qu'un slippage absent.
+- [ ] Garde-fou générique, indépendant du diagnostic : si l'écart médian par ordre dépasse un seuil
+      de plausibilité (à calibrer, de l'ordre de ±300 bps), traiter la série comme suspecte et
+      basculer le bloc en `insuffisant` avec un caveat qui nomme la cause probable.
+
+## Task 10 · Écart de 141 € sur la valeur du portefeuille
+
+**Files:** `services/analytics/counterfactual.py`, `services/analytics/report.py`
+
+Le pont affiche « Toi : 11 789,20 € » contre **11 930,77 €** réels — 141,57 € d'écart, soit 1,2 %.
+C'est le chiffre le plus visible de la page.
+
+- [ ] Vérifier l'hypothèse la plus probable : le pont valorise à `window.end` (hier) alors que le
+      relevé est à aujourd'hui. Si c'est ça, ce n'est pas un bug mais **il faut le dire** — dater
+      explicitement la valeur affichée (« au 30/07 »).
+- [ ] Si l'écart persiste après datation, chercher ailleurs : liquidités non comptées, ligne
+      écartée du rejeu, prix manquant en fin de fenêtre.
+- [ ] Contrôle secondaire, même famille : le bloc dépôt→achat annonce « 14,16 € déposés n'ont jamais
+      été investis » alors que dépôts − investi vaut 6,28 €. Écart faible mais l'appariement FIFO
+      pourrait fuir sur les produits de cession.
+
+## Task 11 · Deux blocs qui semblent se contredire
+
+**Files:** `services/analytics/report.py` (`build_global_verdict`, `_bridge_verdict`)
+
+Le verdict global ouvre sur « un robot achetant l'indice tous les mois aurait **329 € de plus** que
+toi », et quelques centimètres plus bas la carte de l'écart investisseur annonce « le moment où tu
+investis t'a **rapporté 165 €** ». Les deux sont exacts et mesurent des choses différentes — le
+robot compare aux **actifs de l'indice**, l'écart compare à **ta propre stratégie** — mais rien ne
+l'explique au lecteur, qui en conclut que la page se contredit.
+
+- [ ] Nommer la différence dans le verdict global quand les deux figures y apparaissent : le robot
+      juge la **sélection d'actifs**, l'écart investisseur juge le **timing**.
+- [ ] Ne pas juxtaposer les deux montants sans cette précision.
+
+## Corrections mineures confirmées à l'écran
+
+- [ ] `build_global_verdict` affiche « **1.0714** pari indépendant » — quatre décimales, alors que
+      le bloc juste en dessous affiche 1,1. L'arrondi a été corrigé dans `_concentration_verdict` en
+      M3 mais pas dans le verdict global.
+- [ ] « Ton argent est investi en médiane en **0 jour(s)** » — la forme « jour(s) » est à remplacer
+      par un accord correct.
+- [ ] La présomption « Tu penses peut-être faire du DCA » est bien présente en production
+      (déjà couverte par la Task 6).
+- [ ] Les ISIN bruts dans la matrice de corrélation sont bien présents en production
+      (déjà couverts par la Task 2).
+
+## Ce que ce croisement ne prouve toujours pas
+
+Les blocs **TWR / MWR / écart investisseur** n'ont pas pu être validés : la performance globale
+annoncée par le courtier (+21,97 %) est un **cumulé sur l'apport**, là où la page affiche des taux
+**annualisés** (TWR 17,56 %, MWR 21,20 %). Les deux ne sont pas comparables, et leur proximité
+numérique est une coïncidence. Valider ces trois chiffres demande un calcul de référence
+indépendant — c'est le contrôle le plus lourd, et il reste à faire.
