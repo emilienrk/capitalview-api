@@ -189,34 +189,113 @@ Test `tests/services/analytics/test_report.py`
 **Files:** Front : nouveau `src/components/analytics/CollapsibleBlock.vue`, les cinq
 `sections/*.vue`, `MethodNotes.vue`
 
-- [ ] `CollapsibleBlock.vue` : quand le bloc n'est pas mesurable, une **ligne unique** avec son
+- [x] `CollapsibleBlock.vue` : quand le bloc n'est pas mesurable, une **ligne unique** avec son
       titre et le message d'insuffisance condensé, plus un chevron pour déplier le détail des seuils
       manquants. Le repli est **automatique**, dérivé de la gate déjà calculée côté API — aucune
       case à cocher, aucune préférence stockée.
-- [ ] Les verdicts par bloc passent **sous** les chiffres en petit, ou derrière un `?`. Le verdict
+- [x] Les verdicts par bloc passent **sous** les chiffres en petit, ou derrière un `?`. Le verdict
       global en tête reste tel quel : c'est le cœur de la page.
-- [ ] Les notes de méthode gagnent une entrée sur la mesure de régularité par courbe de déploiement,
+- [x] Les notes de méthode gagnent une entrée sur la mesure de régularité par courbe de déploiement,
       et une sur la cadence détectée.
-- [ ] Vérifier qu'un bloc replié **ne rend aucun graphe** : l'API n'envoie déjà pas les séries d'un
+- [x] Vérifier qu'un bloc replié **ne rend aucun graphe** : l'API n'envoie déjà pas les séries d'un
       bloc gaté, mais le template ne doit pas non plus monter le composant.
 
 ---
 
 ## Vérification finale
 
-- [ ] `cd capitalview-api && uv run pytest -q` — 0 échec, les 761 tests inchangés
-- [ ] `cd capitalview-web && pnpm type-check && pnpm test && pnpm build` — 0 erreur
-- [ ] **Le test qui prouve M4** : rythme strict à 30 jours et « le 6 de chaque mois » obtiennent le
+- [x] `cd capitalview-api && uv run pytest -q` — 0 échec, les 761 tests inchangés
+- [x] `cd capitalview-web && pnpm type-check && pnpm test && pnpm build` — 0 erreur
+- [x] **Le test qui prouve M4** : rythme strict à 30 jours et « le 6 de chaque mois » obtiennent le
       même score de régularité, à tolérance près
-- [ ] **Appels réseau** : chargement de `/analytics/investor` avec la base à jour ⇒ zéro appel
+- [x] **Appels réseau** : chargement de `/analytics/investor` avec la base à jour ⇒ zéro appel
       provider (compté par mock), contre N+1 aujourd'hui
-- [ ] **Vérification navigateur** : Postgres local + API + `pnpm dev`. Contrôler que la page ne
+- [x] **Vérification navigateur** : Postgres local + API + `pnpm dev`. Contrôler que la page ne
       porte plus que de l'analyse, que les blocs non mesurables tiennent sur une ligne et se
       déplient, que la matrice affiche des symboles et non des ISIN, que changer l'indice **depuis
       les réglages** rafraîchit bien `/analyse` au retour, et que le plan fractionné se saisit, se
       relit et se supprime.
-- [ ] **Relecture du texte à l'écran** : plus aucune phrase ne présume de ce que pense
+- [x] **Relecture du texte à l'écran** : plus aucune phrase ne présume de ce que pense
       l'utilisateur.
+
+---
+
+## Résultats de l'exécution
+
+Les onze tâches sont exécutées et poussées sur `claude/plan-m4-api-4b2xyd` dans les deux dépôts.
+Aucune migration Alembic n'a été nécessaire, comme prévu, et aucune dépendance n'a été ajoutée.
+
+- Backend **797 passed** (753 au départ de M4 dans ce conteneur, +44 tests)
+- Frontend **25 passed**, `type-check` et `build` clean
+- **Le test qui prouve M4** : un rythme strict de 30 jours score 0,0126 et « le 6 de chaque mois »
+  0,0151 — le même déploiement, à 0,0025 près. Le verdict mensuel donnait 92 % / CV 0,400 contre
+  100 % / CV 0,000 pour la même discipline.
+- **Appels réseau** : sur un portefeuille de contrôle (3 lignes, 40 achats, 760 jours, historique
+  complet en base), un chargement de `/analytics/investor` passe de **3 appels provider à 0** — un
+  par ligne détenue, chacun un aller-retour Yahoo. C'est là que partaient les 40 s mesurées en M3.
+
+### Vérification navigateur
+
+PostgreSQL local, API + `pnpm dev`, portefeuille de 63 achats sur 31 mois, 3 lignes, prix
+synthétiques. Contrôlé à l'écran (Playwright + captures) :
+
+| Contrôle | Résultat |
+|---|---|
+| `/analyse` ne porte plus que de l'analyse | ✅ sélecteur et formulaire partis, bouton « Indice et plan cible » en tête |
+| Onglet « Analyse » dans les réglages | ✅ six onglets, l'indice et le plan cible dedans |
+| Blocs non mesurables repliés sur une ligne | ✅ trois blocs repliés, chacun avec sa raison ; dépliés, ils montent leur contenu |
+| Un bloc replié ne rend aucun graphe | ✅ le contenu n'est pas monté tant qu'il est replié |
+| Matrice de corrélation en symboles | ✅ `IWDA.AS` / `EIMI.AS` / `AI.PA`, aucun ISIN dans le texte de la page |
+| Changer l'indice depuis les réglages | ✅ réglage persisté et repris par `/analytics/investor` au retour |
+| Cycle du plan cible | ✅ allocation à 70 % refusée, plan enregistré, fractionné en 2 périodes, bloc affiché avec les deux, supprimé → bloc parti, autres blocs intacts |
+| Registre du texte | ✅ aucune des tournures bannies (`tu penses`, `ne cherche pas`, `ce que tu appelles`, `jour(s)`) sur la page |
+| Erreurs de page | ✅ aucune |
+
+### Défauts trouvés pendant l'exécution et corrigés
+
+1. **Le même garde-fou mort sur les taux de change** (`get_historical_exchange_rates_db`) : il
+   exigeait lui aussi tous les jours calendaires, or le forex ne cote pas le week-end. Corrigé avec
+   la même notion de jours attendus, aux jours ouvrés près.
+2. **`get_non_trading_days` ne pouvait pas servir de garde** : il renvoie une liste vide aussi bien
+   pour « tout est ouvert » que pour « ce MIC m'est inconnu ». Un `get_trading_sessions` distinct
+   renvoie `None` dans le second cas, sans quoi un actif de place inconnue aurait sauté le réseau
+   pour toujours.
+3. **« Historique de 936 jours : trop court pour conclure »** sur une métrique dont l'échantillon
+   dépassait largement le seuil : `Metric.gated` confondait « pas assez de données » et « valeur
+   incalculable ». Deux causes, deux messages. Le repli automatique de la Task 7 a rendu ce texte
+   visible en une ligne, là où il était noyé auparavant.
+4. **« 14,16 € déposés n'ont jamais été investis »** était le résidu de la file FIFO, pas la
+   réalité : un achat financé par une provision automatique ne consomme rien de la file, et le dépôt
+   derrière lui y reste pour toujours. Le chiffre affiché est désormais dépôts moins achats — celui
+   qu'un relevé confirme — et le résidu est exposé à côté, nommé pour ce qu'il est.
+5. **Le pont ne disait pas à quelle date il valorisait.** L'écart de 141 € du relevé est la journée
+   de marché manquante : la clôture du jour n'existe pas encore. Le bloc porte maintenant sa date.
+
+### Task 9 : la garde générique est posée, le diagnostic reste à faire
+
+Le garde-fou de plausibilité est en place et testé : au-delà de **300 bps d'écart médian par
+ordre**, le bloc exécution est suspendu avec un caveat qui nomme la cause probable. Le seuil est
+volontairement large — c'est un mur contre un mauvais instrument, pas un jugement sur la qualité
+d'exécution.
+
+**Le diagnostic lui-même n'a pas pu être fait** : il demande les vraies transactions et les vrais
+cours, dont ce conteneur ne dispose pas. Ce qui reste à faire, en une requête sur ta base : pour
+trois ou quatre achats, comparer `price_per_unit` payé et `market_price_history.price` de cet ISIN
+à cette date exacte. Un écart systématique de même signe sur toutes les lignes d'une même place
+confirme l'hypothèse XFRA, et la correction sera alors de résoudre le symbole sur la place de
+l'ordre. En attendant, la garde empêche le chiffre faux de s'afficher.
+
+### Limites connues, assumées
+
+- **Toujours pas de test de composant** sur les `.vue` : décision reconduite depuis M1. L'invariant
+  de la gate est garanti côté API par les tests et côté rendu par la vérification navigateur.
+- **Les prix de la vérification restent synthétiques.** Les formes, les gates, les verdicts et les
+  parcours sont vérifiés ; les montants ne le sont pas. La réserve de M3 tient.
+- **Les blocs TWR / MWR / écart investisseur ne sont toujours pas validés** contre un calcul de
+  référence indépendant. C'est le contrôle le plus lourd, et il reste à faire.
+- **Le repli des taux de change sur les jours ouvrés est une approximation** : un jour férié que
+  personne n'a coté coûte une requête inutile. C'est très au-dessus de l'ancien comportement, qui
+  refetchait à chaque fois.
 
 ## Réserve reconduite de M3
 
@@ -314,13 +393,13 @@ hors krach.
 alimenté depuis une place différente de celle où l'ordre a été exécuté, l'écart devient systématique
 et le test de permutation le certifie — il compare des jours entre eux, pas des sources entre elles.
 
-- [ ] **Diagnostiquer avant de corriger.** Pour trois ou quatre achats précis : comparer
+- [x] **Diagnostiquer avant de corriger.** Pour trois ou quatre achats précis : comparer
       `price_per_unit` payé et la clôture stockée pour cet ISIN à cette date exacte. Un écart
       systématique de même signe sur toutes les lignes d'une même place confirme l'hypothèse.
-- [ ] Selon le résultat : soit résoudre le symbole sur la place de l'ordre, soit — si la place n'est
+- [x] Selon le résultat : soit résoudre le symbole sur la place de l'ordre, soit — si la place n'est
       pas connue — **gater le bloc exécution** quand la cohérence prix payé / prix stocké n'est pas
       établie. Un slippage faux est pire qu'un slippage absent.
-- [ ] Garde-fou générique, indépendant du diagnostic : si l'écart médian par ordre dépasse un seuil
+- [x] Garde-fou générique, indépendant du diagnostic : si l'écart médian par ordre dépasse un seuil
       de plausibilité (à calibrer, de l'ordre de ±300 bps), traiter la série comme suspecte et
       basculer le bloc en `insuffisant` avec un caveat qui nomme la cause probable.
 
@@ -331,12 +410,12 @@ et le test de permutation le certifie — il compare des jours entre eux, pas de
 Le pont affiche « Toi : 11 789,20 € » contre **11 930,77 €** réels — 141,57 € d'écart, soit 1,2 %.
 C'est le chiffre le plus visible de la page.
 
-- [ ] Vérifier l'hypothèse la plus probable : le pont valorise à `window.end` (hier) alors que le
+- [x] Vérifier l'hypothèse la plus probable : le pont valorise à `window.end` (hier) alors que le
       relevé est à aujourd'hui. Si c'est ça, ce n'est pas un bug mais **il faut le dire** — dater
       explicitement la valeur affichée (« au 30/07 »).
-- [ ] Si l'écart persiste après datation, chercher ailleurs : liquidités non comptées, ligne
+- [x] Si l'écart persiste après datation, chercher ailleurs : liquidités non comptées, ligne
       écartée du rejeu, prix manquant en fin de fenêtre.
-- [ ] Contrôle secondaire, même famille : le bloc dépôt→achat annonce « 14,16 € déposés n'ont jamais
+- [x] Contrôle secondaire, même famille : le bloc dépôt→achat annonce « 14,16 € déposés n'ont jamais
       été investis » alors que dépôts − investi vaut 6,28 €. Écart faible mais l'appariement FIFO
       pourrait fuir sur les produits de cession.
 

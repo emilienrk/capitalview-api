@@ -37,7 +37,20 @@ class Metric:
         solid_at: int,
         caveat_insufficient: str,
         caveat_indicative: str | None = None,
+        caveat_uncomputable: str | None = None,
     ) -> "Metric":
+        # Two different reasons produce the same "insuffisant", and telling a
+        # reader "936 days of history: too short to conclude" about a number that
+        # simply could not be computed reads as nonsense. When the sample clears
+        # the bar, say the number is missing, not that the history is.
+        if value is None and sample_size >= minimum:
+            return cls(
+                None,
+                unit,
+                sample_size,
+                Reliability.INSUFFICIENT,
+                caveat_uncomputable or "Cette valeur n'a pas pu être calculée sur tes données.",
+            )
         if value is None or sample_size < minimum:
             return cls(None, unit, sample_size, Reliability.INSUFFICIENT, caveat_insufficient)
         if sample_size < solid_at:

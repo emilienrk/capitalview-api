@@ -145,6 +145,10 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
                     "Moins de trois ans d'historique — le signe est lisible, "
                     "la magnitude annualisée beaucoup moins."
                 ),
+                caveat_uncomputable=(
+                    "Les instantanés quotidiens du portefeuille manquent sur la période : "
+                    "sans eux, la performance de la stratégie ne peut pas être chaînée."
+                ),
             )
         )
 

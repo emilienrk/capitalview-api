@@ -47,3 +47,44 @@ def test_none_value_is_always_insufficient():
     )
     assert metric.reliability is Reliability.INSUFFICIENT
     assert metric.value is None
+
+
+def test_a_missing_value_with_enough_sample_says_so_rather_than_blaming_the_history():
+    """"936 days of history: too short to conclude" about an uncomputable number
+    reads as nonsense. Two causes, two messages."""
+    metric = Metric.gated(
+        None,
+        unit="ratio",
+        sample_size=936,
+        minimum=180,
+        solid_at=1095,
+        caveat_insufficient="Historique de 936 jours : trop court pour conclure.",
+        caveat_uncomputable="Les instantanés quotidiens manquent.",
+    )
+
+    assert metric.value is None
+    assert metric.reliability is Reliability.INSUFFICIENT
+    assert metric.caveat == "Les instantanés quotidiens manquent."
+
+
+def test_a_short_sample_still_blames_the_sample():
+    metric = Metric.gated(
+        None,
+        unit="ratio",
+        sample_size=30,
+        minimum=180,
+        solid_at=1095,
+        caveat_insufficient="Historique de 30 jours : trop court pour conclure.",
+        caveat_uncomputable="Les instantanés quotidiens manquent.",
+    )
+
+    assert metric.caveat == "Historique de 30 jours : trop court pour conclure."
+
+
+def test_an_uncomputable_value_falls_back_to_a_generic_reason():
+    metric = Metric.gated(
+        None, unit="ratio", sample_size=936, minimum=180, solid_at=1095,
+        caveat_insufficient="trop court",
+    )
+
+    assert "n'a pas pu être calculée" in metric.caveat
