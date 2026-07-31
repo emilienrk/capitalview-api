@@ -91,6 +91,9 @@ Front : `CorrelationMatrix.vue`, `HoldingsSection.vue`, `PlanSection.vue`, `Inve
       lignes écartées, dérive d'allocation.
 - [x] Afficher le **symbole** en libellé court (axes de la matrice, où la place manque) et le **nom
       complet** en infobulle. L'ISIN reste la clé technique et ne disparaît pas des `value`.
+      **Corrigé après relecture** : un ticker sur l'axe ne faisait qu'échanger un code contre un
+      autre — `IWDA.AS` n'est pas plus un nom que `IE00B4L5Y983`. Les axes portent le **nom
+      tronqué à 22 caractères**, l'infobulle le nom complet suivi du ticker.
 - [x] Repli sur l'ISIN quand l'actif n'est pas connu en base — jamais de libellé vide.
 
 ## Task 3 · La régularité, jugée sur la courbe de déploiement
@@ -245,7 +248,7 @@ synthétiques. Contrôlé à l'écran (Playwright + captures) :
 | Onglet « Analyse » dans les réglages | ✅ six onglets, l'indice et le plan cible dedans |
 | Blocs non mesurables repliés sur une ligne | ✅ trois blocs repliés, chacun avec sa raison ; dépliés, ils montent leur contenu |
 | Un bloc replié ne rend aucun graphe | ✅ le contenu n'est pas monté tant qu'il est replié |
-| Matrice de corrélation en symboles | ✅ `IWDA.AS` / `EIMI.AS` / `AI.PA`, aucun ISIN dans le texte de la page |
+| Matrice de corrélation en noms | ✅ « iShares Core MSCI Wo… », « Air Liquide » sur les axes, nom complet + ticker en infobulle, aucun ISIN dans le texte de la page |
 | Changer l'indice depuis les réglages | ✅ réglage persisté et repris par `/analytics/investor` au retour |
 | Cycle du plan cible | ✅ allocation à 70 % refusée, plan enregistré, fractionné en 2 périodes, bloc affiché avec les deux, supprimé → bloc parti, autres blocs intacts |
 | Registre du texte | ✅ aucune des tournures bannies (`tu penses`, `ne cherche pas`, `ce que tu appelles`, `jour(s)`) sur la page |
