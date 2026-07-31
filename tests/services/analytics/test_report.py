@@ -280,9 +280,12 @@ def test_too_few_purchases_withholds_every_regularity_value_and_its_heatmap():
     assert regularity["equivalent_monthly_purchases"]["value"] is None
     assert regularity["temporal_hhi"]["value"] is None
     assert regularity["invested_share"]["value"] is None
+    assert regularity["deployment_gap"]["value"] is None
     # A heatmap is the same numbers in another shape: withheld here too.
     assert regularity["monthly"] == []
-    assert "pas encore de quoi dire" in regularity["verdict"]
+    # The cadence is a description of a rhythm — with no rhythm, no description.
+    assert regularity["cadence_label"] == ""
+    assert "pas encore de quoi décrire" in regularity["verdict"]
 
 
 def test_the_conditioning_block_withholds_its_chart_data_when_gated():

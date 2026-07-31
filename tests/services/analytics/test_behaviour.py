@@ -421,3 +421,98 @@ def test_a_partial_sale_does_not_close_an_episode():
 
     assert exits.episodes == []
     assert exits.has_episodes is False
+
+
+# ── Deployment regularity ────────────────────────────────────────────────
+#
+# The measure that judges regularity. It reads the cumulative capital curve, so
+# it has no notion of a calendar month and cannot be fooled by one: buying every
+# 30 days used to score 92% of months invested and one month of interruption
+# against 100% and none for the exact same discipline anchored on the 6th.
+
+_DEPLOY_START = date(2024, 1, 1)
+_DEPLOY_END = date(2026, 1, 31)
+
+
+def _deployment_window():
+    return _Window(_DEPLOY_START, _DEPLOY_END)
+
+
+def _buys_on(days):
+    return [_buy(day) for day in days]
+
+
+def _every_n_days(step: int, count: int):
+    return [_DEPLOY_START + timedelta(days=step * n) for n in range(count)]
+
+
+def _on_the_sixth():
+    days = [date(y, m, 6) for y in (2024, 2025) for m in range(1, 13)]
+    days.append(date(2026, 1, 6))
+    return [day for day in days if _DEPLOY_START <= day <= _DEPLOY_END]
+
+
+def test_a_thirty_day_rhythm_scores_like_a_fixed_day_of_the_month():
+    """The test that proves the month-boundary artefact is gone.
+
+    Same discipline, two anchors. The old monthly reading gave 92% / CV 0.400 to
+    one and 100% / CV 0.000 to the other.
+    """
+    drifting = analyse_purchase_regularity(_buys_on(_every_n_days(30, 26)), _deployment_window())
+    anchored = analyse_purchase_regularity(_buys_on(_on_the_sixth()), _deployment_window())
+
+    assert drifting.deployment_gap == pytest.approx(anchored.deployment_gap, abs=0.01)
+    # Both are a straight line in practice: the residue is the staircase of
+    # discrete orders, about 1/(2n).
+    assert drifting.deployment_gap < Decimal("0.05")
+    assert anchored.deployment_gap < Decimal("0.05")
+
+
+def test_bringing_one_purchase_forward_barely_moves_the_score():
+    reference = _every_n_days(30, 26)
+    early = [day - timedelta(days=7) if i == 12 else day for i, day in enumerate(reference)]
+
+    baseline = analyse_purchase_regularity(_buys_on(reference), _deployment_window())
+    moved = analyse_purchase_regularity(_buys_on(early), _deployment_window())
+
+    assert moved.deployment_gap == pytest.approx(baseline.deployment_gap, abs=0.005)
+
+
+def test_a_skipped_month_barely_moves_the_score():
+    reference = _every_n_days(30, 26)
+    skipped = [day for i, day in enumerate(reference) if i != 7]
+
+    baseline = analyse_purchase_regularity(_buys_on(reference), _deployment_window())
+    result = analyse_purchase_regularity(_buys_on(skipped), _deployment_window())
+
+    assert result.deployment_gap == pytest.approx(baseline.deployment_gap, abs=0.01)
+
+
+def test_all_the_capital_in_one_month_degrades_the_score():
+    """A lump sum is not a rhythm, and the curve says so without ambiguity."""
+    result = analyse_purchase_regularity(
+        _buys_on(_every_n_days(5, 6)), _deployment_window()
+    )
+
+    assert result.deployment_gap > Decimal("0.4")
+
+
+def test_the_cadence_names_a_day_of_the_month_when_that_is_the_tighter_rhythm():
+    result = analyse_purchase_regularity(_buys_on(_on_the_sixth()), _deployment_window())
+
+    assert result.cadence.label == "achats autour du 6 du mois"
+    assert result.cadence.median_day_of_month == 6
+
+
+def test_the_cadence_names_an_interval_when_the_day_of_month_drifts():
+    result = analyse_purchase_regularity(_buys_on(_every_n_days(30, 26)), _deployment_window())
+
+    assert result.cadence.label == "achats espacés de 30 jours en médiane"
+    assert result.cadence.median_gap_days == 30
+
+
+def test_too_few_purchases_leave_the_cadence_undescribed():
+    result = analyse_purchase_regularity(_buys_on(_every_n_days(30, 2)), _deployment_window())
+
+    assert result.cadence.label == ""
+    assert result.cadence.median_gap_days is None

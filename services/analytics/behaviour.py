@@ -37,9 +37,28 @@ class MonthlyAmount:
 
 
 @dataclass(frozen=True)
+class Cadence:
+    """The rhythm the purchases actually follow, described rather than declared.
+
+    Spec section 0 bis wants the real strategy revealed, not the stated one, so
+    nothing here is configurable: the cadence is read off the orders.
+    """
+
+    median_gap_days: int | None
+    gap_spread_days: Decimal | None
+    median_day_of_month: int | None
+    day_of_month_spread: Decimal | None
+    label: str
+    """Empty when too few purchases to describe a rhythm at all."""
+
+
+@dataclass(frozen=True)
 class PurchaseRegularity:
     monthly: list[MonthlyAmount]
     """Every month of the window, zeros included — a gap is the information."""
+    deployment_gap: Decimal | None
+    """Mean distance to a straight-line deployment, as a share of the total."""
+    cadence: Cadence
     months_total: int
     months_invested: int
     invested_share: Decimal | None
@@ -147,6 +166,79 @@ def _quartile(ordered: list[int], fraction: float) -> Decimal:
     return Decimal(ordered[low]) + weight * (Decimal(ordered[high]) - Decimal(ordered[low]))
 
 
+def _deployment_gap(
+    events: list[tuple[date, Decimal]], window_start: date, window_end: date
+) -> Decimal | None:
+    """Mean distance between the real deployment curve and a straight line.
+
+    A textbook plan deploys capital along a straight line in cumulative euros, so
+    the distance to that line answers the only question that matters — was the
+    money put to work evenly? — without ever looking at a calendar month.
+
+    That independence is the point. Judged on months, buying strictly every
+    30 days scored 92% of months invested and one month of interruption, against
+    100% and none for the very same discipline anchored on the 6th: a 30-day
+    rhythm drifts across month boundaries while the behaviour never changes.
+
+    The result is a share of the total invested: 0 is a perfectly linear
+    deployment, 0.5 is the whole capital placed in one go. Discrete orders carry
+    a floor of about 1/(2n) — a staircase is never exactly a line — which is why
+    the verdict reads bands rather than the decimal.
+    """
+    total = sum(amount for _, amount in events)
+    span = (window_end - window_start).days
+    if total <= _ZERO or span <= 0:
+        return None
+
+    by_day: dict[date, Decimal] = {}
+    for day, amount in events:
+        by_day[day] = by_day.get(day, _ZERO) + amount
+
+    cumulative = _ZERO
+    deviation = _ZERO
+    for offset in range(span + 1):
+        cumulative += by_day.get(window_start + timedelta(days=offset), _ZERO)
+        deviation += abs(cumulative - total * Decimal(offset) / Decimal(span))
+    return deviation / (Decimal(span + 1) * total)
+
+
+def _cadence(events: list[tuple[date, Decimal]]) -> Cadence:
+    """Describe the rhythm: a day of the month, or an interval between orders.
+
+    Whichever of the two is tighter is the one that gets named — someone placing
+    an order on the 5th and someone placing one every 30 days both have a rhythm,
+    and only one of the two descriptions fits each.
+    """
+    days = sorted({day for day, _ in events})
+    gaps = [(later - earlier).days for earlier, later in zip(days, days[1:])]
+
+    median_gap = gap_spread = None
+    if len(gaps) >= MIN_PURCHASES:
+        ordered = sorted(gaps)
+        median_gap = int(_quartile(ordered, 0.5))
+        gap_spread = _quartile(ordered, 0.75) - _quartile(ordered, 0.25)
+
+    median_day = day_spread = None
+    if len(days) >= MIN_PURCHASES_FOR_DAY_OF_MONTH:
+        of_month = sorted(day.day for day in days)
+        median_day = int(_quartile(of_month, 0.5))
+        day_spread = _quartile(of_month, 0.75) - _quartile(of_month, 0.25)
+
+    label = ""
+    if day_spread is not None and (gap_spread is None or day_spread <= gap_spread):
+        label = f"achats autour du {median_day} du mois"
+    elif median_gap is not None:
+        label = f"achats espacés de {median_gap} jours en médiane"
+
+    return Cadence(
+        median_gap_days=median_gap,
+        gap_spread_days=gap_spread,
+        median_day_of_month=median_day,
+        day_of_month_spread=day_spread,
+        label=label,
+    )
+
+
 def _series_regularity(
     events: list[tuple[date, Decimal]],
     first_month: date,
@@ -206,6 +298,8 @@ def _series_regularity(
 
     return PurchaseRegularity(
         monthly=[MonthlyAmount(y, m, per_month[(y, m)]) for y, m in months],
+        deployment_gap=_deployment_gap(events, first_month, last_month),
+        cadence=_cadence(events),
         months_total=len(months),
         months_invested=invested_months,
         invested_share=invested_share,
