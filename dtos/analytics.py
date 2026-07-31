@@ -60,6 +60,8 @@ class CounterfactualResponse(BaseModel):
     """What that idle cash would have earned on the benchmark."""
     covered_from: date
     covered_days: int
+    valued_at: date
+    """Valuation day — yesterday's close, since today's does not exist yet."""
     truncated: bool
     """True when the benchmark is younger than the history and the window moved."""
     order: list[str]
@@ -85,6 +87,9 @@ class ExecutionResponse(BaseModel):
     percentile: Decimal | None = None
     is_detectable: bool = False
     """False means the pattern is indistinguishable from chance — say nothing."""
+    median_absolute_bps: Decimal | None = None
+    prices_are_plausible: bool = True
+    """False when paid and stored prices look like two different quote venues."""
     verdict: str
 
 
@@ -134,6 +139,10 @@ class DepositLagResponse(BaseModel):
     """Purchase euros no real deposit could have funded — auto-provisions, mostly."""
     unmatched_share: Decimal
     never_invested_eur: Decimal
+    """Deposits minus purchases — the figure a bank statement agrees with."""
+    unpaired_deposits_eur: Decimal = Decimal("0")
+    """Queue residue. Larger than the above when purchases were funded by
+    auto-provisions or sale proceeds, which the deposit queue never sees."""
     deposit_variation: MetricOut
     """Same indicator as the purchases, so the two rhythms can be compared."""
     purchase_variation: MetricOut

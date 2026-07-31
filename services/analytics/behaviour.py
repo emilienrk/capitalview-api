@@ -402,7 +402,16 @@ class DepositLag:
     unmatched_eur: Decimal
     """Purchase euros no real deposit could have funded."""
     never_invested_eur: Decimal
-    """Deposited and still sitting there at the end of the window."""
+    """Deposits the ledger says were never put to work: deposits minus purchases.
+
+    Deliberately *not* the leftover of the FIFO queue. The queue only knows about
+    real deposits, so a purchase funded by an auto-provision or by the proceeds of
+    a sale consumes nothing, and the deposit sitting behind it stays in the queue
+    for ever. Reporting that residue as "never invested" overstated it — 14.16 EUR
+    on a real portfolio where deposits minus purchases came to 6.28.
+    """
+    unpaired_deposits_eur: Decimal
+    """Queue residue: deposits no purchase could be traced back to. Bookkeeping."""
     pairs: int
 
     @property
@@ -479,7 +488,9 @@ def analyse_deposit_lag(transactions) -> DepositLag | None:
         if remaining > _ZERO:
             unmatched_eur += remaining
 
-    never_invested = sum(available for _, available in queue[index:] if available > _ZERO)
+    unpaired = sum(available for _, available in queue[index:] if available > _ZERO)
+    # The ledger figure, which the user can check against their own statement.
+    never_invested = max(sum(a for _, a in deposits) - sum(a for _, a in purchases), _ZERO)
 
     return DepositLag(
         median_days=_weighted_quantile(matched, Decimal("0.5")),
@@ -489,6 +500,7 @@ def analyse_deposit_lag(transactions) -> DepositLag | None:
         matched_eur=matched_eur,
         unmatched_eur=unmatched_eur,
         never_invested_eur=Decimal(str(never_invested)),
+        unpaired_deposits_eur=Decimal(str(unpaired)),
         pairs=len(matched),
     )
 

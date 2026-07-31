@@ -50,6 +50,13 @@ class Bridge:
     idle_cash_opportunity: Decimal | None
     covered_from: date
     covered_days: int
+    valued_at: date
+    """The day everything here is valued on — yesterday, not today.
+
+    Today's close does not exist yet, so the last comparable point is the
+    previous session. Left unsaid, the difference reads as a 1% error against a
+    broker statement priced live; said, it is simply a date.
+    """
     truncated: bool
     order: list[str]
 
@@ -236,6 +243,7 @@ def build_bridge(
         idle_cash_opportunity=_idle_opportunity(idle_cash, benchmark_quotes, start, benchmark_end),
         covered_from=start,
         covered_days=covered_days,
+        valued_at=window.end,
         truncated=not window.benchmark_covers_window,
         order=[step.key for step in steps],
     )

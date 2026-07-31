@@ -160,3 +160,58 @@ def test_the_result_is_reproducible_across_runs():
     second = analyse_execution(txs, {"AAA": quotes}, draws=500, rng=rng())
 
     assert first.permutation.p_value == second.permutation.p_value
+
+
+# ── Plausibility of the prices themselves ────────────────────────────────
+#
+# A real portfolio produced -129 bps on 77 orders with p = 0.000, and whiskers
+# from -1000 to +1500 bps: 25% of intra-month amplitude on broad ETFs. The signal
+# was not execution, it was the same fund quoted on a different venue than the
+# one the orders were placed on. The permutation test cannot catch it — it
+# compares days with each other, never sources with each other.
+
+
+def _flat_month(price: str = "100", days: int = 20):
+    return {"AAA": _month([price] * days)}
+
+
+def _orders_at(price: str, count: int = 20):
+    return [_Tx("BUY", "AAA", JANUARY + timedelta(days=i), price=price) for i in range(count)]
+
+
+def test_a_normal_series_is_plausible():
+    result = analyse_execution(_orders_at("101"), _flat_month(), rng=rng(0))
+
+    assert result.is_plausible is True
+    assert result.median_absolute_bps == pytest.approx(Decimal("100"), abs=1)
+
+
+def test_a_venue_mismatch_is_flagged_as_implausible():
+    """Every order 12% off the stored close: that is another instrument."""
+    result = analyse_execution(_orders_at("112"), _flat_month(), rng=rng(0))
+
+    assert result.median_absolute_bps > Decimal("300")
+    assert result.is_plausible is False
+
+
+def test_one_bad_order_does_not_condemn_the_series():
+    """The median, not the mean: a single fat finger must not gate the block."""
+    orders = _orders_at("101", count=19) + [_Tx("BUY", "AAA", JANUARY, price="150")]
+
+    result = analyse_execution(orders, _flat_month(), rng=rng(0))
+
+    assert result.is_plausible is True
+
+
+def test_an_implausible_series_withholds_every_value_and_says_why():
+    from services.analytics.report import _execution_payload
+
+    result = analyse_execution(_orders_at("112"), _flat_month(), rng=rng(0))
+    payload = _execution_payload(result, None)
+
+    assert payload["slippage_bps"]["value"] is None
+    assert payload["cost_eur"]["value"] is None
+    assert payload["prices_are_plausible"] is False
+    # A pattern detected on prices we cannot trust is not a finding.
+    assert payload["is_detectable"] is False
+    assert "place de cotation" in payload["verdict"]

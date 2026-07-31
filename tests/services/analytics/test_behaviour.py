@@ -246,7 +246,37 @@ def test_a_deposit_after_the_purchase_never_funds_it():
 
     assert lag.pairs == 0
     assert lag.unmatched_eur == Decimal("100")
-    assert lag.never_invested_eur == Decimal("100")
+    # The queue keeps the deposit, since no purchase could have been funded by it.
+    assert lag.unpaired_deposits_eur == Decimal("100")
+    # But the ledger says every deposited euro was spent: 100 in, 100 invested.
+    # Reporting the queue residue as "never invested" is what overstated it.
+    assert lag.never_invested_eur == Decimal("0")
+
+
+def test_never_invested_matches_deposits_minus_purchases():
+    """The figure a bank statement agrees with, not the FIFO leftover.
+
+    A purchase funded by an auto-provision consumes nothing from the queue, so
+    the real deposit behind it stays there for ever and the residue drifts above
+    what was genuinely left uninvested.
+    """
+    from services.analytics.behaviour import analyse_deposit_lag
+
+    txs = [
+        # Bought before any real transfer: the app auto-provisioned the cash, and
+        # auto-provisions are excluded from the queue by design (spec 7.2).
+        _deposit(date(2024, 1, 5), "60", notes="Provision automatique"),
+        _buy(date(2024, 1, 5), amount="1", price="60"),
+        _deposit(date(2024, 2, 1), "100"),
+        _buy(date(2024, 2, 10), amount="1", price="30"),
+    ]
+    lag = analyse_deposit_lag(txs)
+
+    # 100 really deposited, 90 invested: 10 left over, and a statement says so.
+    assert lag.never_invested_eur == Decimal("10")
+    # The queue never saw the January purchase, so it still holds 70.
+    assert lag.unpaired_deposits_eur == Decimal("70")
+    assert lag.unmatched_eur == Decimal("60")
 
 
 def test_no_purchase_at_all_yields_nothing():

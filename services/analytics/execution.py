@@ -38,6 +38,21 @@ _BPS = Decimal("10000")
 MIN_ORDERS = 10
 SOLID_ORDERS = 30
 
+# Beyond this median absolute gap per order, the series is not measuring
+# execution any more.
+#
+# A retail order sits within a percent or so of its month's average price. A
+# median of several hundred basis points means the price paid and the price
+# stored are not the same instrument: the same ETF quoted on XFRA and on XPAR
+# gives two different closes, and if the history was backfilled from a venue the
+# order was not placed on, every order inherits the same offset. The permutation
+# test cannot catch it — it compares days with each other, never sources with
+# each other — so it would certify a systematic bias with p = 0.000.
+#
+# 300 bps is deliberately loose: it is a wall against a wrong instrument, not a
+# judgement on execution quality.
+PLAUSIBILITY_BPS = Decimal("300")
+
 
 @dataclass(frozen=True)
 class OrderSlippage:
@@ -56,10 +71,24 @@ class ExecutionAnalysis:
     cost_eur: Decimal | None
     quartiles: tuple[Decimal, Decimal, Decimal, Decimal, Decimal] | None
     permutation: PermutationResult | None
+    median_absolute_bps: Decimal | None = None
+    """How far a typical order sits from its month average, sign ignored."""
 
     @property
     def sample_size(self) -> int:
         return len(self.orders)
+
+    @property
+    def is_plausible(self) -> bool:
+        """Whether these prices can be compared at all.
+
+        False means the prices paid and the prices stored most likely come from
+        different quote venues, and the block must say so instead of reporting a
+        slippage. A wrong slippage is worse than no slippage.
+        """
+        if self.median_absolute_bps is None:
+            return True
+        return self.median_absolute_bps <= PLAUSIBILITY_BPS
 
 
 def _tx_type(tx) -> str:
@@ -179,7 +208,21 @@ def analyse_execution(
         cost_eur=cost,
         quartiles=_quartiles([o.slippage_bps for o in orders]),
         permutation=_permute(orders, candidate_prices, weights, weighted, draws, generator),
+        median_absolute_bps=_median_absolute([o.slippage_bps for o in orders]),
     )
+
+
+def _median_absolute(values: list[Decimal]) -> Decimal | None:
+    """Median gap per order, sign ignored — the plausibility check.
+
+    The median rather than the mean: one order fat-fingered at the wrong price
+    should not condemn a whole series, while a venue mismatch shifts every order
+    at once and moves the median with them.
+    """
+    if not values:
+        return None
+    ordered = np.asarray([abs(float(v)) for v in values], dtype=np.float64)
+    return Decimal(str(round(float(np.median(ordered)), 4)))
 
 
 def _allowed_days(
