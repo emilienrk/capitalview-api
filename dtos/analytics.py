@@ -176,8 +176,18 @@ class TurnoverOut(BaseModel):
     sales_eur: Decimal
 
 
-class WeightOut(BaseModel):
+class AssetLabelOut(BaseModel):
+    """An ISIN identifies a line; a ticker and a name are what a reader can use.
+
+    Both fall back to the key itself when the market table does not know it.
+    """
+
     asset_key: str
+    symbol: str
+    name: str
+
+
+class WeightOut(AssetLabelOut):
     weight: Decimal
 
 
@@ -185,6 +195,10 @@ class CorrelationOut(BaseModel):
     left: str
     right: str
     value: Decimal
+    left_symbol: str
+    right_symbol: str
+    left_name: str
+    right_name: str
 
 
 class ConcentrationResponse(BaseModel):
@@ -198,7 +212,7 @@ class ConcentrationResponse(BaseModel):
     correlations: list[CorrelationOut] = []
     max_correlation: Decimal | None = None
     overlap: int
-    dropped: list[str] = []
+    dropped: list[AssetLabelOut] = []
     """Lines held but too thinly quoted to enter the covariance."""
     verdict: str
 
@@ -255,8 +269,7 @@ class MonthlyAdherenceOut(BaseModel):
     invested: Decimal
 
 
-class AllocationDriftOut(BaseModel):
-    asset_key: str
+class AllocationDriftOut(AssetLabelOut):
     target: Decimal
     actual: Decimal
 

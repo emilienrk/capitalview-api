@@ -183,6 +183,7 @@ def _run_blocks(transactions, snapshots=None, window_end=None):
         # No exchange calendar here: execution falls back to quoted days, which is
         # what the fixture provides.
         patch("services.analytics.report.resolve_trading_days", return_value={}),
+        patch("services.analytics.report._asset_labels", return_value={}),
     ):
         return build_investor_analytics(None, "user_1", "key")
 
@@ -380,6 +381,7 @@ def test_an_unusable_plan_is_reported_not_dropped(master_key):
         ),
         patch("services.analytics.report.fill_price_gaps", side_effect=lambda m, *_a, **_k: m),
         patch("services.analytics.report.resolve_trading_days", return_value={}),
+        patch("services.analytics.report._asset_labels", return_value={}),
     ):
         report = build_investor_analytics(None, "user_1", master_key)
 
@@ -414,6 +416,7 @@ def test_a_valid_plan_is_decrypted_and_scored(master_key):
         patch("services.analytics.report.get_price_matrix", return_value=_quotes(transactions)),
         patch("services.analytics.report.fill_price_gaps", side_effect=lambda m, *_a, **_k: m),
         patch("services.analytics.report.resolve_trading_days", return_value={}),
+        patch("services.analytics.report._asset_labels", return_value={}),
     ):
         report = build_investor_analytics(None, "user_1", master_key)
 
@@ -422,3 +425,62 @@ def test_a_valid_plan_is_decrypted_and_scored(master_key):
     assert plan["monthly_target"] == Decimal("500")
     assert plan["adherence_ratio"]["value"] is not None
     assert plan["months"]
+
+
+# ── Asset labels ─────────────────────────────────────────────────────────
+#
+# An ISIN identifies a line, it does not name it. These cover the resolution the
+# harnesses above stub out.
+
+
+def test_asset_labels_resolve_symbol_and_name(session):
+    from models.enums import AssetType
+    from models.market import MarketAsset
+    from services.analytics.report import _asset_labels
+
+    session.add(
+        MarketAsset(
+            asset_key="IE00B4L5Y983", symbol="IWDA.AS", name="iShares Core MSCI World",
+            asset_type=AssetType.STOCK,
+        )
+    )
+    session.commit()
+
+    labels = _asset_labels(session, ["IE00B4L5Y983"])
+
+    assert labels["IE00B4L5Y983"] == ("IWDA.AS", "iShares Core MSCI World")
+
+
+def test_an_unknown_asset_falls_back_to_its_key(session):
+    """A technical label beats a blank one."""
+    from services.analytics.report import _asset_labels
+
+    assert _asset_labels(session, ["FR0000000000"]) == {"FR0000000000": ("FR0000000000", "FR0000000000")}
+
+
+def test_labels_reach_the_weights_and_the_correlations():
+    """The payload carries the label next to the key, so the two cannot drift apart."""
+    from services.analytics.concentration import Concentration
+    from services.analytics.report import _concentration_payload
+
+    concentration = Concentration(
+        lines=2,
+        effective_positions=Decimal("2"),
+        independent_bets=Decimal("1.5"),
+        weights=[("AAA", Decimal("0.6")), ("BBB", Decimal("0.4"))],
+        correlations=[("AAA", "BBB", Decimal("0.9"))],
+        max_correlation=Decimal("0.9"),
+        overlap=300,
+        dropped=["CCC"],
+    )
+    labels = {"AAA": ("AAA.PA", "Alpha"), "BBB": ("BBB.PA", "Beta")}
+
+    payload = _concentration_payload(concentration, labels)
+
+    assert payload["weights"][0] == {
+        "asset_key": "AAA", "symbol": "AAA.PA", "name": "Alpha", "weight": Decimal("0.6"),
+    }
+    assert payload["correlations"][0]["left_symbol"] == "AAA.PA"
+    assert payload["correlations"][0]["right_name"] == "Beta"
+    # An unknown line still names itself rather than showing an empty label.
+    assert payload["dropped"] == [{"asset_key": "CCC", "symbol": "CCC", "name": "CCC"}]

@@ -86,12 +86,12 @@ Test `tests/services/test_market_calendar_cache.py`
 **Files:** `services/analytics/concentration.py`, `services/analytics/report.py`, `dtos/analytics.py` ·
 Front : `CorrelationMatrix.vue`, `HoldingsSection.vue`, `PlanSection.vue`, `InvestmentPlanForm.vue`
 
-- [ ] Résoudre `asset_key → {name, symbol}` **une seule fois** dans `report.py` (une requête
+- [x] Résoudre `asset_key → {name, symbol}` **une seule fois** dans `report.py` (une requête
       `MarketAsset`), et faire descendre le libellé dans les DTO concernés : poids, corrélations,
       lignes écartées, dérive d'allocation.
-- [ ] Afficher le **symbole** en libellé court (axes de la matrice, où la place manque) et le **nom
+- [x] Afficher le **symbole** en libellé court (axes de la matrice, où la place manque) et le **nom
       complet** en infobulle. L'ISIN reste la clé technique et ne disparaît pas des `value`.
-- [ ] Repli sur l'ISIN quand l'actif n'est pas connu en base — jamais de libellé vide.
+- [x] Repli sur l'ISIN quand l'actif n'est pas connu en base — jamais de libellé vide.
 
 ## Task 3 · La régularité, jugée sur la courbe de déploiement
 
