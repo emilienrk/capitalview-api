@@ -103,17 +103,17 @@ droite, normalisé par le capital total. Insensible aux frontières de mois par 
 rythme à 30 jours ni un achat avancé d'une semaine ne dégradent le score, alors qu'un vrai
 lump-sum décroche visiblement.
 
-- [ ] `deployment_regularity(purchases, window) -> Decimal | None` : écart moyen absolu entre la
+- [x] `deployment_regularity(purchases, window) -> Decimal | None` : écart moyen absolu entre la
       courbe cumulée réelle et la droite joignant premier et dernier achat, rapporté au capital
       total. 0 = déploiement parfaitement linéaire.
-- [ ] **Cadence détectée**, descriptive : médiane des écarts entre achats, et dispersion du jour du
+- [x] **Cadence détectée**, descriptive : médiane des écarts entre achats, et dispersion du jour du
       mois. Produire un libellé du type « achats espacés de 30 jours en médiane » ou « achats autour
       du 5 du mois » selon lequel des deux est le plus resserré. Aucun réglage, aucune déclaration.
-- [ ] Les indicateurs mensuels (`invested_share`, `variation_coefficient`, `longest_gap_months`,
+- [x] Les indicateurs mensuels (`invested_share`, `variation_coefficient`, `longest_gap_months`,
       `temporal_hhi`, `equivalent_monthly_purchases`) **restent calculés et exposés**, mais ne
       nourrissent plus le verdict de régularité. La heatmap mensuelle reste, comme illustration.
-- [ ] Le verdict de régularité se rédige sur la courbe de déploiement et la cadence détectée.
-- [ ] Tests, en réutilisant les scénarios déjà écrits en scratchpad : rythme strict à 30 jours ⇒
+- [x] Le verdict de régularité se rédige sur la courbe de déploiement et la cadence détectée.
+- [x] Tests, en réutilisant les scénarios déjà écrits en scratchpad : rythme strict à 30 jours ⇒
       score quasi parfait, **et le même que** « le 6 de chaque mois » à tolérance près (c'est le
       test qui prouve que l'artefact a disparu) ; achat avancé puis mois sauté ⇒ score quasi
       inchangé ; tout le capital en un mois ⇒ score fortement dégradé.

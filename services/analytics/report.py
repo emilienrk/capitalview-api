@@ -391,6 +391,18 @@ def _regularity_payload(regularity) -> dict | None:
         )
     )
 
+    # The measure that actually judges regularity. The monthly indicators above
+    # stay exposed as illustration, but they no longer decide anything: a rhythm
+    # of exactly 30 days drifts across month boundaries and used to be marked
+    # down for a discipline it never broke.
+    deployment = gated(
+        round(regularity.deployment_gap, 4)
+        if regularity.deployment_gap is not None
+        else None,
+        "ratio",
+        insufficient=too_short,
+    )
+
     return {
         # A heatmap is the same withheld numbers in another shape.
         "monthly": (
@@ -404,6 +416,11 @@ def _regularity_payload(regularity) -> dict | None:
         "months_total": regularity.months_total,
         "months_invested": regularity.months_invested,
         "purchase_count": regularity.purchase_count,
+        "deployment_gap": deployment,
+        "cadence_label": regularity.cadence.label if deployment["value"] is not None else "",
+        "median_gap_days": (
+            regularity.cadence.median_gap_days if deployment["value"] is not None else None
+        ),
         "invested_share": share,
         "variation_coefficient": variation,
         "longest_gap_months": gap_months,
@@ -413,40 +430,60 @@ def _regularity_payload(regularity) -> dict | None:
         "median_day_of_month": (
             regularity.median_day_of_month if spread["value"] is not None else None
         ),
-        "verdict": _regularity_verdict(regularity, equivalent["value"], spread["value"]),
+        "verdict": _regularity_verdict(regularity, deployment["value"], equivalent["value"]),
     }
 
 
-def _regularity_verdict(regularity, equivalent, spread) -> str:
-    if equivalent is None:
+# Bands on the deployment gap. Discrete orders carry a floor of about 1/(2n), so
+# a few points of gap is a straight line in practice, not a defect.
+_DEPLOYMENT_LINEAR = Decimal("0.05")
+_DEPLOYMENT_UNEVEN = Decimal("0.15")
+_DEPLOYMENT_LUMPY = Decimal("0.35")
+
+
+def _regularity_verdict(regularity, deployment, equivalent) -> str:
+    """Read the deployment curve, never the calendar months.
+
+    The statement is impersonal — the subject is the observed behaviour, not the
+    person — and advice, when there is any to give, comes as its own sentence.
+    """
+    months = regularity.months_total
+    if deployment is None:
         return (
-            f"{regularity.purchase_count} achats sur {regularity.months_total} mois : "
-            "pas encore de quoi dire quelle est ta stratégie réelle."
+            f"{regularity.purchase_count} achats sur {months} mois : "
+            "pas encore de quoi décrire une stratégie."
         )
 
-    months = regularity.months_total
-    rounded = round(equivalent, 1)
-    day_note = ""
-    if spread is not None and regularity.median_day_of_month is not None:
-        if spread <= Decimal("3"):
-            day_note = (
-                f" Tes ordres tombent autour du {regularity.median_day_of_month} du mois : "
-                "ça, c'est une habitude."
-            )
-        else:
-            day_note = " Le jour du mois, lui, est au hasard : tu achètes quand tu y penses."
+    cadence = regularity.cadence.label
+    facts = f"Sur {months} mois, {regularity.purchase_count} achats"
+    facts += f", {cadence}." if cadence else "."
 
-    if equivalent >= Decimal(months) * Decimal("0.8"):
+    if deployment <= _DEPLOYMENT_LINEAR:
         return (
-            f"Tu as investi sur {regularity.months_invested} des {months} mois, et de façon "
-            f"régulière : ton capital équivaut à {rounded} achats mensuels égaux. "
-            f"C'est bien du DCA.{day_note}"
+            f"{facts} Le capital est déployé de façon quasi linéaire dans le temps : "
+            "c'est du DCA au sens strict."
+        )
+    if deployment <= _DEPLOYMENT_UNEVEN:
+        return (
+            f"{facts} Le déploiement s'écarte un peu de la ligne droite — quelques mois "
+            "pèsent plus que les autres — sans que la régularité d'ensemble soit rompue."
+        )
+
+    equivalence = ""
+    if equivalent is not None:
+        equivalence = (
+            f" La répartition du capital équivaut à {round(equivalent, 1)} achats mensuels "
+            f"égaux, sur {months} mois écoulés."
+        )
+    if deployment <= _DEPLOYMENT_LUMPY:
+        return (
+            f"{facts} Le capital est déployé par à-coups plutôt que régulièrement.{equivalence} "
+            "Si l'intention est de lisser les points d'entrée, tu peux fixer un montant et "
+            "une date et t'y tenir."
         )
     return (
-        f"Tu penses peut-être faire du DCA. Sur {months} mois tu as investi "
-        f"{regularity.months_invested} fois, et la répartition de ton capital équivaut à "
-        f"{rounded} achats mensuels égaux, pas {months}. Tu fais des achats opportunistes."
-        f"{day_note}"
+        f"{facts} L'essentiel du capital est entré en une fois : le profil est celui d'un "
+        f"investissement forfaitaire, pas d'un versement programmé.{equivalence}"
     )
 
 
@@ -1367,13 +1404,19 @@ def build_global_verdict(blocks: dict) -> str:
         )
 
     regularity = blocks.get("regularity")
-    if regularity and regularity["equivalent_monthly_purchases"]["value"] is not None:
-        equivalent = regularity["equivalent_monthly_purchases"]["value"]
-        months = regularity["months_total"]
-        if equivalent < Decimal(months) * Decimal("0.6"):
+    if regularity and regularity["deployment_gap"]["value"] is not None:
+        # Read on the deployment curve, not on calendar months: a 30-day rhythm
+        # drifts across month boundaries without the discipline changing.
+        deployment = regularity["deployment_gap"]["value"]
+        if deployment > _DEPLOYMENT_LUMPY:
             structural.append(
-                f"Ta répartition dans le temps équivaut à {round(equivalent, 1)} achats mensuels "
-                f"égaux sur {months} mois : ce que tu appelles régularité n'en est pas."
+                f"Sur {regularity['months_total']} mois, l'essentiel du capital est entré en une "
+                "fois : le profil est celui d'un investissement forfaitaire."
+            )
+        elif deployment > _DEPLOYMENT_UNEVEN:
+            structural.append(
+                f"Sur {regularity['months_total']} mois, le capital est déployé par à-coups "
+                "plutôt que régulièrement."
             )
 
     lag = blocks.get("deposit_lag")

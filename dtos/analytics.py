@@ -104,6 +104,13 @@ class RegularityResponse(BaseModel):
     months_total: int
     months_invested: int
     purchase_count: int
+    deployment_gap: MetricOut
+    """Distance to a straight-line deployment. This is what judges regularity —
+    the monthly indicators below are illustration, because a 30-day rhythm drifts
+    across month boundaries without the behaviour changing."""
+    cadence_label: str = ""
+    """Descriptive, never declared: "achats autour du 6 du mois"."""
+    median_gap_days: int | None = None
     invested_share: MetricOut
     variation_coefficient: MetricOut
     longest_gap_months: MetricOut
