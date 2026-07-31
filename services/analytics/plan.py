@@ -46,8 +46,24 @@ class AllocationDrift:
 
 
 @dataclass(frozen=True)
+class PlanPeriod:
+    """One stretch of the plan. A plan that never changed has exactly one.
+
+    Income changes and plans change with it. Scoring three years of purchases
+    against today's 600 EUR a month would invent a shortfall for the years the
+    plan said 200.
+    """
+
+    since: date
+    monthly_target: Decimal
+    allocation: dict[str, Decimal]
+
+
+@dataclass(frozen=True)
 class PlanAdherence:
     monthly_target: Decimal
+    """The target in force at the end of the window — what the plan says today."""
+    periods: list[PlanPeriod]
     since: date
     months: list[MonthlyAdherence]
     total_target: Decimal
@@ -72,8 +88,13 @@ class PlanError(ValueError):
     """A declared plan that cannot be scored against, with a readable reason."""
 
 
-def parse_plan(raw, default_since: date | None = None) -> tuple[Decimal, dict[str, Decimal], date] | None:
-    """Validate a stored plan, or explain why it cannot be used.
+def parse_plan(raw, default_since: date | None = None) -> list[PlanPeriod] | None:
+    """Validate a stored plan into periods, or explain why it cannot be used.
+
+    Two shapes are accepted, and both end up as a list: the original flat plan
+    (`monthly_target`, `allocation`, `since`) becomes a single period, and the
+    split form carries `periods`. Storing the mode would be one more thing to
+    keep in sync — the shape already says which it is.
 
     An allocation that does not add up is rejected rather than normalised: a
     silent rescale would score the user against a plan they never wrote.
@@ -81,9 +102,29 @@ def parse_plan(raw, default_since: date | None = None) -> tuple[Decimal, dict[st
     if not raw:
         return None
 
+    entries = raw.get("periods")
+    if entries is None:
+        entries = [raw]
+    if not isinstance(entries, list) or not entries:
+        raise PlanError("Le plan ne contient aucune période.")
+
+    periods = [_parse_period(entry, default_since if index == 0 else None)
+               for index, entry in enumerate(entries)]
+    periods.sort(key=lambda period: period.since)
+
+    for earlier, later in zip(periods, periods[1:]):
+        if earlier.since == later.since:
+            raise PlanError(
+                f"Deux périodes du plan démarrent en {later.since:%Y-%m} : "
+                "chaque période doit commencer un mois différent."
+            )
+    return periods
+
+
+def _parse_period(raw, default_since: date | None) -> PlanPeriod:
     try:
         monthly = Decimal(str(raw.get("monthly_target") or "0"))
-    except (InvalidOperation, TypeError):
+    except (InvalidOperation, TypeError, AttributeError):
         raise PlanError("Le montant mensuel du plan n'est pas un nombre.")
     if monthly <= _ZERO:
         raise PlanError("Le montant mensuel du plan doit être supérieur à zéro.")
@@ -109,7 +150,18 @@ def parse_plan(raw, default_since: date | None = None) -> tuple[Decimal, dict[st
     since = _parse_month(raw.get("since")) or default_since
     if since is None:
         raise PlanError("Le mois de départ du plan est inconnu.")
-    return monthly, allocation, since
+    return PlanPeriod(since=since, monthly_target=monthly, allocation=allocation)
+
+
+def _target_for(periods: list[PlanPeriod], year: int, month: int) -> Decimal:
+    """The monthly target in force that month — the latest period that has begun."""
+    target = periods[0].monthly_target
+    for period in periods:
+        if (period.since.year, period.since.month) <= (year, month):
+            target = period.monthly_target
+        else:
+            break
+    return target
 
 
 def _parse_month(value) -> date | None:
@@ -134,10 +186,13 @@ def analyse_plan(
     """Score the declared plan against what was actually invested."""
     if window is None or window.start is None or window.end is None:
         return None
-    parsed = parse_plan(raw_plan, default_since=date(window.start.year, window.start.month, 1))
-    if parsed is None:
+    periods = parse_plan(raw_plan, default_since=date(window.start.year, window.start.month, 1))
+    if periods is None:
         return None
-    monthly_target, allocation, since = parsed
+    since = periods[0].since
+    # The current target is the one to rebalance towards, so it is the one the
+    # allocation drift and the headline figure read.
+    allocation = periods[-1].allocation
 
     # Complete months only: the current one is still running, and counting it
     # would show a shortfall every single time the page is opened.
@@ -154,13 +209,14 @@ def analyse_plan(
         MonthlyAdherence(
             year=year,
             month=month,
-            target=monthly_target,
+            target=_target_for(periods, year, month),
             invested=invested_by_month.get((year, month), _ZERO),
         )
         for year, month in months
     ]
 
-    total_target = monthly_target * Decimal(len(rows))
+    monthly_target = rows[-1].target if rows else periods[-1].monthly_target
+    total_target = sum(row.target for row in rows) or _ZERO
     total_invested = sum(row.invested for row in rows)
     ratio = total_invested / total_target if total_target > _ZERO else None
     average = total_invested / Decimal(len(rows)) if rows else None
@@ -173,6 +229,7 @@ def analyse_plan(
 
     return PlanAdherence(
         monthly_target=monthly_target,
+        periods=periods,
         since=since,
         months=rows,
         total_target=total_target,

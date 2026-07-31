@@ -114,3 +114,97 @@ def test_three_months_is_the_floor_for_a_verdict():
 
     assert len(result.months) == 2
     assert result.is_measurable is False
+
+
+# ── Split plans ──────────────────────────────────────────────────────────
+#
+# Income changes and plans change with it. Scoring every month against today's
+# target would invent a shortfall for the years the plan said something else.
+
+SPLIT = {
+    "periods": [
+        {"since": "2024-01", "monthly_target": "200", "allocation": {"AAA": "100"}},
+        {"since": "2025-01", "monthly_target": "600", "allocation": {"AAA": "80", "BBB": "20"}},
+    ]
+}
+
+
+def test_the_original_flat_shape_is_still_read():
+    """Retro-compatibility: a plan stored before periods existed is one period."""
+    periods = parse_plan(PLAN, date(2024, 1, 1))
+
+    assert len(periods) == 1
+    assert periods[0].monthly_target == Decimal("500")
+    assert periods[0].since == date(2024, 1, 1)
+
+
+def test_each_month_is_scored_against_the_target_in_force():
+    # 12 months at 200 planned, then 6 at 600: 2400 + 3600 = 6000.
+    result = analyse_plan(SPLIT, _purchases(18, amount="200"), [], Decimal("0"), WINDOW)
+
+    assert result.total_target == Decimal("6000")
+    assert result.months[0].target == Decimal("200")
+    assert result.months[-1].target == Decimal("600")
+    # The headline is the target in force today, not the first one ever declared.
+    assert result.monthly_target == Decimal("600")
+
+
+def test_a_split_plan_is_not_scored_against_its_latest_target_throughout():
+    """The regression a single target would cause: a shortfall that never existed."""
+    flat = {"monthly_target": "600", "allocation": {"AAA": "100"}, "since": "2024-01"}
+    invested = _purchases(12, amount="200") + _purchases(6, amount="600", start_year=2025)
+
+    split_result = analyse_plan(SPLIT, invested, [], Decimal("0"), WINDOW)
+    flat_result = analyse_plan(flat, invested, [], Decimal("0"), WINDOW)
+
+    assert split_result.adherence_ratio == Decimal("1")
+    assert flat_result.adherence_ratio < Decimal("0.8")
+
+
+def test_the_drift_reads_the_current_allocation():
+    """It is today's target that says what to rebalance towards."""
+    result = analyse_plan(
+        SPLIT, _purchases(18, amount="200"),
+        [("AAA", Decimal("1"))], Decimal("1000"), WINDOW,
+    )
+
+    targets = {row.asset_key: row.target for row in result.drift}
+    assert targets == {"AAA": Decimal("80"), "BBB": Decimal("20")}
+
+
+def test_periods_are_ordered_whatever_the_stored_order():
+    reversed_plan = {"periods": list(reversed(SPLIT["periods"]))}
+
+    periods = parse_plan(reversed_plan, date(2024, 1, 1))
+
+    assert [period.since for period in periods] == [date(2024, 1, 1), date(2025, 1, 1)]
+
+
+def test_two_periods_starting_the_same_month_are_rejected():
+    with pytest.raises(PlanError) as error:
+        parse_plan(
+            {
+                "periods": [
+                    {"since": "2024-01", "monthly_target": "200"},
+                    {"since": "2024-01", "monthly_target": "600"},
+                ]
+            },
+            date(2024, 1, 1),
+        )
+
+    assert "2024-01" in str(error.value)
+
+
+def test_an_allocation_that_does_not_add_up_is_rejected_in_any_period():
+    with pytest.raises(PlanError) as error:
+        parse_plan(
+            {
+                "periods": [
+                    {"since": "2024-01", "monthly_target": "200", "allocation": {"AAA": "100"}},
+                    {"since": "2025-01", "monthly_target": "600", "allocation": {"AAA": "90"}},
+                ]
+            },
+            date(2024, 1, 1),
+        )
+
+    assert "90" in str(error.value)
