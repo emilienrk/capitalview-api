@@ -108,6 +108,27 @@ def get_non_trading_days(
     return result
 
 
+def get_trading_sessions(mic: str, from_date: date, to_date: date) -> list[date] | None:
+    """Sessions of a single exchange in [from_date, to_date], or None if unknown.
+
+    None and an empty list say different things: None means this calendar cannot
+    answer, an empty list means the exchange was shut for the whole range. Callers
+    that skip work when their stored data is complete need that distinction —
+    reading "unknown" as "no session expected" would let them skip forever.
+    """
+    if to_date < from_date:
+        return []
+
+    cal = _get_calendar(mic)
+    if cal is None:
+        return None
+    try:
+        sessions = cal.sessions_in_range(pd.Timestamp(from_date), pd.Timestamp(to_date))
+    except Exception:
+        return None
+    return [ts.date() for ts in sessions]
+
+
 def _is_cache_fresh(
     asset: MarketAsset,
     price_entry: MarketPriceHistory,
@@ -848,6 +869,45 @@ def _date_range(from_date: date, to_date: date):
         current += timedelta(days=1)
 
 
+def expected_quote_dates(
+    asset: MarketAsset, from_date: date, to_date: date
+) -> set[date] | None:
+    """Days [from_date, to_date[ we expect to hold a stored quote for.
+
+    None means we cannot tell, and the caller must then hit the provider instead
+    of assuming its cache is complete.
+
+    The upper bound is exclusive because today's close does not exist yet.
+
+    Getting this set wrong in the permissive direction is not a cosmetic bug: a
+    stock never quotes on a Saturday, so comparing against calendar days can
+    never be satisfied and the provider ends up being called on every single
+    request for data that is already in the database.
+    """
+    end = to_date - timedelta(days=1)
+    if end < from_date:
+        return set()
+
+    if asset.asset_type == AssetType.CRYPTO:
+        return set(_date_range(from_date, end))  # crypto quotes every day
+    if asset.asset_type == AssetType.FIAT:
+        # Forex runs around the clock on weekdays. Holidays are the approximation
+        # here: a bank holiday nobody quoted costs one needless refetch, which is
+        # still far better than refetching unconditionally.
+        return {d for d in _date_range(from_date, end) if d.weekday() < 5}
+
+    sessions = get_trading_sessions(asset.exchange or "", from_date, end)
+    return None if sessions is None else set(sessions)
+
+
+def _history_is_complete(
+    asset: MarketAsset, from_date: date, to_date: date, existing_dates: set[date]
+) -> bool:
+    """True when every quote we expect over the range is already stored."""
+    expected = expected_quote_dates(asset, from_date, to_date)
+    return expected is not None and expected.issubset(existing_dates)
+
+
 def _get_or_create_forex_asset(session: Session, currency: str) -> MarketAsset:
     """Return (or auto-create) a FIAT MarketAsset tracking currency vs EUR."""
     asset = session.exec(select(MarketAsset).where(MarketAsset.asset_key == currency)).first()
@@ -889,7 +949,7 @@ def get_historical_exchange_rates_db(
     ).all()
     result: dict[date, Decimal] = {r.price_date: r.price for r in stored_rows}
 
-    if len(existing) < (to_date - from_date).days + 1:
+    if not _history_is_complete(asset, from_date, to_date, existing):
         fetched = market_data_manager.get_historical_prices(currency, AssetType.FIAT, from_date, to_date)
         if fetched:
             now = datetime.now(timezone.utc)
@@ -928,12 +988,9 @@ def _backfill_stock_prices(
 
     existing_dates = _existing_dates_in_range(session, asset.id, from_date, to_date)
 
-    # Skip API call if all calendar days up to yesterday are already in DB
-    yesterday = to_date - timedelta(days=1)
-    if yesterday >= from_date:
-        expected_dates = set(_date_range(from_date, yesterday))
-        if expected_dates.issubset(existing_dates):
-            return 0, len(existing_dates)
+    # Skip the provider when every session of the range is already stored.
+    if _history_is_complete(asset, from_date, to_date, existing_dates):
+        return 0, len(existing_dates)
 
     prices = market_data_manager.get_historical_prices(
         asset.symbol, AssetType.STOCK, from_date, to_date
@@ -985,12 +1042,9 @@ def _backfill_crypto_prices(
 
     existing_dates = _existing_dates_in_range(session, asset.id, from_date, to_date)
 
-    # Skip API call if all calendar days up to yesterday are already in DB
-    yesterday = to_date - timedelta(days=1)
-    if yesterday >= from_date:
-        expected_dates = set(_date_range(from_date, yesterday))
-        if expected_dates.issubset(existing_dates):
-            return 0, len(existing_dates)
+    # Skip the provider when every day of the range is already stored.
+    if _history_is_complete(asset, from_date, to_date, existing_dates):
+        return 0, len(existing_dates)
 
     prices = market_data_manager.get_historical_prices(
         asset.symbol, AssetType.CRYPTO, from_date, to_date
