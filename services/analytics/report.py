@@ -9,8 +9,9 @@ import json
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
+from models.market import MarketAsset
 from services.analytics.behaviour import (
     EXIT_HORIZON_DAYS,
     MIN_EPISODES,
@@ -258,6 +259,13 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
         declared_plan, transactions, concentration, price_end, window, benchmark_quotes
     )
 
+    # A target allocation may name a line that is not held, so labels cover the
+    # union rather than the holdings alone.
+    labels = _asset_labels(
+        session,
+        {*window.asset_keys, *(row.asset_key for row in (plan_payload.drift if plan_payload else ()))},
+    )
+
     bridge_payload = _bridge_payload(bridge)
     return {
         "counterfactual": bridge_payload,
@@ -271,11 +279,38 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
             bridge_payload["idle_cash_opportunity"] if bridge_payload else None,
         ),
         "market_conditioning": _conditioning_payload(conditioning),
-        "concentration": _concentration_payload(concentration),
+        "concentration": _concentration_payload(concentration, labels),
         "fees": _fees_payload(fees),
         "exits": _exits_payload(exits),
-        "plan": _plan_payload(plan_payload, plan_error),
+        "plan": _plan_payload(plan_payload, plan_error, labels),
     }, True
+
+
+def _asset_labels(session: Session, asset_keys) -> dict[str, tuple[str, str]]:
+    """Ticker and readable name per asset key, resolved in a single query.
+
+    An ISIN identifies a line, it does not name it, and a correlation matrix
+    labelled IE00B4L5Y983 / IE00BKM4GZ66 tells the reader nothing. Keys the market
+    table does not know fall back to themselves: a technical label beats a blank.
+    """
+    keys = sorted({key for key in asset_keys if key})
+    if not keys:
+        return {}
+
+    rows = session.exec(
+        select(MarketAsset.asset_key, MarketAsset.symbol, MarketAsset.name).where(
+            MarketAsset.asset_key.in_(keys)
+        )
+    ).all()
+    known = {
+        key: (symbol or key, name or symbol or key) for key, symbol, name in rows
+    }
+    return {key: known.get(key, (key, key)) for key in keys}
+
+
+def _labelled(key: str, labels: dict[str, tuple[str, str]]) -> dict:
+    symbol, name = labels.get(key, (key, key))
+    return {"asset_key": key, "symbol": symbol, "name": name}
 
 
 def _average_capital(holdings: dict, prices: dict) -> Decimal:
@@ -845,7 +880,7 @@ def _turnover_payload(turnover) -> dict | None:
     }
 
 
-def _concentration_payload(concentration) -> dict | None:
+def _concentration_payload(concentration, labels: dict) -> dict | None:
     if concentration is None:
         return None
 
@@ -887,12 +922,20 @@ def _concentration_payload(concentration) -> dict | None:
         "effective_positions": effective,
         "independent_bets": bets,
         "weights": [
-            {"asset_key": key, "weight": round(weight, 4)}
+            {**_labelled(key, labels), "weight": round(weight, 4)}
             for key, weight in concentration.weights
         ],
         "correlations": (
             [
-                {"left": left, "right": right, "value": value}
+                {
+                    "left": left,
+                    "right": right,
+                    "value": value,
+                    "left_symbol": labels.get(left, (left, left))[0],
+                    "right_symbol": labels.get(right, (right, right))[0],
+                    "left_name": labels.get(left, (left, left))[1],
+                    "right_name": labels.get(right, (right, right))[1],
+                }
                 for left, right, value in concentration.correlations
             ]
             if show
@@ -900,7 +943,7 @@ def _concentration_payload(concentration) -> dict | None:
         ),
         "max_correlation": concentration.max_correlation if show else None,
         "overlap": concentration.overlap,
-        "dropped": concentration.dropped,
+        "dropped": [_labelled(key, labels) for key in concentration.dropped],
         "verdict": _concentration_verdict(concentration, effective["value"], bets["value"]),
     }
 
@@ -1122,7 +1165,7 @@ def _exits_verdict(exits, ratio) -> str:
     )
 
 
-def _plan_payload(plan, error: str | None) -> dict | None:
+def _plan_payload(plan, error: str | None, labels: dict) -> dict | None:
     if error is not None:
         return {
             "monthly_target": _ZERO,
@@ -1204,7 +1247,7 @@ def _plan_payload(plan, error: str | None) -> dict | None:
         ),
         "drift": [
             {
-                "asset_key": row.asset_key,
+                **_labelled(row.asset_key, labels),
                 "target": round(row.target, 2),
                 "actual": round(row.actual, 2),
             }
