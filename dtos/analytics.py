@@ -281,10 +281,20 @@ class AllocationDriftOut(AssetLabelOut):
     actual: Decimal
 
 
+class PlanPeriodOut(BaseModel):
+    """One stretch of the plan. A plan that never changed has exactly one."""
+
+    since: date
+    monthly_target: Decimal
+    allocation: dict[str, Decimal] = {}
+
+
 class PlanResponse(BaseModel):
     """Only present when a plan is declared."""
 
     monthly_target: Decimal
+    """The target in force today, when the plan is split into periods."""
+    periods: list[PlanPeriodOut] = []
     since: date
     months: list[MonthlyAdherenceOut] = []
     total_target: Decimal

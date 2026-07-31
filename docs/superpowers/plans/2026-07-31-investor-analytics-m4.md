@@ -153,18 +153,18 @@ six onglets vivent tous dans `src/pages/settings/Settings*.vue` — convention d
 ]}
 ```
 
-- [ ] **Rétro-compatibilité** : la forme actuelle `{monthly_target, allocation, since}` est lue
+- [x] **Rétro-compatibilité** : la forme actuelle `{monthly_target, allocation, since}` est lue
       comme une période unique. `parse_plan` normalise les deux vers une liste de périodes.
-- [ ] L'adhérence se calcule **période par période**, chaque mois complet étant confronté à la cible
+- [x] L'adhérence se calcule **période par période**, chaque mois complet étant confronté à la cible
       en vigueur ce mois-là. Le total agrège. La dérive d'allocation utilise la **dernière période**
       (c'est la cible actuelle qui dit ce qu'il faut rééquilibrer aujourd'hui).
-- [ ] Validation par période : allocation à 100 % ± 1, montant > 0, `since` strictement croissants.
+- [x] Validation par période : allocation à 100 % ± 1, montant > 0, `since` strictement croissants.
       Rejet explicite et lisible, jamais de normalisation silencieuse — comportement déjà en place
       via `PlanError`, à étendre.
-- [ ] **UI : fixe par défaut.** Le formulaire montre un montant + une allocation. Une bascule
+- [x] **UI : fixe par défaut.** Le formulaire montre un montant + une allocation. Une bascule
       « plan fractionné » révèle la gestion par périodes. Le mode se déduit de la présence de
       plusieurs périodes, il n'est pas stocké.
-- [ ] Tests : forme ancienne toujours lue ; deux périodes ⇒ adhérence pondérée correctement par
+- [x] Tests : forme ancienne toujours lue ; deux périodes ⇒ adhérence pondérée correctement par
       période ; `since` non croissants ⇒ rejet ; suppression du plan ⇒ bloc absent (déjà couvert).
 
 ## Task 6 · Le registre du texte

@@ -1206,6 +1206,7 @@ def _plan_payload(plan, error: str | None, labels: dict) -> dict | None:
     if error is not None:
         return {
             "monthly_target": _ZERO,
+            "periods": [],
             "since": date.today(),
             "months": [],
             "total_target": _ZERO,
@@ -1266,6 +1267,14 @@ def _plan_payload(plan, error: str | None, labels: dict) -> dict | None:
 
     return {
         "monthly_target": plan.monthly_target,
+        "periods": [
+            {
+                "since": period.since,
+                "monthly_target": period.monthly_target,
+                "allocation": period.allocation,
+            }
+            for period in plan.periods
+        ],
         "since": plan.since,
         "months": [
             {
