@@ -120,22 +120,24 @@ lump-sum décroche visiblement.
 
 ## Task 4 · L'onglet « Analyse » dans les réglages
 
-**Files:** Front : `src/pages/Settings.vue`, nouveau `src/components/settings/AnalyticsSettings.vue`,
+**Files:** Front : `src/pages/Settings.vue`, nouveau `src/pages/settings/SettingsAnalytics.vue`
+(le plan disait `src/components/settings/AnalyticsSettings.vue` ; ce répertoire n'existe pas et les
+six onglets vivent tous dans `src/pages/settings/Settings*.vue` — convention du dépôt retenue),
 `src/pages/Analysis.vue`, `src/stores/analysis.ts`
 
-- [ ] Nouvel onglet `analyse` dans le tableau `tabs` de `Settings.vue:27-66`, à côté de Communauté.
+- [x] Nouvel onglet `analyse` dans le tableau `tabs` de `Settings.vue:27-66`, à côté de Communauté.
       **Ne pas décommenter `finances`** : c'est un onglet mort dont le contenu n'est pas défini.
-- [ ] `AnalyticsSettings.vue` reçoit le sélecteur d'indice et le formulaire de plan, déplacés
+- [x] `AnalyticsSettings.vue` reçoit le sélecteur d'indice et le formulaire de plan, déplacés
       depuis le haut de `/analyse`. Le composant `BenchmarkPicker.vue` est réutilisé tel quel.
-- [ ] Pointeur depuis `/analyse` : un bouton dans le `PageHeader`, exactement le pattern de
+- [x] Pointeur depuis `/analyse` : un bouton dans le `PageHeader`, exactement le pattern de
       `Community.vue:272` — `<RouterLink :to="{ path: '/settings', query: { tab: 'analyse' } }">`.
       `Settings.vue` lit et resynchronise déjà `route.query.tab` dans les deux sens (lignes 67-76),
       rien à ajouter côté routeur.
-- [ ] **Invalidation du cache, sinon le réglage semble ne rien faire.** Le store analytics garde
+- [x] **Invalidation du cache, sinon le réglage semble ne rien faire.** Le store analytics garde
       1 h. `/analyse` doit comparer `analysis.data.benchmark_asset_key` avec
       `settingsStore.settings.benchmark_asset_key` au montage et forcer un `fetchAnalytics(true)`
       s'ils divergent. Se réparer tout seul vaut mieux que dépendre de qui a modifié quoi.
-- [ ] La page `/analyse` ne contient plus que de l'analyse : verdict, blocs, notes de méthode.
+- [x] La page `/analyse` ne contient plus que de l'analyse : verdict, blocs, notes de méthode.
 
 ## Task 5 · Le plan cible fractionné en périodes
 
