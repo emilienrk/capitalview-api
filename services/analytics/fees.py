@@ -62,6 +62,22 @@ class FeeAnalysis:
     def is_measurable(self) -> bool:
         return self.order_count >= MIN_ORDERS
 
+    @property
+    def is_avoidable(self) -> bool:
+        """Whether grouping orders is worth recommending at all.
+
+        The per-order threshold and the annual charge answer different questions,
+        and reading the first as advice while the second is already low produces a
+        contradiction: at 0.68 EUR an order every order sits under the 272 EUR
+        threshold, yet the whole fee load is 20 bps a year. Telling someone to
+        group orders there is telling them to break a DCA habit to save a few
+        euros. The threshold stays on screen as calibration; only the annual
+        charge decides whether there is anything to do.
+        """
+        if self.annual_bps is None or self.orders_below_threshold == 0:
+            return False
+        return self.annual_bps > TARGET_BPS
+
 
 def _tx_type(tx) -> str:
     raw = getattr(tx, "type", None)

@@ -172,16 +172,16 @@ six onglets vivent tous dans `src/pages/settings/Settings*.vue` — convention d
 **Files:** `services/analytics/report.py` (une quinzaine de fonctions `_*_verdict`) ·
 Test `tests/services/analytics/test_report.py`
 
-- [ ] **Constat à l'impersonnel** : « Sur 31 mois, 24 achats. La répartition du capital équivaut à
+- [x] **Constat à l'impersonnel** : « Sur 31 mois, 24 achats. La répartition du capital équivaut à
       10,6 achats mensuels égaux. » Le sujet est le phénomène observé, pas la personne.
-- [ ] **Conseil au « tu », en phrase séparée**, uniquement quand une action existe : « 22 ordres
+- [x] **Conseil au « tu », en phrase séparée**, uniquement quand une action existe : « 22 ordres
       sont sous le seuil de rentabilité — tu peux les regrouper. »
-- [ ] **Supprimé partout** : la présomption (« tu penses peut-être faire du DCA » — l'app n'a pas à
+- [x] **Supprimé partout** : la présomption (« tu penses peut-être faire du DCA » — l'app n'a pas à
       dire à l'utilisateur ce qu'il pense), l'injonction gratuite (« ne cherche pas à corriger le
       mauvais comportement »), le ton accusateur (« ce que tu appelles régularité n'en est pas »).
-- [ ] Les possessifs factuels restent : « tes frais », « ton portefeuille » — c'est du français
+- [x] Les possessifs factuels restent : « tes frais », « ton portefeuille » — c'est du français
       normal, pas de la morale.
-- [ ] L'invariant de M1 est inchangé et reste testé : un verdict ne se rédige **que** sur des
+- [x] L'invariant de M1 est inchangé et reste testé : un verdict ne se rédige **que** sur des
       valeurs qui ont franchi leur gate.
 
 ## Task 7 · Repli automatique et densité de la page
@@ -290,12 +290,12 @@ Le seuil de 25 bps a été calibré pour un courtier à ~4,20 €/ordre. À 0,68
 grouper les ordres revient à demander de casser une discipline de DCA pour économiser une
 cinquantaine d'euros sur deux ans et demi.
 
-- [ ] **Ne pas émettre le conseil de regroupement quand la charge annuelle est déjà sous la cible.**
+- [x] **Ne pas émettre le conseil de regroupement quand la charge annuelle est déjà sous la cible.**
       Condition d'émission : `annual_bps > TARGET_BPS`. En dessous, le constat reste affiché (frais,
       part du capital, seuil théorique) mais sans injonction.
-- [ ] Reformuler pour que les deux chiffres cohabitent sans se contredire : le seuil par ordre est
+- [x] Reformuler pour que les deux chiffres cohabitent sans se contredire : le seuil par ordre est
       une **information de calibrage**, la charge annuelle est le **verdict**.
-- [ ] Test : courtier à 0,68 €/ordre avec 20 bps annuels ⇒ aucun « regroupe-les » ; courtier à
+- [x] Test : courtier à 0,68 €/ordre avec 20 bps annuels ⇒ aucun « regroupe-les » ; courtier à
       4,20 €/ordre avec 60 bps annuels ⇒ conseil émis.
 
 ## Task 9 · Le slippage à −129 bps : suspicion de place de cotation
@@ -350,20 +350,20 @@ investis t'a **rapporté 165 €** ». Les deux sont exacts et mesurent des chos
 robot compare aux **actifs de l'indice**, l'écart compare à **ta propre stratégie** — mais rien ne
 l'explique au lecteur, qui en conclut que la page se contredit.
 
-- [ ] Nommer la différence dans le verdict global quand les deux figures y apparaissent : le robot
+- [x] Nommer la différence dans le verdict global quand les deux figures y apparaissent : le robot
       juge la **sélection d'actifs**, l'écart investisseur juge le **timing**.
-- [ ] Ne pas juxtaposer les deux montants sans cette précision.
+- [x] Ne pas juxtaposer les deux montants sans cette précision.
 
 ## Corrections mineures confirmées à l'écran
 
-- [ ] `build_global_verdict` affiche « **1.0714** pari indépendant » — quatre décimales, alors que
+- [x] `build_global_verdict` affiche « **1.0714** pari indépendant » — quatre décimales, alors que
       le bloc juste en dessous affiche 1,1. L'arrondi a été corrigé dans `_concentration_verdict` en
       M3 mais pas dans le verdict global.
-- [ ] « Ton argent est investi en médiane en **0 jour(s)** » — la forme « jour(s) » est à remplacer
+- [x] « Ton argent est investi en médiane en **0 jour(s)** » — la forme « jour(s) » est à remplacer
       par un accord correct.
-- [ ] La présomption « Tu penses peut-être faire du DCA » est bien présente en production
+- [x] La présomption « Tu penses peut-être faire du DCA » est bien présente en production
       (déjà couverte par la Task 6).
-- [ ] Les ISIN bruts dans la matrice de corrélation sont bien présents en production
+- [x] Les ISIN bruts dans la matrice de corrélation sont bien présents en production
       (déjà couverts par la Task 2).
 
 ## Ce que ce croisement ne prouve toujours pas

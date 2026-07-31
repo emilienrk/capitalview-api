@@ -97,3 +97,65 @@ def test_cash_rows_and_sales_carry_no_purchase_fee():
 
 def test_the_target_is_the_documented_25_bps():
     assert TARGET_BPS == Decimal("25")
+
+
+# ── The advice must not contradict the figure above it ───────────────────
+#
+# On a real portfolio the page showed "coût annuel +20 bps" and, right below,
+# "77 de tes 77 ordres sont sous le seuil — regroupe-les". Both numbers were
+# right; the advice was not. The threshold was calibrated for a 4.20 EUR broker,
+# and at 0.68 EUR an order every order sits under it while the whole load stays
+# a fraction of the target.
+
+
+# The real portfolio the addendum describes: 77 orders of about 136 EUR over
+# 31 months, at 0.68 EUR each. Every order is under the threshold, and the whole
+# fee load is still 20 bps a year.
+REAL_WINDOW = _Window(date(2023, 7, 1), date(2026, 1, 31))
+
+
+def _cheap_broker_orders():
+    return [
+        _buy(date(2023 + (6 + n // 3) // 12, (6 + n // 3) % 12 + 1, 5),
+             notional="136", fees="0.68")
+        for n in range(77)
+    ]
+
+
+def test_a_cheap_broker_does_not_trigger_the_grouping_advice():
+    from services.analytics.report import _fees_verdict
+
+    fees = analyse_fees(_cheap_broker_orders(), REAL_WINDOW)
+
+    assert fees.orders_below_threshold == 77
+    assert fees.annual_bps < TARGET_BPS
+    assert fees.is_avoidable is False
+    assert "regrouper" not in _fees_verdict(fees, fees.threshold_order_size)
+
+
+def test_an_expensive_broker_still_gets_the_advice():
+    from services.analytics.report import _fees_verdict
+
+    fees = analyse_fees(_orders(24, notional="200", fees="4.20"), TWO_YEARS)
+
+    assert fees.annual_bps > TARGET_BPS
+    assert fees.is_avoidable is True
+    assert "regrouper" in _fees_verdict(fees, fees.threshold_order_size)
+
+
+def test_the_threshold_stays_visible_as_calibration():
+    """Suppressing the advice must not suppress the number behind it."""
+    from services.analytics.report import _fees_verdict
+
+    fees = analyse_fees(_cheap_broker_orders(), REAL_WINDOW)
+    verdict = _fees_verdict(fees, fees.threshold_order_size)
+
+    assert str(round(fees.threshold_order_size)) in verdict
+    assert "calibrage" in verdict
+
+
+def test_no_orders_below_the_threshold_is_not_avoidable_either():
+    fees = analyse_fees(_orders(24, notional="100000", fees="4.20"), TWO_YEARS)
+
+    assert fees.orders_below_threshold == 0
+    assert fees.is_avoidable is False
