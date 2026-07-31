@@ -231,6 +231,8 @@ class FeesResponse(BaseModel):
     threshold_order_size: MetricOut
     """Order size below which entry fees exceed 25 bps."""
     orders_below_threshold: int
+    avoidable: bool = False
+    """Whether grouping orders is worth recommending, not merely possible."""
     cost_below_threshold: Decimal
     invested_below_threshold: Decimal
     average_fee: Decimal | None = None

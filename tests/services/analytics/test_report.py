@@ -245,7 +245,7 @@ def test_buying_at_a_flat_price_is_not_detectable():
     execution = _run_blocks(_monthly_buys(24))["execution"]
 
     assert execution["is_detectable"] is False
-    assert "pas là qu'il faut chercher" in execution["verdict"]
+    assert "pas là que ça se joue" in execution["verdict"]
 
 
 def test_the_replay_blocks_survive_missing_snapshots():
@@ -487,3 +487,80 @@ def test_labels_reach_the_weights_and_the_correlations():
     assert payload["correlations"][0]["right_name"] == "Beta"
     # An unknown line still names itself rather than showing an empty label.
     assert payload["dropped"] == [{"asset_key": "CCC", "symbol": "CCC", "name": "CCC"}]
+
+
+# ── Register ─────────────────────────────────────────────────────────────
+#
+# The statement is impersonal — the subject is the observed behaviour, not the
+# person — and advice, when there is any, comes as its own sentence. The page
+# never presumes what the user thinks.
+
+BANNED_PHRASES = [
+    "tu penses",  # presumption about what the user believes
+    "ne cherche pas",  # gratuitous injunction
+    "ce que tu appelles",  # accusation
+    "jour(s)",  # a count that never learned to agree
+    "il faut chercher",  # instruction dressed as a finding
+]
+
+
+def _every_verdict(report) -> list[str]:
+    out = [report["verdict"]]
+    for block in report.values():
+        if isinstance(block, dict) and isinstance(block.get("verdict"), str):
+            out.append(block["verdict"])
+    return [text for text in out if text]
+
+
+@pytest.mark.parametrize("months", [2, 6, 24])
+def test_no_verdict_presumes_or_orders(months):
+    report = _run_blocks(_monthly_buys(months))
+
+    for verdict in _every_verdict(report):
+        for phrase in BANNED_PHRASES:
+            assert phrase not in verdict.lower(), f"{phrase!r} in {verdict!r}"
+
+
+def test_the_deposit_lag_verdict_agrees_its_days():
+    from services.analytics.report import _days
+
+    assert _days(Decimal("0")) == "0 jour"
+    assert _days(Decimal("1")) == "1 jour"
+    assert _days(Decimal("23")) == "23 jours"
+
+
+def test_the_global_verdict_rounds_the_independent_bets():
+    """Four decimals in a sentence is a number nobody reads."""
+    from services.analytics.report import build_global_verdict
+
+    verdict = build_global_verdict(
+        {
+            "concentration": {
+                "independent_bets": {"value": Decimal("1.0714")},
+                "lines": 5,
+            }
+        }
+    )
+
+    assert "1.0714" not in verdict
+    assert "1.1 pari indépendant" in verdict
+
+
+def test_the_robot_and_the_investor_gap_are_told_apart():
+    """Both are exact and they measure different things — say which is which."""
+    from services.analytics.report import build_global_verdict
+
+    verdict = build_global_verdict(
+        {
+            "investor_gap": {"gap_eur": {"value": Decimal("-165")}},
+            "counterfactual": {
+                "behaviour_cost": Decimal("-329"),
+                "idle_cash": Decimal("0"),
+                "idle_cash_opportunity": None,
+            },
+        }
+    )
+
+    assert "329" in verdict and "165" in verdict
+    assert "sélection d'actifs" in verdict
+    assert "moment des versements" in verdict
