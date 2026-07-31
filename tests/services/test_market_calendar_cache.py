@@ -417,3 +417,150 @@ class TestGetStockPriceMarketClosedIntegration:
 
         assert result == new_price
         mock_market_manager.get_info.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Backfill guard — the provider must not be called for history already stored
+# ---------------------------------------------------------------------------
+#
+# This guard used to compare against calendar days. A stock never quotes on a
+# Saturday, so it could never be satisfied: every page load re-fetched years of
+# prices that were already in the database. These tests pin the behaviour down by
+# counting provider calls, not by inspecting the rows that come back.
+
+from services.market import (  # noqa: E402
+    _backfill_crypto_prices,
+    _backfill_stock_prices,
+    expected_quote_dates,
+    get_historical_exchange_rates_db,
+    get_trading_sessions,
+)
+
+# A full Monday-to-Monday span: five Euronext Paris sessions, one weekend.
+_FROM = date(2025, 1, 6)
+_TO = date(2025, 1, 13)
+_SESSIONS = [date(2025, 1, d) for d in (6, 7, 8, 9, 10)]
+_WEEKEND = [date(2025, 1, 11), date(2025, 1, 12)]
+
+
+@pytest.fixture
+def mock_provider():
+    with patch("services.market.market_data_manager") as mock:
+        mock.get_historical_prices.return_value = {}
+        mock.get_info.return_value = {"currency": "EUR"}
+        yield mock
+
+
+def _make_history(session: Session, asset: MarketAsset, days) -> None:
+    now = datetime.now(timezone.utc)
+    for day in days:
+        session.add(
+            MarketPriceHistory(
+                market_asset_id=asset.id,
+                price=Decimal("100"),
+                price_date=day,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    session.commit()
+
+
+class TestBackfillGuard:
+    """The network is skipped exactly when the stored history is complete."""
+
+    def test_trading_sessions_exclude_the_weekend(self):
+        assert get_trading_sessions("XPAR", _FROM, date(2025, 1, 12)) == _SESSIONS
+
+    def test_trading_sessions_are_none_for_an_unknown_mic(self):
+        """None, not an empty list: "cannot answer" must not read as "expect nothing"."""
+        assert get_trading_sessions("NOT-A-MIC", _FROM, _TO) is None
+
+    def test_expected_dates_stop_before_today(self, session: Session):
+        """Today's close does not exist yet, so it is never expected."""
+        asset = _make_asset(
+            session, asset_key="FR0000000001", symbol="AAA.PA", name="AAA",
+            asset_type=AssetType.STOCK, exchange="XPAR",
+        )
+        assert expected_quote_dates(asset, _FROM, _TO) == set(_SESSIONS)
+
+    def test_stock_history_complete_skips_the_provider(
+        self, session: Session, mock_provider
+    ):
+        """The regression: weekends are missing from the database and always will be."""
+        asset = _make_asset(
+            session, asset_key="FR0000000002", symbol="BBB.PA", name="BBB",
+            asset_type=AssetType.STOCK, exchange="XPAR",
+        )
+        _make_history(session, asset, _SESSIONS)
+
+        inserted, skipped = _backfill_stock_prices(session, asset, _FROM, _TO)
+
+        assert mock_provider.get_historical_prices.call_count == 0
+        assert (inserted, skipped) == (0, len(_SESSIONS))
+
+    def test_stock_missing_session_calls_the_provider(
+        self, session: Session, mock_provider
+    ):
+        asset = _make_asset(
+            session, asset_key="FR0000000003", symbol="CCC.PA", name="CCC",
+            asset_type=AssetType.STOCK, exchange="XPAR",
+        )
+        _make_history(session, asset, _SESSIONS[:-1])
+
+        _backfill_stock_prices(session, asset, _FROM, _TO)
+
+        assert mock_provider.get_historical_prices.call_count == 1
+
+    def test_stock_with_unknown_exchange_calls_the_provider(
+        self, session: Session, mock_provider
+    ):
+        """When we cannot know what to expect, we fetch rather than assume."""
+        asset = _make_asset(
+            session, asset_key="FR0000000004", symbol="DDD", name="DDD",
+            asset_type=AssetType.STOCK, exchange=None,
+        )
+        _make_history(session, asset, _SESSIONS + _WEEKEND)
+
+        _backfill_stock_prices(session, asset, _FROM, _TO)
+
+        assert mock_provider.get_historical_prices.call_count == 1
+
+    def test_crypto_expects_every_calendar_day(self, session: Session, mock_provider):
+        asset = _make_asset(
+            session, asset_key="BTC", symbol="BTC", name="Bitcoin",
+            asset_type=AssetType.CRYPTO,
+        )
+        _make_history(session, asset, _SESSIONS)  # weekend missing
+
+        _backfill_crypto_prices(session, asset, _FROM, _TO)
+
+        assert mock_provider.get_historical_prices.call_count == 1
+
+    def test_crypto_complete_history_skips_the_provider(
+        self, session: Session, mock_provider
+    ):
+        asset = _make_asset(
+            session, asset_key="ETH", symbol="ETH", name="Ether",
+            asset_type=AssetType.CRYPTO,
+        )
+        _make_history(session, asset, _SESSIONS + _WEEKEND)
+
+        _backfill_crypto_prices(session, asset, _FROM, _TO)
+
+        assert mock_provider.get_historical_prices.call_count == 0
+
+    def test_exchange_rates_skip_the_provider_when_weekdays_are_stored(
+        self, session: Session, mock_provider
+    ):
+        """Forex has no weekend quotes either — same defect, same fix."""
+        asset = _make_asset(
+            session, asset_key="USD", symbol="USD", name="USD",
+            asset_type=AssetType.FIAT,
+        )
+        _make_history(session, asset, _SESSIONS)
+
+        with patch("services.market.get_exchange_rate", return_value=Decimal("1")):
+            get_historical_exchange_rates_db(session, "USD", _FROM, _TO)
+
+        assert mock_provider.get_historical_prices.call_count == 0

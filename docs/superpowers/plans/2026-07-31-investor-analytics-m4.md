@@ -71,14 +71,14 @@ réactivation de l'onglet Finances.
 **Files:** `services/market.py` (`_backfill_stock_prices` ~ligne 929, `_backfill_crypto_prices` ~ligne 987) ·
 Test `tests/services/test_market_calendar_cache.py`
 
-- [ ] La condition compare `set(_date_range(from_date, yesterday))` — tous les jours calendaires — à
+- [x] La condition compare `set(_date_range(from_date, yesterday))` — tous les jours calendaires — à
       ce qui est en base. Les week-ends n'y sont jamais, donc `issubset` est toujours faux.
       Comparer aux **jours de bourse** (`get_non_trading_days` existe déjà, `services/market.py:67`,
       et `resolve_trading_days` en fait déjà usage dans `services/analytics/window.py`).
-- [ ] Repli sûr quand le MIC est inconnu : dans le doute on appelle le réseau, on ne saute pas.
-- [ ] Test : base contenant toutes les séances de la plage ⇒ **aucun appel provider** (mock, on
+- [x] Repli sûr quand le MIC est inconnu : dans le doute on appelle le réseau, on ne saute pas.
+- [x] Test : base contenant toutes les séances de la plage ⇒ **aucun appel provider** (mock, on
       vérifie `call_count == 0`) ; une séance manquante ⇒ appel effectué.
-- [ ] Mesurer avant/après le nombre d'appels provider pour un chargement de `/analytics/investor`
+- [x] Mesurer avant/après le nombre d'appels provider pour un chargement de `/analytics/investor`
       et l'écrire dans les résultats — c'est la seule preuve que le correctif sert.
 
 ## Task 2 · Les noms d'actifs à la place des ISIN
