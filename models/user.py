@@ -105,6 +105,12 @@ class UserSettings(SQLModel, table=True):
         decimal_places=6,
         sa_column=Column(sa.Numeric(10, 6), nullable=True),
     )
+    # Reference index for the investor analytics counterfactuals. Must be an
+    # accumulating ETF: a distributing one would need a total-return series we
+    # do not store.
+    benchmark_asset_key: str | None = Field(default=None, sa_column=Column(TEXT, nullable=True))
+    # Encrypted JSON: {"monthly_target": "...", "allocation": {asset_key: pct}}
+    investment_plan_enc: str | None = Field(default=None, sa_column=Column(TEXT, nullable=True))
 
     created_at: datetime = Field(
         default=sa.func.now(),
