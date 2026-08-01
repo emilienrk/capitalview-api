@@ -333,17 +333,34 @@ code** comme un choix, avec sa raison, au lieu d'être une dérive silencieuse.
 **Reste à faire, hors périmètre M4 :**
 
 - **Le coût moyen pondéré est réimplémenté** (`behaviour.py`) alors que `get_stock_account_summary`
-  calcule déjà le sien. **Elles avaient déjà divergé** : la couche stock met les frais dans la base
-  de coût (`cost = amount × price + fees`, `proceeds = amount × price − fees`), analytics les
-  laissait dehors. Un aller-retour qui franchit tout juste le seuil de rentabilité était donc
-  compté **gain sur `/analyse` et perte sur `/stock`** — acheté 100 + 1 € de frais, revendu 100,50
-  − 1 € : `/stock` réalise −1,50 €, `/analyse` classait un gain. M3 avait pourtant écrit
-  l'alignement comme une exigence ; l'implémentation ne l'avait pas suivi.
-  **La convention est corrigée** (frais dans la base de coût, prix de vente net de frais, produits
-  d'épisode nets) et trois tests épinglent le cas exact. Le **partage du code** reste à faire : le
-  calcul est enfoui dans une fonction qui construit tout un DTO, donc l'extraire est un refactor du
-  même genre que R1 (les flux) et R2 (la matrice de prix). Tant qu'il n'est pas fait, les deux
-  implémentations peuvent redivergier — mais elles disent au moins la même chose aujourd'hui.
+  calcule déjà le sien. **Faux départ à consigner** : la duplication a d'abord été lue comme une
+  divergence à corriger, parce que la couche stock met les frais dans la base de coût et que
+  l'analytics ne le fait pas. Les frais ont donc été intégrés à la base de coût de la disposition —
+  **puis retirés**, parce que c'était une erreur.
+
+  Le tableau des conventions de M3 tranche **un seul axe** : coût moyen pondéré *contre FIFO*. Sur
+  cet axe l'analytics était déjà conforme. La place des frais est un autre axe, que M3 n'a jamais
+  posé — et sur lequel la littérature tranche dans l'autre sens. L'effet de disposition vient de la
+  théorie des perspectives via Shefrin & Statman (1985) : il mesure un **point de référence
+  mental**, et Odean (1998), que le §3.2 de la spec nomme comme mesure canonique, classe en
+  comparant le prix de vente au **prix d'achat moyen**. Y amortir la commission transformerait un
+  point de référence psychologique en seuil de rentabilité comptable — une autre grandeur.
+
+  **Deux conventions cohabitent donc dans le bloc sorties, volontairement**, et le code le dit :
+
+  | Mesure | Frais | Pourquoi |
+  |---|---|---|
+  | PGR/PLR (disposition) | **hors base de coût** | Question psychologique. Point de référence d'Odean : le prix payé par titre. |
+  | Hit rate, payoff ratio | **dans les deux sens** | Question monétaire : un aller-retour qui perd après commissions n'est pas un gagnant. |
+
+  **Et `/stock` qui annonce un P/L réalisé différent sur la même vente n'est pas une contradiction**
+  — c'est la question comptable contre la question comportementale. C'était la justification
+  invoquée pour le changement, et elle ne tenait pas.
+
+  Le **partage du code** reste ouvert, mais sans urgence : les deux implémentations répondent à des
+  questions différentes, donc les unifier n'est pas l'objectif. Ce qui mériterait d'être partagé,
+  c'est le seul mécanisme réellement commun — le suivi de position en coût moyen pondéré — pas la
+  convention de frais qui doit rester distincte de part et d'autre.
 - **`stock_transaction.py` garde 29 littéraux `"EUR"` en interne.** La constante existe désormais et
   est exportée ; migrer ses propres usages est une dette préexistante, sans rapport avec analytics.
 
