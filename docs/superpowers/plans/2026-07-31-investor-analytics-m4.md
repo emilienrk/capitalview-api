@@ -334,33 +334,34 @@ code** comme un choix, avec sa raison, au lieu d'être une dérive silencieuse.
 
 - **Le coût moyen pondéré est réimplémenté** (`behaviour.py`) alors que `get_stock_account_summary`
   calcule déjà le sien. **Faux départ à consigner** : la duplication a d'abord été lue comme une
-  divergence à corriger, parce que la couche stock met les frais dans la base de coût et que
-  l'analytics ne le fait pas. Les frais ont donc été intégrés à la base de coût de la disposition —
-  **puis retirés**, parce que c'était une erreur.
+  divergence à corriger, parce que la couche stock met les frais dans la base de coût et pas
+  l'analytics. Les frais ont donc été intégrés à la base de coût de la disposition — **puis
+  retirés**, parce que c'était une erreur.
 
-  Le tableau des conventions de M3 tranche **un seul axe** : coût moyen pondéré *contre FIFO*. Sur
-  cet axe l'analytics était déjà conforme. La place des frais est un autre axe, que M3 n'a jamais
-  posé — et sur lequel la littérature tranche dans l'autre sens. L'effet de disposition vient de la
-  théorie des perspectives via Shefrin & Statman (1985) : il mesure un **point de référence
-  mental**, et Odean (1998), que le §3.2 de la spec nomme comme mesure canonique, classe en
-  comparant le prix de vente au **prix d'achat moyen**. Y amortir la commission transformerait un
-  point de référence psychologique en seuil de rentabilité comptable — une autre grandeur.
+  Le tableau des conventions de M3 tranche **un seul axe** : coût moyen pondéré *contre FIFO*, sur
+  lequel l'analytics était déjà conforme. La place des frais est un autre axe, que M3 n'a jamais
+  posé — et la littérature y répond bloc par bloc, pas globalement.
 
-  **Deux conventions cohabitent donc dans le bloc sorties, volontairement**, et le code le dit :
+  **Deux conventions cohabitent donc dans le bloc sorties, chacune avec son papier**, tous deux
+  déjà en bibliographie de la spec (§13). Le code, les tests et les notes de méthode à l'écran les
+  nomment toutes les deux, comme le §85 du plan M3 l'exige pour deux conventions dans une même page :
 
-  | Mesure | Frais | Pourquoi |
+  | Mesure | Frais | Source |
   |---|---|---|
-  | PGR/PLR (disposition) | **hors base de coût** | Question psychologique. Point de référence d'Odean : le prix payé par titre. |
-  | Hit rate, payoff ratio | **dans les deux sens** | Question monétaire : un aller-retour qui perd après commissions n'est pas un gagnant. |
+  | PGR/PLR (disposition) | **hors base de coût** | **Odean (1998)**. Mesure psychologique : la théorie des perspectives situe le point de référence au prix payé par titre, pas au seuil de rentabilité comptable. Y amortir la commission mesurerait autre chose. |
+  | Hit rate, payoff ratio | **nets des deux côtés** | **Barber & Odean (2000)**. Toute leur contribution repose sur cette distinction : bruts de coûts les particuliers sont à peu près au marché, nets ils sous-performent. Mesurée en brut, la question « cet aller-retour a-t-il rapporté ? » se répond faussement. |
+
+  Une même vente peut donc être un gain pour la première et une position perdante pour la seconde —
+  l'écart est exactement la commission, et un test l'épingle explicitement comme voulu.
 
   **Et `/stock` qui annonce un P/L réalisé différent sur la même vente n'est pas une contradiction**
-  — c'est la question comptable contre la question comportementale. C'était la justification
-  invoquée pour le changement, et elle ne tenait pas.
+  — question comptable contre question comportementale. C'était la justification invoquée pour le
+  changement initial, et elle ne tenait pas.
 
-  Le **partage du code** reste ouvert, mais sans urgence : les deux implémentations répondent à des
-  questions différentes, donc les unifier n'est pas l'objectif. Ce qui mériterait d'être partagé,
-  c'est le seul mécanisme réellement commun — le suivi de position en coût moyen pondéré — pas la
-  convention de frais qui doit rester distincte de part et d'autre.
+  Le **partage du code** reste ouvert mais change de nature : les deux implémentations répondent à
+  des questions différentes, donc les unifier n'est pas l'objectif. Seul le mécanisme réellement
+  commun — le suivi de position en coût moyen pondéré — mériterait d'être mutualisé, les
+  conventions de frais devant rester distinctes de part et d'autre.
 - **`stock_transaction.py` garde 29 littéraux `"EUR"` en interne.** La constante existe désormais et
   est exportée ; migrer ses propres usages est une dette préexistante, sans rapport avec analytics.
 
