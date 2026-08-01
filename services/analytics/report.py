@@ -791,48 +791,25 @@ def _execution_payload(execution, window) -> dict | None:
 
     orders = execution.sample_size
 
-    # A median gap of hundreds of basis points is not an execution habit, it is
-    # two different instruments being compared: the same ETF quoted on another
-    # venue than the one the order was placed on. The permutation test cannot see
-    # it — it compares days with each other, never sources — so it would certify
-    # the offset as a systematic bias. Withholding the block is the honest move.
-    implausible = not execution.is_plausible
-    implausible_caveat = (
-        f"{round(execution.out_of_range_share * 100)} % des achats sont payés à un prix jamais "
-        "coté ce mois-là pour cette ligne : le cours enregistré ne semble pas provenir de la même "
-        "place de cotation que celle où l'ordre a été passé. Un slippage faux est pire qu'un "
-        "slippage absent."
-    )
-
     slippage = _as_metric(
         Metric.gated(
-            None if implausible else execution.weighted_slippage_bps,
+            execution.weighted_slippage_bps,
             unit="bps",
-            sample_size=0 if implausible else orders,
+            sample_size=orders,
             minimum=MIN_ORDERS,
             solid_at=SOLID_ORDERS,
-            caveat_insufficient=(
-                implausible_caveat
-                if implausible
-                else f"{orders} achats : trop peu pour lire une habitude."
-            ),
+            caveat_insufficient=f"{orders} achats : trop peu pour lire une habitude.",
             caveat_indicative="Moins de trente achats — la moyenne reste sensible à un ou deux ordres.",
         )
     )
     cost = _as_metric(
         Metric.gated(
-            None
-            if implausible or execution.cost_eur is None
-            else round(execution.cost_eur, 2),
+            round(execution.cost_eur, 2) if execution.cost_eur is not None else None,
             unit="EUR",
-            sample_size=0 if implausible else orders,
+            sample_size=orders,
             minimum=MIN_ORDERS,
             solid_at=SOLID_ORDERS,
-            caveat_insufficient=(
-                implausible_caveat
-                if implausible
-                else f"{orders} achats : trop peu pour chiffrer un coût."
-            ),
+            caveat_insufficient=f"{orders} achats : trop peu pour chiffrer un coût.",
         )
     )
 
@@ -857,28 +834,9 @@ def _execution_payload(execution, window) -> dict | None:
         "distribution": distribution,
         "p_value": round(Decimal(str(permutation.p_value)), 4) if permutation else None,
         "percentile": round(Decimal(str(permutation.percentile)), 1) if permutation else None,
-        # A detectable pattern on prices we cannot trust is not a finding.
-        "is_detectable": bool(permutation and permutation.is_detectable and not implausible),
-        "median_absolute_bps": execution.median_absolute_bps,
-        "out_of_range_share": execution.out_of_range_share,
-        "prices_are_plausible": not implausible,
-        "verdict": (
-            _implausible_verdict(execution)
-            if implausible
-            else _execution_verdict(slippage["value"], cost["value"], orders, permutation)
-        ),
+        "is_detectable": bool(permutation and permutation.is_detectable),
+        "verdict": _execution_verdict(slippage["value"], cost["value"], orders, permutation),
     }
-
-
-def _implausible_verdict(execution) -> str:
-    share = round(execution.out_of_range_share * 100)
-    return (
-        f"Sur {execution.sample_size} achats, {share} % sont payés à un prix que cette ligne n'a "
-        "jamais coté ce mois-là — pas juste un prix extrême, un prix hors de la fourchette "
-        "vraiment cotée. Le cours enregistré provient probablement d'une autre place de cotation "
-        "que celle où l'ordre a été passé. Le bloc est donc suspendu — un slippage faux est pire "
-        "qu'un slippage absent."
-    )
 
 
 def _execution_verdict(slippage_bps, cost_eur, orders: int, permutation) -> str:
