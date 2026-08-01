@@ -332,11 +332,18 @@ code** comme un choix, avec sa raison, au lieu d'être une dérive silencieuse.
 
 **Reste à faire, hors périmètre M4 :**
 
-- **Le coût moyen pondéré est réimplémenté** (`behaviour.py:660`) alors que `get_stock_account_summary`
-  calcule déjà le sien. M3 avait aligné la *convention* volontairement, mais en réécrivant la
-  logique. Si l'une des deux bouge, `/analyse` et `/stock` se contredisent sur les mêmes ventes.
-  C'est un refactor de partage du même genre que R1 (les flux) et R2 (la matrice de prix) — le
-  calcul est enfoui dans une fonction qui construit tout un DTO.
+- **Le coût moyen pondéré est réimplémenté** (`behaviour.py`) alors que `get_stock_account_summary`
+  calcule déjà le sien. **Elles avaient déjà divergé** : la couche stock met les frais dans la base
+  de coût (`cost = amount × price + fees`, `proceeds = amount × price − fees`), analytics les
+  laissait dehors. Un aller-retour qui franchit tout juste le seuil de rentabilité était donc
+  compté **gain sur `/analyse` et perte sur `/stock`** — acheté 100 + 1 € de frais, revendu 100,50
+  − 1 € : `/stock` réalise −1,50 €, `/analyse` classait un gain. M3 avait pourtant écrit
+  l'alignement comme une exigence ; l'implémentation ne l'avait pas suivi.
+  **La convention est corrigée** (frais dans la base de coût, prix de vente net de frais, produits
+  d'épisode nets) et trois tests épinglent le cas exact. Le **partage du code** reste à faire : le
+  calcul est enfoui dans une fonction qui construit tout un DTO, donc l'extraire est un refactor du
+  même genre que R1 (les flux) et R2 (la matrice de prix). Tant qu'il n'est pas fait, les deux
+  implémentations peuvent redivergier — mais elles disent au moins la même chose aujourd'hui.
 - **`stock_transaction.py` garde 29 littéraux `"EUR"` en interne.** La constante existe désormais et
   est exportée ; migrer ses propres usages est une dette préexistante, sans rapport avec analytics.
 

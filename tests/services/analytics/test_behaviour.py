@@ -546,3 +546,60 @@ def test_too_few_purchases_leave_the_cadence_undescribed():
 
     assert result.cadence.label == ""
     assert result.cadence.median_gap_days is None
+
+
+# ── Cost basis: the same convention as /stock ────────────────────────────
+#
+# M3 declared the alignment with get_stock_account_summary and did not implement
+# it: fees were left out of the cost basis here and booked into it there, so a
+# round trip that only just cleared break-even counted as a gain on /analyse and
+# a loss on /stock. Same sale, two verdicts.
+
+
+def _priced(day, price="100", days=400):
+    """A flat quote series long enough to cover the one-year exit horizon."""
+    start = day - timedelta(days=10)
+    return {
+        "IE00B4L5Y983": {start + timedelta(days=i): Decimal(price) for i in range(days)}
+    }
+
+
+def test_fees_are_inside_the_cost_basis_like_the_stock_summary():
+    """Buy at 100 + 1 fee, sell at 100.50 - 1 fee: a loss, not a gain."""
+    from services.analytics.behaviour import analyse_exits
+
+    buy = _Tx("BUY", "IE00B4L5Y983", date(2024, 1, 5), amount="1", price="100", fees="1")
+    sell = _Tx("SELL", "IE00B4L5Y983", date(2024, 6, 5), amount="1", price="100.5", fees="1")
+
+    result = analyse_exits([buy, sell], _priced(date(2024, 1, 5)), {})
+
+    # /stock books 101 of cost against 99.50 of proceeds — a realised loss.
+    assert result.realised_losses == 1
+    assert result.realised_gains == 0
+
+
+def test_a_sale_clearly_above_the_fee_inclusive_cost_is_still_a_gain():
+    from services.analytics.behaviour import analyse_exits
+
+    buy = _Tx("BUY", "IE00B4L5Y983", date(2024, 1, 5), amount="1", price="100", fees="1")
+    sell = _Tx("SELL", "IE00B4L5Y983", date(2024, 6, 5), amount="1", price="120", fees="1")
+
+    result = analyse_exits([buy, sell], _priced(date(2024, 1, 5)), {})
+
+    assert result.realised_gains == 1
+    assert result.realised_losses == 0
+
+
+def test_an_episode_nets_its_fees_on_both_sides():
+    """Hit rate and payoff must not call a fee-losing round trip a winner."""
+    from services.analytics.behaviour import analyse_exits
+
+    buy = _Tx("BUY", "IE00B4L5Y983", date(2024, 1, 5), amount="1", price="100", fees="1")
+    sell = _Tx("SELL", "IE00B4L5Y983", date(2024, 6, 5), amount="1", price="100.5", fees="1")
+
+    result = analyse_exits([buy, sell], _priced(date(2024, 1, 5)), {})
+
+    episode = result.episodes[0]
+    assert episode.invested == Decimal("101")
+    assert episode.proceeds == Decimal("99.5")
+    assert episode.proceeds < episode.invested

@@ -628,6 +628,7 @@ def analyse_exits(transactions, price_matrix, benchmark_series=None, today=None)
         day = _tx_day(tx)
         quantity = _dec(getattr(tx, "amount", None))
         price = _dec(getattr(tx, "price_per_unit", None))
+        fees = _dec(getattr(tx, "fees", None))
         kind = _tx_type(tx)
 
         if kind == _BUY:
@@ -639,8 +640,11 @@ def analyse_exits(transactions, price_matrix, benchmark_series=None, today=None)
                 # A line bought back after a full exit opens a new episode.
                 position["opened"] = day
             position["quantity"] += quantity
-            position["cost"] += quantity * price
-            position["invested"] += quantity * price
+            # Fees belong in the cost basis, exactly as get_stock_account_summary
+            # books them. Leaving them out made a sale a gain here and a loss on
+            # /stock whenever the round trip only just cleared break-even.
+            position["cost"] += quantity * price + fees
+            position["invested"] += quantity * price + fees
             continue
 
         if kind != _SELL:
@@ -652,12 +656,15 @@ def analyse_exits(transactions, price_matrix, benchmark_series=None, today=None)
 
         average_cost = position["cost"] / position["quantity"]
         sold = min(quantity, position["quantity"])
+        # Net of the exit fee, per unit, so both sides of the comparison carry
+        # their costs — the convention /stock realises its P/L with.
+        net_price = price - (fees / sold if sold > _ZERO else _ZERO)
 
         # Realised: this line, on this day. Available but not realised: every
         # other line held that day, valued at its own quote.
-        if price > average_cost:
+        if net_price > average_cost:
             realised_gains += 1
-        elif price < average_cost:
+        elif net_price < average_cost:
             realised_losses += 1
 
         for other_key, other in positions.items():
@@ -687,7 +694,7 @@ def analyse_exits(transactions, price_matrix, benchmark_series=None, today=None)
 
         position["quantity"] -= sold
         position["cost"] -= average_cost * sold
-        position["proceeds"] += sold * price
+        position["proceeds"] += sold * price - fees
         if position["quantity"] <= _ZERO:
             episodes.append(
                 Episode(
