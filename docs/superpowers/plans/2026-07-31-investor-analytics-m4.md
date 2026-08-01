@@ -274,32 +274,39 @@ synthétiques. Contrôlé à l'écran (Playwright + captures) :
 5. **Le pont ne disait pas à quelle date il valorisait.** L'écart de 141 € du relevé est la journée
    de marché manquante : la clôture du jour n'existe pas encore. Le bloc porte maintenant sa date.
 
-### Task 9 : la garde générique est posée, le diagnostic reste à faire
+### Task 9 : aucune garde ici — c'est une affaire de qualité de donnée
 
-**Première version, corrigée après relecture.** Un seuil plat de 300 bps d'écart médian ne
-distingue pas un mauvais alignement de source d'un vrai signal de timing fort sur un actif
-volatil. Un investisseur qui achète systématiquement au creux d'un titre à 30 % de volatilité
-annualisée peut légitimement poster plusieurs centaines de bps d'« écart » chaque mois — vérifié
-par simulation : un tel profil ressort à −483 bps médian, p = 0,0002, un signal réel et
-statistiquement indiscutable. Le seuil plat l'aurait suspendu exactement comme un vrai problème de
-source.
+**La tâche demandait un garde-fou dans le bloc exécution. Il a été écrit, mesuré, puis retiré.**
 
-**La garde retenue** compare le prix payé à la **fourchette réellement cotée** ce mois-là pour la
-ligne (min/max des clôtures, avec une tolérance de 3 % pour l'exécution intra-journalière que les
-clôtures ne capturent pas), plutôt qu'à un écart en bps. Un prix issu d'un vrai achat, même au plus
-bas ou au plus haut du mois, tombe forcément dans cette fourchette. Un prix issu d'une autre place
-de cotation en tombe généralement très en dehors — c'est la vraie ligne de partage, pas l'ampleur
-de l'écart. Le bloc entier est suspendu seulement si une **majorité** des ordres est hors
-fourchette (un ordre isolé peut être une erreur de saisie, pas un problème de source). Testé sur
-les deux cas : le trader compétent sur actif volatil reste `is_plausible=True`, le cas XFRA/XPAR
-simulé (tous les ordres à +12 % d'une série plate) reste détecté et suspendu.
+Deux versions ont été essayées et aucune ne tient :
 
-**Le diagnostic lui-même n'a toujours pas pu être fait** : il demande les vraies transactions et
-les vrais cours, dont ce conteneur ne dispose pas. Ce qui reste à faire, en une requête sur ta
-base : pour trois ou quatre achats, comparer `price_per_unit` payé et `market_price_history.price`
-de cet ISIN à cette date exacte. Un écart systématique de même signe sur toutes les lignes d'une
-même place confirme l'hypothèse XFRA, et la correction sera alors de résoudre le symbole sur la
-place de l'ordre. En attendant, la garde empêche le chiffre faux de s'afficher.
+1. **Seuil plat en bps** (300 bps d'écart médian par ordre) : ne distingue pas un mauvais
+   alignement de place d'un vrai signal de timing. Simulation : un investisseur qui achète
+   systématiquement au creux d'un titre à 30 % de volatilité annualisée ressort à −483 bps
+   médian avec p = 0,0002 — un signal réel et statistiquement indiscutable, que ce seuil
+   supprimait purement et simplement.
+2. **Fourchette cotée du mois** (prix payé dans [min, max] ± 3 %) : ne se déclenche qu'au-delà de
+   5 à 8 % de décalage selon la volatilité de l'actif, alors qu'un mésalignement de place en même
+   devise fait 1 à 3 %. Mesuré : sur le cas réel simulé (ETF large, décalage constant de 1,29 %),
+   `part hors fourchette = 0 %`, le bloc s'afficherait normalement.
+
+**Le seuil de 300 bps ne l'attrapait pas davantage** (écart médian mesuré à 150 bps sur ce cas) :
+les deux versions ratent le cas subtil, et la première ajoute des faux positifs par-dessus.
+
+**Décision : rien de tout ça ne vit ici.** Un prix payé et un cours stocké qui ne concordent pas,
+c'est un défaut de la donnée de l'actif — il fausse le P/L, les positions et tous les graphes, pas
+seulement ce bloc. Le détecter dans une métrique comportementale, c'est traiter un problème global
+à un endroit local, et re-dériver un soupçon à partir de chiffres qui en sont déjà la conséquence.
+La vérification appartient à la couche stock qui possède l'historique de prix, une fois, pour tout
+ce qui le lit. Un commentaire en tête de `execution.py` dit pourquoi il n'y a rien.
+
+**Le diagnostic reste entier**, et il n'a pas changé de forme : sur ta base, pour trois ou quatre
+achats, comparer `price_per_unit` payé et `market_price_history.price` de cet ISIN **à cette date
+exacte**. Un écart systématique de même signe sur toutes les lignes d'une même place confirme
+l'hypothèse XFRA. C'est la comparaison au jour le jour — pas à la moyenne du mois — qui sépare
+proprement les deux cas, indépendamment de la volatilité de l'actif : mesuré à 5 bps pour du vrai
+talent contre 130 bps pour un décalage de place de 1,3 %. Si un contrôle automatique est construit
+un jour, c'est cette forme-là qu'il doit prendre, côté stock.
 
 ### Limites connues, assumées
 
@@ -425,6 +432,8 @@ et le test de permutation le certifie — il compare des jours entre eux, pas de
 - [x] Garde-fou générique, indépendant du diagnostic : si l'écart médian par ordre dépasse un seuil
       de plausibilité (à calibrer, de l'ordre de ±300 bps), traiter la série comme suspecte et
       basculer le bloc en `insuffisant` avec un caveat qui nomme la cause probable.
+      **Écrit, mesuré, puis retiré** — deux calibrages essayés, aucun ne tient, et de toute façon
+      ce contrôle n'a pas sa place dans une métrique comportementale. Voir les résultats.
 
 ## Task 10 · Écart de 141 € sur la valeur du portefeuille
 

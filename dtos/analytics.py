@@ -87,11 +87,6 @@ class ExecutionResponse(BaseModel):
     percentile: Decimal | None = None
     is_detectable: bool = False
     """False means the pattern is indistinguishable from chance — say nothing."""
-    median_absolute_bps: Decimal | None = None
-    out_of_range_share: Decimal | None = None
-    """Share of orders paid at a price the asset was never quoted at that month."""
-    prices_are_plausible: bool = True
-    """False when paid and stored prices look like two different quote venues."""
     verdict: str
 
 
