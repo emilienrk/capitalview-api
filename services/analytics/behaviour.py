@@ -640,10 +640,13 @@ def analyse_exits(transactions, price_matrix, benchmark_series=None, today=None)
                 # A line bought back after a full exit opens a new episode.
                 position["opened"] = day
             position["quantity"] += quantity
-            # Fees belong in the cost basis, exactly as get_stock_account_summary
-            # books them. Leaving them out made a sale a gain here and a loss on
-            # /stock whenever the round trip only just cleared break-even.
-            position["cost"] += quantity * price + fees
+            # Odean's reference point, gross of fees. The disposition effect is a
+            # psychological measure: prospect theory codes an outcome as a gain or
+            # a loss against the price the investor paid per share, not against an
+            # accounting break-even. Amortising the commission into the reference
+            # would measure something else.
+            position["cost"] += quantity * price
+            # The episode figures are the money question, so they carry the costs.
             position["invested"] += quantity * price + fees
             continue
 
@@ -656,15 +659,14 @@ def analyse_exits(transactions, price_matrix, benchmark_series=None, today=None)
 
         average_cost = position["cost"] / position["quantity"]
         sold = min(quantity, position["quantity"])
-        # Net of the exit fee, per unit, so both sides of the comparison carry
-        # their costs — the convention /stock realises its P/L with.
-        net_price = price - (fees / sold if sold > _ZERO else _ZERO)
 
         # Realised: this line, on this day. Available but not realised: every
-        # other line held that day, valued at its own quote.
-        if net_price > average_cost:
+        # other line held that day, valued at its own quote. Both sides compare a
+        # quoted price to the gross average purchase price, so the held lines are
+        # judged on the same footing as the sold one.
+        if price > average_cost:
             realised_gains += 1
-        elif net_price < average_cost:
+        elif price < average_cost:
             realised_losses += 1
 
         for other_key, other in positions.items():

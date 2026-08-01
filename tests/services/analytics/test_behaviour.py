@@ -548,12 +548,21 @@ def test_too_few_purchases_leave_the_cadence_undescribed():
     assert result.cadence.median_gap_days is None
 
 
-# ── Cost basis: the same convention as /stock ────────────────────────────
+# ── Cost basis: Odean's reference point, and the episode's money question ──
 #
-# M3 declared the alignment with get_stock_account_summary and did not implement
-# it: fees were left out of the cost basis here and booked into it there, so a
-# round trip that only just cleared break-even counted as a gain on /analyse and
-# a loss on /stock. Same sale, two verdicts.
+# Two conventions on purpose, and they must not be quietly unified.
+#
+# PGR/PLR is a *psychological* measure: prospect theory codes an outcome against
+# the price the investor paid per share, so the reference is gross of fees, as in
+# Odean (1998) which the spec names as the canonical measure. Amortising the
+# commission into it would make it an accounting break-even instead.
+#
+# Hit rate and payoff ratio are a *money* question — did this closed position
+# make anything? — so those carry the costs on both sides.
+#
+# /stock reporting a different realised P/L on the same sale is not a
+# contradiction: it answers the accounting question, this answers the
+# behavioural one.
 
 
 def _priced(day, price="100", days=400):
@@ -564,8 +573,13 @@ def _priced(day, price="100", days=400):
     }
 
 
-def test_fees_are_inside_the_cost_basis_like_the_stock_summary():
-    """Buy at 100 + 1 fee, sell at 100.50 - 1 fee: a loss, not a gain."""
+def test_the_disposition_reference_is_gross_of_fees():
+    """Bought at 100 + 1 of fees, sold at 100.50: a gain, as Odean classifies it.
+
+    The round trip loses money after commissions, and /stock says so. This block
+    is not measuring money — it is measuring whether the investor sells what is
+    up against the price they paid.
+    """
     from services.analytics.behaviour import analyse_exits
 
     buy = _Tx("BUY", "IE00B4L5Y983", date(2024, 1, 5), amount="1", price="100", fees="1")
@@ -573,25 +587,24 @@ def test_fees_are_inside_the_cost_basis_like_the_stock_summary():
 
     result = analyse_exits([buy, sell], _priced(date(2024, 1, 5)), {})
 
-    # /stock books 101 of cost against 99.50 of proceeds — a realised loss.
-    assert result.realised_losses == 1
-    assert result.realised_gains == 0
-
-
-def test_a_sale_clearly_above_the_fee_inclusive_cost_is_still_a_gain():
-    from services.analytics.behaviour import analyse_exits
-
-    buy = _Tx("BUY", "IE00B4L5Y983", date(2024, 1, 5), amount="1", price="100", fees="1")
-    sell = _Tx("SELL", "IE00B4L5Y983", date(2024, 6, 5), amount="1", price="120", fees="1")
-
-    result = analyse_exits([buy, sell], _priced(date(2024, 1, 5)), {})
-
     assert result.realised_gains == 1
     assert result.realised_losses == 0
 
 
+def test_a_sale_below_the_purchase_price_is_a_realised_loss():
+    from services.analytics.behaviour import analyse_exits
+
+    buy = _Tx("BUY", "IE00B4L5Y983", date(2024, 1, 5), amount="1", price="100", fees="1")
+    sell = _Tx("SELL", "IE00B4L5Y983", date(2024, 6, 5), amount="1", price="95", fees="1")
+
+    result = analyse_exits([buy, sell], _priced(date(2024, 1, 5)), {})
+
+    assert result.realised_losses == 1
+    assert result.realised_gains == 0
+
+
 def test_an_episode_nets_its_fees_on_both_sides():
-    """Hit rate and payoff must not call a fee-losing round trip a winner."""
+    """The same round trip, asked as a money question, is a loser."""
     from services.analytics.behaviour import analyse_exits
 
     buy = _Tx("BUY", "IE00B4L5Y983", date(2024, 1, 5), amount="1", price="100", fees="1")
@@ -602,4 +615,7 @@ def test_an_episode_nets_its_fees_on_both_sides():
     episode = result.episodes[0]
     assert episode.invested == Decimal("101")
     assert episode.proceeds == Decimal("99.5")
+    # Counted a gain by the disposition measure, a loser by the money one — the
+    # difference is exactly the commissions, and both readings are intended.
     assert episode.proceeds < episode.invested
+    assert result.realised_gains == 1
