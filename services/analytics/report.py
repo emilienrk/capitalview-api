@@ -798,9 +798,10 @@ def _execution_payload(execution, window) -> dict | None:
     # the offset as a systematic bias. Withholding the block is the honest move.
     implausible = not execution.is_plausible
     implausible_caveat = (
-        f"Écart médian de {round(execution.median_absolute_bps)} bps par ordre : le prix payé et "
-        "le cours enregistré ne semblent pas provenir de la même place de cotation. Un slippage "
-        "faux est pire qu'un slippage absent."
+        f"{round(execution.out_of_range_share * 100)} % des achats sont payés à un prix jamais "
+        "coté ce mois-là pour cette ligne : le cours enregistré ne semble pas provenir de la même "
+        "place de cotation que celle où l'ordre a été passé. Un slippage faux est pire qu'un "
+        "slippage absent."
     )
 
     slippage = _as_metric(
@@ -859,6 +860,7 @@ def _execution_payload(execution, window) -> dict | None:
         # A detectable pattern on prices we cannot trust is not a finding.
         "is_detectable": bool(permutation and permutation.is_detectable and not implausible),
         "median_absolute_bps": execution.median_absolute_bps,
+        "out_of_range_share": execution.out_of_range_share,
         "prices_are_plausible": not implausible,
         "verdict": (
             _implausible_verdict(execution)
@@ -869,12 +871,13 @@ def _execution_payload(execution, window) -> dict | None:
 
 
 def _implausible_verdict(execution) -> str:
+    share = round(execution.out_of_range_share * 100)
     return (
-        f"Sur {execution.sample_size} achats, le prix payé s'écarte en médiane de "
-        f"{round(execution.median_absolute_bps)} bps du cours enregistré ce mois-là. Un ordre de "
-        "particulier ne s'écarte pas autant du prix moyen de son mois : le cours stocké provient "
-        "probablement d'une autre place de cotation que celle où l'ordre a été passé. Le bloc est "
-        "donc suspendu — un slippage faux est pire qu'un slippage absent."
+        f"Sur {execution.sample_size} achats, {share} % sont payés à un prix que cette ligne n'a "
+        "jamais coté ce mois-là — pas juste un prix extrême, un prix hors de la fourchette "
+        "vraiment cotée. Le cours enregistré provient probablement d'une autre place de cotation "
+        "que celle où l'ordre a été passé. Le bloc est donc suspendu — un slippage faux est pire "
+        "qu'un slippage absent."
     )
 
 

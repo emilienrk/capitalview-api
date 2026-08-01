@@ -38,20 +38,26 @@ _BPS = Decimal("10000")
 MIN_ORDERS = 10
 SOLID_ORDERS = 30
 
-# Beyond this median absolute gap per order, the series is not measuring
-# execution any more.
+# A wrong quote source, not a wide flat threshold, is what the plausibility
+# check looks for.
 #
-# A retail order sits within a percent or so of its month's average price. A
-# median of several hundred basis points means the price paid and the price
-# stored are not the same instrument: the same ETF quoted on XFRA and on XPAR
-# gives two different closes, and if the history was backfilled from a venue the
-# order was not placed on, every order inherits the same offset. The permutation
-# test cannot catch it — it compares days with each other, never sources with
-# each other — so it would certify a systematic bias with p = 0.000.
+# A flat bps threshold cannot tell a mismatched venue from real skill: a trader
+# who buys near the monthly low of a genuinely volatile stock can post several
+# hundred basis points of "slippage" every month, and that is a real, welcome
+# signal, not a data defect — a synthetic 30%-volatility timer scores -483 bps
+# median with p = 0.0002. A price from the wrong venue, on the other hand,
+# cannot fall inside the range the true venue actually quoted that month: the
+# check is whether the paid price is a price this asset could plausibly have
+# traded at, not how far it sits from the average.
 #
-# 300 bps is deliberately loose: it is a wall against a wrong instrument, not a
-# judgement on execution quality.
-PLAUSIBILITY_BPS = Decimal("300")
+# RANGE_TOLERANCE widens the quoted [min, max] by a relative buffer, since only
+# daily closes are stored and a real intraday execution can land slightly
+# outside the close-to-close range without anything being wrong.
+RANGE_TOLERANCE = Decimal("0.03")
+# A single order the wrong side of the buffer can be a fat-fingered entry, not a
+# venue mismatch. A mismatch shifts every order in the series, so only a
+# majority out of range is treated as the series being incomparable.
+IMPLAUSIBLE_MAJORITY = Decimal("0.5")
 
 
 @dataclass(frozen=True)
@@ -62,6 +68,13 @@ class OrderSlippage:
     twap: Decimal
     notional: Decimal
     slippage_bps: Decimal
+    in_range: bool
+    """Whether the paid price falls inside the month's actually quoted range.
+
+    A real execution, however extreme, is a price this asset traded at. A price
+    from the wrong venue generally is not — that is the signal, not the size of
+    the gap.
+    """
 
 
 @dataclass(frozen=True)
@@ -72,7 +85,10 @@ class ExecutionAnalysis:
     quartiles: tuple[Decimal, Decimal, Decimal, Decimal, Decimal] | None
     permutation: PermutationResult | None
     median_absolute_bps: Decimal | None = None
-    """How far a typical order sits from its month average, sign ignored."""
+    """How far a typical order sits from its month average, sign ignored. A
+    diagnostic figure, shown alongside the block — no longer what gates it."""
+    out_of_range_share: Decimal | None = None
+    """Share of orders whose paid price falls outside the month's quoted range."""
 
     @property
     def sample_size(self) -> int:
@@ -82,13 +98,14 @@ class ExecutionAnalysis:
     def is_plausible(self) -> bool:
         """Whether these prices can be compared at all.
 
-        False means the prices paid and the prices stored most likely come from
-        different quote venues, and the block must say so instead of reporting a
+        False means most paid prices are not prices the asset was ever quoted
+        at that month, so they most likely come from a different venue than the
+        one recorded — and the block must say so instead of reporting a
         slippage. A wrong slippage is worse than no slippage.
         """
-        if self.median_absolute_bps is None:
+        if self.out_of_range_share is None:
             return True
-        return self.median_absolute_bps <= PLAUSIBILITY_BPS
+        return self.out_of_range_share <= IMPLAUSIBLE_MAJORITY
 
 
 def _tx_type(tx) -> str:
@@ -137,6 +154,21 @@ def _slippage_bps(paid: Decimal, twap: Decimal) -> Decimal | None:
     if twap <= 0:
         return None
     return (paid - twap) / twap * _BPS
+
+
+def _in_quoted_range(paid: Decimal, quotes_of_month: dict[date, Decimal]) -> bool:
+    """Whether `paid` is a price this asset could plausibly have traded at.
+
+    The buffer is relative to the price level rather than to the width of the
+    month's range, so a flat or thinly quoted month (low == high) still gets a
+    sensible tolerance instead of a zero-width one.
+    """
+    prices = list(quotes_of_month.values())
+    if not prices:
+        return True
+    low, high = min(prices), max(prices)
+    buffer = max(low, high) * RANGE_TOLERANCE
+    return (low - buffer) <= paid <= (high + buffer)
 
 
 def _weighted_mean(values: list[Decimal], weights: list[Decimal]) -> Decimal | None:
@@ -188,6 +220,7 @@ def analyse_execution(
                 twap=twap,
                 notional=notional,
                 slippage_bps=bps,
+                in_range=_in_quoted_range(paid, of_month),
             )
         )
 
@@ -201,6 +234,7 @@ def analyse_execution(
     weighted = _weighted_mean([o.slippage_bps for o in orders], weights)
     total_notional = sum(weights)
     cost = (weighted / _BPS * total_notional) if weighted is not None else None
+    out_of_range = sum(1 for o in orders if not o.in_range)
 
     return ExecutionAnalysis(
         orders=orders,
@@ -209,6 +243,7 @@ def analyse_execution(
         quartiles=_quartiles([o.slippage_bps for o in orders]),
         permutation=_permute(orders, candidate_prices, weights, weighted, draws, generator),
         median_absolute_bps=_median_absolute([o.slippage_bps for o in orders]),
+        out_of_range_share=Decimal(out_of_range) / Decimal(len(orders)),
     )
 
 
