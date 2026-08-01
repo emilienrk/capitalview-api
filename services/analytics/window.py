@@ -24,14 +24,17 @@ from sqlmodel import Session, select
 
 from models.enums import AssetType
 from models.market import MarketAsset, MarketPriceHistory
+from models.enums import StockTransactionType as TxType
+from services.analytics.transactions import tx_type as _tx_type, tx_day as _tx_day
+from services.stock_transaction import CASH_ASSET_KEY
 from services.market import (
     ensure_price_history,
     get_historical_exchange_rates_db,
     get_non_trading_days,
 )
 
-_BUY = "BUY"
-_EUR = "EUR"
+_BUY = TxType.BUY
+_EUR = CASH_ASSET_KEY
 
 # Extra benchmark history fetched before the window, so a one-year trailing high
 # exists from its very first day (spec section 2.2).
@@ -64,16 +67,6 @@ class AnalysisWindow:
     @property
     def is_empty(self) -> bool:
         return self.start is None or self.days <= 0
-
-
-def _tx_type(tx) -> str:
-    raw = getattr(tx, "type", None)
-    return str(getattr(raw, "value", raw) or "")
-
-
-def _tx_day(tx) -> date | None:
-    executed_at = getattr(tx, "executed_at", None)
-    return executed_at.date() if executed_at is not None else None
 
 
 def first_quote_date(session: Session, asset_key: str) -> date | None:

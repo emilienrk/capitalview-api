@@ -15,7 +15,10 @@ from datetime import date
 from decimal import Decimal
 from typing import Iterable
 
-AUTO_PROVISION_NOTE = "Provision automatique"
+# Imported, never re-declared: the writer owns the wording (spec section 7.2).
+from services.stock_transaction import AUTO_PROVISION_NOTE, CASH_ASSET_KEY
+from models.enums import StockTransactionType as TxType
+from services.analytics.transactions import tx_type as _tx_type, tx_day as _tx_day
 
 _ZERO = Decimal("0")
 
@@ -37,36 +40,26 @@ def _to_decimal(value: object) -> Decimal:
         return _ZERO
 
 
-def _tx_type(tx) -> str:
-    raw = getattr(tx, "type", None)
-    return str(getattr(raw, "value", raw) or "")
-
-
-def _tx_day(tx) -> date | None:
-    executed_at = getattr(tx, "executed_at", None)
-    return executed_at.date() if executed_at is not None else None
-
-
 def is_auto_provision(tx) -> bool:
     """True for a cash row the app generated itself to cover a BUY shortfall."""
-    if _tx_type(tx) != "DEPOSIT":
+    if _tx_type(tx) != TxType.DEPOSIT:
         return False
-    if str(getattr(tx, "asset_key", "") or "").upper() != "EUR":
+    if str(getattr(tx, "asset_key", "") or "").upper() != CASH_ASSET_KEY:
         return False
     return (getattr(tx, "notes", None) or "").strip() == AUTO_PROVISION_NOTE
 
 
 def _signed_flow(tx, include_auto_provisions: bool) -> Decimal:
-    if str(getattr(tx, "asset_key", "") or "").upper() != "EUR":
+    if str(getattr(tx, "asset_key", "") or "").upper() != CASH_ASSET_KEY:
         return _ZERO
     if not include_auto_provisions and is_auto_provision(tx):
         return _ZERO
 
     amount = _to_decimal(getattr(tx, "amount", _ZERO))
     match _tx_type(tx):
-        case "DEPOSIT":
+        case TxType.DEPOSIT:
             return amount
-        case "WITHDRAW":
+        case TxType.WITHDRAW:
             return -amount
         case _:
             return _ZERO

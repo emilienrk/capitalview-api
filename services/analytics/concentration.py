@@ -23,6 +23,8 @@ from datetime import date
 from decimal import Decimal
 
 import numpy as np
+from models.enums import StockTransactionType as TxType
+from services.stock_transaction import CASH_ASSET_KEY
 
 # Spec section 2: a pair needs 250 overlapping daily returns before its
 # correlation means anything.
@@ -187,11 +189,11 @@ def holdings_from_transactions(transactions) -> dict[str, Decimal]:
         raw = getattr(tx, "type", None)
         tx_type = str(getattr(raw, "value", raw) or "")
         key = str(getattr(tx, "asset_key", "") or "").upper()
-        if not key or key == "EUR":
+        if not key or key == CASH_ASSET_KEY:
             continue
         amount = Decimal(str(getattr(tx, "amount", 0) or 0))
-        if tx_type == "BUY":
+        if tx_type == TxType.BUY:
             held[key] = held.get(key, Decimal("0")) + amount
-        elif tx_type == "SELL":
+        elif tx_type == TxType.SELL:
             held[key] = held.get(key, Decimal("0")) - amount
     return {key: quantity for key, quantity in held.items() if quantity > 0}

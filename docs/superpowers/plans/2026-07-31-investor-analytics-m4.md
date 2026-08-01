@@ -308,6 +308,46 @@ proprement les deux cas, indépendamment de la volatilité de l'actif : mesuré 
 talent contre 130 bps pour un décalage de place de 1,3 %. Si un contrôle automatique est construit
 un jour, c'est cette forme-là qu'il doit prendre, côté stock.
 
+### Audit de duplication entre analytics et les services
+
+Après le retrait de la garde de plausibilité, la même question a été passée sur tout le module :
+un fait ou une vérification qui appartient au domaine est-il redéclaré dans `analytics/` ?
+
+**Corrigé :**
+
+| Trouvé | Traitement |
+|---|---|
+| `"Provision automatique"` écrit par `stock_transaction.py:326` et **redéclaré** dans `analytics/flows.py` | La constante `AUTO_PROVISION_NOTE` vit désormais chez celui qui écrit ; analytics l'importe. Une reformulation côté stock aurait fait cesser **silencieusement** la reconnaissance des provisions — donc leur réintroduction dans les flux du MWR, l'appariement FIFO et `auto_provision_share`, tout le §0 bis. |
+| Types de transaction en chaînes brutes (`"BUY"`, `"SELL"`…) dans 8 fichiers analytics, alors que `models/enums.py` porte `StockTransactionType` | Analytics importe l'enum. `StockTransactionType` hérite de `str`, donc les comparaisons existantes fonctionnent sans conversion. |
+| Sentinelle de trésorerie `"EUR"` redéclarée dans 4 modules analytics, sans domicile canonique nulle part | `CASH_ASSET_KEY` créée dans `stock_transaction.py` — le service qui écrit les lignes de cash — et importée. |
+| `_tx_type` (6 copies identiques) et `_tx_day` (5 copies, déjà 2 orthographes) | Regroupés dans `analytics/transactions.py`. La dérive avait déjà commencé. |
+
+**Trouvé et délibérément non fusionné :**
+
+`_dec` existe en deux variantes : `behaviour.py` rattrape une conversion impossible en zéro,
+`counterfactual.py` la laisse remonter. Les unifier changerait un comportement dans un sens ou dans
+l'autre — soit le pont avale une transaction illisible tout en continuant à « réconcilier », soit
+tout l'endpoint tombe sur une donnée aberrante. La divergence est maintenant **documentée dans le
+code** comme un choix, avec sa raison, au lieu d'être une dérive silencieuse.
+
+**Reste à faire, hors périmètre M4 :**
+
+- **Le coût moyen pondéré est réimplémenté** (`behaviour.py:660`) alors que `get_stock_account_summary`
+  calcule déjà le sien. M3 avait aligné la *convention* volontairement, mais en réécrivant la
+  logique. Si l'une des deux bouge, `/analyse` et `/stock` se contredisent sur les mêmes ventes.
+  C'est un refactor de partage du même genre que R1 (les flux) et R2 (la matrice de prix) — le
+  calcul est enfoui dans une fonction qui construit tout un DTO.
+- **`stock_transaction.py` garde 29 littéraux `"EUR"` en interne.** La constante existe désormais et
+  est exportée ; migrer ses propres usages est une dette préexistante, sans rapport avec analytics.
+
+**Vérifié comme légitime :** toutes les autres portes du module sont des gates de taille
+d'échantillon — « 24 achats : trop peu pour lire une habitude », « 250 rendements journaliers
+communs requis », « historique de 90 jours : trop court ». C'est le cadre de fiabilité du §2 de la
+spec, et c'est exactement ce qui doit rester ici. La seule gate qui n'est pas un comptage — le bloc
+dépôt→achat qui se retire quand plus de la moitié des achats sont financés par provisions — **lit un
+fait** (la note portée par la transaction) au lieu de deviner un défaut à partir de ses propres
+chiffres. C'est la différence avec la garde supprimée.
+
 ### Limites connues, assumées
 
 - **Toujours pas de test de composant** sur les `.vue` : décision reconduite depuis M1. L'invariant
