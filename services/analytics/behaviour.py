@@ -594,15 +594,24 @@ def analyse_exits(transactions, price_matrix, benchmark_series=None, today=None)
 
     Three readings of one behaviour, under one gate:
 
-    - **PGR/PLR** (Odean 1998), the canonical frequency measure. Cost basis is the
-      weighted average, matching what the rest of the app calls a realised gain —
-      a different basis here would make this page contradict the account summary
-      on the very same sales.
+    - **PGR/PLR** (Odean 1998), the canonical frequency measure. Weighted-average
+      cost basis, taken **gross of fees**: the disposition effect is a
+      psychological measure, and prospect theory codes an outcome against the
+      price the investor paid per share, not against an accounting break-even.
+      Amortising the commission into the reference point would measure something
+      else. The account summary reports a different realised P/L on the same sale
+      and that is not a contradiction — it answers the accounting question, this
+      one answers the behavioural question.
     - **The euro cost**, because a ratio is not actionable. Each sale is compared
       with the benchmark over a fixed one-year horizon; sales too recent for that
       horizon are excluded and counted rather than measured over three weeks.
-    - **Closed episodes**, a full round trip from first purchase to complete
-      exit, giving a hit rate and a payoff ratio.
+    - **Closed episodes**, measured **net of fees on both sides**, because they
+      ask whether the round trip made money rather than how it was framed. That
+      is the one distinction Barber & Odean (2000) rest on: gross of costs,
+      individual investors sit roughly at the market; net of them they
+      underperform, and the finding only exists in the net figures. An episode
+      runs from the first purchase of a line to its complete exit, giving a hit
+      rate and a payoff ratio.
     """
     today = today or date.today()
     ordered = sorted(

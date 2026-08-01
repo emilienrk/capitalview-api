@@ -548,17 +548,20 @@ def test_too_few_purchases_leave_the_cadence_undescribed():
     assert result.cadence.median_gap_days is None
 
 
-# ── Cost basis: Odean's reference point, and the episode's money question ──
+# ── Two conventions, each with its paper ─────────────────────────────────
 #
-# Two conventions on purpose, and they must not be quietly unified.
+# They must not be quietly unified, and both are in the spec's bibliography.
 #
-# PGR/PLR is a *psychological* measure: prospect theory codes an outcome against
+# PGR/PLR is a *psychological* measure. Prospect theory codes an outcome against
 # the price the investor paid per share, so the reference is gross of fees, as in
 # Odean (1998) which the spec names as the canonical measure. Amortising the
 # commission into it would make it an accounting break-even instead.
 #
-# Hit rate and payoff ratio are a *money* question — did this closed position
-# make anything? — so those carry the costs on both sides.
+# Hit rate and payoff ratio ask whether the round trip *made money*, and that is
+# the single distinction Barber & Odean (2000) rest on: gross of costs individual
+# investors sit roughly at the market, net of them they underperform. Measured
+# gross, the question answers itself wrongly — so episodes carry the fees on both
+# sides.
 #
 # /stock reporting a different realised P/L on the same sale is not a
 # contradiction: it answers the accounting question, this answers the
@@ -604,7 +607,11 @@ def test_a_sale_below_the_purchase_price_is_a_realised_loss():
 
 
 def test_an_episode_nets_its_fees_on_both_sides():
-    """The same round trip, asked as a money question, is a loser."""
+    """The same round trip, asked as a money question, is a loser.
+
+    Barber & Odean (2000): trading that looks flat gross of costs is a loss net
+    of them, and the net reading is the one that carries the finding.
+    """
     from services.analytics.behaviour import analyse_exits
 
     buy = _Tx("BUY", "IE00B4L5Y983", date(2024, 1, 5), amount="1", price="100", fees="1")
