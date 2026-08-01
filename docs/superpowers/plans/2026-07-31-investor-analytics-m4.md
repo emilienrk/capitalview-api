@@ -276,17 +276,30 @@ synthétiques. Contrôlé à l'écran (Playwright + captures) :
 
 ### Task 9 : la garde générique est posée, le diagnostic reste à faire
 
-Le garde-fou de plausibilité est en place et testé : au-delà de **300 bps d'écart médian par
-ordre**, le bloc exécution est suspendu avec un caveat qui nomme la cause probable. Le seuil est
-volontairement large — c'est un mur contre un mauvais instrument, pas un jugement sur la qualité
-d'exécution.
+**Première version, corrigée après relecture.** Un seuil plat de 300 bps d'écart médian ne
+distingue pas un mauvais alignement de source d'un vrai signal de timing fort sur un actif
+volatil. Un investisseur qui achète systématiquement au creux d'un titre à 30 % de volatilité
+annualisée peut légitimement poster plusieurs centaines de bps d'« écart » chaque mois — vérifié
+par simulation : un tel profil ressort à −483 bps médian, p = 0,0002, un signal réel et
+statistiquement indiscutable. Le seuil plat l'aurait suspendu exactement comme un vrai problème de
+source.
 
-**Le diagnostic lui-même n'a pas pu être fait** : il demande les vraies transactions et les vrais
-cours, dont ce conteneur ne dispose pas. Ce qui reste à faire, en une requête sur ta base : pour
-trois ou quatre achats, comparer `price_per_unit` payé et `market_price_history.price` de cet ISIN
-à cette date exacte. Un écart systématique de même signe sur toutes les lignes d'une même place
-confirme l'hypothèse XFRA, et la correction sera alors de résoudre le symbole sur la place de
-l'ordre. En attendant, la garde empêche le chiffre faux de s'afficher.
+**La garde retenue** compare le prix payé à la **fourchette réellement cotée** ce mois-là pour la
+ligne (min/max des clôtures, avec une tolérance de 3 % pour l'exécution intra-journalière que les
+clôtures ne capturent pas), plutôt qu'à un écart en bps. Un prix issu d'un vrai achat, même au plus
+bas ou au plus haut du mois, tombe forcément dans cette fourchette. Un prix issu d'une autre place
+de cotation en tombe généralement très en dehors — c'est la vraie ligne de partage, pas l'ampleur
+de l'écart. Le bloc entier est suspendu seulement si une **majorité** des ordres est hors
+fourchette (un ordre isolé peut être une erreur de saisie, pas un problème de source). Testé sur
+les deux cas : le trader compétent sur actif volatil reste `is_plausible=True`, le cas XFRA/XPAR
+simulé (tous les ordres à +12 % d'une série plate) reste détecté et suspendu.
+
+**Le diagnostic lui-même n'a toujours pas pu être fait** : il demande les vraies transactions et
+les vrais cours, dont ce conteneur ne dispose pas. Ce qui reste à faire, en une requête sur ta
+base : pour trois ou quatre achats, comparer `price_per_unit` payé et `market_price_history.price`
+de cet ISIN à cette date exacte. Un écart systématique de même signe sur toutes les lignes d'une
+même place confirme l'hypothèse XFRA, et la correction sera alors de résoudre le symbole sur la
+place de l'ordre. En attendant, la garde empêche le chiffre faux de s'afficher.
 
 ### Limites connues, assumées
 
@@ -299,6 +312,13 @@ l'ordre. En attendant, la garde empêche le chiffre faux de s'afficher.
 - **Le repli des taux de change sur les jours ouvrés est une approximation** : un jour férié que
   personne n'a coté coûte une requête inutile. C'est très au-dessus de l'ancien comportement, qui
   refetchait à chaque fois.
+- **Le bloc plan cible est découpé en mois calendaires, pas en cadence déclarée.** La régularité
+  (`deployment_gap`) est continue et lit n'importe quel intervalle sans problème — 50 jours, 90
+  jours, peu importe. Mais l'adhérence au plan (`analyse_plan`) compare l'investi à la cible **mois
+  par mois** : pour une cadence supérieure à 60 jours (tous les deux mois, par exemple), certains
+  mois affichent 0 € et sont comptés « sous-investis » alors que le plan est tenu sur la durée — le
+  ratio global reste juste, le détail mensuel devient trompeur. Non traité dans M4, signalé ici
+  pour une future itération (agréger l'adhérence sur la cadence détectée plutôt que sur le mois).
 
 ## Réserve reconduite de M3
 
