@@ -22,6 +22,9 @@ from decimal import Decimal
 
 import numpy as np
 
+from models.enums import StockTransactionType as TxType
+from services.analytics.transactions import tx_type as _tx_type, tx_day as _tx_day
+from services.stock_transaction import CASH_ASSET_KEY
 from services.analytics.timing import (
     DEFAULT_DRAWS,
     PermutationResult,
@@ -29,8 +32,8 @@ from services.analytics.timing import (
     rng as default_rng,
 )
 
-_BUY = "BUY"
-_EUR = "EUR"
+_BUY = TxType.BUY
+_EUR = CASH_ASSET_KEY
 _BPS = Decimal("10000")
 
 # Under ten orders the distribution is not a distribution. Thirty is where the
@@ -69,16 +72,6 @@ class ExecutionAnalysis:
     @property
     def sample_size(self) -> int:
         return len(self.orders)
-
-
-def _tx_type(tx) -> str:
-    raw = getattr(tx, "type", None)
-    return str(getattr(raw, "value", raw) or "")
-
-
-def _tx_day(tx):
-    executed_at = getattr(tx, "executed_at", None)
-    return executed_at.date() if executed_at is not None else None
 
 
 def buy_orders(transactions) -> list:

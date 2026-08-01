@@ -14,6 +14,9 @@ would leave the reader comfortable about the wrong number.
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from models.enums import StockTransactionType as TxType
+from services.analytics.transactions import tx_type as _tx_type
+from services.stock_transaction import CASH_ASSET_KEY
 
 _ZERO = Decimal("0")
 _BPS = Decimal("10000")
@@ -79,11 +82,6 @@ class FeeAnalysis:
         return self.annual_bps > TARGET_BPS
 
 
-def _tx_type(tx) -> str:
-    raw = getattr(tx, "type", None)
-    return str(getattr(raw, "value", raw) or "")
-
-
 def _dec(value) -> Decimal:
     if value is None:
         return _ZERO
@@ -99,9 +97,9 @@ def analyse_fees(transactions, window) -> FeeAnalysis | None:
     """Fees paid on purchases, and the order size that makes them stop mattering."""
     orders: list[tuple[Decimal, Decimal]] = []
     for tx in transactions or ():
-        if _tx_type(tx) != "BUY":
+        if _tx_type(tx) != TxType.BUY:
             continue
-        if str(getattr(tx, "asset_key", "") or "").upper() == "EUR":
+        if str(getattr(tx, "asset_key", "") or "").upper() == CASH_ASSET_KEY:
             continue
         notional = _dec(getattr(tx, "amount", None)) * _dec(getattr(tx, "price_per_unit", None))
         if notional <= _ZERO:
@@ -171,7 +169,7 @@ def monthly_fee_series(transactions) -> list[tuple[date, Decimal, Decimal]]:
     """(day, notional, fee) per purchase — the scatter behind the threshold."""
     out: list[tuple[date, Decimal, Decimal]] = []
     for tx in transactions or ():
-        if _tx_type(tx) != "BUY":
+        if _tx_type(tx) != TxType.BUY:
             continue
         executed_at = getattr(tx, "executed_at", None)
         if executed_at is None:

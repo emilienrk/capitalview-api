@@ -57,6 +57,7 @@ from services.analytics.timing import (
     MIN_SESSIONS,
     analyse_market_conditioning,
 )
+from models.enums import StockTransactionType as TxType
 from services.analytics.window import (
     LOOKBACK_DAYS,
     calendar_days,
@@ -66,7 +67,7 @@ from services.analytics.window import (
 from services.encryption import decrypt_data
 from services.settings import get_or_create_settings
 from services.stock_account import get_all_stock_accounts_history, get_user_stock_accounts
-from services.stock_transaction import get_account_transactions
+from services.stock_transaction import CASH_ASSET_KEY, get_account_transactions
 
 _ZERO = Decimal("0")
 
@@ -904,8 +905,8 @@ def _auto_provision_share(transactions) -> Decimal:
     deposits = [
         tx
         for tx in transactions
-        if str(getattr(tx.type, "value", tx.type)) == "DEPOSIT"
-        and str(tx.asset_key or "").upper() == "EUR"
+        if str(getattr(tx.type, "value", tx.type)) == TxType.DEPOSIT
+        and str(tx.asset_key or "").upper() == CASH_ASSET_KEY
     ]
     if not deposits:
         return _ZERO

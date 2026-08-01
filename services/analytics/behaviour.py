@@ -13,10 +13,13 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from services.analytics.flows import is_auto_provision
+from models.enums import StockTransactionType as TxType
+from services.analytics.transactions import tx_type as _tx_type, tx_day as _tx_day
+from services.stock_transaction import CASH_ASSET_KEY
 
-_BUY = "BUY"
-_DEPOSIT = "DEPOSIT"
-_EUR = "EUR"
+_BUY = TxType.BUY
+_DEPOSIT = TxType.DEPOSIT
+_EUR = CASH_ASSET_KEY
 _ZERO = Decimal("0")
 
 # Six months of purchases is the least that can show a rhythm; two years is where
@@ -75,16 +78,6 @@ class PurchaseRegularity:
     @property
     def is_measurable(self) -> bool:
         return self.months_total >= MIN_MONTHS and self.purchase_count >= MIN_PURCHASES
-
-
-def _tx_type(tx) -> str:
-    raw = getattr(tx, "type", None)
-    return str(getattr(raw, "value", raw) or "")
-
-
-def _tx_day(tx) -> date | None:
-    executed_at = getattr(tx, "executed_at", None)
-    return executed_at.date() if executed_at is not None else None
 
 
 def _dec(value) -> Decimal:
@@ -349,7 +342,7 @@ def sale_amounts(transactions) -> list[tuple[date, Decimal]]:
     """Every real sale as (day, euros)."""
     out: list[tuple[date, Decimal]] = []
     for tx in transactions or ():
-        if _tx_type(tx) != "SELL":
+        if _tx_type(tx) != TxType.SELL:
             continue
         if str(getattr(tx, "asset_key", "") or "").upper() == _EUR:
             continue
@@ -519,7 +512,7 @@ def analyse_deposit_regularity(transactions, window) -> PurchaseRegularity | Non
 
 # ── 3.2 · what you do with your exits ─────────────────────────────────
 
-_SELL = "SELL"
+_SELL = TxType.SELL
 
 # Odean's measure needs occasions, not sales: twelve is where the ratio of two
 # proportions stops being three coin flips.

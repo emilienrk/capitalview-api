@@ -25,6 +25,9 @@ from decimal import Decimal
 
 from services.analytics.execution import month_quotes
 from services.analytics.window import AnalysisWindow
+from models.enums import StockTransactionType as TxType
+from services.analytics.transactions import tx_type as _tx_type, tx_day as _tx_day
+from services.stock_transaction import CASH_ASSET_KEY
 
 _ZERO = Decimal("0")
 
@@ -71,17 +74,14 @@ class Bridge:
         return self.final - self.baseline
 
 
-def _tx_type(tx) -> str:
-    raw = getattr(tx, "type", None)
-    return str(getattr(raw, "value", raw) or "")
-
-
-def _tx_day(tx):
-    executed_at = getattr(tx, "executed_at", None)
-    return executed_at.date() if executed_at is not None else None
-
-
 def _dec(value) -> Decimal:
+    """Deliberately stricter than behaviour._dec, which swallows a bad value as zero.
+
+    The bridge has to reconcile to the euro (spec section 11). Coercing an
+    unparseable amount to zero here would keep the sum balancing while quietly
+    dropping a real transaction, which is the one failure this block must not
+    have. Raising is the lesser evil, so the two variants are not merged.
+    """
     if value is None:
         return _ZERO
     if isinstance(value, Decimal):
@@ -140,7 +140,7 @@ def build_bridge(
     buys = [
         tx
         for tx in scoped
-        if _tx_type(tx) == "BUY" and str(getattr(tx, "asset_key", "") or "").upper() != "EUR"
+        if _tx_type(tx) == TxType.BUY and str(getattr(tx, "asset_key", "") or "").upper() != CASH_ASSET_KEY
     ]
     if not buys:
         return None
@@ -196,13 +196,13 @@ def build_bridge(
         kind = _tx_type(tx)
         fees_total += _dec(getattr(tx, "fees", None))
         gross = _dec(getattr(tx, "amount", None)) * _dec(getattr(tx, "price_per_unit", None))
-        if kind == "DEPOSIT":
+        if kind == TxType.DEPOSIT:
             deposits += gross
-        elif kind == "WITHDRAW":
+        elif kind == TxType.WITHDRAW:
             withdrawals += gross
-        elif kind == "DIVIDEND":
+        elif kind == TxType.DIVIDEND:
             dividends += gross
-        elif kind == "SELL":
+        elif kind == TxType.SELL:
             sell_proceeds += gross
             key = str(tx.asset_key).upper()
             sold_units[key] = sold_units.get(key, _ZERO) + _dec(tx.amount)

@@ -19,6 +19,17 @@ from services.encryption import encrypt_data, decrypt_data, hash_index
 from services.market import get_stock_info, get_or_create_market_asset
 
 
+# The cash sentinel and the note the app stamps on the deposits it writes itself.
+#
+# Both are facts this service owns because this service is what writes them, and
+# both are read elsewhere — the analytics layer excludes auto-provisions from
+# every behavioural statistic (spec section 0 bis), so a reader matching on a
+# copy of the string would silently stop recognising them if the wording here
+# ever changed.
+CASH_ASSET_KEY = "EUR"
+AUTO_PROVISION_NOTE = "Provision automatique"
+
+
 def bulk_tx_order_key(item_with_index: tuple[int, object]) -> tuple:
     """Deterministic processing order for bulk stock imports.
 
@@ -323,7 +334,7 @@ def create_stock_transaction(
             deposit_time = data.executed_at - timedelta(seconds=1)
             create_eur_deposit(
                 session, data.account_id, round(shortage, 2), deposit_time, master_key,
-                notes="Provision automatique",
+                notes=AUTO_PROVISION_NOTE,
             )
 
     account_bidx = hash_index(data.account_id, master_key)
