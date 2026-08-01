@@ -47,6 +47,7 @@ from services.analytics.benchmark import get_benchmark_series, resolve_benchmark
 from services.analytics.counterfactual import build_bridge
 from services.analytics.execution import MIN_ORDERS, SOLID_ORDERS, analyse_execution
 from services.analytics.flows import is_auto_provision, stock_external_flows
+from services.analytics.labels import label_of, resolve_asset_labels
 from services.analytics.prices import fill_price_gaps, get_price_matrix
 from services.analytics.reliability import Metric
 from services.analytics.returns import annualize, time_weighted_return, xirr
@@ -259,6 +260,16 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
     )
 
     bridge_payload = _bridge_payload(bridge)
+    # One lookup for every key any block will display: the ISIN is the join, the
+    # name and the ticker are what the reader gets.
+    labels = resolve_asset_labels(
+        session,
+        [
+            *(key for key, _ in (concentration.weights if concentration else ())),
+            *(concentration.dropped if concentration else ()),
+            *(row.asset_key for row in (getattr(plan_payload, "drift", None) or ())),
+        ],
+    )
     return {
         "counterfactual": bridge_payload,
         "execution": _execution_payload(execution, window),
@@ -271,10 +282,10 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
             bridge_payload["idle_cash_opportunity"] if bridge_payload else None,
         ),
         "market_conditioning": _conditioning_payload(conditioning),
-        "concentration": _concentration_payload(concentration),
+        "concentration": _concentration_payload(concentration, labels),
         "fees": _fees_payload(fees),
         "exits": _exits_payload(exits),
-        "plan": _plan_payload(plan_payload, plan_error),
+        "plan": _plan_payload(plan_payload, plan_error, labels),
     }, True
 
 
@@ -845,7 +856,7 @@ def _turnover_payload(turnover) -> dict | None:
     }
 
 
-def _concentration_payload(concentration) -> dict | None:
+def _concentration_payload(concentration, labels) -> dict | None:
     if concentration is None:
         return None
 
@@ -887,12 +898,22 @@ def _concentration_payload(concentration) -> dict | None:
         "effective_positions": effective,
         "independent_bets": bets,
         "weights": [
-            {"asset_key": key, "weight": round(weight, 4)}
+            {**label_of(labels, key).as_dict(), "weight": round(weight, 4)}
             for key, weight in concentration.weights
         ],
+        # The ISIN stays the key the UI matches on; the name and the ticker ride
+        # along so the axes of the matrix can be read without a lookup table.
         "correlations": (
             [
-                {"left": left, "right": right, "value": value}
+                {
+                    "left": left,
+                    "right": right,
+                    "value": value,
+                    "left_symbol": label_of(labels, left).symbol,
+                    "right_symbol": label_of(labels, right).symbol,
+                    "left_name": label_of(labels, left).name,
+                    "right_name": label_of(labels, right).name,
+                }
                 for left, right, value in concentration.correlations
             ]
             if show
@@ -900,7 +921,7 @@ def _concentration_payload(concentration) -> dict | None:
         ),
         "max_correlation": concentration.max_correlation if show else None,
         "overlap": concentration.overlap,
-        "dropped": concentration.dropped,
+        "dropped": [label_of(labels, key).as_dict() for key in concentration.dropped],
         "verdict": _concentration_verdict(concentration, effective["value"], bets["value"]),
     }
 
@@ -1122,7 +1143,7 @@ def _exits_verdict(exits, ratio) -> str:
     )
 
 
-def _plan_payload(plan, error: str | None) -> dict | None:
+def _plan_payload(plan, error: str | None, labels) -> dict | None:
     if error is not None:
         return {
             "monthly_target": _ZERO,
@@ -1204,7 +1225,7 @@ def _plan_payload(plan, error: str | None) -> dict | None:
         ),
         "drift": [
             {
-                "asset_key": row.asset_key,
+                **label_of(labels, row.asset_key).as_dict(),
                 "target": round(row.target, 2),
                 "actual": round(row.actual, 2),
             }
