@@ -28,21 +28,24 @@ répétition à supprimer.
 et toute la pédagogie repliée derrière un `?` — sans perdre le garde-fou qui distingue un chiffre
 solide d'une estimation bruitée.
 
-### Ce que dit la spec, et pourquoi ça tombe juste
+### Décision : le format tableau de bord est assumé
 
-`docs/superpowers/specs/2026-07-29-investor-behaviour-analytics-design.md` §12 liste parmi les
-risques du projet : « **La page devient un dashboard de 30 chiffres** », avec pour parade
-« 9 métriques, hiérarchisées, avec une section explicite de ce qui est écarté ».
+`docs/superpowers/specs/2026-07-29-investor-behaviour-analytics-design.md` §12 comptait parmi les
+risques « la page devient un dashboard de 30 chiffres », avec pour parade « 9 métriques ».
 
-La page en compte **30** aujourd'hui. Le risque identifié s'est réalisé.
+**Cette contrainte est levée le 2026-08-03**, et la ligne du §12 a été réécrite en conséquence.
+Elle avait été écrite avant que la page existe : c'était une supposition sur un mode d'échec.
+La page existe maintenant, et le vrai défaut est ailleurs — non pas trop de chiffres, mais aucun
+qui soit priorisé, et le même caveat répété six fois dans un bloc. Un tableau de bord hiérarchisé
+est le remède, pas le risque.
 
-Il y a donc un malentendu de vocabulaire à lever, parce qu'il oriente tout le reste : la spec
-interdit le dashboard au sens de « trente chiffres indifférenciés qui se concurrencent », pas au
-sens de « page scannable ». La demande — moins de texte, une hiérarchie lisible — et la parade
-prévue par la spec sont la même chose. La Phase 2 vise donc explicitement la cible de la spec :
-**passer de 30 métriques de premier plan à ~9**, les autres rétrogradées derrière le `?` ou
-supprimées. Ce n'est pas une contrainte subie, c'est le chiffre qui rend « ça ressemble enfin à
-un dashboard » mesurable.
+Ce qui reste du §12, et qui pilote la Phase 2 : **le risque est l'absence de hiérarchie**, pas le
+nombre. Il n'y a donc plus de plafond à 9 métriques à respecter. La cible est qualitative — un
+étage d'accueil court, une phrase par bloc, le reste replié — et c'est le tri éditorial de la
+Phase 2 qui décide de ce qui monte.
+
+Le plan M3 (`plans/2026-07-30-investor-analytics-m3.md:19`) reprend l'ancienne formulation. Il
+n'est pas modifié : c'est le compte rendu daté d'un jalon terminé, pas une règle en vigueur.
 
 ---
 
@@ -139,12 +142,14 @@ Trois coupes, par ordre de gain :
 Ajout en tête de page : le verdict global existant (`VerdictBanner`) suivi d'une rangée compacte
 de 4–5 chiffres phares. C'est l'étage « dashboard ».
 
-**Cible chiffrée, reprise de la spec §12** : ~9 métriques de premier plan au lieu de 30. La
-répartition des 30 tuiles actuelles est `BehaviourSection` 12, `FeesSection` 8, `CostSection` 4,
-`HoldingsSection` 3, `PlanSection` 3 — les deux premières sections sont donc où la coupe doit
-porter. Pour chaque tuile : promue en chiffre phare, gardée dans son bloc, ou rétrogradée dans le
-`?`. Ce tri est à faire avec toi, tuile par tuile : c'est un choix éditorial sur ce qui mérite
-l'attention, pas une décision technique.
+**Le tri des 30 tuiles.** Répartition actuelle : `BehaviourSection` 12, `FeesSection` 8,
+`CostSection` 4, `HoldingsSection` 3, `PlanSection` 3 — les deux premières sont donc où la coupe
+porte. Pour chaque tuile, trois sorts : promue en chiffre phare de l'étage d'accueil, gardée dans
+son bloc, ou rétrogradée dans le `?`.
+
+Aucun plafond chiffré ne s'impose (cf. la décision du 2026-08-03 ci-dessus) : ce tri est un choix
+éditorial sur ce qui mérite l'attention, pas une décision technique. À faire avec toi, tuile par
+tuile.
 
 ---
 

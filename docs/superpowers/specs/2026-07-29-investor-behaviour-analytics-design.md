@@ -625,7 +625,7 @@ Chaque jalon est autonome et livrable.
 | Trop peu d'opérations pour conclure quoi que ce soit | C'est le cadre de fiabilité, pas un accident : la page dira « je ne sais pas » là où c'est le cas |
 | Temps de calcul (permutations × 5 000, ACP, rejeux) | Un seul endpoint, cache serveur + client, numpy déjà tiré par les dépendances existantes |
 | Ajustement dividendes du backfill sur une ligne distribuante | Sans effet sur un ETF capitalisant (benchmark contraint, §7.1) ; signalé en note de méthode pour les lignes distribuantes |
-| La page devient un dashboard de 30 chiffres | 9 métriques, hiérarchisées, avec une section explicite de ce qui est écarté |
+| La page noie l'information faute de hiérarchie | Un étage d'accueil court, une phrase de verdict par bloc, le reste replié derrière un `?`. **Révisé le 2026-08-03 :** la formulation initiale était « la page devient un dashboard de 30 chiffres », parade « 9 métriques ». Le format tableau de bord n'est plus tenu pour un risque et le plafond de 9 est levé — écrits avant que la page existe, ils visaient l'encombrement indifférencié, pas la forme. C'est l'absence de hiérarchie qui reste le risque. Cf. `plans/2026-08-03-analysis-page-contract-and-dashboard.md`. |
 
 ---
 
