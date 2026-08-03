@@ -36,6 +36,7 @@ from services.analytics.fees import (
     PROJECTION_RATE,
     PROJECTION_YEARS,
     SOLID_ORDERS as FEES_SOLID_ORDERS,
+    TARGET_BPS,
     analyse_fees,
 )
 from services.analytics.plan import (
@@ -348,6 +349,10 @@ def _regularity_payload(regularity) -> dict | None:
     equivalent = gated(
         regularity.equivalent_monthly_purchases, "achats", insufficient=too_short
     )
+    # The measure that actually judges regularity: distance to a straight-line
+    # deployment, which has no notion of a calendar month and so cannot be fooled
+    # by one. The monthly figures below it only illustrate.
+    deployment = gated(regularity.deployment_gap, "ratio", insufficient=too_short)
     hhi = gated(regularity.temporal_hhi, "indice", insufficient=too_short)
     share = gated(regularity.invested_share, "ratio", insufficient=too_short)
     variation = gated(regularity.variation_coefficient, "ratio", insufficient=too_short)
@@ -380,6 +385,9 @@ def _regularity_payload(regularity) -> dict | None:
         "months_total": regularity.months_total,
         "months_invested": regularity.months_invested,
         "purchase_count": regularity.purchase_count,
+        "deployment_gap": deployment,
+        "cadence_label": regularity.cadence_label,
+        "median_gap_days": regularity.median_gap_days,
         "invested_share": share,
         "variation_coefficient": variation,
         "longest_gap_months": gap_months,
@@ -477,6 +485,7 @@ def _deposit_lag_payload(lag, purchases, deposits, idle_opportunity) -> dict | N
         "unmatched_eur": round(lag.unmatched_eur, 2),
         "unmatched_share": round(lag.unmatched_share, 4),
         "never_invested_eur": round(lag.never_invested_eur, 2),
+        "unpaired_deposits_eur": round(lag.unpaired_deposits_eur, 2),
         "deposit_variation": deposit_variation,
         "purchase_variation": purchase_variation,
         "idle_cash_opportunity": idle_opportunity,
@@ -675,6 +684,9 @@ def _bridge_payload(bridge) -> dict | None:
         ),
         "covered_from": bridge.covered_from,
         "covered_days": bridge.covered_days,
+        # The day the two portfolios are compared at — the end of the covered
+        # window, not today: a truncated bridge stops earlier.
+        "valued_at": bridge.covered_from + timedelta(days=bridge.covered_days),
         "truncated": bridge.truncated,
         "order": bridge.order,
         "verdict": _bridge_verdict(bridge),
@@ -991,6 +1003,12 @@ def _fees_payload(fees) -> dict | None:
             insufficient=too_few,
         ),
         "threshold_order_size": threshold,
+        # Whether the small orders are a problem worth acting on, or only a
+        # calibration figure: below the target the annual load is a rounding
+        # error, however many orders sit under the threshold.
+        "avoidable": (
+            fees.annual_bps is not None and fees.annual_bps > TARGET_BPS
+        ),
         "orders_below_threshold": fees.orders_below_threshold,
         "cost_below_threshold": round(fees.cost_below_threshold, 2),
         "invested_below_threshold": round(fees.invested_below_threshold, 2),
@@ -1148,6 +1166,7 @@ def _plan_payload(plan, error: str | None, labels) -> dict | None:
         return {
             "monthly_target": _ZERO,
             "since": date.today(),
+            "periods": [],
             "months": [],
             "total_target": _ZERO,
             "total_invested": _ZERO,
@@ -1208,6 +1227,16 @@ def _plan_payload(plan, error: str | None, labels) -> dict | None:
     return {
         "monthly_target": plan.monthly_target,
         "since": plan.since,
+        # One period, in the shape the UI reads. A plan revised mid-window would
+        # be several, which the engine does not model yet — the list makes that a
+        # later addition rather than a breaking change.
+        "periods": [
+            {
+                "since": plan.since,
+                "monthly_target": plan.monthly_target,
+                "allocation": {row.asset_key: row.target for row in plan.drift},
+            }
+        ],
         "months": [
             {
                 "year": row.year,

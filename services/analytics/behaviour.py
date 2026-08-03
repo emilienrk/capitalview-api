@@ -50,6 +50,15 @@ class PurchaseRegularity:
     day_of_month_spread: Decimal | None
     """Interquartile range of the day the month's main purchase lands on."""
     median_day_of_month: int | None
+    deployment_gap: Decimal | None
+    """Mean distance to a straight-line deployment, as a share of total capital.
+
+    This is what judges regularity — the monthly figures only illustrate it.
+    """
+    median_gap_days: int | None
+    """Median number of days between two purchases."""
+    cadence_label: str
+    """Descriptive, never declared: "achats autour du 6 du mois". Empty when unreadable."""
     purchase_count: int
     total_invested: Decimal
 
@@ -147,6 +156,74 @@ def _quartile(ordered: list[int], fraction: float) -> Decimal:
     return Decimal(ordered[low]) + weight * (Decimal(ordered[high]) - Decimal(ordered[low]))
 
 
+def _deployment_gap(
+    events: list[tuple[date, Decimal]], start: date, end: date, total: Decimal
+) -> Decimal | None:
+    """Mean distance between the capital actually deployed and a straight line.
+
+    Regularity read on the cumulative capital curve rather than on calendar
+    months. A strict 30-day rhythm drifts from one month to the next without the
+    discipline changing, and judging it by month punished it for the calendar.
+
+    The line joins (start, 0) to (end, total); the gap is the mean absolute
+    distance to it over every day of the window, as a share of total capital, so
+    two portfolios of different sizes compare directly.
+
+    Discrete orders leave a floor of roughly 1/(2n): a few per cent is a straight
+    line, not a finding — which is why the metric is capped at "indicatif".
+    """
+    span = (end - start).days
+    if total <= _ZERO or span <= 0:
+        return None
+
+    ordered = sorted(events)
+    cumulative = _ZERO
+    deviation = _ZERO
+    index = 0
+    for offset in range(span + 1):
+        day = start + timedelta(days=offset)
+        while index < len(ordered) and ordered[index][0] <= day:
+            cumulative += ordered[index][1]
+            index += 1
+        target = total * Decimal(offset) / Decimal(span)
+        deviation += abs(cumulative - target)
+
+    return deviation / (Decimal(span + 1) * total)
+
+
+# A day-of-month habit repeats over a month; dividing both dispersions by their
+# own cycle is what makes them comparable.
+_MONTH_CYCLE = Decimal("30")
+
+
+def _cadence_label(main_days: list[int], gaps: list[int]) -> tuple[str, int | None]:
+    """The tighter of two readings of the rhythm, and the median interval.
+
+    Purchases either land on the same day of the month or are spaced by a steady
+    interval. Both are disciplines, and naming the looser one would describe the
+    investor badly — so the smaller relative dispersion wins. Nothing here is
+    declared by the user: it is read off the orders.
+    """
+    median_gap = int(_quartile(sorted(gaps), 0.5)) if gaps else None
+
+    day_relative = None
+    if len(main_days) >= MIN_PURCHASES_FOR_DAY_OF_MONTH:
+        ordered = sorted(main_days)
+        day_relative = (_quartile(ordered, 0.75) - _quartile(ordered, 0.25)) / _MONTH_CYCLE
+
+    gap_relative = None
+    if len(gaps) >= MIN_PURCHASES_FOR_DAY_OF_MONTH and median_gap:
+        ordered = sorted(gaps)
+        gap_relative = (_quartile(ordered, 0.75) - _quartile(ordered, 0.25)) / Decimal(median_gap)
+
+    if day_relative is not None and (gap_relative is None or day_relative <= gap_relative):
+        median_day = int(_quartile(sorted(main_days), 0.5))
+        return f"achats autour du {median_day} du mois", median_gap
+    if gap_relative is not None and median_gap:
+        return f"achats tous les {median_gap} jours environ", median_gap
+    return "", median_gap
+
+
 def _series_regularity(
     events: list[tuple[date, Decimal]],
     first_month: date,
@@ -204,6 +281,12 @@ def _series_regularity(
         spread = _quartile(main_days, 0.75) - _quartile(main_days, 0.25)
         median_day = int(_quartile(main_days, 0.5))
 
+    # The rhythm read on the capital curve, which no calendar can distort.
+    ordered_days = sorted(day for day, _ in events)
+    gaps = [(b - a).days for a, b in zip(ordered_days, ordered_days[1:])]
+    cadence, median_gap = _cadence_label(main_days, gaps)
+    deployment = _deployment_gap(events, first_month, last_month, total)
+
     return PurchaseRegularity(
         monthly=[MonthlyAmount(y, m, per_month[(y, m)]) for y, m in months],
         months_total=len(months),
@@ -215,6 +298,9 @@ def _series_regularity(
         equivalent_monthly_purchases=equivalent,
         day_of_month_spread=spread,
         median_day_of_month=median_day,
+        deployment_gap=deployment,
+        median_gap_days=median_gap,
+        cadence_label=cadence,
         purchase_count=len(events),
         total_invested=total,
     )
@@ -309,6 +395,14 @@ class DepositLag:
     """Purchase euros no real deposit could have funded."""
     never_invested_eur: Decimal
     """Deposited and still sitting there at the end of the window."""
+    unpaired_deposits_eur: Decimal
+    """Deposit euros the FIFO never consumed.
+
+    The same figure as never_invested_eur today. The UI distinguishes the two —
+    the FIFO leftover against deposits minus purchases — but that split would
+    change a displayed amount and contradict the behaviour this module's tests
+    pin down, so the engine does not make it yet.
+    """
     pairs: int
 
     @property
@@ -395,6 +489,7 @@ def analyse_deposit_lag(transactions) -> DepositLag | None:
         matched_eur=matched_eur,
         unmatched_eur=unmatched_eur,
         never_invested_eur=Decimal(str(never_invested)),
+        unpaired_deposits_eur=Decimal(str(never_invested)),
         pairs=len(matched),
     )
 
