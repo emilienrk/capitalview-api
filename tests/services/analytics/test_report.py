@@ -179,10 +179,14 @@ def _run_blocks(transactions, snapshots=None, window_end=None):
         patch("services.analytics.window.get_historical_exchange_rates_db"),
         patch("services.analytics.window.first_quote_date", return_value=date(2010, 1, 1)),
         patch("services.analytics.report.get_price_matrix", return_value=matrix),
+        # Reference data, not a measurement: unresolved keys fall back to the
+        # ISIN and every payload keeps its shape.
+        patch("services.analytics.report.resolve_asset_labels", return_value={}),
         patch("services.analytics.report.fill_price_gaps", side_effect=lambda m, *_a, **_k: m),
         # No exchange calendar here: execution falls back to quoted days, which is
         # what the fixture provides.
         patch("services.analytics.report.resolve_trading_days", return_value={}),
+        patch("services.analytics.report.resolve_asset_labels", return_value={}),
     ):
         return build_investor_analytics(None, "user_1", "key")
 
@@ -380,6 +384,7 @@ def test_an_unusable_plan_is_reported_not_dropped(master_key):
         ),
         patch("services.analytics.report.fill_price_gaps", side_effect=lambda m, *_a, **_k: m),
         patch("services.analytics.report.resolve_trading_days", return_value={}),
+        patch("services.analytics.report.resolve_asset_labels", return_value={}),
     ):
         report = build_investor_analytics(None, "user_1", master_key)
 
@@ -414,6 +419,7 @@ def test_a_valid_plan_is_decrypted_and_scored(master_key):
         patch("services.analytics.report.get_price_matrix", return_value=_quotes(transactions)),
         patch("services.analytics.report.fill_price_gaps", side_effect=lambda m, *_a, **_k: m),
         patch("services.analytics.report.resolve_trading_days", return_value={}),
+        patch("services.analytics.report.resolve_asset_labels", return_value={}),
     ):
         report = build_investor_analytics(None, "user_1", master_key)
 
@@ -422,3 +428,39 @@ def test_a_valid_plan_is_decrypted_and_scored(master_key):
     assert plan["monthly_target"] == Decimal("500")
     assert plan["adherence_ratio"]["value"] is not None
     assert plan["months"]
+
+
+def test_the_concentration_payload_carries_names_not_only_isins():
+    """The matrix is read by a human: every key ships with its name and ticker."""
+    from services.analytics.concentration import Concentration
+    from services.analytics.labels import AssetLabel
+    from services.analytics.report import _concentration_payload
+
+    concentration = Concentration(
+        lines=2,
+        effective_positions=Decimal("2"),
+        independent_bets=Decimal("1.8"),
+        weights=[("FR0000120073", Decimal("0.6")), (BENCH, Decimal("0.4"))],
+        correlations=[("FR0000120073", BENCH, Decimal("0.42"))],
+        max_correlation=Decimal("0.42"),
+        overlap=400,
+        dropped=["FR0011550185"],
+    )
+    labels = {
+        "FR0000120073": AssetLabel("FR0000120073", "AIR.PA", "Air Liquide"),
+        BENCH: AssetLabel(BENCH, "IWDA.AS", "iShares Core MSCI World"),
+    }
+
+    payload = _concentration_payload(concentration, labels)
+
+    assert payload["weights"][0]["name"] == "Air Liquide"
+    assert payload["weights"][0]["asset_key"] == "FR0000120073"
+    pair = payload["correlations"][0]
+    assert (pair["left_name"], pair["right_name"]) == ("Air Liquide", "iShares Core MSCI World")
+    assert (pair["left_symbol"], pair["right_symbol"]) == ("AIR.PA", "IWDA.AS")
+    # The ISIN is still the join the UI matches on.
+    assert (pair["left"], pair["right"]) == ("FR0000120073", BENCH)
+    # A dropped line has no reference data here: it falls back to its key.
+    assert payload["dropped"] == [
+        {"asset_key": "FR0011550185", "symbol": "FR0011550185", "name": "FR0011550185"}
+    ]

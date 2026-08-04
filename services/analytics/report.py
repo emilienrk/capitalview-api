@@ -36,6 +36,7 @@ from services.analytics.fees import (
     PROJECTION_RATE,
     PROJECTION_YEARS,
     SOLID_ORDERS as FEES_SOLID_ORDERS,
+    TARGET_BPS,
     analyse_fees,
 )
 from services.analytics.plan import (
@@ -47,6 +48,7 @@ from services.analytics.benchmark import get_benchmark_series, resolve_benchmark
 from services.analytics.counterfactual import build_bridge
 from services.analytics.execution import MIN_ORDERS, SOLID_ORDERS, analyse_execution
 from services.analytics.flows import is_auto_provision, stock_external_flows
+from services.analytics.labels import label_of, resolve_asset_labels
 from services.analytics.prices import fill_price_gaps, get_price_matrix
 from services.analytics.reliability import Metric
 from services.analytics.returns import annualize, time_weighted_return, xirr
@@ -259,6 +261,16 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
     )
 
     bridge_payload = _bridge_payload(bridge)
+    # One lookup for every key any block will display: the ISIN is the join, the
+    # name and the ticker are what the reader gets.
+    labels = resolve_asset_labels(
+        session,
+        [
+            *(key for key, _ in (concentration.weights if concentration else ())),
+            *(concentration.dropped if concentration else ()),
+            *(row.asset_key for row in (getattr(plan_payload, "drift", None) or ())),
+        ],
+    )
     return {
         "counterfactual": bridge_payload,
         "execution": _execution_payload(execution, window),
@@ -271,10 +283,10 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
             bridge_payload["idle_cash_opportunity"] if bridge_payload else None,
         ),
         "market_conditioning": _conditioning_payload(conditioning),
-        "concentration": _concentration_payload(concentration),
+        "concentration": _concentration_payload(concentration, labels),
         "fees": _fees_payload(fees),
         "exits": _exits_payload(exits),
-        "plan": _plan_payload(plan_payload, plan_error),
+        "plan": _plan_payload(plan_payload, plan_error, labels),
     }, True
 
 
@@ -337,6 +349,10 @@ def _regularity_payload(regularity) -> dict | None:
     equivalent = gated(
         regularity.equivalent_monthly_purchases, "achats", insufficient=too_short
     )
+    # The measure that actually judges regularity: distance to a straight-line
+    # deployment, which has no notion of a calendar month and so cannot be fooled
+    # by one. The monthly figures below it only illustrate.
+    deployment = gated(regularity.deployment_gap, "ratio", insufficient=too_short)
     hhi = gated(regularity.temporal_hhi, "indice", insufficient=too_short)
     share = gated(regularity.invested_share, "ratio", insufficient=too_short)
     variation = gated(regularity.variation_coefficient, "ratio", insufficient=too_short)
@@ -369,6 +385,9 @@ def _regularity_payload(regularity) -> dict | None:
         "months_total": regularity.months_total,
         "months_invested": regularity.months_invested,
         "purchase_count": regularity.purchase_count,
+        "deployment_gap": deployment,
+        "cadence_label": regularity.cadence_label,
+        "median_gap_days": regularity.median_gap_days,
         "invested_share": share,
         "variation_coefficient": variation,
         "longest_gap_months": gap_months,
@@ -466,6 +485,7 @@ def _deposit_lag_payload(lag, purchases, deposits, idle_opportunity) -> dict | N
         "unmatched_eur": round(lag.unmatched_eur, 2),
         "unmatched_share": round(lag.unmatched_share, 4),
         "never_invested_eur": round(lag.never_invested_eur, 2),
+        "unpaired_deposits_eur": round(lag.unpaired_deposits_eur, 2),
         "deposit_variation": deposit_variation,
         "purchase_variation": purchase_variation,
         "idle_cash_opportunity": idle_opportunity,
@@ -664,6 +684,9 @@ def _bridge_payload(bridge) -> dict | None:
         ),
         "covered_from": bridge.covered_from,
         "covered_days": bridge.covered_days,
+        # The day the two portfolios are compared at — the end of the covered
+        # window, not today: a truncated bridge stops earlier.
+        "valued_at": bridge.covered_from + timedelta(days=bridge.covered_days),
         "truncated": bridge.truncated,
         "order": bridge.order,
         "verdict": _bridge_verdict(bridge),
@@ -845,7 +868,7 @@ def _turnover_payload(turnover) -> dict | None:
     }
 
 
-def _concentration_payload(concentration) -> dict | None:
+def _concentration_payload(concentration, labels) -> dict | None:
     if concentration is None:
         return None
 
@@ -887,12 +910,22 @@ def _concentration_payload(concentration) -> dict | None:
         "effective_positions": effective,
         "independent_bets": bets,
         "weights": [
-            {"asset_key": key, "weight": round(weight, 4)}
+            {**label_of(labels, key).as_dict(), "weight": round(weight, 4)}
             for key, weight in concentration.weights
         ],
+        # The ISIN stays the key the UI matches on; the name and the ticker ride
+        # along so the axes of the matrix can be read without a lookup table.
         "correlations": (
             [
-                {"left": left, "right": right, "value": value}
+                {
+                    "left": left,
+                    "right": right,
+                    "value": value,
+                    "left_symbol": label_of(labels, left).symbol,
+                    "right_symbol": label_of(labels, right).symbol,
+                    "left_name": label_of(labels, left).name,
+                    "right_name": label_of(labels, right).name,
+                }
                 for left, right, value in concentration.correlations
             ]
             if show
@@ -900,7 +933,7 @@ def _concentration_payload(concentration) -> dict | None:
         ),
         "max_correlation": concentration.max_correlation if show else None,
         "overlap": concentration.overlap,
-        "dropped": concentration.dropped,
+        "dropped": [label_of(labels, key).as_dict() for key in concentration.dropped],
         "verdict": _concentration_verdict(concentration, effective["value"], bets["value"]),
     }
 
@@ -970,6 +1003,12 @@ def _fees_payload(fees) -> dict | None:
             insufficient=too_few,
         ),
         "threshold_order_size": threshold,
+        # Whether the small orders are a problem worth acting on, or only a
+        # calibration figure: below the target the annual load is a rounding
+        # error, however many orders sit under the threshold.
+        "avoidable": (
+            fees.annual_bps is not None and fees.annual_bps > TARGET_BPS
+        ),
         "orders_below_threshold": fees.orders_below_threshold,
         "cost_below_threshold": round(fees.cost_below_threshold, 2),
         "invested_below_threshold": round(fees.invested_below_threshold, 2),
@@ -1122,11 +1161,12 @@ def _exits_verdict(exits, ratio) -> str:
     )
 
 
-def _plan_payload(plan, error: str | None) -> dict | None:
+def _plan_payload(plan, error: str | None, labels) -> dict | None:
     if error is not None:
         return {
             "monthly_target": _ZERO,
             "since": date.today(),
+            "periods": [],
             "months": [],
             "total_target": _ZERO,
             "total_invested": _ZERO,
@@ -1187,6 +1227,16 @@ def _plan_payload(plan, error: str | None) -> dict | None:
     return {
         "monthly_target": plan.monthly_target,
         "since": plan.since,
+        # One period, in the shape the UI reads. A plan revised mid-window would
+        # be several, which the engine does not model yet — the list makes that a
+        # later addition rather than a breaking change.
+        "periods": [
+            {
+                "since": plan.since,
+                "monthly_target": plan.monthly_target,
+                "allocation": {row.asset_key: row.target for row in plan.drift},
+            }
+        ],
         "months": [
             {
                 "year": row.year,
@@ -1204,7 +1254,7 @@ def _plan_payload(plan, error: str | None) -> dict | None:
         ),
         "drift": [
             {
-                "asset_key": row.asset_key,
+                **label_of(labels, row.asset_key).as_dict(),
                 "target": round(row.target, 2),
                 "actual": round(row.actual, 2),
             }

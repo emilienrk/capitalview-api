@@ -60,6 +60,8 @@ class CounterfactualResponse(BaseModel):
     """What that idle cash would have earned on the benchmark."""
     covered_from: date
     covered_days: int
+    valued_at: date | None = None
+    """End of the covered window: the day both portfolios are priced at."""
     truncated: bool
     """True when the benchmark is younger than the history and the window moved."""
     order: list[str]
@@ -104,6 +106,11 @@ class RegularityResponse(BaseModel):
     months_total: int
     months_invested: int
     purchase_count: int
+    deployment_gap: MetricOut
+    """Distance to a straight-line deployment. This is what judges regularity."""
+    cadence_label: str = ""
+    """Descriptive, never declared: "achats autour du 6 du mois"."""
+    median_gap_days: int | None = None
     invested_share: MetricOut
     variation_coefficient: MetricOut
     longest_gap_months: MetricOut
@@ -127,6 +134,8 @@ class DepositLagResponse(BaseModel):
     """Purchase euros no real deposit could have funded — auto-provisions, mostly."""
     unmatched_share: Decimal
     never_invested_eur: Decimal
+    unpaired_deposits_eur: Decimal = Decimal("0")
+    """FIFO leftover. Equal to never_invested_eur until the split is decided."""
     deposit_variation: MetricOut
     """Same indicator as the purchases, so the two rhythms can be compared."""
     purchase_variation: MetricOut
@@ -176,8 +185,15 @@ class TurnoverOut(BaseModel):
     sales_eur: Decimal
 
 
-class WeightOut(BaseModel):
+class AssetLabelOut(BaseModel):
+    """The technical key plus what a reader is actually shown."""
+
     asset_key: str
+    symbol: str
+    name: str
+
+
+class WeightOut(AssetLabelOut):
     weight: Decimal
 
 
@@ -185,6 +201,10 @@ class CorrelationOut(BaseModel):
     left: str
     right: str
     value: Decimal
+    left_symbol: str
+    right_symbol: str
+    left_name: str
+    right_name: str
 
 
 class ConcentrationResponse(BaseModel):
@@ -198,7 +218,7 @@ class ConcentrationResponse(BaseModel):
     correlations: list[CorrelationOut] = []
     max_correlation: Decimal | None = None
     overlap: int
-    dropped: list[str] = []
+    dropped: list[AssetLabelOut] = []
     """Lines held but too thinly quoted to enter the covariance."""
     verdict: str
 
@@ -209,6 +229,8 @@ class FeesResponse(BaseModel):
     annual_bps: MetricOut
     threshold_order_size: MetricOut
     """Order size below which entry fees exceed 25 bps."""
+    avoidable: bool = False
+    """True when the annual load clears the target — otherwise it is calibration."""
     orders_below_threshold: int
     cost_below_threshold: Decimal
     invested_below_threshold: Decimal
@@ -255,10 +277,17 @@ class MonthlyAdherenceOut(BaseModel):
     invested: Decimal
 
 
-class AllocationDriftOut(BaseModel):
-    asset_key: str
+class AllocationDriftOut(AssetLabelOut):
     target: Decimal
     actual: Decimal
+
+
+class PlanPeriodOut(BaseModel):
+    """One declared period of the plan."""
+
+    since: date
+    monthly_target: Decimal
+    allocation: dict[str, Decimal] = {}
 
 
 class PlanResponse(BaseModel):
@@ -266,6 +295,8 @@ class PlanResponse(BaseModel):
 
     monthly_target: Decimal
     since: date
+    periods: list[PlanPeriodOut] = []
+    """The plan as declared. One entry today; a revised plan would be several."""
     months: list[MonthlyAdherenceOut] = []
     total_target: Decimal
     total_invested: Decimal
