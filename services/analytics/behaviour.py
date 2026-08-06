@@ -88,21 +88,27 @@ def _dec(value) -> Decimal:
         return _ZERO
 
 
-def purchase_amounts(transactions) -> list[tuple[date, Decimal]]:
-    """Every real purchase as (day, euros). EUR cash rows are not purchases."""
-    out: list[tuple[date, Decimal]] = []
+def purchases_by_asset(transactions) -> list[tuple[date, str, Decimal]]:
+    """Every real purchase as (day, asset_key, euros). Cash rows are not purchases."""
+    out: list[tuple[date, str, Decimal]] = []
     for tx in transactions or ():
         if _tx_type(tx) != _BUY:
             continue
-        if str(getattr(tx, "asset_key", "") or "").upper() == _EUR:
+        key = str(getattr(tx, "asset_key", "") or "").upper()
+        if not key or key == _EUR:
             continue
         day = _tx_day(tx)
         if day is None:
             continue
         amount = _dec(getattr(tx, "amount", None)) * _dec(getattr(tx, "price_per_unit", None))
         if amount > _ZERO:
-            out.append((day, amount))
+            out.append((day, key, amount))
     return sorted(out)
+
+
+def purchase_amounts(transactions) -> list[tuple[date, Decimal]]:
+    """Every real purchase as (day, euros). EUR cash rows are not purchases."""
+    return [(day, amount) for day, _key, amount in purchases_by_asset(transactions)]
 
 
 def deposit_amounts(transactions, *, include_auto_provisions: bool = False) -> list[tuple[date, Decimal]]:

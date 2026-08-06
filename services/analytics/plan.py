@@ -40,6 +40,36 @@ class PlanPeriod:
 
 
 @dataclass(frozen=True)
+class PeriodOutcome:
+    """What one period asked for, and what was actually done while it was in force.
+
+    Drift compares the portfolio *today* against the target in force today, so it
+    cannot say anything about a period that has ended: two years of market moves
+    sit between the purchases and the current weights. This compares the flows
+    instead — the euros put in during the period, split by line, against the split
+    the period asked for. That is the only figure that survives a plan revision,
+    and the only one that answers "did I follow 50/50 while 50/50 was the plan".
+    """
+
+    since: date
+    until: date | None
+    """First month of the next period, or None while this one is still running."""
+    monthly_target: Decimal
+    allocation: dict[str, Decimal]
+    months: int
+    target_eur: Decimal
+    invested_eur: Decimal
+    flow_shares: dict[str, Decimal]
+    """Share of the period's euros that went to each line, in points."""
+    flow_drift_l1: Decimal | None
+    """L1 distance between those shares and the target, in points."""
+
+    @property
+    def adherence_ratio(self) -> Decimal | None:
+        return self.invested_eur / self.target_eur if self.target_eur > _ZERO else None
+
+
+@dataclass(frozen=True)
 class MonthlyAdherence:
     year: int
     month: int
@@ -69,6 +99,8 @@ class PlanAdherence:
     since: date
     """The month the plan starts, which is the first period's."""
     periods: list[PlanPeriod]
+    outcomes: list[PeriodOutcome]
+    """Per period: what was promised, and what was actually put in while it ran."""
     months: list[MonthlyAdherence]
     total_target: Decimal
     total_invested: Decimal
@@ -250,6 +282,7 @@ def analyse_plan(
         monthly_target=current.monthly_target,
         since=since,
         periods=periods,
+        outcomes=_period_outcomes(periods, purchases_by_asset, rows),
         months=rows,
         total_target=total_target,
         total_invested=Decimal(str(total_invested)),
@@ -261,6 +294,67 @@ def analyse_plan(
         under_invested_months=len(under),
         under_in_down_months=under_in_down,
     )
+
+
+def _period_outcomes(
+    periods: list[PlanPeriod],
+    purchases: list[tuple[date, str, Decimal]],
+    rows: list[MonthlyAdherence],
+) -> list[PeriodOutcome]:
+    """Score every period on its own months and its own allocation.
+
+    Only complete months count, exactly as the headline figure does — a period
+    scored over a month still running would show a shortfall that resolves
+    itself, and the two numbers would then disagree on the same data.
+    """
+    scored_months = {(row.year, row.month) for row in rows}
+    outcomes: list[PeriodOutcome] = []
+
+    for index, period in enumerate(periods):
+        nxt = periods[index + 1].since if index + 1 < len(periods) else None
+        months = [
+            row
+            for row in rows
+            if (row.year, row.month) >= (period.since.year, period.since.month)
+            and (nxt is None or (row.year, row.month) < (nxt.year, nxt.month))
+        ]
+
+        flows: dict[str, Decimal] = {}
+        for day, key, amount in purchases:
+            if (day.year, day.month) not in scored_months:
+                continue
+            if day < period.since or (nxt is not None and day >= nxt):
+                continue
+            flows[key] = flows.get(key, _ZERO) + amount
+
+        invested = sum(flows.values(), _ZERO)
+        shares = (
+            {key: (amount / invested) * _HUNDRED for key, amount in flows.items()}
+            if invested > _ZERO
+            else {}
+        )
+        drift = None
+        if period.allocation and shares:
+            keys = {*period.allocation, *shares}
+            drift = sum(
+                (abs(shares.get(key, _ZERO) - period.allocation.get(key, _ZERO)) for key in keys),
+                _ZERO,
+            )
+
+        outcomes.append(
+            PeriodOutcome(
+                since=period.since,
+                until=nxt,
+                monthly_target=period.monthly_target,
+                allocation=dict(period.allocation),
+                months=len(months),
+                target_eur=period.monthly_target * Decimal(len(months)),
+                invested_eur=invested,
+                flow_shares=shares,
+                flow_drift_l1=drift,
+            )
+        )
+    return outcomes
 
 
 def _complete_months(first: date, last: date) -> list[tuple[int, int]]:

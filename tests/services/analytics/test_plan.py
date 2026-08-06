@@ -220,3 +220,66 @@ def test_drift_reads_the_allocation_in_force_today():
     assert result.drift_l1 == Decimal("0")
     targets = {row.asset_key: row.target for row in result.drift}
     assert targets == {"AAA": Decimal("25"), "BBB": Decimal("75")}
+
+
+def _split_purchases(first: tuple[str, str], second: tuple[str, str]):
+    """Monthly buys of two lines, at one euro split before 2025 and another after."""
+    out = []
+    for year, month in [(2024, m) for m in range(1, 13)] + [(2025, m) for m in range(1, 7)]:
+        total = Decimal("200") if year == 2024 else Decimal("600")
+        aaa, bbb = (first if year == 2024 else second)
+        out.append((date(year, month, 5), "AAA", total * Decimal(aaa) / Decimal("100")))
+        out.append((date(year, month, 5), "BBB", total * Decimal(bbb) / Decimal("100")))
+    return out
+
+
+def test_each_period_is_scored_on_its_own_allocation():
+    """50/50 then 25/75, both respected: neither period may show any drift.
+
+    Only the flows can say this. The portfolio held today has been reshaped by
+    two years of market moves, so the point-in-time drift cannot answer whether
+    50/50 was followed back when 50/50 was the plan.
+    """
+    result = analyse_plan(SPLIT, _split_purchases(("50", "50"), ("25", "75")), [], Decimal("0"), WINDOW)
+
+    assert [outcome.flow_drift_l1 for outcome in result.outcomes] == [Decimal("0"), Decimal("0")]
+    assert [outcome.months for outcome in result.outcomes] == [12, 6]
+    assert [outcome.adherence_ratio for outcome in result.outcomes] == [Decimal("1"), Decimal("1")]
+
+
+def test_a_period_that_kept_the_old_split_shows_its_drift():
+    """The raise was applied, the reallocation was not — and the page says so."""
+    result = analyse_plan(SPLIT, _split_purchases(("50", "50"), ("50", "50")), [], Decimal("0"), WINDOW)
+
+    first, second = result.outcomes
+    assert first.flow_drift_l1 == Decimal("0")
+    # 50 vs 25 on AAA and 50 vs 75 on BBB: 25 + 25 = 50 points apart.
+    assert second.flow_drift_l1 == Decimal("50")
+    # The amount was still respected: only the split moved.
+    assert second.adherence_ratio == Decimal("1")
+
+
+def test_a_period_carries_the_month_the_next_one_starts():
+    result = analyse_plan(SPLIT, [], [], Decimal("0"), WINDOW)
+
+    assert [outcome.until for outcome in result.outcomes] == [date(2025, 1, 1), None]
+
+
+def test_a_period_outcome_ignores_the_running_month():
+    """The window ends mid-July 2025; July euros must not count for the period."""
+    purchases = [
+        *_split_purchases(("50", "50"), ("25", "75")),
+        (date(2025, 7, 5), "AAA", Decimal("5000")),
+    ]
+    result = analyse_plan(SPLIT, purchases, [], Decimal("0"), WINDOW)
+
+    assert result.outcomes[1].invested_eur == Decimal("3600")
+    assert result.outcomes[1].flow_drift_l1 == Decimal("0")
+
+
+def test_a_flat_plan_still_gets_one_outcome():
+    result = analyse_plan(PLAN, _purchases(18), [], Decimal("0"), WINDOW)
+
+    assert len(result.outcomes) == 1
+    assert result.outcomes[0].until is None
+    assert result.outcomes[0].adherence_ratio == Decimal("1")

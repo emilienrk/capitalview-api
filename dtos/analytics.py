@@ -299,12 +299,34 @@ class AllocationDriftOut(AssetLabelOut):
     actual: Decimal
 
 
+class PlanFlowOut(AssetLabelOut):
+    """Where the euros of one period actually went, against where they were meant to."""
+
+    target: Decimal
+    actual: Decimal
+
+
 class PlanPeriodOut(BaseModel):
-    """One declared period of the plan."""
+    """One declared period of the plan, and what was done while it was in force."""
 
     since: date
+    until: date | None = None
+    """Start of the next period, or null while this one is still running."""
     monthly_target: Decimal
     allocation: dict[str, Decimal] = {}
+    months: int = 0
+    """Complete months scored inside this period."""
+    target_eur: Decimal = Decimal("0")
+    invested_eur: Decimal = Decimal("0")
+    adherence_ratio: Decimal | None = None
+    flow_drift_l1: Decimal | None = None
+    """L1 distance between the period's real euro split and its target, in points.
+
+    Distinct from the plan-level drift, which compares the portfolio held *today*
+    against the target in force today and therefore says nothing about a period
+    that has ended.
+    """
+    flows: list[PlanFlowOut] = []
 
 
 class PlanResponse(BaseModel):
