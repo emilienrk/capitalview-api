@@ -261,3 +261,47 @@ def test_an_empty_plan_clears_the_stored_one(session, master_key):
 
     client.put("/settings", json={"investment_plan": {}})
     assert client.get("/settings").json()["investment_plan"] is None
+
+
+def test_an_unusable_plan_is_refused_at_the_door(session, master_key):
+    """Stored and rejected an hour later is the worst of both worlds."""
+    client = TestClient(app)
+
+    r = client.put(
+        "/settings",
+        json={"investment_plan": {"monthly_target": "500", "allocation": {"AAA": "90"}}},
+    )
+
+    assert r.status_code == 422
+    assert "90" in r.json()["detail"]
+    assert client.get("/settings").json()["investment_plan"] is None
+
+
+def test_a_plan_in_periods_round_trips(session, master_key):
+    client = TestClient(app)
+    plan = {
+        "periods": [
+            {"since": "2024-01", "monthly_target": "200", "allocation": {"IE00B4L5Y983": "100"}},
+            {"since": "2025-06", "monthly_target": "600", "allocation": {"IE00B4L5Y983": "100"}},
+        ]
+    }
+
+    assert client.put("/settings", json={"investment_plan": plan}).status_code == 200
+
+    stored = client.get("/settings").json()["investment_plan"]
+    assert [period["monthly_target"] for period in stored["periods"]] == ["200", "600"]
+
+
+def test_a_period_missing_its_month_is_named_in_the_error(session, master_key):
+    client = TestClient(app)
+    plan = {
+        "periods": [
+            {"since": "2024-01", "monthly_target": "200"},
+            {"monthly_target": "600"},
+        ]
+    }
+
+    r = client.put("/settings", json={"investment_plan": plan})
+
+    assert r.status_code == 422
+    assert "Période 2" in r.json()["detail"]

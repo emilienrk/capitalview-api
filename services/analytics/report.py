@@ -1225,17 +1225,18 @@ def _plan_payload(plan, error: str | None, labels) -> dict | None:
     )
 
     return {
+        # The target in force today, not the one the plan opened with.
         "monthly_target": plan.monthly_target,
         "since": plan.since,
-        # One period, in the shape the UI reads. A plan revised mid-window would
-        # be several, which the engine does not model yet — the list makes that a
-        # later addition rather than a breaking change.
+        # Every period as declared, oldest first. A plan that never changed has
+        # exactly one, so the UI reads a single shape either way.
         "periods": [
             {
-                "since": plan.since,
-                "monthly_target": plan.monthly_target,
-                "allocation": {row.asset_key: row.target for row in plan.drift},
+                "since": period.since,
+                "monthly_target": period.monthly_target,
+                "allocation": dict(period.allocation),
             }
+            for period in plan.periods
         ],
         "months": [
             {
@@ -1301,16 +1302,38 @@ def _plan_verdict(plan, adherence) -> str:
                 "marché."
             )
 
+    promise = _plan_promise(plan)
     if adherence >= Decimal("0.98"):
         return (
-            f"Ton plan dit {round(plan.monthly_target)} €/mois investis. Tu as investi "
-            f"{round(plan.total_invested)} € en {len(plan.months)} mois : tu le tiens.{drift}"
+            f"{promise} Tu as investi {round(plan.total_invested)} € en "
+            f"{len(plan.months)} mois : tu le tiens.{drift}"
         )
     gap = round((Decimal("1") - adherence) * 100)
     return (
-        f"Ton plan dit {round(plan.monthly_target)} €/mois investis. Tu as investi "
-        f"{round(plan.total_invested)} € en {len(plan.months)} mois, soit "
-        f"{round(plan.average_monthly)} €/mois réels — {gap} % sous ton propre plan.{drift}{timing}"
+        f"{promise} Tu as investi {round(plan.total_invested)} € en {len(plan.months)} mois, "
+        f"soit {round(plan.average_monthly)} €/mois réels — {gap} % sous ton propre "
+        f"plan.{drift}{timing}"
+    )
+
+
+def _plan_promise(plan) -> str:
+    """What the plan asked for, in one sentence.
+
+    A plan in several periods cannot be summarised by one monthly amount: saying
+    "600 €/mois" next to a total that also covers months promised at 200 would
+    read as a shortfall the user never had. The revisions are named instead, and
+    the total is what the adherence ratio actually divides by.
+    """
+    if len(plan.periods) < 2:
+        return f"Ton plan dit {round(plan.monthly_target)} €/mois investis."
+
+    steps = " puis ".join(
+        f"{round(period.monthly_target)} € depuis {period.since:%m/%Y}"
+        for period in plan.periods
+    )
+    return (
+        f"Ton plan a changé {len(plan.periods) - 1} fois — {steps} — soit "
+        f"{round(plan.total_target)} € promis sur {len(plan.months)} mois complets."
     )
 
 

@@ -161,3 +161,87 @@ def test_the_response_model_exposes_every_part_b_block(session, master_key):
     assert {"adherence_ratio", "drift_l1", "rebalance_eur", "since", "error"} <= set(
         PlanResponse.model_fields
     )
+
+
+def test_the_asset_list_is_empty_without_any_account(session, master_key):
+    response = TestClient(app).get("/analytics/assets")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_the_asset_list_offers_held_and_sold_lines(session, master_key):
+    """What the settings pickers read, so no ISIN ever has to be typed."""
+    from datetime import date
+
+    from models.enums import AssetType, StockTransactionType
+    from models.market import MarketAsset
+    from models.stock import StockAccount
+    from services.encryption import encrypt_data, hash_index
+    from services.stock_transaction import create_stock_transaction
+    from dtos import StockTransactionCreate
+
+    session.add(
+        StockAccount(
+            uuid="acc_1",
+            user_uuid_bidx=hash_index("user_1", master_key),
+            name_enc=encrypt_data("PEA", master_key),
+            account_type_enc=encrypt_data("PEA", master_key),
+        )
+    )
+    session.add(
+        MarketAsset(
+            asset_key="IE00B4L5Y983",
+            symbol="IWDA.AS",
+            name="iShares Core MSCI World",
+            asset_type=AssetType.STOCK,
+        )
+    )
+    session.add(
+        MarketAsset(
+            asset_key="FR0000120073",
+            symbol="AI.PA",
+            name="Air Liquide",
+            asset_type=AssetType.STOCK,
+        )
+    )
+    session.commit()
+
+    for tx in (
+        StockTransactionCreate(
+            account_id="acc_1",
+            asset_key="IE00B4L5Y983",
+            type=StockTransactionType.BUY,
+            amount=Decimal("10"),
+            price_per_unit=Decimal("100"),
+            executed_at=datetime(2024, 1, 5, 10, tzinfo=timezone.utc),
+        ),
+        StockTransactionCreate(
+            account_id="acc_1",
+            asset_key="FR0000120073",
+            type=StockTransactionType.BUY,
+            amount=Decimal("2"),
+            price_per_unit=Decimal("100"),
+            executed_at=datetime(2024, 2, 5, 10, tzinfo=timezone.utc),
+        ),
+        StockTransactionCreate(
+            account_id="acc_1",
+            asset_key="FR0000120073",
+            type=StockTransactionType.SELL,
+            amount=Decimal("2"),
+            price_per_unit=Decimal("110"),
+            executed_at=datetime(2024, 6, 5, 10, tzinfo=timezone.utc),
+        ),
+    ):
+        create_stock_transaction(session, tx, master_key)
+
+    body = TestClient(app).get("/analytics/assets").json()
+
+    # Held first, so the line being looked for is at the top of the dropdown.
+    assert [row["asset_key"] for row in body] == ["IE00B4L5Y983", "FR0000120073"]
+    # The name is the point of the endpoint: the key is only the join.
+    assert (body[0]["name"], body[0]["symbol"]) == ("iShares Core MSCI World", "IWDA.AS")
+    assert body[0]["held"] is True
+    # A line sold to zero stays selectable: a plan may name what is being exited.
+    assert (body[1]["name"], body[1]["held"]) == ("Air Liquide", False)
+    assert body[1]["last_activity"] == str(date(2024, 6, 5))
