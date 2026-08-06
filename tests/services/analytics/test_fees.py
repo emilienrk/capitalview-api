@@ -133,7 +133,7 @@ def test_orders_with_no_fee_recorded_are_not_averaged_in():
     assert result.orders_with_fee == 8
     # 50 € over the 8 charged orders, not over all 24.
     assert result.average_fee == Decimal("6.25")
-    assert result.total_fees == Decimal("50.00")
+    assert result.recorded_fees == Decimal("50.00")
 
 
 def test_coverage_reports_how_much_of_the_ledger_carries_fees():
@@ -163,20 +163,21 @@ def test_free_orders_are_not_counted_under_the_threshold():
 
 
 def test_the_verdict_stops_advising_a_regrouping_it_calls_harmless():
-    """50 € on 10 800 € is 23 bps a year — under the 25 the block targets.
+    """0,50 € on 150 € orders is 17 bps a year — under the 25 the block targets.
 
     It said "regroupe-les" all the same, one line under a tile stating the
     annual load was fine, which is how a rounding error read as a problem.
     """
     from services.analytics.report import _fees_payload
 
-    payload = _fees_payload(analyse_fees(_ledger(charged=8), _TwoYears))
+    ledger = _ledger(charged=24, notional="150", fee="0.50")
+    payload = _fees_payload(analyse_fees(ledger, _TwoYears))
 
+    # Every order under the threshold, and none of it worth acting on.
+    assert payload["orders_below_threshold"] == 24
     assert payload["avoidable"] is False
     assert "Regroupe-les" not in payload["verdict"]
     assert "pas un problème à corriger" in payload["verdict"]
-    # And the partial ledger is named before any total is quoted as a bill.
-    assert "plancher" in payload["verdict"]
 
 
 def test_the_verdict_still_advises_a_regrouping_when_the_load_is_real():
@@ -187,3 +188,74 @@ def test_the_verdict_still_advises_a_regrouping_when_the_load_is_real():
 
     assert payload["avoidable"] is True
     assert "Regroupe-les" in payload["verdict"]
+
+
+def test_a_partly_filled_ledger_is_extrapolated_not_reported_as_a_floor():
+    """A fee nobody typed in was still paid.
+
+    Reporting only what was keyed in understates the bill by exactly the share
+    nobody filled — which is how 150 € of real cost showed up as 50 €.
+    """
+    result = analyse_fees(_ledger(charged=8), _TwoYears)
+
+    assert result.is_estimated is True
+    assert result.recorded_fees == Decimal("50.00")
+    # The 16 orders with nothing recorded are charged at the same 6,25 €.
+    assert result.total_fees == Decimal("150.00")
+
+
+def test_a_complete_ledger_is_never_marked_as_an_estimate():
+    result = analyse_fees(_ledger(charged=24), _TwoYears)
+
+    assert result.is_estimated is False
+    assert result.total_fees == result.recorded_fees
+    assert result.coverage == Decimal("1")
+
+
+def test_below_a_tenth_of_the_ledger_nothing_is_extrapolated():
+    """Four fees out of two hundred orders do not describe a broker.
+
+    Extrapolating from them would be a guess wearing a number's clothes, and
+    reporting their sum would understate the bill fifty-fold. Neither happens.
+    """
+    result = analyse_fees(_ledger(charged=8, total=200), _TwoYears)
+
+    assert result.coverage < Decimal("0.10")
+    assert result.is_estimated is False
+    assert result.is_too_partial is True
+    # The gate is what folds the block away rather than showing either number.
+    assert result.is_measurable is False
+
+
+def test_an_estimated_total_carries_the_estimated_marker_not_a_plain_one():
+    from services.analytics.report import _fees_payload
+
+    payload = _fees_payload(analyse_fees(_ledger(charged=8), _TwoYears))
+
+    assert payload["total_fees"]["reliability"] == "estimé"
+    assert payload["annual_bps"]["reliability"] == "estimé"
+    assert "Estimé" in payload["total_fees"]["caveat"]
+    # The per-order calibration is measured on the charged orders, not guessed.
+    assert payload["threshold_order_size"]["reliability"] != "estimé"
+    assert payload["is_estimated"] is True
+    assert payload["recorded_fees"] == Decimal("50.00")
+
+
+def test_a_ledger_too_partial_to_estimate_says_so_and_withholds():
+    from services.analytics.report import _fees_payload
+
+    payload = _fees_payload(analyse_fees(_ledger(charged=8, total=200), _TwoYears))
+
+    assert payload["total_fees"]["value"] is None
+    assert payload["total_fees"]["reliability"] == "insuffisant"
+    assert "trop peu pour estimer le reste" in payload["total_fees"]["caveat"]
+
+
+def test_no_fee_at_all_offers_the_three_readings_rather_than_picking_one():
+    """Included in the price is likelier than free, and neither is measurable."""
+    from services.analytics.report import _fees_payload
+
+    verdict = _fees_payload(analyse_fees(_ledger(charged=0), _TwoYears))["verdict"]
+
+    assert "déjà compris dans les prix" in verdict
+    assert "rien n'est mesuré" in verdict

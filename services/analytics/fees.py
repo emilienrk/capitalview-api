@@ -26,6 +26,13 @@ TARGET_BPS = Decimal("25")
 MIN_ORDERS = 5
 SOLID_ORDERS = 20
 
+# Below this share of orders carrying a fee, the recorded ones are too few to
+# stand in for the rest and nothing is extrapolated. Above it, the totals are
+# estimated over the whole ledger and labelled as estimates — because a fee not
+# typed in was still paid, and reporting only what was keyed in understates the
+# bill by exactly the share nobody filled.
+ESTIMATE_MIN_COVERAGE = Decimal("0.10")
+
 # Projection assumptions, reported alongside the figure — a projection whose
 # hypothesis is hidden is an assertion in disguise.
 PROJECTION_YEARS = 20
@@ -42,6 +49,10 @@ TER_NOTE = (
 @dataclass(frozen=True)
 class FeeAnalysis:
     total_fees: Decimal
+    """The bill for the whole ledger — extrapolated when `is_estimated`."""
+    recorded_fees: Decimal
+    """What was actually keyed in. Equal to total_fees on a complete ledger."""
+    is_estimated: bool
     deployed_capital: Decimal
     fee_share: Decimal | None
     """Fees as a share of the capital actually put to work."""
@@ -63,16 +74,26 @@ class FeeAnalysis:
 
     @property
     def coverage(self) -> Decimal:
-        """Share of orders carrying a fee. Below one, every total is a floor."""
+        """Share of orders carrying a fee."""
         if self.order_count <= 0:
             return _ZERO
         return Decimal(self.orders_with_fee) / Decimal(self.order_count)
 
     @property
+    def is_too_partial(self) -> bool:
+        """Filled too thinly for the recorded orders to stand in for the rest.
+
+        Four fees out of two hundred orders do not describe a broker. Reporting
+        their sum as a bill understates it forty-fold, and extrapolating from
+        them would be a guess wearing a number's clothes — so neither happens.
+        """
+        return bool(self.orders_with_fee) and not self.is_estimated and self.coverage < Decimal("1")
+
+    @property
     def is_measurable(self) -> bool:
         # Counted on charged orders, not on orders. Ten imports with no fee
         # column and five real ones describe five fees, whatever the ledger size.
-        return self.orders_with_fee >= MIN_ORDERS
+        return self.orders_with_fee >= MIN_ORDERS and not self.is_too_partial
 
 
 def _tx_type(tx) -> str:
@@ -107,17 +128,29 @@ def analyse_fees(transactions, window) -> FeeAnalysis | None:
     if not orders:
         return None
 
-    total_fees = sum(fee for _, fee in orders)
+    recorded_fees = sum(fee for _, fee in orders)
     deployed = sum(notional for notional, _ in orders)
     count = len(orders)
     charged = [(notional, fee) for notional, fee in orders if fee > _ZERO]
+    coverage = Decimal(len(charged)) / Decimal(count) if count else _ZERO
 
     # Averaged over charged orders only. An order with no fee recorded is far
     # more often a fee nobody typed in than a free order, and folding those
     # zeros into the average halves what the broker looks like it charges —
     # which then halves the threshold drawn from it.
-    average_fee = total_fees / Decimal(len(charged)) if charged else None
+    average_fee = recorded_fees / Decimal(len(charged)) if charged else None
     average_order = deployed / Decimal(count)
+
+    # A fee nobody typed in was still paid. With enough of the ledger filled to
+    # stand in for the rest, the missing orders are charged at the same rate and
+    # every total below is the estimate — flagged as one, never as a reading.
+    #
+    # The model is a flat commission per order, which is what the threshold
+    # below assumes too. A broker charging a percentage would be estimated
+    # wrongly if the recorded orders are not of typical size.
+    is_estimated = bool(charged) and coverage < Decimal("1") and coverage >= ESTIMATE_MIN_COVERAGE
+    total_fees = average_fee * Decimal(count) if is_estimated and average_fee else recorded_fees
+
     fee_share = total_fees / deployed if deployed > _ZERO else None
 
     years = _years_of(window)
@@ -134,6 +167,8 @@ def analyse_fees(transactions, window) -> FeeAnalysis | None:
 
     return FeeAnalysis(
         total_fees=total_fees,
+        recorded_fees=recorded_fees,
+        is_estimated=is_estimated,
         deployed_capital=deployed,
         fee_share=fee_share,
         annual_bps=annual_bps,

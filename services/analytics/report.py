@@ -981,22 +981,39 @@ def _fees_payload(fees) -> dict | None:
     # Fee figures are gated on orders that actually carry a fee, not on orders.
     # A ledger imported without a fee column has no fees to describe, and
     # reporting a confident total over it states a floor as if it were the sum.
-    def gated(value, unit, *, insufficient: str):
+    sample = 0 if fees.is_too_partial else fees.orders_with_fee
+    estimate_note = (
+        f"Estimé : {fees.orders_with_fee} de tes {fees.order_count} ordres portent des frais "
+        f"renseignés ({round(fees.coverage * 100)} %). Les autres sont comptés au même tarif "
+        f"— {round(fees.average_fee, 2)} € par ordre — parce qu'un frais non saisi a quand même "
+        "été payé. Hypothèse : une commission fixe par ordre."
+        if fees.is_estimated and fees.average_fee
+        else None
+    )
+
+    def gated(value, unit, *, insufficient: str, estimated: bool = False):
         return _as_metric(
             Metric.gated(
                 value,
                 unit=unit,
-                sample_size=fees.orders_with_fee,
+                sample_size=sample,
                 minimum=FEES_MIN_ORDERS,
                 solid_at=FEES_SOLID_ORDERS,
                 caveat_insufficient=insufficient,
                 caveat_indicative="Moins de vingt ordres facturés — l'ordre de grandeur, pas la précision.",
+                estimated=estimated and fees.is_estimated,
+                caveat_estimated=estimate_note,
             )
         )
 
     too_few = (
-        f"{fees.orders_with_fee} ordre(s) avec des frais renseignés sur {fees.order_count} : "
-        "trop peu pour décrire une habitude de frais."
+        f"Frais renseignés sur {fees.orders_with_fee} de tes {fees.order_count} ordres "
+        f"({round(fees.coverage * 100)} %) : trop peu pour estimer le reste."
+        if fees.is_too_partial
+        else (
+            f"{fees.orders_with_fee} ordre(s) avec des frais renseignés sur {fees.order_count} : "
+            "trop peu pour décrire une habitude de frais."
+        )
     )
     threshold = gated(
         round(fees.threshold_order_size, 2) if fees.threshold_order_size is not None else None,
@@ -1005,16 +1022,20 @@ def _fees_payload(fees) -> dict | None:
     )
 
     return {
-        "total_fees": gated(round(fees.total_fees, 2), "EUR", insufficient=too_few),
+        # The three totals are extrapolated over the whole ledger; the per-order
+        # calibration below them is measured on the charged orders and is not.
+        "total_fees": gated(round(fees.total_fees, 2), "EUR", insufficient=too_few, estimated=True),
         "fee_share": gated(
             round(fees.fee_share, 6) if fees.fee_share is not None else None,
             "ratio",
             insufficient=too_few,
+            estimated=True,
         ),
         "annual_bps": gated(
             round(fees.annual_bps, 2) if fees.annual_bps is not None else None,
             "bps",
             insufficient=too_few,
+            estimated=True,
         ),
         "threshold_order_size": threshold,
         # Whether the small orders are a problem worth acting on, or only a
@@ -1031,6 +1052,8 @@ def _fees_payload(fees) -> dict | None:
         "order_count": fees.order_count,
         "orders_with_fee": fees.orders_with_fee,
         "fee_coverage": round(fees.coverage, 4),
+        "recorded_fees": round(fees.recorded_fees, 2),
+        "is_estimated": fees.is_estimated,
         "projection_eur": fees.projection_eur,
         "projection_note": (
             f"Projection sur {PROJECTION_YEARS} ans à hypothèse constante : même cadence de "
@@ -1044,23 +1067,31 @@ def _fees_payload(fees) -> dict | None:
 
 def _fees_verdict(fees, threshold) -> str:
     if fees.orders_with_fee == 0:
-        # Not "you pay nothing": a ledger with no fees recorded and a broker that
-        # charges none look identical from here, and only one of them is good news.
+        # Not "you pay nothing": a ledger with no fee recorded and a broker that
+        # charges none look identical from here, and a third reading is likelier
+        # than either — the price keyed in already included the commission.
         return (
-            f"Aucun frais renseigné sur tes {fees.order_count} ordres. Soit ton courtier ne "
-            "t'en prend pas, soit ils n'ont pas été saisis — dans le second cas ce bloc ne peut "
-            "rien dire. " + fees.ter_note
+            f"Aucun frais renseigné sur tes {fees.order_count} ordres. Soit ton courtier ne t'en "
+            "prend pas, soit ils sont déjà compris dans les prix que tu as saisis, soit ils "
+            "n'ont pas été renseignés — rien ici ne permet de trancher, donc rien n'est mesuré. "
+            + fees.ter_note
+        )
+    if fees.is_too_partial:
+        return (
+            f"Frais renseignés sur {fees.orders_with_fee} de tes {fees.order_count} ordres "
+            f"({round(fees.coverage * 100)} %). C'est trop peu pour que ces ordres représentent "
+            "les autres : rien n'est estimé plutôt qu'estimé au hasard."
         )
     if threshold is None:
         return f"{fees.order_count} ordres : trop peu pour dire si tes frais sont un sujet."
 
-    # Partial data makes every total a floor, and the sentence has to say so
-    # before quoting one.
+    # An estimate has to say so before quoting a total, not after.
     partial = ""
-    if fees.orders_with_fee < fees.order_count:
+    if fees.is_estimated:
         partial = (
-            f" Attention : seuls {fees.orders_with_fee} de tes {fees.order_count} ordres portent "
-            "des frais renseignés, donc ce total est un plancher, pas ta facture."
+            f" Total estimé : seuls {fees.orders_with_fee} de tes {fees.order_count} ordres "
+            f"portent des frais renseignés ({round(fees.recorded_fees)} € saisis), les autres "
+            "sont comptés au même tarif."
         )
 
     if fees.orders_below_threshold == 0:
