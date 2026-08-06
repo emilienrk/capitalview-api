@@ -122,6 +122,7 @@ from .community import (
 
 # Analytics
 from .analytics import (
+    AnalysedAssetOut,
     BridgeStepOut,
     CounterfactualResponse,
     ExecutionResponse,
@@ -226,6 +227,7 @@ __all__ = [
     "AvailablePositionsResponse",
     # Analytics
     "MetricOut",
+    "AnalysedAssetOut",
     "InvestorGapResponse",
     "InvestorAnalyticsResponse",
     "BridgeStepOut",
