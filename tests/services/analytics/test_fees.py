@@ -183,9 +183,11 @@ def test_the_verdict_stops_advising_a_regrouping_it_calls_harmless():
 def test_the_verdict_still_advises_a_regrouping_when_the_load_is_real():
     from services.analytics.report import _fees_payload
 
-    # 8 € per order on 200 € orders: 400 bps of entry, nothing rounding about it.
-    payload = _fees_payload(analyse_fees(_ledger(charged=24, notional="200", fee="8"), _TwoYears))
+    # A flat 8 € per order, on sizes varied enough to establish that it is flat:
+    # only then does grouping actually reduce anything.
+    payload = _fees_payload(analyse_fees(_varied(lambda _size: "8", charged=24), _TwoYears))
 
+    assert payload["model"] == "fixe"
     assert payload["avoidable"] is True
     assert "Regroupe-les" in payload["verdict"]
 
@@ -259,3 +261,108 @@ def test_no_fee_at_all_offers_the_three_readings_rather_than_picking_one():
 
     assert "déjà compris dans les prix" in verdict
     assert "rien n'est mesuré" in verdict
+
+
+def _varied(fee_of, charged: int = 8, total: int = 24):
+    """Orders of deliberately varied size — the only ledger a tariff shows in.
+
+    `fee_of(notional)` is the tariff. Same-size orders fit a flat fee and a
+    percentage equally well, so a ledger of them can prove nothing either way.
+    """
+    sizes = [200, 500, 1200, 300, 800, 2000, 450, 150, 3000, 600, 250, 900] * 2
+    return [
+        _FeeTx(size, fee_of(size) if n < charged else "0", date(2024 + n // 12, n % 12 + 1, 5))
+        for n, size in enumerate(sizes[:total])
+    ]
+
+
+def test_a_percentage_tariff_is_read_off_the_orders():
+    from services.analytics.fees import FeeModel
+
+    result = analyse_fees(_varied(lambda size: str(round(size * 0.005, 2))), _TwoYears)
+
+    assert result.model is FeeModel.PROPORTIONAL
+    assert result.fee_rate == pytest.approx(Decimal("0.005"), abs=Decimal("0.0002"))
+
+
+def test_a_flat_tariff_is_read_off_the_same_ledger_shape():
+    from services.analytics.fees import FeeModel
+
+    result = analyse_fees(_varied(lambda _size: "5"), _TwoYears)
+
+    assert result.model is FeeModel.FLAT
+    assert result.average_fee == Decimal("5")
+
+
+def test_orders_all_of_one_size_cannot_separate_the_two_tariffs():
+    """The monthly-plan case: 450 € every month fits both models exactly.
+
+    Answering "flat" here would be a coin toss dressed as a measurement, and it
+    is the answer that decides whether grouping is advised.
+    """
+    from services.analytics.fees import FeeModel
+
+    assert analyse_fees(_ledger(charged=24), _TwoYears).model is FeeModel.UNKNOWN
+
+
+def test_a_percentage_tariff_is_extrapolated_by_the_euros_not_the_orders():
+    """Scaling by order count would be wrong whenever sizes differ."""
+    result = analyse_fees(_varied(lambda size: str(round(size * 0.005, 2))), _TwoYears)
+
+    # 0,5 % of everything deployed, whatever the split into orders.
+    assert result.total_fees == pytest.approx(
+        result.deployed_capital * Decimal("0.005"), abs=Decimal("1")
+    )
+
+
+def test_grouping_is_never_advised_under_a_percentage_tariff():
+    """It is the advice that changes nothing — worse than silence, since it
+
+    sounds actionable. The lever there is the tariff, not the order count.
+    """
+    from services.analytics.report import _fees_payload
+
+    # 2 % of the notional: far above the target, and still not a grouping problem.
+    payload = _fees_payload(analyse_fees(_varied(lambda size: str(size * 0.02)), _TwoYears))
+
+    assert payload["model"] == "proportionnel"
+    assert payload["avoidable"] is False
+    # The word appears, but only inside the sentence refusing the advice.
+    assert "Regroupe-les" not in payload["verdict"]
+    assert "Regrouper tes ordres n'y changerait rien" in payload["verdict"]
+    assert "du montant, pas un forfait" in payload["verdict"]
+    # A threshold order size is not a smaller number here, it is a question that
+    # does not apply — so none is offered.
+    assert payload["threshold_order_size"]["value"] is None
+
+
+def test_grouping_is_not_promised_when_the_tariff_shape_is_unknown():
+    from services.analytics.report import _fees_payload
+
+    payload = _fees_payload(analyse_fees(_ledger(charged=8), _TwoYears))
+
+    assert payload["model"] == "indéterminé"
+    assert payload["avoidable"] is False
+    assert "Regroupe-les" not in payload["verdict"]
+    assert "trop uniformes" in payload["verdict"]
+
+
+def test_a_nearly_complete_small_ledger_is_estimated_despite_few_samples():
+    """Four fees out of five orders is nearly complete data.
+
+    The coverage guard alone would have passed it and the sample guard alone
+    would have refused it; the estimate needs either, not both.
+    """
+    result = analyse_fees(_ledger(charged=4, total=5), _TwoYears)
+
+    assert result.coverage == Decimal("0.8")
+    assert result.is_estimated is True
+
+
+def test_many_recorded_fees_are_enough_even_at_low_coverage():
+    """Fifty fees out of a thousand orders is a stable average under a big factor."""
+    result = analyse_fees(_ledger(charged=25, total=1000), _TwoYears)
+
+    assert result.coverage < Decimal("0.10")
+    assert result.is_estimated is True
+    assert result.is_too_partial is False

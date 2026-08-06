@@ -247,7 +247,16 @@ class FeesResponse(BaseModel):
     threshold_order_size: MetricOut
     """Order size below which entry fees exceed 25 bps."""
     avoidable: bool = False
-    """True when the annual load clears the target — otherwise it is calibration."""
+    """True when the annual load clears the target *and* grouping would help."""
+    model: str = "indéterminé"
+    """How the broker appears to charge: fixe, proportionnel, or indéterminé.
+
+    Read off the orders, never assumed. Under `proportionnel` the order size is
+    irrelevant and grouping orders changes nothing, so no threshold is offered.
+    Same-size orders fit both models exactly and come back `indéterminé`.
+    """
+    fee_rate: Decimal | None = None
+    """Fees over notional on the charged orders — what a percentage tariff is."""
     orders_below_threshold: int
     cost_below_threshold: Decimal
     invested_below_threshold: Decimal

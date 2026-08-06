@@ -38,6 +38,7 @@ from services.analytics.fees import (
     PROJECTION_YEARS,
     SOLID_ORDERS as FEES_SOLID_ORDERS,
     TARGET_BPS,
+    FeeModel,
     analyse_fees,
 )
 from services.analytics.plan import (
@@ -1041,9 +1042,15 @@ def _fees_payload(fees) -> dict | None:
         # Whether the small orders are a problem worth acting on, or only a
         # calibration figure: below the target the annual load is a rounding
         # error, however many orders sit under the threshold.
+        # Worth acting on only when there is an action: a load above the target
+        # under a percentage tariff is a reason to change broker, not to group.
         "avoidable": (
-            fees.annual_bps is not None and fees.annual_bps > TARGET_BPS
+            fees.annual_bps is not None
+            and fees.annual_bps > TARGET_BPS
+            and fees.grouping_helps
         ),
+        "model": fees.model.value,
+        "fee_rate": round(fees.fee_rate, 6) if fees.fee_rate is not None else None,
         "orders_below_threshold": fees.orders_below_threshold,
         "cost_below_threshold": round(fees.cost_below_threshold, 2),
         "invested_below_threshold": round(fees.invested_below_threshold, 2),
@@ -1082,9 +1089,6 @@ def _fees_verdict(fees, threshold) -> str:
             f"({round(fees.coverage * 100)} %). C'est trop peu pour que ces ordres représentent "
             "les autres : rien n'est estimé plutôt qu'estimé au hasard."
         )
-    if threshold is None:
-        return f"{fees.order_count} ordres : trop peu pour dire si tes frais sont un sujet."
-
     # An estimate has to say so before quoting a total, not after.
     partial = ""
     if fees.is_estimated:
@@ -1093,6 +1097,24 @@ def _fees_verdict(fees, threshold) -> str:
             f"portent des frais renseignés ({round(fees.recorded_fees)} € saisis), les autres "
             "sont comptés au même tarif."
         )
+
+    # A percentage tariff has no order size to fall under, so the whole
+    # threshold sentence is skipped rather than reworded around a null.
+    if fees.model is FeeModel.PROPORTIONAL and fees.fee_rate is not None:
+        rate = f"{round(fees.fee_rate * 100, 3)} %".replace(".", ",")
+        load = (
+            f" Ta charge annuelle est de {round(fees.annual_bps)} bps."
+            if fees.annual_bps is not None
+            else ""
+        )
+        return (
+            f"Ton courtier te prend {rate} du montant, pas un forfait par ordre. Regrouper tes "
+            f"ordres n'y changerait rien : le coût suit les euros, pas le nombre d'ordres. Le "
+            f"seul levier est le tarif lui-même.{load}{partial}"
+        )
+
+    if threshold is None:
+        return f"{fees.order_count} ordres : trop peu pour dire si tes frais sont un sujet."
 
     if fees.orders_below_threshold == 0:
         return (
@@ -1111,8 +1133,17 @@ def _fees_verdict(fees, threshold) -> str:
     # "Group your orders" is advice, and it must not contradict the tile above
     # it: below the target the annual load is a rounding error, however many
     # orders sit under a threshold derived from the user's own average fee.
-    if fees.annual_bps is not None and fees.annual_bps > TARGET_BPS:
+    if fees.annual_bps is not None and fees.annual_bps > TARGET_BPS and fees.grouping_helps:
         return f"{detail} Regroupe-les.{partial}"
+    if fees.annual_bps is not None and fees.annual_bps > TARGET_BPS:
+        # Above the target, but the tariff's shape is not established enough to
+        # promise that grouping would help.
+        return (
+            f"{detail} Ta charge annuelle dépasse les 25 bps visés "
+            f"({round(fees.annual_bps)} bps), mais tes ordres sont trop uniformes pour dire si "
+            f"ton courtier facture au forfait ou au pourcentage — et donc si les regrouper "
+            f"changerait quelque chose.{partial}"
+        )
     return (
         f"{detail} Mais ta charge annuelle reste sous les 25 bps visés "
         f"({round(fees.annual_bps)} bps) : c'est un calibrage, pas un problème à "
