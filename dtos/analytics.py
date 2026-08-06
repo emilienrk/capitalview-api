@@ -252,8 +252,13 @@ class FeesResponse(BaseModel):
     cost_below_threshold: Decimal
     invested_below_threshold: Decimal
     average_fee: Decimal | None = None
+    """What the broker takes on a charged order. Free orders are not averaged in."""
     average_order: Decimal | None = None
     order_count: int
+    orders_with_fee: int = 0
+    """Orders carrying a recorded fee — the real sample size of every figure here."""
+    fee_coverage: Decimal = Decimal("0")
+    """orders_with_fee / order_count. Below one, every total is a floor."""
     projection_eur: Decimal | None = None
     projection_note: str
     ter_note: str

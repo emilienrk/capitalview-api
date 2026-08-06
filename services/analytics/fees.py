@@ -47,7 +47,10 @@ class FeeAnalysis:
     """Fees as a share of the capital actually put to work."""
     annual_bps: Decimal | None
     order_count: int
+    orders_with_fee: int
+    """Orders carrying a recorded fee — the real sample size of every fee figure."""
     average_fee: Decimal | None
+    """What the broker takes on a charged order. Free orders are not averaged in."""
     average_order: Decimal | None
     threshold_order_size: Decimal | None
     """Below this order size, entry fees exceed TARGET_BPS."""
@@ -59,8 +62,17 @@ class FeeAnalysis:
     ter_note: str = TER_NOTE
 
     @property
+    def coverage(self) -> Decimal:
+        """Share of orders carrying a fee. Below one, every total is a floor."""
+        if self.order_count <= 0:
+            return _ZERO
+        return Decimal(self.orders_with_fee) / Decimal(self.order_count)
+
+    @property
     def is_measurable(self) -> bool:
-        return self.order_count >= MIN_ORDERS
+        # Counted on charged orders, not on orders. Ten imports with no fee
+        # column and five real ones describe five fees, whatever the ledger size.
+        return self.orders_with_fee >= MIN_ORDERS
 
 
 def _tx_type(tx) -> str:
@@ -98,8 +110,13 @@ def analyse_fees(transactions, window) -> FeeAnalysis | None:
     total_fees = sum(fee for _, fee in orders)
     deployed = sum(notional for notional, _ in orders)
     count = len(orders)
+    charged = [(notional, fee) for notional, fee in orders if fee > _ZERO]
 
-    average_fee = total_fees / Decimal(count)
+    # Averaged over charged orders only. An order with no fee recorded is far
+    # more often a fee nobody typed in than a free order, and folding those
+    # zeros into the average halves what the broker looks like it charges —
+    # which then halves the threshold drawn from it.
+    average_fee = total_fees / Decimal(len(charged)) if charged else None
     average_order = deployed / Decimal(count)
     fee_share = total_fees / deployed if deployed > _ZERO else None
 
@@ -109,9 +126,11 @@ def analyse_fees(transactions, window) -> FeeAnalysis | None:
         annual_bps = fee_share * _BPS / years
 
     # Below this notional, a flat commission costs more than TARGET_BPS of entry.
-    threshold = average_fee * _BPS / TARGET_BPS if average_fee > _ZERO else None
+    threshold = average_fee * _BPS / TARGET_BPS if average_fee else None
 
-    below = [(notional, fee) for notional, fee in orders if threshold and notional < threshold]
+    # Only charged orders can be under it: a free order carries no entry cost to
+    # exceed the target with, and counting it would inflate the tally.
+    below = [(notional, fee) for notional, fee in charged if threshold and notional < threshold]
 
     return FeeAnalysis(
         total_fees=total_fees,
@@ -119,6 +138,7 @@ def analyse_fees(transactions, window) -> FeeAnalysis | None:
         fee_share=fee_share,
         annual_bps=annual_bps,
         order_count=count,
+        orders_with_fee=len(charged),
         average_fee=average_fee,
         average_order=average_order,
         threshold_order_size=threshold,

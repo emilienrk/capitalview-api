@@ -978,20 +978,26 @@ def _fees_payload(fees) -> dict | None:
     if fees is None:
         return None
 
+    # Fee figures are gated on orders that actually carry a fee, not on orders.
+    # A ledger imported without a fee column has no fees to describe, and
+    # reporting a confident total over it states a floor as if it were the sum.
     def gated(value, unit, *, insufficient: str):
         return _as_metric(
             Metric.gated(
                 value,
                 unit=unit,
-                sample_size=fees.order_count,
+                sample_size=fees.orders_with_fee,
                 minimum=FEES_MIN_ORDERS,
                 solid_at=FEES_SOLID_ORDERS,
                 caveat_insufficient=insufficient,
-                caveat_indicative="Moins de vingt ordres — l'ordre de grandeur, pas la précision.",
+                caveat_indicative="Moins de vingt ordres facturés — l'ordre de grandeur, pas la précision.",
             )
         )
 
-    too_few = f"{fees.order_count} ordres : trop peu pour décrire une habitude de frais."
+    too_few = (
+        f"{fees.orders_with_fee} ordre(s) avec des frais renseignés sur {fees.order_count} : "
+        "trop peu pour décrire une habitude de frais."
+    )
     threshold = gated(
         round(fees.threshold_order_size, 2) if fees.threshold_order_size is not None else None,
         "EUR",
@@ -1023,6 +1029,8 @@ def _fees_payload(fees) -> dict | None:
         "average_fee": round(fees.average_fee, 2) if fees.average_fee is not None else None,
         "average_order": round(fees.average_order, 2) if fees.average_order is not None else None,
         "order_count": fees.order_count,
+        "orders_with_fee": fees.orders_with_fee,
+        "fee_coverage": round(fees.coverage, 4),
         "projection_eur": fees.projection_eur,
         "projection_note": (
             f"Projection sur {PROJECTION_YEARS} ans à hypothèse constante : même cadence de "
@@ -1035,22 +1043,49 @@ def _fees_payload(fees) -> dict | None:
 
 
 def _fees_verdict(fees, threshold) -> str:
+    if fees.orders_with_fee == 0:
+        # Not "you pay nothing": a ledger with no fees recorded and a broker that
+        # charges none look identical from here, and only one of them is good news.
+        return (
+            f"Aucun frais renseigné sur tes {fees.order_count} ordres. Soit ton courtier ne "
+            "t'en prend pas, soit ils n'ont pas été saisis — dans le second cas ce bloc ne peut "
+            "rien dire. " + fees.ter_note
+        )
     if threshold is None:
-        if fees.total_fees <= _ZERO:
-            return "Tu ne paies aucun frais d'ordre. " + fees.ter_note
         return f"{fees.order_count} ordres : trop peu pour dire si tes frais sont un sujet."
+
+    # Partial data makes every total a floor, and the sentence has to say so
+    # before quoting one.
+    partial = ""
+    if fees.orders_with_fee < fees.order_count:
+        partial = (
+            f" Attention : seuls {fees.orders_with_fee} de tes {fees.order_count} ordres portent "
+            "des frais renseignés, donc ce total est un plancher, pas ta facture."
+        )
+
     if fees.orders_below_threshold == 0:
         return (
-            f"Ton courtier te prend {round(fees.average_fee, 2)} € par ordre. En dessous de "
-            f"{round(threshold)} € par ordre tu dépasserais 25 bps de frais d'entrée : aucun de "
-            f"tes {fees.order_count} ordres n'est sous ce seuil."
+            f"Ton courtier te prend {round(fees.average_fee, 2)} € par ordre facturé. En dessous "
+            f"de {round(threshold)} € par ordre tu dépasserais 25 bps de frais d'entrée : aucun "
+            f"de tes ordres facturés n'est sous ce seuil.{partial}"
         )
-    return (
-        f"Ton courtier te prend en moyenne {round(fees.average_fee, 2)} € par ordre. En dessous "
-        f"de {round(threshold)} € par ordre, tu dépasses 25 bps de frais d'entrée. "
+
+    detail = (
+        f"Ton courtier te prend en moyenne {round(fees.average_fee, 2)} € par ordre facturé. En "
+        f"dessous de {round(threshold)} € par ordre, tu dépasses 25 bps de frais d'entrée. "
         f"{fees.orders_below_threshold} de tes {fees.order_count} ordres sont sous ce seuil — ils "
         f"t'ont coûté {round(fees.cost_below_threshold)} € pour "
-        f"{round(fees.invested_below_threshold)} € investis. Regroupe-les."
+        f"{round(fees.invested_below_threshold)} € investis."
+    )
+    # "Group your orders" is advice, and it must not contradict the tile above
+    # it: below the target the annual load is a rounding error, however many
+    # orders sit under a threshold derived from the user's own average fee.
+    if fees.annual_bps is not None and fees.annual_bps > TARGET_BPS:
+        return f"{detail} Regroupe-les.{partial}"
+    return (
+        f"{detail} Mais ta charge annuelle reste sous les 25 bps visés "
+        f"({round(fees.annual_bps)} bps) : c'est un calibrage, pas un problème à "
+        f"corriger.{partial}"
     )
 
 

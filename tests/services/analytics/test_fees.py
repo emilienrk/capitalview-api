@@ -97,3 +97,93 @@ def test_cash_rows_and_sales_carry_no_purchase_fee():
 
 def test_the_target_is_the_documented_25_bps():
     assert TARGET_BPS == Decimal("25")
+
+
+class _FeeTx:
+    def __init__(self, notional, fee, day):
+        self.type = "BUY"
+        self.asset_key = "AAA"
+        self.amount = Decimal("1")
+        self.price_per_unit = Decimal(str(notional))
+        self.fees = Decimal(str(fee))
+        self.executed_at = datetime(day.year, day.month, day.day, 10)
+
+
+class _TwoYears:
+    start = date(2024, 1, 5)
+    end = date(2026, 1, 5)
+
+
+def _ledger(charged: int, total: int = 24, notional="450", fee="6.25"):
+    """`total` monthly buys, of which only the first `charged` carry a fee."""
+    return [
+        _FeeTx(notional, fee if n < charged else "0", date(2024 + n // 12, n % 12 + 1, 5))
+        for n in range(total)
+    ]
+
+
+def test_orders_with_no_fee_recorded_are_not_averaged_in():
+    """Folding them in halves what the broker looks like it charges.
+
+    Which then halves the threshold drawn from that average, and turns a ledger
+    imported without a fee column into a fee habit nobody has.
+    """
+    result = analyse_fees(_ledger(charged=8), _TwoYears)
+
+    assert result.orders_with_fee == 8
+    # 50 € over the 8 charged orders, not over all 24.
+    assert result.average_fee == Decimal("6.25")
+    assert result.total_fees == Decimal("50.00")
+
+
+def test_coverage_reports_how_much_of_the_ledger_carries_fees():
+    result = analyse_fees(_ledger(charged=8), _TwoYears)
+
+    assert round(result.coverage, 4) == Decimal("0.3333")
+    assert analyse_fees(_ledger(charged=24), _TwoYears).coverage == Decimal("1")
+
+
+def test_a_ledger_without_any_fee_says_nothing_rather_than_zero():
+    """No fee recorded and a broker charging none look identical from here."""
+    result = analyse_fees(_ledger(charged=0), _TwoYears)
+
+    assert result.orders_with_fee == 0
+    assert result.average_fee is None
+    assert result.threshold_order_size is None
+    # The gate is what folds the block away instead of asserting a zero bill.
+    assert result.is_measurable is False
+
+
+def test_free_orders_are_not_counted_under_the_threshold():
+    """An order with no fee has no entry cost to exceed the target with."""
+    result = analyse_fees(_ledger(charged=8), _TwoYears)
+
+    assert result.orders_below_threshold == 8
+    assert result.invested_below_threshold == Decimal("3600")
+
+
+def test_the_verdict_stops_advising_a_regrouping_it_calls_harmless():
+    """50 € on 10 800 € is 23 bps a year — under the 25 the block targets.
+
+    It said "regroupe-les" all the same, one line under a tile stating the
+    annual load was fine, which is how a rounding error read as a problem.
+    """
+    from services.analytics.report import _fees_payload
+
+    payload = _fees_payload(analyse_fees(_ledger(charged=8), _TwoYears))
+
+    assert payload["avoidable"] is False
+    assert "Regroupe-les" not in payload["verdict"]
+    assert "pas un problème à corriger" in payload["verdict"]
+    # And the partial ledger is named before any total is quoted as a bill.
+    assert "plancher" in payload["verdict"]
+
+
+def test_the_verdict_still_advises_a_regrouping_when_the_load_is_real():
+    from services.analytics.report import _fees_payload
+
+    # 8 € per order on 200 € orders: 400 bps of entry, nothing rounding about it.
+    payload = _fees_payload(analyse_fees(_ledger(charged=24, notional="200", fee="8"), _TwoYears))
+
+    assert payload["avoidable"] is True
+    assert "Regroupe-les" in payload["verdict"]
