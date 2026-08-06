@@ -25,6 +25,7 @@ from services.analytics.behaviour import (
     analyse_purchase_regularity,
     analyse_turnover,
     purchase_amounts,
+    purchases_by_asset,
 )
 from services.analytics.concentration import (
     MIN_OVERLAP,
@@ -269,6 +270,13 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
             *(key for key, _ in (concentration.weights if concentration else ())),
             *(concentration.dropped if concentration else ()),
             *(row.asset_key for row in (getattr(plan_payload, "drift", None) or ())),
+            # A line bought only during an old period appears nowhere else, and
+            # would otherwise show up in that period's table as a bare ISIN.
+            *(
+                key
+                for outcome in (getattr(plan_payload, "outcomes", None) or ())
+                for key in outcome.flow_shares
+            ),
         ],
     )
     return {
@@ -304,9 +312,9 @@ def _plan_block(raw, transactions, concentration, price_end, window, benchmark_q
     if not raw:
         return None, None
 
-    purchases = [
-        (day, "", amount) for day, amount in purchase_amounts(transactions)
-    ]
+    # With the asset key, not without it: blanking it here is what kept the plan
+    # from ever saying whether an allocation was followed while it was in force.
+    purchases = purchases_by_asset(transactions)
     weights = concentration.weights if concentration else []
     portfolio_value = _average_capital(holdings_from_transactions(transactions), price_end)
     try:
@@ -1228,15 +1236,40 @@ def _plan_payload(plan, error: str | None, labels) -> dict | None:
         # The target in force today, not the one the plan opened with.
         "monthly_target": plan.monthly_target,
         "since": plan.since,
-        # Every period as declared, oldest first. A plan that never changed has
-        # exactly one, so the UI reads a single shape either way.
+        # Every period as declared, oldest first, each with what was actually
+        # done while it ran. A plan that never changed has exactly one, so the UI
+        # reads a single shape either way.
         "periods": [
             {
-                "since": period.since,
-                "monthly_target": period.monthly_target,
-                "allocation": dict(period.allocation),
+                "since": outcome.since,
+                "until": outcome.until,
+                "monthly_target": outcome.monthly_target,
+                "allocation": dict(outcome.allocation),
+                "months": outcome.months,
+                "target_eur": round(outcome.target_eur, 2),
+                "invested_eur": round(outcome.invested_eur, 2),
+                "adherence_ratio": (
+                    round(outcome.adherence_ratio, 4)
+                    if outcome.adherence_ratio is not None
+                    else None
+                ),
+                "flow_drift_l1": (
+                    round(outcome.flow_drift_l1, 2)
+                    if outcome.flow_drift_l1 is not None
+                    else None
+                ),
+                "flows": [
+                    {
+                        **label_of(labels, key).as_dict(),
+                        "target": round(outcome.allocation.get(key, _ZERO), 2),
+                        "actual": round(share, 2),
+                    }
+                    for key, share in sorted(
+                        outcome.flow_shares.items(), key=lambda pair: -pair[1]
+                    )
+                ],
             }
-            for period in plan.periods
+            for outcome in plan.outcomes
         ],
         "months": [
             {
@@ -1293,6 +1326,23 @@ def _plan_verdict(plan, adherence) -> str:
             f"{round(plan.rebalance_eur)} € à rééquilibrer."
         )
 
+    # A revision the user only half-applied: the amount moved, the split did not.
+    # The portfolio drift above cannot say this — it reads today's holdings, which
+    # the market has reshaped since.
+    reallocation = ""
+    current = plan.outcomes[-1] if plan.outcomes else None
+    if (
+        len(plan.periods) > 1
+        and current is not None
+        and current.flow_drift_l1 is not None
+        and current.flow_drift_l1 > Decimal("10")
+    ):
+        reallocation = (
+            f" Depuis {current.since:%m/%Y} tes achats s'écartent de "
+            f"{round(current.flow_drift_l1)} points de la répartition que tu as déclarée pour "
+            "cette période : le montant a changé, la répartition non."
+        )
+
     timing = ""
     if plan.under_invested_months and plan.under_in_down_months:
         share = round(plan.under_in_down_months * 100 / plan.under_invested_months)
@@ -1306,13 +1356,13 @@ def _plan_verdict(plan, adherence) -> str:
     if adherence >= Decimal("0.98"):
         return (
             f"{promise} Tu as investi {round(plan.total_invested)} € en "
-            f"{len(plan.months)} mois : tu le tiens.{drift}"
+            f"{len(plan.months)} mois : tu le tiens.{reallocation}{drift}"
         )
     gap = round((Decimal("1") - adherence) * 100)
     return (
         f"{promise} Tu as investi {round(plan.total_invested)} € en {len(plan.months)} mois, "
         f"soit {round(plan.average_monthly)} €/mois réels — {gap} % sous ton propre "
-        f"plan.{drift}{timing}"
+        f"plan.{reallocation}{drift}{timing}"
     )
 
 

@@ -487,6 +487,12 @@ def test_a_plan_split_into_periods_is_scored_not_rejected(master_key):
     assert targets[(2025, 6)] == Decimal("600")
     # The verdict names the revision instead of quoting one amount for both.
     assert "a changé" in plan["verdict"]
+    # Each period carries what was actually done while it ran, not only what was
+    # asked for: the range it covers, its own months, and where its euros went.
+    first, second = plan["periods"]
+    assert (first["until"], second["until"]) == (date(2025, 1, 1), None)
+    assert first["months"] > 0 and second["months"] > 0
+    assert first["flows"] and first["flows"][0]["asset_key"] == BENCH
 
 
 def test_the_concentration_payload_carries_names_not_only_isins():
