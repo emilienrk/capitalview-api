@@ -197,6 +197,23 @@ class WeightOut(AssetLabelOut):
     weight: Decimal
 
 
+class AnalysedAssetOut(AssetLabelOut):
+    """A line the user has traded, offered as a choice rather than typed.
+
+    The settings forms used to ask for an ISIN. Nobody knows their ISINs, and a
+    typo there is invisible: the plan simply scores against a line that does not
+    exist. This is the list to pick from — everything ever bought, whether still
+    held or long sold, so a plan can also be written about a line being exited.
+    """
+
+    held: bool
+    """Still in the portfolio, as opposed to fully sold."""
+    invested_eur: Decimal
+    """Gross bought, at transaction prices. Orders the list by significance."""
+    first_bought: date
+    last_activity: date
+
+
 class CorrelationOut(BaseModel):
     left: str
     right: str
@@ -230,13 +247,27 @@ class FeesResponse(BaseModel):
     threshold_order_size: MetricOut
     """Order size below which entry fees exceed 25 bps."""
     avoidable: bool = False
-    """True when the annual load clears the target — otherwise it is calibration."""
+    """True when the annual load clears the target *and* grouping would help."""
+    model: str = "indéterminé"
+    """How the broker appears to charge: fixe, proportionnel, or indéterminé.
+
+    Read off the orders, never assumed. Under `proportionnel` the order size is
+    irrelevant and grouping orders changes nothing, so no threshold is offered.
+    Same-size orders fit both models exactly and come back `indéterminé`.
+    """
+    fee_rate: Decimal | None = None
+    """Fees over notional on the charged orders — what a percentage tariff is."""
     orders_below_threshold: int
     cost_below_threshold: Decimal
     invested_below_threshold: Decimal
     average_fee: Decimal | None = None
+    """What the broker takes on a charged order. Free orders are not averaged in."""
     average_order: Decimal | None = None
     order_count: int
+    orders_with_fee: int = 0
+    """Orders carrying a recorded fee — the real sample size of every figure here."""
+    fee_coverage: Decimal = Decimal("0")
+    """orders_with_fee / order_count. Below one, every total is a floor."""
     projection_eur: Decimal | None = None
     projection_note: str
     ter_note: str
@@ -282,12 +313,34 @@ class AllocationDriftOut(AssetLabelOut):
     actual: Decimal
 
 
+class PlanFlowOut(AssetLabelOut):
+    """Where the euros of one period actually went, against where they were meant to."""
+
+    target: Decimal
+    actual: Decimal
+
+
 class PlanPeriodOut(BaseModel):
-    """One declared period of the plan."""
+    """One declared period of the plan, and what was done while it was in force."""
 
     since: date
+    until: date | None = None
+    """Start of the next period, or null while this one is still running."""
     monthly_target: Decimal
     allocation: dict[str, Decimal] = {}
+    months: int = 0
+    """Complete months scored inside this period."""
+    target_eur: Decimal = Decimal("0")
+    invested_eur: Decimal = Decimal("0")
+    adherence_ratio: Decimal | None = None
+    flow_drift_l1: Decimal | None = None
+    """L1 distance between the period's real euro split and its target, in points.
+
+    Distinct from the plan-level drift, which compares the portfolio held *today*
+    against the target in force today and therefore says nothing about a period
+    that has ended.
+    """
+    flows: list[PlanFlowOut] = []
 
 
 class PlanResponse(BaseModel):

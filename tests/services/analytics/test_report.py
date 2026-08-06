@@ -428,6 +428,71 @@ def test_a_valid_plan_is_decrypted_and_scored(master_key):
     assert plan["monthly_target"] == Decimal("500")
     assert plan["adherence_ratio"]["value"] is not None
     assert plan["months"]
+    assert len(plan["periods"]) == 1
+
+
+def test_a_plan_split_into_periods_is_scored_not_rejected(master_key):
+    """The form has always been able to save periods; the engine could not read them.
+
+    A plan stored as `{"periods": [...]}` has no top-level `monthly_target`, so
+    the parser saw a zero amount and the whole block came back as the error
+    "le montant mensuel doit être supérieur à zéro" — for a plan the user had
+    filled in correctly.
+    """
+    import json
+
+    from services.encryption import encrypt_data
+
+    class _Settings:
+        benchmark_asset_key = None
+        investment_plan_enc = encrypt_data(
+            json.dumps(
+                {
+                    "periods": [
+                        {"since": "2024-01", "monthly_target": "200", "allocation": {BENCH: "100"}},
+                        {"since": "2025-01", "monthly_target": "600", "allocation": {BENCH: "100"}},
+                    ]
+                }
+            ),
+            master_key,
+        )
+
+    transactions = _monthly_buys(24)
+    with (
+        patch("services.analytics.report.get_or_create_settings", return_value=_Settings()),
+        patch("services.analytics.report.get_user_stock_accounts", return_value=[_Account()]),
+        patch("services.analytics.report.get_account_transactions", return_value=transactions),
+        patch("services.analytics.report.get_all_stock_accounts_history", return_value=[]),
+        patch("services.analytics.report.get_benchmark_series", return_value={}),
+        patch("services.analytics.window.ensure_price_history"),
+        patch("services.analytics.window.get_historical_exchange_rates_db"),
+        patch("services.analytics.window.first_quote_date", return_value=date(2010, 1, 1)),
+        patch("services.analytics.report.get_price_matrix", return_value=_quotes(transactions)),
+        patch("services.analytics.report.fill_price_gaps", side_effect=lambda m, *_a, **_k: m),
+        patch("services.analytics.report.resolve_trading_days", return_value={}),
+        patch("services.analytics.report.resolve_asset_labels", return_value={}),
+    ):
+        report = build_investor_analytics(None, "user_1", master_key)
+
+    plan = report["plan"]
+    assert plan is not None and plan["error"] is None
+    # The headline is the target in force today, and both periods are shipped.
+    assert plan["monthly_target"] == Decimal("600")
+    assert [period["monthly_target"] for period in plan["periods"]] == [
+        Decimal("200"),
+        Decimal("600"),
+    ]
+    targets = {(row["year"], row["month"]): row["target"] for row in plan["months"]}
+    assert targets[(2024, 6)] == Decimal("200")
+    assert targets[(2025, 6)] == Decimal("600")
+    # The verdict names the revision instead of quoting one amount for both.
+    assert "a changé" in plan["verdict"]
+    # Each period carries what was actually done while it ran, not only what was
+    # asked for: the range it covers, its own months, and where its euros went.
+    first, second = plan["periods"]
+    assert (first["until"], second["until"]) == (date(2025, 1, 1), None)
+    assert first["months"] > 0 and second["months"] > 0
+    assert first["flows"] and first["flows"][0]["asset_key"] == BENCH
 
 
 def test_the_concentration_payload_carries_names_not_only_isins():

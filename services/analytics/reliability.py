@@ -15,6 +15,8 @@ from enum import Enum
 class Reliability(str, Enum):
     SOLID = "solide"
     INDICATIVE = "indicatif"
+    ESTIMATED = "estimé"
+    """Extrapolated from a partial ledger — a figure, but not one that was read."""
     INSUFFICIENT = "insuffisant"
 
 
@@ -37,9 +39,15 @@ class Metric:
         solid_at: int,
         caveat_insufficient: str,
         caveat_indicative: str | None = None,
+        estimated: bool = False,
+        caveat_estimated: str | None = None,
     ) -> "Metric":
         if value is None or sample_size < minimum:
             return cls(None, unit, sample_size, Reliability.INSUFFICIENT, caveat_insufficient)
+        # Extrapolated outranks merely thin: that the number was never read is
+        # the more important thing to say about it, and both cannot be shown.
+        if estimated:
+            return cls(value, unit, sample_size, Reliability.ESTIMATED, caveat_estimated)
         if sample_size < solid_at:
             return cls(value, unit, sample_size, Reliability.INDICATIVE, caveat_indicative)
         return cls(value, unit, sample_size, Reliability.SOLID, None)

@@ -97,3 +97,272 @@ def test_cash_rows_and_sales_carry_no_purchase_fee():
 
 def test_the_target_is_the_documented_25_bps():
     assert TARGET_BPS == Decimal("25")
+
+
+class _FeeTx:
+    def __init__(self, notional, fee, day):
+        self.type = "BUY"
+        self.asset_key = "AAA"
+        self.amount = Decimal("1")
+        self.price_per_unit = Decimal(str(notional))
+        self.fees = Decimal(str(fee))
+        self.executed_at = datetime(day.year, day.month, day.day, 10)
+
+
+class _TwoYears:
+    start = date(2024, 1, 5)
+    end = date(2026, 1, 5)
+
+
+def _ledger(charged: int, total: int = 24, notional="450", fee="6.25"):
+    """`total` monthly buys, of which only the first `charged` carry a fee."""
+    return [
+        _FeeTx(notional, fee if n < charged else "0", date(2024 + n // 12, n % 12 + 1, 5))
+        for n in range(total)
+    ]
+
+
+def test_orders_with_no_fee_recorded_are_not_averaged_in():
+    """Folding them in halves what the broker looks like it charges.
+
+    Which then halves the threshold drawn from that average, and turns a ledger
+    imported without a fee column into a fee habit nobody has.
+    """
+    result = analyse_fees(_ledger(charged=8), _TwoYears)
+
+    assert result.orders_with_fee == 8
+    # 50 € over the 8 charged orders, not over all 24.
+    assert result.average_fee == Decimal("6.25")
+    assert result.recorded_fees == Decimal("50.00")
+
+
+def test_coverage_reports_how_much_of_the_ledger_carries_fees():
+    result = analyse_fees(_ledger(charged=8), _TwoYears)
+
+    assert round(result.coverage, 4) == Decimal("0.3333")
+    assert analyse_fees(_ledger(charged=24), _TwoYears).coverage == Decimal("1")
+
+
+def test_a_ledger_without_any_fee_says_nothing_rather_than_zero():
+    """No fee recorded and a broker charging none look identical from here."""
+    result = analyse_fees(_ledger(charged=0), _TwoYears)
+
+    assert result.orders_with_fee == 0
+    assert result.average_fee is None
+    assert result.threshold_order_size is None
+    # The gate is what folds the block away instead of asserting a zero bill.
+    assert result.is_measurable is False
+
+
+def test_free_orders_are_not_counted_under_the_threshold():
+    """An order with no fee has no entry cost to exceed the target with."""
+    result = analyse_fees(_ledger(charged=8), _TwoYears)
+
+    assert result.orders_below_threshold == 8
+    assert result.invested_below_threshold == Decimal("3600")
+
+
+def test_the_verdict_stops_advising_a_regrouping_it_calls_harmless():
+    """0,50 € on 150 € orders is 17 bps a year — under the 25 the block targets.
+
+    It said "regroupe-les" all the same, one line under a tile stating the
+    annual load was fine, which is how a rounding error read as a problem.
+    """
+    from services.analytics.report import _fees_payload
+
+    ledger = _ledger(charged=24, notional="150", fee="0.50")
+    payload = _fees_payload(analyse_fees(ledger, _TwoYears))
+
+    # Every order under the threshold, and none of it worth acting on.
+    assert payload["orders_below_threshold"] == 24
+    assert payload["avoidable"] is False
+    assert "Regroupe-les" not in payload["verdict"]
+    assert "pas un problème à corriger" in payload["verdict"]
+
+
+def test_the_verdict_still_advises_a_regrouping_when_the_load_is_real():
+    from services.analytics.report import _fees_payload
+
+    # A flat 8 € per order, on sizes varied enough to establish that it is flat:
+    # only then does grouping actually reduce anything.
+    payload = _fees_payload(analyse_fees(_varied(lambda _size: "8", charged=24), _TwoYears))
+
+    assert payload["model"] == "fixe"
+    assert payload["avoidable"] is True
+    assert "Regroupe-les" in payload["verdict"]
+
+
+def test_a_partly_filled_ledger_is_extrapolated_not_reported_as_a_floor():
+    """A fee nobody typed in was still paid.
+
+    Reporting only what was keyed in understates the bill by exactly the share
+    nobody filled — which is how 150 € of real cost showed up as 50 €.
+    """
+    result = analyse_fees(_ledger(charged=8), _TwoYears)
+
+    assert result.is_estimated is True
+    assert result.recorded_fees == Decimal("50.00")
+    # The 16 orders with nothing recorded are charged at the same 6,25 €.
+    assert result.total_fees == Decimal("150.00")
+
+
+def test_a_complete_ledger_is_never_marked_as_an_estimate():
+    result = analyse_fees(_ledger(charged=24), _TwoYears)
+
+    assert result.is_estimated is False
+    assert result.total_fees == result.recorded_fees
+    assert result.coverage == Decimal("1")
+
+
+def test_below_a_tenth_of_the_ledger_nothing_is_extrapolated():
+    """Four fees out of two hundred orders do not describe a broker.
+
+    Extrapolating from them would be a guess wearing a number's clothes, and
+    reporting their sum would understate the bill fifty-fold. Neither happens.
+    """
+    result = analyse_fees(_ledger(charged=8, total=200), _TwoYears)
+
+    assert result.coverage < Decimal("0.10")
+    assert result.is_estimated is False
+    assert result.is_too_partial is True
+    # The gate is what folds the block away rather than showing either number.
+    assert result.is_measurable is False
+
+
+def test_an_estimated_total_carries_the_estimated_marker_not_a_plain_one():
+    from services.analytics.report import _fees_payload
+
+    payload = _fees_payload(analyse_fees(_ledger(charged=8), _TwoYears))
+
+    assert payload["total_fees"]["reliability"] == "estimé"
+    assert payload["annual_bps"]["reliability"] == "estimé"
+    assert "Estimé" in payload["total_fees"]["caveat"]
+    # The per-order calibration is measured on the charged orders, not guessed.
+    assert payload["threshold_order_size"]["reliability"] != "estimé"
+    assert payload["is_estimated"] is True
+    assert payload["recorded_fees"] == Decimal("50.00")
+
+
+def test_a_ledger_too_partial_to_estimate_says_so_and_withholds():
+    from services.analytics.report import _fees_payload
+
+    payload = _fees_payload(analyse_fees(_ledger(charged=8, total=200), _TwoYears))
+
+    assert payload["total_fees"]["value"] is None
+    assert payload["total_fees"]["reliability"] == "insuffisant"
+    assert "trop peu pour estimer le reste" in payload["total_fees"]["caveat"]
+
+
+def test_no_fee_at_all_offers_the_three_readings_rather_than_picking_one():
+    """Included in the price is likelier than free, and neither is measurable."""
+    from services.analytics.report import _fees_payload
+
+    verdict = _fees_payload(analyse_fees(_ledger(charged=0), _TwoYears))["verdict"]
+
+    assert "déjà compris dans les prix" in verdict
+    assert "rien n'est mesuré" in verdict
+
+
+def _varied(fee_of, charged: int = 8, total: int = 24):
+    """Orders of deliberately varied size — the only ledger a tariff shows in.
+
+    `fee_of(notional)` is the tariff. Same-size orders fit a flat fee and a
+    percentage equally well, so a ledger of them can prove nothing either way.
+    """
+    sizes = [200, 500, 1200, 300, 800, 2000, 450, 150, 3000, 600, 250, 900] * 2
+    return [
+        _FeeTx(size, fee_of(size) if n < charged else "0", date(2024 + n // 12, n % 12 + 1, 5))
+        for n, size in enumerate(sizes[:total])
+    ]
+
+
+def test_a_percentage_tariff_is_read_off_the_orders():
+    from services.analytics.fees import FeeModel
+
+    result = analyse_fees(_varied(lambda size: str(round(size * 0.005, 2))), _TwoYears)
+
+    assert result.model is FeeModel.PROPORTIONAL
+    assert result.fee_rate == pytest.approx(Decimal("0.005"), abs=Decimal("0.0002"))
+
+
+def test_a_flat_tariff_is_read_off_the_same_ledger_shape():
+    from services.analytics.fees import FeeModel
+
+    result = analyse_fees(_varied(lambda _size: "5"), _TwoYears)
+
+    assert result.model is FeeModel.FLAT
+    assert result.average_fee == Decimal("5")
+
+
+def test_orders_all_of_one_size_cannot_separate_the_two_tariffs():
+    """The monthly-plan case: 450 € every month fits both models exactly.
+
+    Answering "flat" here would be a coin toss dressed as a measurement, and it
+    is the answer that decides whether grouping is advised.
+    """
+    from services.analytics.fees import FeeModel
+
+    assert analyse_fees(_ledger(charged=24), _TwoYears).model is FeeModel.UNKNOWN
+
+
+def test_a_percentage_tariff_is_extrapolated_by_the_euros_not_the_orders():
+    """Scaling by order count would be wrong whenever sizes differ."""
+    result = analyse_fees(_varied(lambda size: str(round(size * 0.005, 2))), _TwoYears)
+
+    # 0,5 % of everything deployed, whatever the split into orders.
+    assert result.total_fees == pytest.approx(
+        result.deployed_capital * Decimal("0.005"), abs=Decimal("1")
+    )
+
+
+def test_grouping_is_never_advised_under_a_percentage_tariff():
+    """It is the advice that changes nothing — worse than silence, since it
+
+    sounds actionable. The lever there is the tariff, not the order count.
+    """
+    from services.analytics.report import _fees_payload
+
+    # 2 % of the notional: far above the target, and still not a grouping problem.
+    payload = _fees_payload(analyse_fees(_varied(lambda size: str(size * 0.02)), _TwoYears))
+
+    assert payload["model"] == "proportionnel"
+    assert payload["avoidable"] is False
+    # The word appears, but only inside the sentence refusing the advice.
+    assert "Regroupe-les" not in payload["verdict"]
+    assert "Regrouper tes ordres n'y changerait rien" in payload["verdict"]
+    assert "du montant, pas un forfait" in payload["verdict"]
+    # A threshold order size is not a smaller number here, it is a question that
+    # does not apply — so none is offered.
+    assert payload["threshold_order_size"]["value"] is None
+
+
+def test_grouping_is_not_promised_when_the_tariff_shape_is_unknown():
+    from services.analytics.report import _fees_payload
+
+    payload = _fees_payload(analyse_fees(_ledger(charged=8), _TwoYears))
+
+    assert payload["model"] == "indéterminé"
+    assert payload["avoidable"] is False
+    assert "Regroupe-les" not in payload["verdict"]
+    assert "trop uniformes" in payload["verdict"]
+
+
+def test_a_nearly_complete_small_ledger_is_estimated_despite_few_samples():
+    """Four fees out of five orders is nearly complete data.
+
+    The coverage guard alone would have passed it and the sample guard alone
+    would have refused it; the estimate needs either, not both.
+    """
+    result = analyse_fees(_ledger(charged=4, total=5), _TwoYears)
+
+    assert result.coverage == Decimal("0.8")
+    assert result.is_estimated is True
+
+
+def test_many_recorded_fees_are_enough_even_at_low_coverage():
+    """Fifty fees out of a thousand orders is a stable average under a big factor."""
+    result = analyse_fees(_ledger(charged=25, total=1000), _TwoYears)
+
+    assert result.coverage < Decimal("0.10")
+    assert result.is_estimated is True
+    assert result.is_too_partial is False

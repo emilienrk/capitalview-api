@@ -25,6 +25,7 @@ from services.analytics.behaviour import (
     analyse_purchase_regularity,
     analyse_turnover,
     purchase_amounts,
+    purchases_by_asset,
 )
 from services.analytics.concentration import (
     MIN_OVERLAP,
@@ -37,6 +38,7 @@ from services.analytics.fees import (
     PROJECTION_YEARS,
     SOLID_ORDERS as FEES_SOLID_ORDERS,
     TARGET_BPS,
+    FeeModel,
     analyse_fees,
 )
 from services.analytics.plan import (
@@ -269,6 +271,13 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
             *(key for key, _ in (concentration.weights if concentration else ())),
             *(concentration.dropped if concentration else ()),
             *(row.asset_key for row in (getattr(plan_payload, "drift", None) or ())),
+            # A line bought only during an old period appears nowhere else, and
+            # would otherwise show up in that period's table as a bare ISIN.
+            *(
+                key
+                for outcome in (getattr(plan_payload, "outcomes", None) or ())
+                for key in outcome.flow_shares
+            ),
         ],
     )
     return {
@@ -304,9 +313,9 @@ def _plan_block(raw, transactions, concentration, price_end, window, benchmark_q
     if not raw:
         return None, None
 
-    purchases = [
-        (day, "", amount) for day, amount in purchase_amounts(transactions)
-    ]
+    # With the asset key, not without it: blanking it here is what kept the plan
+    # from ever saying whether an allocation was followed while it was in force.
+    purchases = purchases_by_asset(transactions)
     weights = concentration.weights if concentration else []
     portfolio_value = _average_capital(holdings_from_transactions(transactions), price_end)
     try:
@@ -970,20 +979,43 @@ def _fees_payload(fees) -> dict | None:
     if fees is None:
         return None
 
-    def gated(value, unit, *, insufficient: str):
+    # Fee figures are gated on orders that actually carry a fee, not on orders.
+    # A ledger imported without a fee column has no fees to describe, and
+    # reporting a confident total over it states a floor as if it were the sum.
+    sample = 0 if fees.is_too_partial else fees.orders_with_fee
+    estimate_note = (
+        f"Estimé : {fees.orders_with_fee} de tes {fees.order_count} ordres portent des frais "
+        f"renseignés ({round(fees.coverage * 100)} %). Les autres sont comptés au même tarif "
+        f"— {round(fees.average_fee, 2)} € par ordre — parce qu'un frais non saisi a quand même "
+        "été payé. Hypothèse : une commission fixe par ordre."
+        if fees.is_estimated and fees.average_fee
+        else None
+    )
+
+    def gated(value, unit, *, insufficient: str, estimated: bool = False):
         return _as_metric(
             Metric.gated(
                 value,
                 unit=unit,
-                sample_size=fees.order_count,
+                sample_size=sample,
                 minimum=FEES_MIN_ORDERS,
                 solid_at=FEES_SOLID_ORDERS,
                 caveat_insufficient=insufficient,
-                caveat_indicative="Moins de vingt ordres — l'ordre de grandeur, pas la précision.",
+                caveat_indicative="Moins de vingt ordres facturés — l'ordre de grandeur, pas la précision.",
+                estimated=estimated and fees.is_estimated,
+                caveat_estimated=estimate_note,
             )
         )
 
-    too_few = f"{fees.order_count} ordres : trop peu pour décrire une habitude de frais."
+    too_few = (
+        f"Frais renseignés sur {fees.orders_with_fee} de tes {fees.order_count} ordres "
+        f"({round(fees.coverage * 100)} %) : trop peu pour estimer le reste."
+        if fees.is_too_partial
+        else (
+            f"{fees.orders_with_fee} ordre(s) avec des frais renseignés sur {fees.order_count} : "
+            "trop peu pour décrire une habitude de frais."
+        )
+    )
     threshold = gated(
         round(fees.threshold_order_size, 2) if fees.threshold_order_size is not None else None,
         "EUR",
@@ -991,30 +1023,44 @@ def _fees_payload(fees) -> dict | None:
     )
 
     return {
-        "total_fees": gated(round(fees.total_fees, 2), "EUR", insufficient=too_few),
+        # The three totals are extrapolated over the whole ledger; the per-order
+        # calibration below them is measured on the charged orders and is not.
+        "total_fees": gated(round(fees.total_fees, 2), "EUR", insufficient=too_few, estimated=True),
         "fee_share": gated(
             round(fees.fee_share, 6) if fees.fee_share is not None else None,
             "ratio",
             insufficient=too_few,
+            estimated=True,
         ),
         "annual_bps": gated(
             round(fees.annual_bps, 2) if fees.annual_bps is not None else None,
             "bps",
             insufficient=too_few,
+            estimated=True,
         ),
         "threshold_order_size": threshold,
         # Whether the small orders are a problem worth acting on, or only a
         # calibration figure: below the target the annual load is a rounding
         # error, however many orders sit under the threshold.
+        # Worth acting on only when there is an action: a load above the target
+        # under a percentage tariff is a reason to change broker, not to group.
         "avoidable": (
-            fees.annual_bps is not None and fees.annual_bps > TARGET_BPS
+            fees.annual_bps is not None
+            and fees.annual_bps > TARGET_BPS
+            and fees.grouping_helps
         ),
+        "model": fees.model.value,
+        "fee_rate": round(fees.fee_rate, 6) if fees.fee_rate is not None else None,
         "orders_below_threshold": fees.orders_below_threshold,
         "cost_below_threshold": round(fees.cost_below_threshold, 2),
         "invested_below_threshold": round(fees.invested_below_threshold, 2),
         "average_fee": round(fees.average_fee, 2) if fees.average_fee is not None else None,
         "average_order": round(fees.average_order, 2) if fees.average_order is not None else None,
         "order_count": fees.order_count,
+        "orders_with_fee": fees.orders_with_fee,
+        "fee_coverage": round(fees.coverage, 4),
+        "recorded_fees": round(fees.recorded_fees, 2),
+        "is_estimated": fees.is_estimated,
         "projection_eur": fees.projection_eur,
         "projection_note": (
             f"Projection sur {PROJECTION_YEARS} ans à hypothèse constante : même cadence de "
@@ -1027,22 +1073,81 @@ def _fees_payload(fees) -> dict | None:
 
 
 def _fees_verdict(fees, threshold) -> str:
+    if fees.orders_with_fee == 0:
+        # Not "you pay nothing": a ledger with no fee recorded and a broker that
+        # charges none look identical from here, and a third reading is likelier
+        # than either — the price keyed in already included the commission.
+        return (
+            f"Aucun frais renseigné sur tes {fees.order_count} ordres. Soit ton courtier ne t'en "
+            "prend pas, soit ils sont déjà compris dans les prix que tu as saisis, soit ils "
+            "n'ont pas été renseignés — rien ici ne permet de trancher, donc rien n'est mesuré. "
+            + fees.ter_note
+        )
+    if fees.is_too_partial:
+        return (
+            f"Frais renseignés sur {fees.orders_with_fee} de tes {fees.order_count} ordres "
+            f"({round(fees.coverage * 100)} %). C'est trop peu pour que ces ordres représentent "
+            "les autres : rien n'est estimé plutôt qu'estimé au hasard."
+        )
+    # An estimate has to say so before quoting a total, not after.
+    partial = ""
+    if fees.is_estimated:
+        partial = (
+            f" Total estimé : seuls {fees.orders_with_fee} de tes {fees.order_count} ordres "
+            f"portent des frais renseignés ({round(fees.recorded_fees)} € saisis), les autres "
+            "sont comptés au même tarif."
+        )
+
+    # A percentage tariff has no order size to fall under, so the whole
+    # threshold sentence is skipped rather than reworded around a null.
+    if fees.model is FeeModel.PROPORTIONAL and fees.fee_rate is not None:
+        rate = f"{round(fees.fee_rate * 100, 3)} %".replace(".", ",")
+        load = (
+            f" Ta charge annuelle est de {round(fees.annual_bps)} bps."
+            if fees.annual_bps is not None
+            else ""
+        )
+        return (
+            f"Ton courtier te prend {rate} du montant, pas un forfait par ordre. Regrouper tes "
+            f"ordres n'y changerait rien : le coût suit les euros, pas le nombre d'ordres. Le "
+            f"seul levier est le tarif lui-même.{load}{partial}"
+        )
+
     if threshold is None:
-        if fees.total_fees <= _ZERO:
-            return "Tu ne paies aucun frais d'ordre. " + fees.ter_note
         return f"{fees.order_count} ordres : trop peu pour dire si tes frais sont un sujet."
+
     if fees.orders_below_threshold == 0:
         return (
-            f"Ton courtier te prend {round(fees.average_fee, 2)} € par ordre. En dessous de "
-            f"{round(threshold)} € par ordre tu dépasserais 25 bps de frais d'entrée : aucun de "
-            f"tes {fees.order_count} ordres n'est sous ce seuil."
+            f"Ton courtier te prend {round(fees.average_fee, 2)} € par ordre facturé. En dessous "
+            f"de {round(threshold)} € par ordre tu dépasserais 25 bps de frais d'entrée : aucun "
+            f"de tes ordres facturés n'est sous ce seuil.{partial}"
         )
-    return (
-        f"Ton courtier te prend en moyenne {round(fees.average_fee, 2)} € par ordre. En dessous "
-        f"de {round(threshold)} € par ordre, tu dépasses 25 bps de frais d'entrée. "
+
+    detail = (
+        f"Ton courtier te prend en moyenne {round(fees.average_fee, 2)} € par ordre facturé. En "
+        f"dessous de {round(threshold)} € par ordre, tu dépasses 25 bps de frais d'entrée. "
         f"{fees.orders_below_threshold} de tes {fees.order_count} ordres sont sous ce seuil — ils "
         f"t'ont coûté {round(fees.cost_below_threshold)} € pour "
-        f"{round(fees.invested_below_threshold)} € investis. Regroupe-les."
+        f"{round(fees.invested_below_threshold)} € investis."
+    )
+    # "Group your orders" is advice, and it must not contradict the tile above
+    # it: below the target the annual load is a rounding error, however many
+    # orders sit under a threshold derived from the user's own average fee.
+    if fees.annual_bps is not None and fees.annual_bps > TARGET_BPS and fees.grouping_helps:
+        return f"{detail} Regroupe-les.{partial}"
+    if fees.annual_bps is not None and fees.annual_bps > TARGET_BPS:
+        # Above the target, but the tariff's shape is not established enough to
+        # promise that grouping would help.
+        return (
+            f"{detail} Ta charge annuelle dépasse les 25 bps visés "
+            f"({round(fees.annual_bps)} bps), mais tes ordres sont trop uniformes pour dire si "
+            f"ton courtier facture au forfait ou au pourcentage — et donc si les regrouper "
+            f"changerait quelque chose.{partial}"
+        )
+    return (
+        f"{detail} Mais ta charge annuelle reste sous les 25 bps visés "
+        f"({round(fees.annual_bps)} bps) : c'est un calibrage, pas un problème à "
+        f"corriger.{partial}"
     )
 
 
@@ -1225,17 +1330,43 @@ def _plan_payload(plan, error: str | None, labels) -> dict | None:
     )
 
     return {
+        # The target in force today, not the one the plan opened with.
         "monthly_target": plan.monthly_target,
         "since": plan.since,
-        # One period, in the shape the UI reads. A plan revised mid-window would
-        # be several, which the engine does not model yet — the list makes that a
-        # later addition rather than a breaking change.
+        # Every period as declared, oldest first, each with what was actually
+        # done while it ran. A plan that never changed has exactly one, so the UI
+        # reads a single shape either way.
         "periods": [
             {
-                "since": plan.since,
-                "monthly_target": plan.monthly_target,
-                "allocation": {row.asset_key: row.target for row in plan.drift},
+                "since": outcome.since,
+                "until": outcome.until,
+                "monthly_target": outcome.monthly_target,
+                "allocation": dict(outcome.allocation),
+                "months": outcome.months,
+                "target_eur": round(outcome.target_eur, 2),
+                "invested_eur": round(outcome.invested_eur, 2),
+                "adherence_ratio": (
+                    round(outcome.adherence_ratio, 4)
+                    if outcome.adherence_ratio is not None
+                    else None
+                ),
+                "flow_drift_l1": (
+                    round(outcome.flow_drift_l1, 2)
+                    if outcome.flow_drift_l1 is not None
+                    else None
+                ),
+                "flows": [
+                    {
+                        **label_of(labels, key).as_dict(),
+                        "target": round(outcome.allocation.get(key, _ZERO), 2),
+                        "actual": round(share, 2),
+                    }
+                    for key, share in sorted(
+                        outcome.flow_shares.items(), key=lambda pair: -pair[1]
+                    )
+                ],
             }
+            for outcome in plan.outcomes
         ],
         "months": [
             {
@@ -1292,6 +1423,23 @@ def _plan_verdict(plan, adherence) -> str:
             f"{round(plan.rebalance_eur)} € à rééquilibrer."
         )
 
+    # A revision the user only half-applied: the amount moved, the split did not.
+    # The portfolio drift above cannot say this — it reads today's holdings, which
+    # the market has reshaped since.
+    reallocation = ""
+    current = plan.outcomes[-1] if plan.outcomes else None
+    if (
+        len(plan.periods) > 1
+        and current is not None
+        and current.flow_drift_l1 is not None
+        and current.flow_drift_l1 > Decimal("10")
+    ):
+        reallocation = (
+            f" Depuis {current.since:%m/%Y} tes achats s'écartent de "
+            f"{round(current.flow_drift_l1)} points de la répartition que tu as déclarée pour "
+            "cette période : le montant a changé, la répartition non."
+        )
+
     timing = ""
     if plan.under_invested_months and plan.under_in_down_months:
         share = round(plan.under_in_down_months * 100 / plan.under_invested_months)
@@ -1301,16 +1449,38 @@ def _plan_verdict(plan, adherence) -> str:
                 "marché."
             )
 
+    promise = _plan_promise(plan)
     if adherence >= Decimal("0.98"):
         return (
-            f"Ton plan dit {round(plan.monthly_target)} €/mois investis. Tu as investi "
-            f"{round(plan.total_invested)} € en {len(plan.months)} mois : tu le tiens.{drift}"
+            f"{promise} Tu as investi {round(plan.total_invested)} € en "
+            f"{len(plan.months)} mois : tu le tiens.{reallocation}{drift}"
         )
     gap = round((Decimal("1") - adherence) * 100)
     return (
-        f"Ton plan dit {round(plan.monthly_target)} €/mois investis. Tu as investi "
-        f"{round(plan.total_invested)} € en {len(plan.months)} mois, soit "
-        f"{round(plan.average_monthly)} €/mois réels — {gap} % sous ton propre plan.{drift}{timing}"
+        f"{promise} Tu as investi {round(plan.total_invested)} € en {len(plan.months)} mois, "
+        f"soit {round(plan.average_monthly)} €/mois réels — {gap} % sous ton propre "
+        f"plan.{reallocation}{drift}{timing}"
+    )
+
+
+def _plan_promise(plan) -> str:
+    """What the plan asked for, in one sentence.
+
+    A plan in several periods cannot be summarised by one monthly amount: saying
+    "600 €/mois" next to a total that also covers months promised at 200 would
+    read as a shortfall the user never had. The revisions are named instead, and
+    the total is what the adherence ratio actually divides by.
+    """
+    if len(plan.periods) < 2:
+        return f"Ton plan dit {round(plan.monthly_target)} €/mois investis."
+
+    steps = " puis ".join(
+        f"{round(period.monthly_target)} € depuis {period.since:%m/%Y}"
+        for period in plan.periods
+    )
+    return (
+        f"Ton plan a changé {len(plan.periods) - 1} fois — {steps} — soit "
+        f"{round(plan.total_target)} € promis sur {len(plan.months)} mois complets."
     )
 
 
