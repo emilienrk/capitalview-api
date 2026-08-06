@@ -283,3 +283,39 @@ def test_a_flat_plan_still_gets_one_outcome():
     assert len(result.outcomes) == 1
     assert result.outcomes[0].until is None
     assert result.outcomes[0].adherence_ratio == Decimal("1")
+
+
+def test_a_plan_that_rotated_out_of_its_first_lines_entirely():
+    """Two ETFs at 50/50 for a year, sold, then one line at 100 % since.
+
+    The two periods share no line at all. The first has to be scored on lines
+    the portfolio no longer holds — which the point-in-time drift cannot do, and
+    which is the case the per-period flows exist for.
+    """
+    plan = {
+        "periods": [
+            {"since": "2024-01", "monthly_target": "200", "allocation": {"AAA": "50", "BBB": "50"}},
+            {"since": "2025-01", "monthly_target": "600", "allocation": {"CCC": "100"}},
+        ]
+    }
+    purchases = []
+    for month in range(1, 13):
+        purchases.append((date(2024, month, 5), "AAA", Decimal("100")))
+        purchases.append((date(2024, month, 5), "BBB", Decimal("100")))
+    for month in range(1, 7):
+        purchases.append((date(2025, month, 5), "CCC", Decimal("600")))
+
+    # Only CCC is still held: AAA and BBB were sold to zero.
+    weights = [("CCC", Decimal("1"))]
+    result = analyse_plan(plan, purchases, weights, Decimal("10000"), WINDOW)
+
+    first, second = result.outcomes
+    # Each period judged on its own lines, both followed to the point.
+    assert first.flow_drift_l1 == Decimal("0")
+    assert second.flow_drift_l1 == Decimal("0")
+    assert (first.adherence_ratio, second.adherence_ratio) == (Decimal("1"), Decimal("1"))
+    # The sold lines do not pollute the current drift: the target in force names
+    # only CCC, and CCC is all that is held.
+    assert result.drift_l1 == Decimal("0")
+    assert [row.asset_key for row in result.drift] == ["CCC"]
+    assert result.adherence_ratio == Decimal("1")

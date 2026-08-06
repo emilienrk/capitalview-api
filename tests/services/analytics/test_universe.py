@@ -65,3 +65,34 @@ def test_held_lines_come_first_then_the_largest():
     )
 
     assert [row.asset_key for row in rows] == ["BIG", "SMALL", "SOLD"]
+
+
+def test_a_portfolio_rotated_from_two_etfs_to_one_offers_all_three():
+    """The scenario the picker exists for.
+
+    Two ETFs held 50/50 for a year, sold, then a single line for the year since.
+    Declaring the first period means naming two lines the portfolio no longer
+    holds — impossible if the list only offered current holdings, and the whole
+    reason it is built from purchase history instead.
+    """
+    rows = traded_assets(
+        [
+            _Tx("BUY", "ETF_A", 10, date(2023, 1, 5)),
+            _Tx("BUY", "ETF_B", 10, date(2023, 1, 5)),
+            _Tx("BUY", "ETF_A", 10, date(2023, 12, 5)),
+            _Tx("BUY", "ETF_B", 10, date(2023, 12, 5)),
+            _Tx("SELL", "ETF_A", 20, date(2024, 1, 10)),
+            _Tx("SELL", "ETF_B", 20, date(2024, 1, 10)),
+            _Tx("BUY", "ETF_C", 40, date(2024, 2, 5)),
+        ]
+    )
+
+    by_key = {row.asset_key: row for row in rows}
+    assert set(by_key) == {"ETF_A", "ETF_B", "ETF_C"}
+    # The line still held comes first; the two sold ones remain selectable.
+    assert rows[0].asset_key == "ETF_C" and rows[0].held is True
+    assert by_key["ETF_A"].held is False and by_key["ETF_B"].held is False
+    # Their dates bound the period they belonged to, which is what makes them
+    # recognisable in a dropdown two years later.
+    assert by_key["ETF_A"].first_bought == date(2023, 1, 5)
+    assert by_key["ETF_A"].last_activity == date(2024, 1, 10)
