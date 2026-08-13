@@ -7,6 +7,7 @@ envelope in ``params._meta`` and repeats its method in the routable
 ``Mcp-Method`` header.
 """
 
+import datetime
 import json
 import uuid as uuid_lib
 
@@ -85,6 +86,33 @@ def _call(client: TestClient, method: str, params: dict, token: str | None, name
         json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {**params, "_meta": ENVELOPE}},
         headers=headers,
     )
+
+
+def test_money_reaches_the_model_as_numbers_from_every_tool():
+    """One tool must not report euros as a string while another reports floats.
+
+    The overview read models cast to float; the analytics report keeps Decimal,
+    which the default serialiser renders as a string to protect precision. A
+    model comparing figures across tools would have no way to notice.
+    """
+    from decimal import Decimal
+
+    from mcp_server.tools import _jsonable
+
+    normalised = _jsonable(
+        {
+            "cash_total": Decimal("12500.55"),
+            "blocks": [{"fees": Decimal("12.30"), "label": "12.30"}],
+            "period_start": datetime.date(2026, 8, 13),
+        }
+    )
+
+    assert normalised["cash_total"] == 12500.55
+    assert isinstance(normalised["cash_total"], float)
+    assert isinstance(normalised["blocks"][0]["fees"], float)
+    # A genuine string that merely looks numeric must survive untouched.
+    assert normalised["blocks"][0]["label"] == "12.30"
+    assert normalised["period_start"] == "2026-08-13"
 
 
 def test_the_bare_path_is_served_without_a_redirect(client, session, account):

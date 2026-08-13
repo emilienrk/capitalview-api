@@ -351,7 +351,7 @@ async def get_or_generate_card(
     from models.card import Card
     from models.enums import CardTheme
     from services.ai.agents.card_agent import CardAgent
-    from services.ai.tools import get_performance_since_last_login
+    from services.overview import get_performance_since_last_login
     from services.encryption import encrypt_data, decrypt_data, hash_index
 
     user_bidx = hash_index(current_user.uuid, master_key)

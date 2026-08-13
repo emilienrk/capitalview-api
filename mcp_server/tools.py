@@ -11,24 +11,52 @@ agent picks better from a short menu, and each extra tool costs context on every
 single request.
 """
 
+from decimal import Decimal
 from typing import Any
 
 from pydantic_core import to_jsonable_python
 
 from mcp_server.context import require_scope
 from mcp_server.db import open_session
-from services.ai.tools import (
+from services.analytics.report import build_investor_analytics
+from services.api_token import READ_SCOPE
+from services.overview import (
     get_historical_performance,
     get_user_balance,
     get_user_cashflow,
 )
-from services.analytics.report import build_investor_analytics
-from services.api_token import READ_SCOPE
 
 
 def _jsonable(payload: Any) -> Any:
-    """Flatten Decimals, dates and pydantic models into JSON-safe values."""
-    return to_jsonable_python(payload)
+    """Flatten a tool's return value into JSON-safe values.
+
+    Money must reach the model as a number from every tool. The read models in
+    ``services/overview`` already cast to float, but the analytics report keeps
+    Decimal — and the default serialiser turns a Decimal into a *string* to
+    protect precision. Left alone, the same euro would arrive as ``12500.0``
+    from one tool and ``"12500.55"`` from another, and a model comparing the two
+    across a conversation has no reason to suspect the difference.
+
+    Precision is not the concern it would be in a ledger: these figures are read
+    and reasoned about, never written back, and float64 holds euro amounts far
+    past any balance this application tracks.
+    """
+    return to_jsonable_python(_floats(payload))
+
+
+def _floats(value: Any) -> Any:
+    """Recursively replace Decimal with float, leaving everything else intact.
+
+    Runs before serialisation rather than after, because once a Decimal has been
+    rendered as a string it is indistinguishable from a genuine one.
+    """
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, dict):
+        return {key: _floats(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_floats(item) for item in value]
+    return value
 
 
 def register_tools(mcp) -> None:
