@@ -9,6 +9,20 @@ The set is deliberately small. Four tools that answer the questions people
 actually ask about their money beat twenty that mirror the REST surface: an
 agent picks better from a short menu, and each extra tool costs context on every
 single request.
+
+**Where a tool is allowed to read from.** Only neutral service modules — never
+another consumer's module. A tool may call ``services/overview`` (cross-domain
+read models) or ``services/analytics`` (its own subsystem, entered through
+``report``) because both are owned by nobody and read by several callers as
+peers. A tool may not reach into ``services/ai/`` or a ``routes/`` module: those
+belong to the assistant and the web app, and shaping them around MCP's needs
+would break their owner silently.
+
+The two allowed sources look uneven — one small module, one 5 000-line
+subsystem — but that is a difference of size, not of kind. Do not wrap the
+analytics entry point in ``overview`` to make the imports look symmetrical: it
+would be a function calling a function, and ``overview`` would end up having to
+know every subsystem it forwards to.
 """
 
 from decimal import Decimal
