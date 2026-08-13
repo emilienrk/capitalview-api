@@ -27,10 +27,18 @@ from sqlmodel import Session, select
 
 from models import CryptoAccount, StockAccount
 from models.enums import FlowType
-from services.asset import get_asset_portfolio_snapshot_for_date, get_user_assets
-from services.bank import get_all_bank_accounts_snapshot_for_date, get_user_bank_accounts
+from services.asset import (
+    get_asset_portfolio_history,
+    get_asset_portfolio_snapshot_for_date,
+    get_user_assets,
+)
+from services.bank import (
+    get_all_bank_accounts_history,
+    get_all_bank_accounts_snapshot_for_date,
+    get_user_bank_accounts,
+)
 from services.cashflow import get_user_cashflow_balance
-from services.crypto_account import get_all_crypto_accounts_history
+from services.crypto_account import get_all_crypto_accounts_history, get_user_crypto_accounts
 from services.crypto_transaction import (
     get_account_transactions as get_crypto_transactions,
 )
@@ -39,13 +47,155 @@ from services.crypto_transaction import (
 )
 from services.encryption import decrypt_data, hash_index
 from services.settings import get_or_create_settings
-from services.stock_account import get_all_stock_accounts_history
+from services.stock_account import get_all_stock_accounts_history, get_user_stock_accounts
 from services.stock_transaction import (
     get_account_transactions as get_stock_transactions,
 )
 from services.stock_transaction import (
     get_stock_account_summary,
 )
+
+
+def build_wealth_history(session: Session, user_uuid: str, master_key: str) -> list[dict]:
+    """
+    One entry per day: total wealth and how it split across account types.
+
+    The union of every category's snapshot dates, so a day where only the bank
+    moved still appears. A category with no snapshot on a given day contributes
+    zero rather than being omitted — the caller charts a stacked total and needs
+    every series to line up.
+
+    Values stay Decimal; rounding and serialisation belong to the caller.
+    """
+    settings = get_or_create_settings(session, user_uuid, master_key)
+
+    stock_snaps = {
+        s.snapshot_date: s.total_value
+        for s in get_all_stock_accounts_history(session, user_uuid, master_key, include_current=False)
+    }
+    crypto_snaps = {
+        s.snapshot_date: s.total_value
+        for s in get_all_crypto_accounts_history(session, user_uuid, master_key, include_current=False)
+    }
+
+    bank_snaps: dict = {}
+    if settings.bank_module_enabled:
+        bank_snaps = {
+            s.snapshot_date: s.total_value
+            for s in get_all_bank_accounts_history(session, user_uuid, master_key)
+        }
+
+    assets_snaps: dict = {}
+    if settings.wealth_module_enabled:
+        assets_snaps = {
+            s.snapshot_date: s.total_value
+            for s in get_asset_portfolio_history(session, user_uuid, master_key)
+        }
+
+    all_dates = sorted(
+        stock_snaps.keys() | crypto_snaps.keys() | bank_snaps.keys() | assets_snaps.keys()
+    )
+
+    history = []
+    for day in all_dates:
+        stock_v = stock_snaps.get(day, Decimal("0"))
+        crypto_v = crypto_snaps.get(day, Decimal("0"))
+        bank_v = bank_snaps.get(day, Decimal("0"))
+        assets_v = assets_snaps.get(day, Decimal("0"))
+        history.append(
+            {
+                "snapshot_date": day,
+                "total_wealth": stock_v + crypto_v + bank_v + assets_v,
+                "stock_value": stock_v,
+                "crypto_value": crypto_v,
+                "bank_value": bank_v,
+                "assets_value": assets_v,
+            }
+        )
+
+    return history
+
+
+def list_transactions(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    account_type: str = "all",
+    since: datetime.date | None = None,
+    until: datetime.date | None = None,
+    limit: int | None = None,
+) -> list[dict]:
+    """
+    The user's buy/sell movements across accounts, newest first.
+
+    Transactions are stored per account and encrypted, so there is no query that
+    filters them in the database — every account is read and decrypted, then
+    filtered here. Callers should pass a window rather than asking for a whole
+    ledger.
+
+    Args:
+        account_type: "stock", "crypto" or "all"
+        since/until: inclusive bounds on the execution date
+        limit: keep only the *limit* most recent, applied after filtering
+    """
+    collected: list[dict] = []
+
+    if account_type in ("all", "stock"):
+        for account in get_user_stock_accounts(session, user_uuid, master_key):
+            for tx in get_stock_transactions(session, account.id, master_key):
+                collected.append(_as_movement(tx, "stock", account.name))
+
+    if account_type in ("all", "crypto"):
+        for account in get_user_crypto_accounts(session, user_uuid, master_key):
+            for tx in get_crypto_transactions(session, account.id, master_key):
+                collected.append(_as_movement(tx, "crypto", account.name))
+
+    if since:
+        collected = [m for m in collected if m["executed_at"].date() >= since]
+    if until:
+        collected = [m for m in collected if m["executed_at"].date() <= until]
+
+    collected.sort(key=lambda m: m["executed_at"], reverse=True)
+
+    return collected[:limit] if limit else collected
+
+
+def _as_movement(transaction, account_type: str, account_name: str) -> dict:
+    """Flatten a transaction into the fields that describe what happened."""
+    return {
+        "account_type": account_type,
+        "account_name": account_name,
+        "asset_key": transaction.asset_key,
+        "type": transaction.type,
+        "amount": transaction.amount,
+        "price_per_unit": transaction.price_per_unit,
+        "total_cost": transaction.total_cost,
+        "fees": transaction.fees,
+        "currency": transaction.currency,
+        "executed_at": transaction.executed_at,
+    }
+
+
+def _opt_float(value: Decimal | None) -> float | None:
+    """Keep an absent figure absent — 0.0 would read as 'flat', which is a lie."""
+    return float(value) if value is not None else None
+
+
+def _as_position(position) -> dict:
+    """A held line with both what it is worth and what it cost.
+
+    Without the cost basis a reader can say how much you hold but not whether
+    you are up on it, which is most of what anyone wants to know.
+    """
+    return {
+        "symbol": position.symbol,
+        "amount": float(position.total_amount),
+        "current_value": float(position.current_value) if position.current_value else 0.0,
+        "total_invested": float(position.total_invested),
+        "average_buy_price": float(position.average_buy_price),
+        "profit_loss": _opt_float(position.profit_loss),
+        "profit_loss_percentage": _opt_float(position.profit_loss_percentage),
+    }
 
 
 def get_user_balance(session: Session, user_uuid: str, master_key: bytes, details: bool = False, date: str = None) -> dict:
@@ -60,6 +210,8 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
     ).all()
 
     stock_current_value = Decimal(0)
+    stock_invested = Decimal(0)
+    stock_pnl: list[Decimal] = []
     stock_accounts_details = []
     for acc in stock_models:
         transactions = get_stock_transactions(session, acc.uuid, master_key)
@@ -67,13 +219,20 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
         # Net worth = holdings VALEUR + idle account cash.
         acc_val = (summary.current_value or Decimal(0)) + summary.cash_balance
         stock_current_value += acc_val
+        stock_invested += summary.total_invested
+        if summary.profit_loss is not None:
+            stock_pnl.append(summary.profit_loss)
 
         if details:
             acc_name = decrypt_data(acc.name_enc, master_key)
-            positions = [{"symbol": p.symbol, "amount": float(p.total_amount), "current_value": float(p.current_value) if p.current_value else 0.0} for p in summary.positions if p.total_amount != 0]
+            positions = [_as_position(p) for p in summary.positions if p.total_amount != 0]
             stock_accounts_details.append({
                 "name": acc_name,
                 "total_value": float(acc_val),
+                "total_invested": float(summary.total_invested),
+                "profit_loss": _opt_float(summary.profit_loss),
+                "realized_profit_loss": _opt_float(summary.realized_profit_loss),
+                "cash_balance": float(summary.cash_balance),
                 "positions": positions
             })
 
@@ -83,6 +242,8 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
     ).all()
 
     crypto_current_value = Decimal(0)
+    crypto_invested = Decimal(0)
+    crypto_pnl: list[Decimal] = []
     crypto_accounts_details = []
     for acc in crypto_models:
         transactions = get_crypto_transactions(session, acc.uuid, master_key)
@@ -90,13 +251,20 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
         # Net worth = holdings VALEUR + idle account cash.
         acc_val = (summary.current_value or Decimal(0)) + summary.cash_balance
         crypto_current_value += acc_val
+        crypto_invested += summary.total_invested
+        if summary.profit_loss is not None:
+            crypto_pnl.append(summary.profit_loss)
 
         if details:
             acc_name = decrypt_data(acc.name_enc, master_key)
-            positions = [{"symbol": p.symbol, "amount": float(p.total_amount), "current_value": float(p.current_value) if p.current_value else 0.0} for p in summary.positions if p.total_amount != 0]
+            positions = [_as_position(p) for p in summary.positions if p.total_amount != 0]
             crypto_accounts_details.append({
                 "name": acc_name,
                 "total_value": float(acc_val),
+                "total_invested": float(summary.total_invested),
+                "profit_loss": _opt_float(summary.profit_loss),
+                "realized_profit_loss": _opt_float(summary.realized_profit_loss),
+                "cash_balance": float(summary.cash_balance),
                 "positions": positions
             })
 
@@ -156,12 +324,27 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
                     detail["category"] = a.category
                 assets_details.append(detail)
 
+    invested_total = stock_invested + crypto_invested
+
+    # Summed from the accounts rather than derived as value minus cost: the
+    # per-type totals above fold in each account's idle cash, so subtracting the
+    # cost basis from them would report an untouched cash balance as a gain.
+    # None, not zero, when no account could be priced — zero would read as flat.
+    priced = stock_pnl + crypto_pnl
+    unrealized = sum(priced) if priced else None
+
     result.update({
         "stocks_total": float(stock_current_value),
         "crypto_total": float(crypto_current_value),
         "cash_total": float(cash_total),
         "assets_total": float(assets_total),
-        "global_wealth": float(stock_current_value + crypto_current_value + cash_total + assets_total)
+        "global_wealth": float(stock_current_value + crypto_current_value + cash_total + assets_total),
+        # Cost basis and the gain it implies. Without these a reader knows the
+        # size of the portfolio but not whether it has made or lost money.
+        "stocks_invested": float(stock_invested),
+        "crypto_invested": float(crypto_invested),
+        "invested_total": float(invested_total),
+        "unrealized_profit_loss": _opt_float(unrealized),
     })
 
     if details:

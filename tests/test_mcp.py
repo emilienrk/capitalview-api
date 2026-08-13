@@ -10,6 +10,7 @@ envelope in ``params._meta`` and repeats its method in the routable
 import datetime
 import json
 import uuid as uuid_lib
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -115,6 +116,67 @@ def test_money_reaches_the_model_as_numbers_from_every_tool():
     assert normalised["period_start"] == "2026-08-13"
 
 
+def _curve(days: int) -> list[dict]:
+    """A daily wealth curve, oldest first, as build_wealth_history returns it."""
+    start = datetime.date(2026, 1, 1)
+    return [
+        {
+            "snapshot_date": start + datetime.timedelta(days=offset),
+            "total_wealth": Decimal(offset),
+            "stock_value": Decimal(offset),
+            "crypto_value": Decimal(0),
+            "bank_value": Decimal(0),
+            "assets_value": Decimal(0),
+        }
+        for offset in range(days)
+    ]
+
+
+def test_a_long_history_is_summarised_instead_of_flooding_the_conversation():
+    """Three years of daily points would spend the budget on a single call."""
+    from mcp_server.tools import MAX_HISTORY_POINTS, _downsample, _resolve_granularity
+
+    assert _resolve_granularity("auto", days=90) == "day"
+    assert _resolve_granularity("auto", days=365) == "week"
+    assert _resolve_granularity("auto", days=1095) == "month"
+    # An explicit choice is honoured over the automatic one.
+    assert _resolve_granularity("month", days=30) == "month"
+
+    monthly = _downsample(_curve(1095), "month")
+    assert len(monthly) == 36
+    assert len(_downsample(_curve(1095), "day")) == MAX_HISTORY_POINTS
+
+
+def test_each_period_reports_its_closing_value_not_a_total():
+    """Wealth is a level: summing a week's snapshots would invent money."""
+    from mcp_server.tools import _downsample
+
+    weekly = _downsample(_curve(14), "week")
+
+    # 2026-01-01 is a Thursday, so the first ISO week closes on the 4th.
+    assert weekly[0]["snapshot_date"] == datetime.date(2026, 1, 4)
+    assert weekly[0]["total_wealth"] == Decimal(3)
+
+
+def test_the_window_is_measured_from_the_data_not_from_today():
+    """A portfolio whose history stopped must still answer, not return nothing."""
+    from mcp_server.tools import _within_days
+
+    stale = _curve(400)  # ends in early 2027, long before "now"
+
+    assert len(_within_days(stale, 30)) == 30
+    assert _within_days(stale, 30)[-1]["snapshot_date"] == stale[-1]["snapshot_date"]
+
+
+def test_a_malformed_date_bound_is_refused_rather_than_guessed():
+    from mcp_server.tools import _as_date
+
+    assert _as_date(None) is None
+    assert _as_date("2026-03-01") == datetime.date(2026, 3, 1)
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        _as_date("01/03/2026")
+
+
 def test_the_bare_path_is_served_without_a_redirect(client, session, account):
     """Clients are configured with the bare URL and must be served on first hop.
 
@@ -175,6 +237,8 @@ def test_tools_are_advertised_to_an_authenticated_client(client, session, accoun
         "get_portfolio_overview",
         "get_performance",
         "get_cashflow_summary",
+        "get_wealth_history",
+        "list_recent_transactions",
         "get_investor_analytics",
     }
 
@@ -195,6 +259,74 @@ def test_a_tool_call_returns_the_callers_own_figures(client, session, account):
     overview = json.loads(result["content"][0]["text"])
     assert overview["global_wealth"] == 0
     assert set(overview) >= {"stocks_total", "crypto_total", "cash_total", "assets_total"}
+
+
+def test_the_overview_reports_cost_basis_alongside_value(client, session, account):
+    """Holdings without a cost basis cannot say whether the user is up or down."""
+    _, _, token = account
+
+    response = _call(
+        client, "tools/call", {"name": "get_portfolio_overview", "arguments": {"details": True}},
+        token=token, name="get_portfolio_overview",
+    )
+
+    assert response.status_code == 200
+    overview = json.loads(response.json()["result"]["content"][0]["text"])
+    assert set(overview) >= {
+        "invested_total",
+        "stocks_invested",
+        "crypto_invested",
+        "unrealized_profit_loss",
+    }
+
+
+def test_the_wealth_curve_answers_on_an_empty_account(client, session, account):
+    """No history is an empty series, not an error the agent has to interpret."""
+    _, _, token = account
+
+    response = _call(
+        client, "tools/call", {"name": "get_wealth_history", "arguments": {"days": 30}},
+        token=token, name="get_wealth_history",
+    )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["isError"] is False
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["granularity"] == "day"
+    assert payload["points"] == []
+
+
+def test_listing_transactions_answers_on_an_empty_account(client, session, account):
+    _, _, token = account
+
+    response = _call(
+        client, "tools/call",
+        {"name": "list_recent_transactions", "arguments": {"account_type": "all"}},
+        token=token, name="list_recent_transactions",
+    )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["isError"] is False
+    assert json.loads(result["content"][0]["text"]) == {"count": 0, "transactions": []}
+
+
+def test_a_caller_cannot_lift_the_transaction_cap(client, session, account):
+    """A limit argument is a request, not an instruction."""
+    from mcp_server.tools import MAX_TRANSACTIONS
+
+    _, _, token = account
+
+    response = _call(
+        client, "tools/call",
+        {"name": "list_recent_transactions", "arguments": {"limit": 10_000}},
+        token=token, name="list_recent_transactions",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert MAX_TRANSACTIONS == 200
 
 
 def test_two_tokens_never_see_each_others_data(client, session, master_key, account):

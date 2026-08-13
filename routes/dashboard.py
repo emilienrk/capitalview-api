@@ -22,12 +22,11 @@ from services.auth import get_current_user, get_master_key
 from services.encryption import hash_index, decrypt_data
 from services.market import get_exchange_rate
 from services.settings import get_or_create_settings
+from services.overview import build_wealth_history
 from services.stock_transaction import get_stock_account_summary, get_account_transactions as get_stock_transactions
 from services.crypto_transaction import get_crypto_account_summary, get_account_transactions as get_crypto_transactions
-from services.bank import get_user_bank_accounts, get_all_bank_accounts_history
-from services.asset import get_user_assets, get_asset_portfolio_history
-from services.stock_account import get_all_stock_accounts_history
-from services.crypto_account import get_all_crypto_accounts_history
+from services.bank import get_user_bank_accounts
+from services.asset import get_user_assets
 from services.cashflow import get_user_cashflow_balance
 from services.projection import generate_wealth_projection
 from dtos.projection import ProjectionParameters
@@ -50,7 +49,7 @@ def get_dashboard_summary(
     statistics = get_dashboard_statistics(current_user, master_key, session)
     portfolio = get_my_portfolio(current_user, master_key, session)
     cashflow = get_user_cashflow_balance(session, current_user.uuid, master_key)
-    
+
     # ── Projection ──
     # Create default parameters (120 months)
     params = ProjectionParameters(months_to_project=120)
@@ -91,43 +90,12 @@ def get_global_history(
     Returns one entry per day with total_wealth and a breakdown by category.
     No positions included — designed for lightweight chart rendering.
     """
-    settings = get_or_create_settings(session, current_user.uuid, master_key)
-
-    # Fetch per-category histories in parallel (same session, sequential is fine)
-    stock_snaps = {s.snapshot_date: s.total_value for s in get_all_stock_accounts_history(session, current_user.uuid, master_key, include_current=False)}
-    crypto_snaps = {s.snapshot_date: s.total_value for s in get_all_crypto_accounts_history(session, current_user.uuid, master_key, include_current=False)}
-
-    bank_snaps: dict = {}
-    if settings.bank_module_enabled:
-        bank_snaps = {s.snapshot_date: s.total_value for s in get_all_bank_accounts_history(session, current_user.uuid, master_key)}
-
-    assets_snaps: dict = {}
-    if settings.wealth_module_enabled:
-        assets_snaps = {s.snapshot_date: s.total_value for s in get_asset_portfolio_history(session, current_user.uuid, master_key)}
-
-    # Union of all dates
-    all_dates = sorted(
-        stock_snaps.keys() | crypto_snaps.keys() | bank_snaps.keys() | assets_snaps.keys()
-    )
-
-    result = []
-    for d in all_dates:
-        stock_v = stock_snaps.get(d, Decimal("0"))
-        crypto_v = crypto_snaps.get(d, Decimal("0"))
-        bank_v = bank_snaps.get(d, Decimal("0"))
-        assets_v = assets_snaps.get(d, Decimal("0"))
-        result.append(
-            GlobalHistorySnapshotResponse(
-                snapshot_date=d,
-                total_wealth=stock_v + crypto_v + bank_v + assets_v,
-                stock_value=stock_v,
-                crypto_value=crypto_v,
-                bank_value=bank_v,
-                assets_value=assets_v,
-            )
-        )
-
-    return result
+    # Composed in services/overview so the MCP server reads the same curve this
+    # route serves, rather than a second implementation of it.
+    return [
+        GlobalHistorySnapshotResponse(**entry)
+        for entry in build_wealth_history(session, current_user.uuid, master_key)
+    ]
 
 
 @router.get("/portfolio", response_model=PortfolioResponse)
@@ -148,17 +116,17 @@ def get_my_portfolio(
     - Performance percentage
     """
     user_bidx = hash_index(current_user.uuid, master_key)
-    
+
     stock_models = session.exec(
         select(StockAccount).where(StockAccount.user_uuid_bidx == user_bidx)
     ).all()
-    
+
     crypto_models = session.exec(
         select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
     ).all()
-    
+
     accounts = []
-    
+
     for acc in stock_models:
         transactions = get_stock_transactions(session, acc.uuid, master_key)
 
@@ -171,7 +139,7 @@ def get_my_portfolio(
                 **summary.model_dump(),
             )
         )
-    
+
     for acc in crypto_models:
         transactions = get_crypto_transactions(session, acc.uuid, master_key)
 
@@ -184,7 +152,7 @@ def get_my_portfolio(
                 **summary.model_dump(),
             )
         )
-    
+
     total_invested = sum(a.total_invested for a in accounts)
     total_deposits = sum(a.total_deposits for a in accounts)
     total_withdrawals = sum(a.total_withdrawals for a in accounts)
@@ -346,13 +314,14 @@ async def get_or_generate_card(
     """
     Returns the card for today. If it doesn't exist, generates one.
     """
-    from datetime import datetime, timedelta, timezone
     import random
+    from datetime import datetime, timedelta, timezone
+
     from models.card import Card
     from models.enums import CardTheme
     from services.ai.agents.card_agent import CardAgent
+    from services.encryption import decrypt_data, encrypt_data, hash_index
     from services.overview import get_performance_since_last_login
-    from services.encryption import encrypt_data, decrypt_data, hash_index
 
     user_bidx = hash_index(current_user.uuid, master_key)
     now = datetime.now(timezone.utc)
@@ -390,7 +359,7 @@ async def get_or_generate_card(
     recent_themes = set()
     last_monthly = None
     last_weekly = None
-    
+
     for card in recent_cards:
         try:
             th = decrypt_data(card.theme_enc, master_key)
@@ -412,12 +381,12 @@ async def get_or_generate_card(
     _, days_in_month = calendar.monthrange(now.year, now.month)
 
     # 1. Monthly condition
-    # If the month is over (or very near the end) and we haven't done it 
+    # If the month is over (or very near the end) and we haven't done it
     # Let's say if we are in the first 5 days of the month and no MONTHLY for the previous month
     # Or if we are in the last 2 days of the month and no MONTHLY this month
     is_start_of_month = now.day <= 5
     is_end_of_month = now.day >= days_in_month - 1
-    
+
     if is_end_of_month and (last_monthly is None or (now - last_monthly).days > 25):
         selected_theme = CardTheme.MONTHLY.value
         theme_context = "Thème : Bilan mensuel. Rédige un bref bilan du mois qui s'écoule pour le portefeuille de l'utilisateur."
@@ -463,7 +432,7 @@ async def get_or_generate_card(
         is_significant=is_significant,
         perf_data=perf_data
     )
-    
+
     card_title = card_data.get("title", selected_theme)
     card_body = card_data.get("body", str(card_data))
 

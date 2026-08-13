@@ -5,10 +5,16 @@ context, opens its own short-lived database session, and hands the account's
 Master Key down to the service layer — the same key path the web app uses, so a
 tool can never see more than the user themselves can.
 
-The set is deliberately small. Four tools that answer the questions people
+The set is deliberately small. Six tools that answer the questions people
 actually ask about their money beat twenty that mirror the REST surface: an
 agent picks better from a short menu, and each extra tool costs context on every
 single request.
+
+Two of them return sequences, and both are capped rather than trusted to be
+small: a daily curve over several years, or a full ledger, would spend the
+conversation's budget on one call. The caps live here, in the layer that knows
+about context windows, not in the read models — the web app charts the same
+curve at full resolution and must keep every point.
 
 **Where a tool is allowed to read from.** Only neutral service modules — never
 another consumer's module. A tool may call ``services/overview`` (cross-domain
@@ -25,6 +31,7 @@ would be a function calling a function, and ``overview`` would end up having to
 know every subsystem it forwards to.
 """
 
+import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -35,9 +42,11 @@ from mcp_server.db import open_session
 from services.analytics.report import build_investor_analytics
 from services.api_token import READ_SCOPE
 from services.overview import (
+    build_wealth_history,
     get_historical_performance,
     get_user_balance,
     get_user_cashflow,
+    list_transactions,
 )
 
 
@@ -56,6 +65,70 @@ def _jsonable(payload: Any) -> Any:
     past any balance this application tracks.
     """
     return to_jsonable_python(_floats(payload))
+
+
+# A conversation cannot afford an unbounded ledger or a multi-year daily series.
+MAX_TRANSACTIONS = 200
+MAX_HISTORY_POINTS = 120
+
+
+def _as_date(value: str | None) -> datetime.date | None:
+    """Parse a YYYY-MM-DD bound, refusing anything else rather than guessing."""
+    if not value:
+        return None
+    try:
+        return datetime.date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"Date attendue au format YYYY-MM-DD, reçu {value!r}.") from exc
+
+
+def _within_days(history: list[dict], days: int) -> list[dict]:
+    """Keep the entries falling inside the last *days*, counted from the data.
+
+    Counted from the newest snapshot rather than today: a portfolio whose
+    history stops last month should still answer, instead of returning nothing
+    because the window ends before the data starts.
+    """
+    if not history or days <= 0:
+        return history
+    cutoff = history[-1]["snapshot_date"] - datetime.timedelta(days=days)
+    return [entry for entry in history if entry["snapshot_date"] > cutoff]
+
+
+def _resolve_granularity(granularity: str, days: int) -> str:
+    """Pick a step that keeps the series readable over the requested window."""
+    if granularity in ("day", "week", "month"):
+        return granularity
+    if days <= 90:
+        return "day"
+    return "week" if days <= 730 else "month"
+
+
+def _period_key(day: datetime.date, step: str) -> tuple:
+    if step == "week":
+        year, week, _ = day.isocalendar()
+        return (year, week)
+    if step == "month":
+        return (day.year, day.month)
+    return (day.year, day.month, day.day)
+
+
+def _downsample(history: list[dict], step: str) -> list[dict]:
+    """Keep the last entry of each period, then cap the number of points.
+
+    Wealth is a level, not a flow: the closing value of a week describes it,
+    where a sum would invent money and an average would smooth away the peak
+    that made the period worth looking at.
+    """
+    if not history:
+        return []
+
+    by_period: dict[tuple, dict] = {}
+    for entry in history:
+        by_period[_period_key(entry["snapshot_date"], step)] = entry
+
+    points = [by_period[key] for key in sorted(by_period)]
+    return points[-MAX_HISTORY_POINTS:]
 
 
 def _floats(value: Any) -> Any:
@@ -141,6 +214,65 @@ def register_tools(mcp) -> None:
                     flow_type=flow_type,
                 )
             )
+
+    @mcp.tool(
+        title="Courbe du patrimoine",
+        description=(
+            "Évolution du patrimoine jour par jour sur les `days` derniers jours, "
+            "ventilée entre actions, crypto, banque et autres actifs. C'est la série "
+            "à utiliser pour décrire une trajectoire ou repérer un décrochage — "
+            "get_performance ne donne que les bornes. `granularity` vaut 'auto' "
+            "(défaut), 'day', 'week' ou 'month' ; 'auto' choisit le pas pour rester "
+            "lisible sur la période demandée."
+        ),
+    )
+    def get_wealth_history(days: int = 90, granularity: str = "auto") -> dict:
+        principal = require_scope(READ_SCOPE)
+        with open_session() as session:
+            history = build_wealth_history(session, principal.user_uuid, principal.master_key)
+
+        window = _within_days(history, days)
+        step = _resolve_granularity(granularity, days)
+        points = _downsample(window, step)
+
+        return _jsonable(
+            {
+                "granularity": step,
+                "points_returned": len(points),
+                "days_covered": len(window),
+                "points": points,
+            }
+        )
+
+    @mcp.tool(
+        title="Transactions",
+        description=(
+            "Mouvements d'achat et de vente de l'utilisateur, du plus récent au plus "
+            "ancien. Pour répondre à « qu'est-ce que j'ai acheté en mars » ou retracer "
+            "l'entrée sur une ligne. `account_type` vaut 'stock', 'crypto' ou 'all'. "
+            "`since` et `until` sont des dates 'YYYY-MM-DD' incluses. Préférer une "
+            "fenêtre resserrée : la réponse est plafonnée à 200 mouvements."
+        ),
+    )
+    def list_recent_transactions(
+        account_type: str = "all",
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 50,
+    ) -> dict:
+        principal = require_scope(READ_SCOPE)
+        with open_session() as session:
+            movements = list_transactions(
+                session,
+                principal.user_uuid,
+                principal.master_key,
+                account_type=account_type,
+                since=_as_date(since),
+                until=_as_date(until),
+                limit=min(max(limit, 1), MAX_TRANSACTIONS),
+            )
+
+        return _jsonable({"count": len(movements), "transactions": movements})
 
     @mcp.tool(
         title="Analyse du comportement d'investisseur",
