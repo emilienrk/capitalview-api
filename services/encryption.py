@@ -146,6 +146,65 @@ def unwrap_master_key(wrapped: str, secret: str, salt: str) -> str:
     return base64.b64encode(mk_bytes).decode("utf-8")
 
 
+def derive_token_kek(secret: str, salt: str) -> bytes:
+    """
+    Derives a Key-Encryption-Key (32 bytes) from an API token via HKDF.
+
+    Deliberately not :func:`derive_kek`: Argon2id exists to make brute force of a
+    *low-entropy* secret expensive. An API token is 32 bytes straight from the
+    CSPRNG, so there is nothing to brute force and the memory-hard KDF would only
+    add ~100 ms and 64 MB of RAM to every single MCP tool call.
+
+    Args:
+        secret: The API token in plaintext (prefix included)
+        salt: Per-token salt (Base64)
+
+    Returns:
+        Raw 32-byte KEK
+    """
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=base64.b64decode(salt),
+        info=b"api-token-key-encryption-key",
+    )
+    return hkdf.derive(secret.encode("utf-8"))
+
+
+def token_wrap_master_key(masterkey: str, secret: str, salt: str) -> str:
+    """
+    Wraps the Master Key with a KEK derived from an API token.
+
+    Mirrors :func:`wrap_master_key` (same AES-256-GCM envelope) but with the
+    HKDF derivation of :func:`derive_token_kek`.
+
+    Returns:
+        Base64(nonce ‖ AES-256-GCM ciphertext of the raw MK bytes)
+    """
+    aesgcm = AESGCM(derive_token_kek(secret, salt))
+    nonce = os.urandom(NONCE_SIZE)
+    ciphertext = aesgcm.encrypt(nonce, base64.b64decode(masterkey), None)
+    return base64.b64encode(nonce + ciphertext).decode("utf-8")
+
+
+def token_unwrap_master_key(wrapped: str, secret: str, salt: str) -> str:
+    """
+    Unwraps a Master Key wrapped by :func:`token_wrap_master_key`.
+
+    Raises:
+        DecryptionError: if the token is wrong or the data is corrupted.
+    """
+    aesgcm = AESGCM(derive_token_kek(secret, salt))
+    packed = base64.b64decode(wrapped)
+    nonce = packed[:NONCE_SIZE]
+    ciphertext = packed[NONCE_SIZE:]
+    try:
+        mk_bytes = aesgcm.decrypt(nonce, ciphertext, None)
+    except Exception as exc:
+        raise DecryptionError("Incorrect token or corrupted data.") from exc
+    return base64.b64encode(mk_bytes).decode("utf-8")
+
+
 def _derive_server_key(context: str) -> bytes:
     """Derives a server-side 32-byte key from SECRET_KEY via HKDF for the given context."""
     hkdf = HKDF(

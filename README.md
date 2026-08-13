@@ -50,6 +50,60 @@ alembic heads     # must print exactly one head
 alembic history   # must be linear, no branch points
 ```
 
+## MCP server
+
+The API exposes its data to agent clients (Claude Desktop, Claude Code, …) over
+MCP at `/mcp`, mounted inside this same FastAPI app. It runs **stateless**: the
+2026-07-28 protocol revision dropped the `initialize` handshake and
+protocol-level sessions, so any worker answers any request and there is nothing
+to lose on redeploy.
+
+Tools live in `mcp_server/tools.py` and are read-only. They call the same
+`services/` functions the REST routes do, so an agent can never see more than
+the account holder can.
+
+### How a token reaches encrypted data
+
+Every user record is encrypted under a Master Key that the server never stores
+in the clear, so a bearer token that only *identifies* a user would be able to
+read nothing. An API token therefore carries the key as well: at mint time the
+Master Key is wrapped under a KEK derived from the token itself (`mk_wrapped`),
+the same mechanism the account recovery key uses. Only the token's HMAC is
+persisted — a database dump can neither be replayed nor unwrapped.
+
+That makes a token exactly as sensitive as the account password. Tokens are
+named, listed with their last use, capped per account, optionally expiring, and
+revocable with immediate effect (nothing is cached between requests).
+
+The KEK uses HKDF rather than the Argon2id of the password path: a token is 32
+bytes straight from the CSPRNG, so there is nothing to brute force, and a
+memory-hard KDF would only add ~100 ms and 64 MB of RAM to every tool call.
+
+### Configuration
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MCP_ENABLED` | `true` | Mount the endpoint at all |
+| `MCP_PATH` | `/mcp` | Mount path |
+| `MCP_PUBLIC_URL` | `http://localhost:8000/mcp` | Advertised to clients and shown in the settings UI |
+| `MCP_ALLOWED_HOSTS` | *(empty)* | Comma-separated Host allow-list. Empty disables the SDK's DNS-rebinding protection, which targets localhost servers and would otherwise answer 421 behind a reverse proxy. |
+
+### Connecting a client
+
+Generate a token in Settings → Security → *Accès agents (MCP)*, then:
+
+```json
+{
+  "mcpServers": {
+    "capitalview": {
+      "type": "http",
+      "url": "https://api.<domaine>/mcp",
+      "headers": { "Authorization": "Bearer cvw_…" }
+    }
+  }
+}
+```
+
 ## Tests
 
 ```bash

@@ -14,6 +14,7 @@ from .enums import (
     AccountCategory,
 )
 from .user import User, UserSettings, UserAIProvider, TotpBackupCode
+from .api_token import ApiToken
 from .cashflow import Cashflow
 from .bank import BankAccount
 from .stock import StockAccount, StockTransaction
@@ -39,6 +40,7 @@ __all__ = [
     "UserSettings",
     "UserAIProvider",
     "TotpBackupCode",
+    "ApiToken",
     "Cashflow",
     "BankAccount",
     "StockAccount",

@@ -41,6 +41,18 @@ class Settings:
         self.app_name: str = os.getenv("APP_NAME", "CapitalView API")
         self.trusted_proxy_count: int = int(os.getenv("TRUSTED_PROXY_COUNT", "0"))
 
+        # ── MCP (agent access to the API) ─────────────────────
+        self.mcp_enabled: bool = os.getenv("MCP_ENABLED", "true").lower() == "true"
+        self.mcp_path: str = os.getenv("MCP_PATH", "/mcp")
+        # Advertised to MCP clients and shown in the settings UI
+        self.mcp_public_url: str = os.getenv("MCP_PUBLIC_URL", f"http://localhost:8000{self.mcp_path}")
+        # Optional Host allow-list re-enabling the SDK's DNS-rebinding protection
+        self.mcp_allowed_hosts: list[str] = [
+            host.strip()
+            for host in os.getenv("MCP_ALLOWED_HOSTS", "").split(",")
+            if host.strip()
+        ]
+
         # ── Market Data ───────────────────────────────────────
         self.yahoo_user_agent: str = os.getenv(
             "YAHOO_USER_AGENT", 

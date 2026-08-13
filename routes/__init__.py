@@ -1,6 +1,7 @@
 """Routes module."""
 
 from .auth import router as auth_router
+from .api_tokens import router as api_tokens_router
 from .bank import router as bank_router
 from .cashflow import router as cashflow_router
 from .stocks import router as stocks_router
@@ -17,6 +18,7 @@ from .analytics import router as analytics_router
 
 __all__ = [
     "auth_router",
+    "api_tokens_router",
     "bank_router",
     "cashflow_router",
     "stocks_router",
