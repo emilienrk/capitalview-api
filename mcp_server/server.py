@@ -10,6 +10,7 @@ import logging
 
 from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.routing import Route
 
 from config import get_settings
 from mcp_server.auth import ApiTokenAuthMiddleware
@@ -64,19 +65,26 @@ def _transport_security() -> TransportSecuritySettings:
     )
 
 
-def build_mcp_app(server: MCPServer):
+def build_mcp_route(server: MCPServer) -> Route:
     """
-    Return the authenticated ASGI app to mount at the MCP path.
+    Return the authenticated MCP endpoint as a route for the host application.
+
+    A route rather than a mount: mounting at ``/mcp`` strips the prefix, leaving
+    an empty path that the inner router answers with a 307 to ``/mcp/``. Clients
+    are configured with the bare URL, and a redirect ahead of authentication is
+    a round trip every call would pay. Routing keeps the path intact, so the
+    inner app's own ``/mcp`` route matches on the first hop.
 
     ``json_response=True`` keeps every answer a plain JSON body rather than an
     SSE stream: none of these tools stream partial results, and a buffering
     reverse proxy would sit on an SSE response until it completed anyway.
     """
+    path = get_settings().mcp_path
     app = server.streamable_http_app(
-        streamable_http_path="/",
+        streamable_http_path=path,
         json_response=True,
         stateless_http=True,
         transport_security=_transport_security(),
         host="0.0.0.0",
     )
-    return ApiTokenAuthMiddleware(app)
+    return Route(path, endpoint=ApiTokenAuthMiddleware(app))

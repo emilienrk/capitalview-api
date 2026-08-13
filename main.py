@@ -16,7 +16,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import get_settings
 from database import get_session, get_engine
-from mcp_server import build_mcp_app, build_mcp_server
+from mcp_server import build_mcp_route, build_mcp_server
 from models import User
 from routes import (
     auth_router,
@@ -62,11 +62,11 @@ async def lifespan(app: FastAPI):
     if mcp_server is None:
         yield
     else:
-        # The mounted MCP app never gets its own lifespan run, so the host app
+        # The MCP app never gets its own lifespan run, so the host app
         # owns the session manager's task group. Skipping this makes the first
         # MCP request fail with "Task group is not initialized".
         async with mcp_server.session_manager.run():
-            print(f"🔌 MCP server mounted at {settings.mcp_path}")
+            print(f"🔌 MCP server listening at {settings.mcp_path}")
             yield
 
     scheduler.shutdown(wait=False)
@@ -128,10 +128,10 @@ app.include_router(imports_router)
 app.include_router(analytics_router)
 
 if mcp_server is not None:
-    # Mounted rather than routed: the MCP endpoint speaks JSON-RPC over its own
-    # ASGI app, and its bearer auth is unrelated to the session cookies the REST
+    # Its own ASGI app rather than a FastAPI route: the MCP endpoint speaks
+    # JSON-RPC, and its bearer auth is unrelated to the session cookies the REST
     # routes use.
-    app.mount(settings.mcp_path, build_mcp_app(mcp_server))
+    app.router.routes.append(build_mcp_route(mcp_server))
 
 
 @app.get("/")

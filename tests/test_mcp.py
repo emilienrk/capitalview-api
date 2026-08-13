@@ -87,6 +87,31 @@ def _call(client: TestClient, method: str, params: dict, token: str | None, name
     )
 
 
+def test_the_bare_path_is_served_without_a_redirect(client, session, account):
+    """Clients are configured with the bare URL and must be served on first hop.
+
+    Asserted with redirects disabled on purpose: the default test client follows
+    them, which would hide a 307 that every real call would pay for — ahead of
+    authentication, at that.
+    """
+    _, _, token = account
+
+    response = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {"_meta": ENVELOPE}},
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": PROTOCOL_VERSION,
+            "Mcp-Method": "tools/list",
+            "Authorization": f"Bearer {token}",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+
+
 def test_the_endpoint_refuses_an_anonymous_request(client, session, account):
     response = _call(client, "tools/list", {}, token=None)
 
