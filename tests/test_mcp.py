@@ -288,6 +288,69 @@ def test_an_explicit_rate_and_contribution_are_honoured_to_the_cent(client, sess
     assert body["assumptions"]["assets"]["BANK"]["annual_return_rate"] == 0
     assert body["points"][-1]["total_value"] == 6000
 
+    # Nothing was earned, so every euro of it is contribution.
+    assert body["outcome"] == {
+        "starting_value": 0.0,
+        "contributed": 6000.0,
+        "growth": 0.0,
+        "final_value": 6000.0,
+        "total_invested": 6000.0,
+        "growth_share": 0.0,
+    }
+
+
+def test_the_outcome_separates_what_was_paid_in_from_what_was_earned(client, session, account):
+    """100 a month at 12% for 10 years: 12 000 paid in, ~11 200 earned.
+
+    The closed form for an ordinary annuity at 12% nominal — 0.9489% monthly,
+    compounded — lands just over 23 000. What matters is that the two halves are
+    told apart and still add up.
+    """
+    _, _, token = account
+
+    response = _call(
+        client, "tools/call",
+        {
+            "name": "project_wealth",
+            "arguments": {"months": 120, "monthly_bank": 100, "annual_return_bank": 0.12},
+        },
+        token=token, name="project_wealth",
+    )
+
+    body = json.loads(response.json()["result"]["content"][0]["text"])
+    outcome = body["outcome"]
+
+    assert outcome["contributed"] == 12000
+    assert 10_000 < outcome["growth"] < 12_000
+    assert outcome["final_value"] == pytest.approx(
+        outcome["starting_value"] + outcome["contributed"] + outcome["growth"], abs=0.01
+    )
+    assert outcome["growth_share"] == pytest.approx(
+        outcome["growth"] / outcome["final_value"], abs=0.0001
+    )
+
+
+def test_every_point_adds_up_to_the_value_it_reports(client, session, account):
+    """The split is only useful if it is exact at every step, not just the last."""
+    _, _, token = account
+
+    response = _call(
+        client, "tools/call",
+        {
+            "name": "project_wealth",
+            "arguments": {"months": 24, "monthly_bank": 250, "annual_return_bank": 0.05},
+        },
+        token=token, name="project_wealth",
+    )
+
+    points = json.loads(response.json()["result"]["content"][0]["text"])["points"]
+
+    assert points[0]["contributed"] == 0  # nothing paid in before the first month
+    for point in points:
+        assert point["total_value"] == pytest.approx(
+            point["starting_value"] + point["contributed"] + point["growth"], abs=0.01
+        )
+
 
 def test_the_assumptions_carry_the_measurement_behind_them(client, session, account):
     """A rate with no provenance invites being quoted as fact."""

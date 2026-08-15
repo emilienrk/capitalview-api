@@ -159,23 +159,80 @@ def _projection_step(months: int) -> int:
     return 1 if months <= 36 else 12
 
 
-def _projection_points(data: list, step: int) -> list[dict]:
+def _split_value(point, month: int, monthly_contribution: float, starting_value: float) -> dict:
+    """Break a projected value into where each euro of it came from.
+
+    Three parts that sum to the total: what was already there, what was paid in
+    since, and what the return added. Without the split, "143 000 € in ten
+    years" hides whether the portfolio earned 38 000 or the user simply paid in
+    60 000 — which is most of what the question was about.
+
+    ``contributed`` is counted, not accumulated: the service adds the same
+    injection every month, so after *month* months exactly that many landed.
+    ``growth`` is then taken by difference, which keeps the three parts adding
+    up to the total the curve actually reports, rounding included.
+    """
+    contributed = monthly_contribution * month
+    return {
+        "date": point.date,
+        "total_value": point.total_value,
+        "starting_value": starting_value,
+        "contributed": round(contributed, 2),
+        "growth": round(float(point.total_value) - starting_value - contributed, 2),
+        "asset_values": {_category_name(key): value for key, value in point.asset_values.items()},
+    }
+
+
+def _projection_outcome(points: list[dict]) -> dict | None:
+    """The horizon's answer in one block: paid in, earned, ended at.
+
+    ``growth_share`` says how much of the final value the portfolio produced
+    rather than the saver — the figure that separates "I saved a lot" from "it
+    compounded". None when the curve is empty, since there is no outcome to
+    report.
+    """
+    if not points:
+        return None
+
+    final = points[-1]
+    total = float(final["total_value"])
+    invested = final["starting_value"] + final["contributed"]
+
+    return {
+        "starting_value": final["starting_value"],
+        "contributed": final["contributed"],
+        "growth": final["growth"],
+        "final_value": total,
+        "total_invested": round(invested, 2),
+        "growth_share": round(final["growth"] / total, 4) if total else None,
+    }
+
+
+def _projection_points(
+    data: list, step: int, monthly_contribution: float = 0.0
+) -> list[dict]:
     """Keep one point per step, always including the horizon itself.
 
     The final point is what the question was about — "where do I land" — so it
-    survives whatever the step does to the rest of the curve.
+    survives whatever the step does to the rest of the curve. The month index is
+    read before thinning, so a point still knows how many contributions it has
+    seen once its neighbours are gone.
     """
-    kept = [point for index, point in enumerate(data, start=1) if index % step == 0]
-    if data and (not kept or kept[-1] is not data[-1]):
-        kept.append(data[-1])
-    return [
-        {
-            "date": point.date,
-            "total_value": point.total_value,
-            "asset_values": {_category_name(key): value for key, value in point.asset_values.items()},
-        }
-        for point in kept[-MAX_HISTORY_POINTS:]
+    if not data:
+        return []
+
+    starting_value = float(data[0].total_value)
+    numbered = [
+        _split_value(point, month, monthly_contribution, starting_value)
+        for month, point in enumerate(data)
     ]
+
+    # Month zero always survives: it is today's value, the baseline every other
+    # point is read against, and a curve starting eleven months out is unusable.
+    kept = [entry for month, entry in enumerate(numbered) if month == 0 or month % step == 0]
+    if kept[-1] is not numbered[-1]:
+        kept.append(numbered[-1])
+    return kept[-MAX_HISTORY_POINTS:]
 
 
 def _within_days(history: list[dict], days: int) -> list[dict]:
@@ -387,6 +444,11 @@ def register_tools(mcp) -> None:
             "`monthly_crypto`, `monthly_bank` fixent l'apport mensuel en euros ; "
             "`annual_return_stock`, `annual_return_crypto`, `annual_return_bank` "
             "fixent le rendement annuel en décimal (0.05 = 5 %/an). "
+            "`outcome` décompose l'arrivée : `starting_value` (patrimoine "
+            "actuel), `contributed` (versé sur la période), `growth` (gagné par "
+            "le rendement) et `growth_share` (part des gains dans le total) — de "
+            "quoi dire combien a été déposé et combien a été gagné, au lieu d'un "
+            "seul chiffre final. Chaque point porte la même décomposition. "
             "`assumptions` renvoie ce qui a été retenu, d'où ça vient et les "
             "réserves associées : les citer, et ne jamais présenter la courbe "
             "comme une prévision."
@@ -421,14 +483,20 @@ def register_tools(mcp) -> None:
         # is, that reads as "no projection available" when it actually means
         # "this ends up below what you put in" — the one outcome the user most
         # needs told.
-        step = _projection_step(horizon)
-        points = _projection_points(projection.data, step)
         assumptions = projection.parameters_used
+        monthly_contribution = sum(
+            used.monthly_injection for used in assumptions.assets.values()
+        )
+
+        step = _projection_step(horizon)
+        points = _projection_points(projection.data, step, float(monthly_contribution))
 
         return _jsonable(
             {
                 "months": horizon,
                 "step_months": step,
+                "monthly_contribution": monthly_contribution,
+                "outcome": _projection_outcome(points),
                 "ends_below_contributions": not projection.data,
                 "note": (
                     "À ces hypothèses, le patrimoine projeté finit sous la somme "

@@ -90,6 +90,17 @@ Every figure comes back in `assumptions` with its provenance and any warning
 attached — a rate is `annualised_twr` over so many days, or it is `unavailable`
 and says why.
 
+The answer is decomposed rather than reduced to a single number, in `outcome`
+and on every point of the curve:
+
+```
+starting_value + contributed + growth = total_value
+```
+
+so "81 237 € in ten years" reads as 60 000 paid in and 21 237 earned, with
+`growth_share` (26%) saying how much of the result the portfolio produced rather
+than the saver.
+
 ### How a token reaches encrypted data
 
 Every user record is encrypted under a Master Key that the server never stores
