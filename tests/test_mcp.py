@@ -363,10 +363,11 @@ def test_the_assumptions_carry_the_measurement_behind_them(client, session, acco
 
     stock = json.loads(response.json()["result"]["content"][0]["text"])["assumptions"]["assets"]["STOCK"]
 
-    assert stock["basis"]["return"] in {"annualised_twr", "unavailable"}
-    assert stock["basis"]["contribution"] in {"net_external_flows", "unavailable"}
-    # An account with no ledger must say it projected nothing, not imply a pace.
-    assert any("Aucun versement" in warning for warning in stock["basis"]["warnings"])
+    # An empty account has nothing to measure, and says so rather than
+    # reporting a rate it cannot support.
+    assert stock["basis"]["return"] == "unavailable"
+    assert stock["basis"]["contribution"] == "unavailable"
+    assert stock["annual_return_rate"] == 0.0
 
 
 def test_a_projection_that_ends_below_its_contributions_says_so(client, session, account, monkeypatch):

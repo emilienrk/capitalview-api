@@ -71,6 +71,9 @@ past, so both figures it assumes are measured rather than guessed
 | Monthly contribution | Net external flows from the ledger, averaged over the months they span | `monthly_stock`, `monthly_crypto`, `monthly_bank` |
 | Annual return | Annualised time-weighted return (TWR) | `annual_return_stock`, `annual_return_crypto`, `annual_return_bank` |
 
+These defaults live in `generate_wealth_projection` itself, so the dashboard,
+`POST /projection/calculate` and the MCP tool all project from the same numbers.
+
 TWR rather than value-over-cost: the latter treats a euro deposited last week as
 though it had compounded since day one, which understates any portfolio fed by
 regular contributions — on a four-year ledger of 300/month it reports 4.0% where

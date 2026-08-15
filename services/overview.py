@@ -458,43 +458,26 @@ def build_projection(
 
     basis = derive_projection_defaults(session, user_uuid, master_key)
 
-    measured_categories = {
-        AccountCategory.STOCK: (monthly_stock, annual_return_stock, basis["STOCK"]),
-        AccountCategory.CRYPTO: (monthly_crypto, annual_return_crypto, basis["CRYPTO"]),
+    # Only what the caller asked for: every unset figure falls through to the
+    # measured default the projection service now applies on its own, so the web
+    # app and an agent client project from the same numbers.
+    overrides = {
+        AccountCategory.STOCK: (monthly_stock, annual_return_stock),
+        AccountCategory.CRYPTO: (monthly_crypto, annual_return_crypto),
+        AccountCategory.BANK: (monthly_bank, annual_return_bank),
     }
-
-    assets = {}
-    for category, (contribution, rate, measured) in measured_categories.items():
-        # Always explicit, even when the measurement came back empty: falling
-        # through to the service's own default would reinstate the cost-basis
-        # formula this function exists to replace.
-        if contribution is None:
-            if measured.monthly_contribution is not None:
-                contribution = float(measured.monthly_contribution)
-            else:
-                contribution = 0.0
-                measured.warnings.append(
-                    "Aucun versement identifié dans le journal : projeté sans apport."
-                )
-        if rate is None:
-            rate = float(measured.annual_return_rate or 0.0)
-
-        assets[category] = ProjectionAssetParameters(
-            monthly_injection=contribution, return_rate=rate
-        )
-
-    # BANK keeps the service's conservative default unless the caller says
-    # otherwise — there is nothing here it would be honest to measure.
-    if monthly_bank is not None or annual_return_bank is not None:
-        assets[AccountCategory.BANK] = ProjectionAssetParameters(
-            monthly_injection=monthly_bank, return_rate=annual_return_bank
-        )
+    assets = {
+        category: ProjectionAssetParameters(monthly_injection=contribution, return_rate=rate)
+        for category, (contribution, rate) in overrides.items()
+        if contribution is not None or rate is not None
+    }
 
     projection = generate_wealth_projection(
         session,
         user,
         master_key,
         ProjectionParameters(months_to_project=months, assets=assets),
+        basis=basis,
     )
     return projection, basis
 

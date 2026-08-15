@@ -98,21 +98,6 @@ def _get_history_stats(
     return current_value, total_invested, days_elapsed
 
 
-def _compute_defaults(value: Decimal, invested: Decimal, days: int) -> tuple[Decimal, float]:
-    default_injection = ZERO_DECIMAL
-    default_rate = 0.0
-
-    if days > 0:
-        months_elapsed = Decimal(str(max(days / 30.41, 1.0)))
-        default_injection = invested / months_elapsed
-
-        if invested > ZERO_DECIMAL and value > ZERO_DECIMAL:
-            years_elapsed = max(days / 365.25, 0.1)
-            rate = (float(value / invested)) ** (1.0 / years_elapsed) - 1.0
-            default_rate = max(min(rate, 2.0), -0.99)
-
-    return default_injection, float(default_rate)
-
 
 def _to_monthly_rate(annual_rate: float) -> float:
     if annual_rate <= -1.0:
@@ -143,12 +128,26 @@ def generate_wealth_projection(
     session: Session,
     user: User,
     master_key: str,
-    params: ProjectionParameters
+    params: ProjectionParameters,
+    basis: dict | None = None,
 ) -> ProjectionResponse:
     """
     Generate wealth projection based on historical data or given parameters.
     Returns empty data if the long-term PnL is negative.
+
+    Anything *params* leaves unset is measured from the account's own history by
+    ``services/analytics/projection_basis``: contributions from the ledger's real
+    external flows, return from the annualised time-weighted return. A category
+    whose history is too thin to measure projects flat rather than compounding
+    an extrapolation.
+
+    Args:
+        basis: an already-derived measurement, for callers that need it in their
+            own response too — deriving it reads every transaction and snapshot,
+            so it is worth passing rather than paying for twice.
     """
+    from services.analytics.projection_basis import derive_projection_defaults
+
     user_bidx = hash_index(user.uuid, master_key)
 
     # 1. Current stats from existing investment accounts.
@@ -158,16 +157,30 @@ def generate_wealth_projection(
         AccountCategory.BANK: (ZERO_DECIMAL, ZERO_DECIMAL, 0),
     }
 
+    if basis is None:
+        basis = derive_projection_defaults(session, user.uuid, master_key)
+
     # 2. Resolve effective params by category.
     used_injections: dict[AccountCategory, Decimal] = {}
     used_rates: dict[AccountCategory, float] = {}
 
     for category in PROJECTED_CATEGORIES:
         if category == AccountCategory.BANK:
+            # Bank balances move with salary and spending, so there is nothing
+            # here it would be honest to measure. See the basis module.
             default_injection, default_rate = ZERO_DECIMAL, 0.02
         else:
-            value, invested, days = history_stats[category]
-            default_injection, default_rate = _compute_defaults(value, invested, days)
+            measured = basis.get(category.value)
+            default_injection = (
+                measured.monthly_contribution
+                if measured is not None and measured.monthly_contribution is not None
+                else ZERO_DECIMAL
+            )
+            default_rate = (
+                float(measured.annual_return_rate)
+                if measured is not None and measured.annual_return_rate is not None
+                else 0.0
+            )
 
         used_injection, used_rate = _resolve_asset_params(
             params=params,

@@ -96,21 +96,45 @@ def test_projection_negative_rate_returns_empty(session: Session, master_key: st
     assert resp.data == []
 
 
-def test_compute_defaults_bounds_cagr_and_average_injection():
-    """CAGR must be clamped to [-0.99, 2] and the default injection must be
-    the average of invested capital over the elapsed months."""
-    from services.projection import _compute_defaults
+def test_defaults_come_from_the_measured_basis(session: Session, master_key: str):
+    """The service no longer invents its own rate from value over cost.
 
-    # Explosive growth over a short period → CAGR clamped to the 2.0 ceiling.
-    injection, rate = _compute_defaults(value=Decimal("100000"), invested=Decimal("1000"), days=30)
-    assert rate == 2.0
-    assert injection == Decimal("1000")  # invested / max(30/30.41, 1.0) == invested / 1.0
+    An account with nothing to measure projects flat: no contribution, no
+    return. The previous shortcut would have extrapolated whatever ratio the
+    cost basis happened to produce, which is what made the web app and an agent
+    disagree about the same portfolio.
+    """
+    params = ProjectionParameters(months_to_project=12)
 
-    # Near-total loss over a year → CAGR clamped to the -0.99 floor.
-    _, rate_loss = _compute_defaults(value=Decimal("1"), invested=Decimal("100000"), days=365)
-    assert rate_loss == -0.99
+    response = generate_wealth_projection(session, _make_user(), master_key, params)
 
-    # No history at all → no default injection, no default rate.
-    injection_zero, rate_zero = _compute_defaults(value=Decimal("0"), invested=Decimal("0"), days=0)
-    assert injection_zero == Decimal("0")
-    assert rate_zero == 0.0
+    used = response.parameters_used.assets
+    assert used[AccountCategory.STOCK].monthly_injection == 0
+    assert used[AccountCategory.STOCK].return_rate == 0.0
+    assert used[AccountCategory.CRYPTO].return_rate == 0.0
+    # The bank keeps its own conservative default, untouched by the change.
+    assert used[AccountCategory.BANK].return_rate == 0.02
+
+
+def test_a_supplied_basis_is_used_instead_of_being_measured_again(
+    session: Session, master_key: str
+):
+    """Deriving reads every transaction and snapshot; callers may pass theirs."""
+    from services.analytics.projection_basis import CategoryBasis
+
+    supplied = CategoryBasis(
+        monthly_contribution=Decimal("250"), annual_return_rate=Decimal("0.07")
+    )
+    params = ProjectionParameters(months_to_project=12)
+
+    response = generate_wealth_projection(
+        session,
+        _make_user(),
+        master_key,
+        params,
+        basis={"STOCK": supplied, "CRYPTO": CategoryBasis(), "BANK": CategoryBasis()},
+    )
+
+    used = response.parameters_used.assets[AccountCategory.STOCK]
+    assert used.monthly_injection == 250
+    assert used.return_rate == 0.07

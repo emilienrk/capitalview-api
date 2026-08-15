@@ -154,6 +154,13 @@ def _category_basis(
         basis.contribution_source = "net_external_flows"
         basis.contribution_months = months
         basis.contribution_total = total
+    elif transactions:
+        # Holdings but no deposit anywhere: an imported ledger of buys, most
+        # likely. Projecting no contribution is what the data supports, and
+        # saying so is what stops it reading as "you save nothing".
+        basis.warnings.append(
+            "Aucun versement identifié dans le journal : projeté sans apport."
+        )
 
     series = sorted(series, key=lambda point: point[0])
     if len(series) >= 2:
