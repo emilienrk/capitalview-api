@@ -177,6 +177,53 @@ def test_a_malformed_date_bound_is_refused_rather_than_guessed():
         _as_date("01/03/2026")
 
 
+def test_an_unknown_account_type_is_refused_rather_than_answered_empty():
+    """"bank" is the obvious guess, and an empty ledger would read as an answer."""
+    from mcp_server.tools import _as_account_type
+
+    assert _as_account_type("all") == "all"
+    with pytest.raises(ValueError, match="'stock', 'crypto' ou 'all'"):
+        _as_account_type("bank")
+
+
+def test_an_unknown_flow_type_is_refused_rather_than_ignored():
+    from mcp_server.tools import _as_flow_type
+
+    assert _as_flow_type(None) is None
+    assert _as_flow_type("inflow") == "inflow"
+    with pytest.raises(ValueError, match="'inflow' ou 'outflow'"):
+        _as_flow_type("revenus")
+
+
+def test_asking_for_bank_movements_says_so_instead_of_reporting_none(client, session, account):
+    """The refusal has to reach the caller as an error, not as an empty ledger."""
+    _, _, token = account
+
+    response = _call(
+        client, "tools/call",
+        {"name": "list_recent_transactions", "arguments": {"account_type": "bank"}},
+        token=token, name="list_recent_transactions",
+    )
+
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert "account_type" in result["content"][0]["text"]
+
+
+def test_a_malformed_overview_date_is_refused_like_any_other_bound(client, session, account):
+    _, _, token = account
+
+    response = _call(
+        client, "tools/call",
+        {"name": "get_portfolio_overview", "arguments": {"date": "hier"}},
+        token=token, name="get_portfolio_overview",
+    )
+
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert "YYYY-MM-DD" in result["content"][0]["text"]
+
+
 def test_the_bare_path_is_served_without_a_redirect(client, session, account):
     """Clients are configured with the bare URL and must be served on first hop.
 

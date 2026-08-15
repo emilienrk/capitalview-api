@@ -82,6 +82,35 @@ def _as_date(value: str | None) -> datetime.date | None:
         raise ValueError(f"Date attendue au format YYYY-MM-DD, reçu {value!r}.") from exc
 
 
+ACCOUNT_TYPES = ("stock", "crypto", "all")
+FLOW_TYPES = ("inflow", "outflow")
+
+
+def _as_account_type(value: str) -> str:
+    """Refuse an account type the read models do not know.
+
+    They answer an unknown type with an empty result rather than an error, which
+    a caller reading the code can see but a model cannot: ask for "bank" — the
+    obvious guess, since the overview reports a cash total — and you get
+    ``{"count": 0}``, which reads as "you never traded anything". A wrong answer
+    about someone's money is worse than a refused one, so name the alternatives
+    and let the model retry.
+    """
+    if value not in ACCOUNT_TYPES:
+        raise ValueError(
+            f"account_type doit valoir 'stock', 'crypto' ou 'all', reçu {value!r}. "
+            "Les mouvements bancaires ne sont pas exposés ici."
+        )
+    return value
+
+
+def _as_flow_type(value: str | None) -> str | None:
+    """Same refusal for the cashflow direction, which silently ignores typos."""
+    if value is not None and value.lower() not in FLOW_TYPES:
+        raise ValueError(f"flow_type doit valoir 'inflow' ou 'outflow', reçu {value!r}.")
+    return value
+
+
 def _within_days(history: list[dict], days: int) -> list[dict]:
     """Keep the entries falling inside the last *days*, counted from the data.
 
@@ -161,6 +190,9 @@ def register_tools(mcp) -> None:
     )
     def get_portfolio_overview(details: bool = False, date: str | None = None) -> dict:
         principal = require_scope(READ_SCOPE)
+        # Validated here rather than left to the read model, which would parse it
+        # deep inside and raise a Python format error at the model.
+        day = _as_date(date)
         with open_session() as session:
             return _jsonable(
                 get_user_balance(
@@ -168,7 +200,7 @@ def register_tools(mcp) -> None:
                     principal.user_uuid,
                     principal.master_key,
                     details=details,
-                    date=date,
+                    date=day.isoformat() if day else None,
                 )
             )
 
@@ -183,6 +215,7 @@ def register_tools(mcp) -> None:
     )
     def get_performance(days: int = 30, account_type: str = "all") -> dict:
         principal = require_scope(READ_SCOPE)
+        kind = _as_account_type(account_type)
         with open_session() as session:
             return _jsonable(
                 get_historical_performance(
@@ -190,7 +223,7 @@ def register_tools(mcp) -> None:
                     principal.user_uuid,
                     principal.master_key,
                     days=days,
-                    account_type=account_type,
+                    account_type=kind,
                 )
             )
 
@@ -204,6 +237,7 @@ def register_tools(mcp) -> None:
     )
     def get_cashflow_summary(details: bool = False, flow_type: str | None = None) -> dict:
         principal = require_scope(READ_SCOPE)
+        direction = _as_flow_type(flow_type)
         with open_session() as session:
             return _jsonable(
                 get_user_cashflow(
@@ -211,7 +245,7 @@ def register_tools(mcp) -> None:
                     principal.user_uuid,
                     principal.master_key,
                     details=details,
-                    flow_type=flow_type,
+                    flow_type=direction,
                 )
             )
 
@@ -261,12 +295,13 @@ def register_tools(mcp) -> None:
         limit: int = 50,
     ) -> dict:
         principal = require_scope(READ_SCOPE)
+        kind = _as_account_type(account_type)
         with open_session() as session:
             movements = list_transactions(
                 session,
                 principal.user_uuid,
                 principal.master_key,
-                account_type=account_type,
+                account_type=kind,
                 since=_as_date(since),
                 until=_as_date(until),
                 limit=min(max(limit, 1), MAX_TRANSACTIONS),
