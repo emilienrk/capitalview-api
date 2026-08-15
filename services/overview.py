@@ -422,50 +422,81 @@ def build_projection(
     monthly_stock: float | None = None,
     monthly_crypto: float | None = None,
     monthly_bank: float | None = None,
+    annual_return_stock: float | None = None,
+    annual_return_crypto: float | None = None,
+    annual_return_bank: float | None = None,
 ):
     """
-    Project the wealth forward, optionally overriding the monthly contributions.
+    Project the wealth forward from measured assumptions the caller can override.
 
-    Each ``monthly_*`` left at None keeps the rate the projection service derives
-    from the account's own history — which is the cost basis spread over every
-    month since the first transaction, not a recent average. Someone who bought
-    once, years ago, is therefore assumed to still be contributing at that pace;
-    passing an explicit figure is how a caller says otherwise.
+    Every parameter left at None is filled from
+    ``services/analytics/projection_basis``: the monthly contribution from the
+    account's real external flows, the return from its annualised time-weighted
+    return. Those are the figures a performance report would quote, rather than
+    the cost-basis shortcut ``services/projection`` falls back on — see that
+    module's docstring for why the shortcut is wrong rather than merely rough.
 
-    ``AccountCategory.BANK`` has no history to derive from and defaults to no
-    contribution at all, so it is the one most worth overriding.
+    A derived figure that would not stand up is not substituted: under a year of
+    history yields no rate at all, and the projection then runs flat for that
+    category rather than compounding an extrapolation. BANK stays on the
+    service's own conservative default by design.
 
     Returns:
-        The service's own ``ProjectionResponse`` — it already reports the
-        parameters it used, which is what lets a caller state its assumptions
-        rather than present the curve as fact.
+        ``(ProjectionResponse, basis)`` — the curve, and the measurement behind
+        each default, warnings included, so a caller can state what it assumed
+        instead of presenting the curve as a forecast.
     """
     from dtos.projection import ProjectionAssetParameters, ProjectionParameters
     from models.enums import AccountCategory
     from models.user import User
+    from services.analytics.projection_basis import derive_projection_defaults
     from services.projection import generate_wealth_projection
 
     user = session.get(User, user_uuid)
     if user is None:
         raise ValueError("Utilisateur introuvable.")
 
-    overrides = {
-        AccountCategory.STOCK: monthly_stock,
-        AccountCategory.CRYPTO: monthly_crypto,
-        AccountCategory.BANK: monthly_bank,
-    }
-    assets = {
-        category: ProjectionAssetParameters(monthly_injection=amount)
-        for category, amount in overrides.items()
-        if amount is not None
+    basis = derive_projection_defaults(session, user_uuid, master_key)
+
+    measured_categories = {
+        AccountCategory.STOCK: (monthly_stock, annual_return_stock, basis["STOCK"]),
+        AccountCategory.CRYPTO: (monthly_crypto, annual_return_crypto, basis["CRYPTO"]),
     }
 
-    return generate_wealth_projection(
+    assets = {}
+    for category, (contribution, rate, measured) in measured_categories.items():
+        # Always explicit, even when the measurement came back empty: falling
+        # through to the service's own default would reinstate the cost-basis
+        # formula this function exists to replace.
+        if contribution is None:
+            if measured.monthly_contribution is not None:
+                contribution = float(measured.monthly_contribution)
+            else:
+                contribution = 0.0
+                measured.warnings.append(
+                    "Aucun versement identifié dans le journal : projeté sans apport."
+                )
+        if rate is None:
+            rate = float(measured.annual_return_rate or 0.0)
+
+        assets[category] = ProjectionAssetParameters(
+            monthly_injection=contribution, return_rate=rate
+        )
+
+    # BANK keeps the service's conservative default unless the caller says
+    # otherwise — there is nothing here it would be honest to measure.
+    if monthly_bank is not None or annual_return_bank is not None:
+        assets[AccountCategory.BANK] = ProjectionAssetParameters(
+            monthly_injection=monthly_bank, return_rate=annual_return_bank
+        )
+
+    projection = generate_wealth_projection(
         session,
         user,
         master_key,
         ProjectionParameters(months_to_project=months, assets=assets),
     )
+    return projection, basis
 
 
 def get_performance_since_last_login(session: Session, user_uuid: str, master_key: bytes) -> dict:

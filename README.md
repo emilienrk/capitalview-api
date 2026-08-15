@@ -63,11 +63,32 @@ Tools live in `mcp_server/tools.py` and are read-only. They call the same
 the account holder can.
 
 `project_wealth` is the one tool that answers about the future rather than the
-past. Its monthly contributions default to the pace derived from the account's
-own history — the amount invested spread over every month since the first
-transaction, which assumes the user still contributes at that rate — so it
-reports the figures it used in `assumptions`, for the agent to state rather than
-hide.
+past, so both figures it assumes are measured rather than guessed
+(`services/analytics/projection_basis.py`):
+
+| Assumption | Default | Override |
+| --- | --- | --- |
+| Monthly contribution | Net external flows from the ledger, averaged over the months they span | `monthly_stock`, `monthly_crypto`, `monthly_bank` |
+| Annual return | Annualised time-weighted return (TWR) | `annual_return_stock`, `annual_return_crypto`, `annual_return_bank` |
+
+TWR rather than value-over-cost: the latter treats a euro deposited last week as
+though it had compounded since day one, which understates any portfolio fed by
+regular contributions — on a four-year ledger of 300/month it reports 4.0% where
+the real return is 7.6%. Money-weighted return (XIRR) is the right lens on how
+the investor did, and the wrong one to project with, since it bakes an entry
+sequence into every future month.
+
+A default that would not stand up is not substituted: under a year of history
+yields no rate, and deposits landing on days the series does not price
+disqualify it too — time-weighting cannot neutralise those, and reads them as
+performance. The category then projects flat rather than compounding an
+extrapolation. BANK is never derived at all: its balances move with salary and
+spending, not performance, and its obvious contribution proxy is the same money
+already counted as deposits elsewhere.
+
+Every figure comes back in `assumptions` with its provenance and any warning
+attached — a rate is `annualised_twr` over so many days, or it is `unavailable`
+and says why.
 
 ### How a token reaches encrypted data
 

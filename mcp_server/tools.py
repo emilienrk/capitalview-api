@@ -124,6 +124,31 @@ def _category_name(category: Any) -> str:
     return getattr(category, "value", str(category))
 
 
+def _assumption(used, measured) -> dict:
+    """Pair a figure the projection used with the measurement behind it.
+
+    Both halves matter to a reader: the rate alone invites "your portfolio makes
+    7.8% a year" stated as fact, while the provenance turns it into "measured
+    over four years of history, which the last two barely support".
+    """
+    assumption = {
+        "monthly_injection": used.monthly_injection,
+        "annual_return_rate": used.return_rate,
+    }
+    if measured is None:
+        return assumption
+
+    assumption["basis"] = {
+        "contribution": measured.contribution_source,
+        "contribution_months": measured.contribution_months,
+        "contribution_total": measured.contribution_total,
+        "return": measured.return_source,
+        "return_days": measured.return_days,
+        "warnings": measured.warnings,
+    }
+    return assumption
+
+
 def _as_months(months: int) -> int:
     """Clamp the projection horizon to something the service will accept."""
     return min(max(months, 1), MAX_PROJECTION_MONTHS)
@@ -356,13 +381,15 @@ def register_tools(mcp) -> None:
         description=(
             "Projette le patrimoine sur `months` mois. Pour répondre à « où j'en "
             "serai dans X années » et pour comparer des scénarios d'épargne. "
-            "`monthly_stock`, `monthly_crypto` et `monthly_bank` fixent l'apport "
-            "mensuel en euros de chaque poche ; laisser vide reprend le rythme "
-            "déduit de l'historique du compte — soit le montant investi étalé "
-            "depuis la première transaction, ce qui suppose que l'utilisateur "
-            "verse encore au même rythme. La réponse répète les hypothèses "
-            "retenues dans `assumptions` : les citer, ne jamais présenter la "
-            "courbe comme une prévision."
+            "Sans paramètre, chaque poche part de ce que l'historique mesure : "
+            "le versement mensuel moyen (flux réels entrants nets du journal) et "
+            "le rendement time-weighted annualisé. `monthly_stock`, "
+            "`monthly_crypto`, `monthly_bank` fixent l'apport mensuel en euros ; "
+            "`annual_return_stock`, `annual_return_crypto`, `annual_return_bank` "
+            "fixent le rendement annuel en décimal (0.05 = 5 %/an). "
+            "`assumptions` renvoie ce qui a été retenu, d'où ça vient et les "
+            "réserves associées : les citer, et ne jamais présenter la courbe "
+            "comme une prévision."
         ),
     )
     def project_wealth(
@@ -370,11 +397,14 @@ def register_tools(mcp) -> None:
         monthly_stock: float | None = None,
         monthly_crypto: float | None = None,
         monthly_bank: float | None = None,
+        annual_return_stock: float | None = None,
+        annual_return_crypto: float | None = None,
+        annual_return_bank: float | None = None,
     ) -> dict:
         principal = require_scope(READ_SCOPE)
         horizon = _as_months(months)
         with open_session() as session:
-            projection = build_projection(
+            projection, basis = build_projection(
                 session,
                 principal.user_uuid,
                 principal.master_key,
@@ -382,6 +412,9 @@ def register_tools(mcp) -> None:
                 monthly_stock=monthly_stock,
                 monthly_crypto=monthly_crypto,
                 monthly_bank=monthly_bank,
+                annual_return_stock=annual_return_stock,
+                annual_return_crypto=annual_return_crypto,
+                annual_return_bank=annual_return_bank,
             )
 
         # The service answers a losing trajectory with an empty curve. Left as
@@ -405,11 +438,15 @@ def register_tools(mcp) -> None:
                 ),
                 "assumptions": {
                     "months_to_project": assumptions.months_to_project,
+                    # The service adds the contribution after applying the
+                    # month's return, so a euro paid in earns nothing until the
+                    # month after — the conservative convention, worth stating
+                    # because the other one inflates a long horizon.
+                    "contribution_timing": "end_of_month",
                     "assets": {
-                        _category_name(category): {
-                            "monthly_injection": used.monthly_injection,
-                            "annual_return_rate": used.return_rate,
-                        }
+                        _category_name(category): _assumption(
+                            used, basis.get(_category_name(category))
+                        )
                         for category, used in assumptions.assets.items()
                     },
                 },

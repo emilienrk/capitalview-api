@@ -264,6 +264,48 @@ def test_a_projection_states_the_contribution_it_assumed(client, session, accoun
     assert body["assumptions"]["assets"]["BANK"]["monthly_injection"] == 500
 
 
+def test_an_explicit_rate_and_contribution_are_honoured_to_the_cent(client, session, account):
+    """The arithmetic is checkable, so check it rather than trusting the shape.
+
+    500 a month for 12 months at 0% is 6 000 — contributions land at the end of
+    each month and the last one earns nothing, which is the convention the tool
+    reports in `contribution_timing`.
+    """
+    _, _, token = account
+
+    response = _call(
+        client, "tools/call",
+        {
+            "name": "project_wealth",
+            "arguments": {"months": 12, "monthly_bank": 500, "annual_return_bank": 0},
+        },
+        token=token, name="project_wealth",
+    )
+
+    body = json.loads(response.json()["result"]["content"][0]["text"])
+
+    assert body["assumptions"]["contribution_timing"] == "end_of_month"
+    assert body["assumptions"]["assets"]["BANK"]["annual_return_rate"] == 0
+    assert body["points"][-1]["total_value"] == 6000
+
+
+def test_the_assumptions_carry_the_measurement_behind_them(client, session, account):
+    """A rate with no provenance invites being quoted as fact."""
+    _, _, token = account
+
+    response = _call(
+        client, "tools/call", {"name": "project_wealth", "arguments": {"months": 12}},
+        token=token, name="project_wealth",
+    )
+
+    stock = json.loads(response.json()["result"]["content"][0]["text"])["assumptions"]["assets"]["STOCK"]
+
+    assert stock["basis"]["return"] in {"annualised_twr", "unavailable"}
+    assert stock["basis"]["contribution"] in {"net_external_flows", "unavailable"}
+    # An account with no ledger must say it projected nothing, not imply a pace.
+    assert any("Aucun versement" in warning for warning in stock["basis"]["warnings"])
+
+
 def test_a_projection_that_ends_below_its_contributions_says_so(client, session, account, monkeypatch):
     """An empty curve reads as "unavailable" when it means "you end up down"."""
     from dtos.projection import (
@@ -285,7 +327,7 @@ def test_a_projection_that_ends_below_its_contributions_says_so(client, session,
         ),
         data=[],
     )
-    monkeypatch.setattr("mcp_server.tools.build_projection", lambda *a, **k: losing)
+    monkeypatch.setattr("mcp_server.tools.build_projection", lambda *a, **k: (losing, {}))
 
     response = _call(
         client, "tools/call", {"name": "project_wealth", "arguments": {}},
