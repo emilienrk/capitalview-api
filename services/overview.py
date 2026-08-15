@@ -414,6 +414,60 @@ def get_user_cashflow(session: Session, user_uuid: str, master_key: bytes, detai
     return output
 
 
+def build_projection(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    months: int,
+    monthly_stock: float | None = None,
+    monthly_crypto: float | None = None,
+    monthly_bank: float | None = None,
+):
+    """
+    Project the wealth forward, optionally overriding the monthly contributions.
+
+    Each ``monthly_*`` left at None keeps the rate the projection service derives
+    from the account's own history — which is the cost basis spread over every
+    month since the first transaction, not a recent average. Someone who bought
+    once, years ago, is therefore assumed to still be contributing at that pace;
+    passing an explicit figure is how a caller says otherwise.
+
+    ``AccountCategory.BANK`` has no history to derive from and defaults to no
+    contribution at all, so it is the one most worth overriding.
+
+    Returns:
+        The service's own ``ProjectionResponse`` — it already reports the
+        parameters it used, which is what lets a caller state its assumptions
+        rather than present the curve as fact.
+    """
+    from dtos.projection import ProjectionAssetParameters, ProjectionParameters
+    from models.enums import AccountCategory
+    from models.user import User
+    from services.projection import generate_wealth_projection
+
+    user = session.get(User, user_uuid)
+    if user is None:
+        raise ValueError("Utilisateur introuvable.")
+
+    overrides = {
+        AccountCategory.STOCK: monthly_stock,
+        AccountCategory.CRYPTO: monthly_crypto,
+        AccountCategory.BANK: monthly_bank,
+    }
+    assets = {
+        category: ProjectionAssetParameters(monthly_injection=amount)
+        for category, amount in overrides.items()
+        if amount is not None
+    }
+
+    return generate_wealth_projection(
+        session,
+        user,
+        master_key,
+        ProjectionParameters(months_to_project=months, assets=assets),
+    )
+
+
 def get_performance_since_last_login(session: Session, user_uuid: str, master_key: bytes) -> dict:
     from models.user import User
 

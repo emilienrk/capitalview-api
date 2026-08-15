@@ -5,16 +5,16 @@ context, opens its own short-lived database session, and hands the account's
 Master Key down to the service layer — the same key path the web app uses, so a
 tool can never see more than the user themselves can.
 
-The set is deliberately small. Six tools that answer the questions people
+The set is deliberately small. Seven tools that answer the questions people
 actually ask about their money beat twenty that mirror the REST surface: an
 agent picks better from a short menu, and each extra tool costs context on every
 single request.
 
-Two of them return sequences, and both are capped rather than trusted to be
-small: a daily curve over several years, or a full ledger, would spend the
-conversation's budget on one call. The caps live here, in the layer that knows
-about context windows, not in the read models — the web app charts the same
-curve at full resolution and must keep every point.
+Three of them return sequences, and all are capped rather than trusted to be
+small: a daily curve over several years, a full ledger, or a fifty-year
+projection would spend the conversation's budget on one call. The caps live
+here, in the layer that knows about context windows, not in the read models —
+the web app charts the same curves at full resolution and must keep every point.
 
 **Where a tool is allowed to read from.** Only neutral service modules — never
 another consumer's module. A tool may call ``services/overview`` (cross-domain
@@ -42,6 +42,7 @@ from mcp_server.db import open_session
 from services.analytics.report import build_investor_analytics
 from services.api_token import READ_SCOPE
 from services.overview import (
+    build_projection,
     build_wealth_history,
     get_historical_performance,
     get_user_balance,
@@ -109,6 +110,47 @@ def _as_flow_type(value: str | None) -> str | None:
     if value is not None and value.lower() not in FLOW_TYPES:
         raise ValueError(f"flow_type doit valoir 'inflow' ou 'outflow', reçu {value!r}.")
     return value
+
+
+MAX_PROJECTION_MONTHS = 600
+
+
+def _category_name(category: Any) -> str:
+    """Name a category as "BANK", not "AccountCategory.BANK".
+
+    ``str()`` on a str-Enum member yields the qualified form, which a model then
+    repeats back to the user verbatim.
+    """
+    return getattr(category, "value", str(category))
+
+
+def _as_months(months: int) -> int:
+    """Clamp the projection horizon to something the service will accept."""
+    return min(max(months, 1), MAX_PROJECTION_MONTHS)
+
+
+def _projection_step(months: int) -> int:
+    """Yearly milestones once the horizon is long enough to make months noise."""
+    return 1 if months <= 36 else 12
+
+
+def _projection_points(data: list, step: int) -> list[dict]:
+    """Keep one point per step, always including the horizon itself.
+
+    The final point is what the question was about — "where do I land" — so it
+    survives whatever the step does to the rest of the curve.
+    """
+    kept = [point for index, point in enumerate(data, start=1) if index % step == 0]
+    if data and (not kept or kept[-1] is not data[-1]):
+        kept.append(data[-1])
+    return [
+        {
+            "date": point.date,
+            "total_value": point.total_value,
+            "asset_values": {_category_name(key): value for key, value in point.asset_values.items()},
+        }
+        for point in kept[-MAX_HISTORY_POINTS:]
+    ]
 
 
 def _within_days(history: list[dict], days: int) -> list[dict]:
@@ -308,6 +350,72 @@ def register_tools(mcp) -> None:
             )
 
         return _jsonable({"count": len(movements), "transactions": movements})
+
+    @mcp.tool(
+        title="Projection du patrimoine",
+        description=(
+            "Projette le patrimoine sur `months` mois. Pour répondre à « où j'en "
+            "serai dans X années » et pour comparer des scénarios d'épargne. "
+            "`monthly_stock`, `monthly_crypto` et `monthly_bank` fixent l'apport "
+            "mensuel en euros de chaque poche ; laisser vide reprend le rythme "
+            "déduit de l'historique du compte — soit le montant investi étalé "
+            "depuis la première transaction, ce qui suppose que l'utilisateur "
+            "verse encore au même rythme. La réponse répète les hypothèses "
+            "retenues dans `assumptions` : les citer, ne jamais présenter la "
+            "courbe comme une prévision."
+        ),
+    )
+    def project_wealth(
+        months: int = 120,
+        monthly_stock: float | None = None,
+        monthly_crypto: float | None = None,
+        monthly_bank: float | None = None,
+    ) -> dict:
+        principal = require_scope(READ_SCOPE)
+        horizon = _as_months(months)
+        with open_session() as session:
+            projection = build_projection(
+                session,
+                principal.user_uuid,
+                principal.master_key,
+                months=horizon,
+                monthly_stock=monthly_stock,
+                monthly_crypto=monthly_crypto,
+                monthly_bank=monthly_bank,
+            )
+
+        # The service answers a losing trajectory with an empty curve. Left as
+        # is, that reads as "no projection available" when it actually means
+        # "this ends up below what you put in" — the one outcome the user most
+        # needs told.
+        step = _projection_step(horizon)
+        points = _projection_points(projection.data, step)
+        assumptions = projection.parameters_used
+
+        return _jsonable(
+            {
+                "months": horizon,
+                "step_months": step,
+                "ends_below_contributions": not projection.data,
+                "note": (
+                    "À ces hypothèses, le patrimoine projeté finit sous la somme "
+                    "des versements : la courbe n'est pas rendue."
+                    if not projection.data
+                    else None
+                ),
+                "assumptions": {
+                    "months_to_project": assumptions.months_to_project,
+                    "assets": {
+                        _category_name(category): {
+                            "monthly_injection": used.monthly_injection,
+                            "annual_return_rate": used.return_rate,
+                        }
+                        for category, used in assumptions.assets.items()
+                    },
+                },
+                "points": points,
+            }
+        )
 
     @mcp.tool(
         title="Analyse du comportement d'investisseur",

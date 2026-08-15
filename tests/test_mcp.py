@@ -224,6 +224,80 @@ def test_a_malformed_overview_date_is_refused_like_any_other_bound(client, sessi
     assert "YYYY-MM-DD" in result["content"][0]["text"]
 
 
+def test_a_long_projection_is_reported_in_yearly_milestones():
+    """Ten years of monthly points is noise; the horizon itself is the answer."""
+    from mcp_server.tools import _as_months, _projection_points, _projection_step
+
+    assert _projection_step(24) == 1
+    assert _projection_step(120) == 12
+    assert _as_months(0) == 1
+    assert _as_months(10_000) == 600
+
+    class _Point:
+        def __init__(self, index):
+            self.date = datetime.date(2026, 1, 1) + datetime.timedelta(days=30 * index)
+            self.total_value = float(index)
+            self.asset_values = {}
+
+    curve = [_Point(index) for index in range(1, 122)]  # 121 months, not a round year
+    kept = _projection_points(curve, 12)
+
+    assert len(kept) == 11  # ten yearly marks, plus the horizon
+    assert kept[-1]["total_value"] == 121.0
+
+
+def test_a_projection_states_the_contribution_it_assumed(client, session, account):
+    """The curve is worthless to a reader who cannot see what it assumed."""
+    _, _, token = account
+
+    response = _call(
+        client, "tools/call",
+        {"name": "project_wealth", "arguments": {"months": 24, "monthly_bank": 500}},
+        token=token, name="project_wealth",
+    )
+
+    result = response.json()["result"]
+    assert result["isError"] is False
+
+    body = json.loads(result["content"][0]["text"])
+    assert body["months"] == 24
+    assert body["assumptions"]["assets"]["BANK"]["monthly_injection"] == 500
+
+
+def test_a_projection_that_ends_below_its_contributions_says_so(client, session, account, monkeypatch):
+    """An empty curve reads as "unavailable" when it means "you end up down"."""
+    from dtos.projection import (
+        ProjectionAssetParametersUsed,
+        ProjectionParametersUsed,
+        ProjectionResponse,
+    )
+    from models.enums import AccountCategory
+
+    _, _, token = account
+    losing = ProjectionResponse(
+        parameters_used=ProjectionParametersUsed(
+            months_to_project=120,
+            assets={
+                AccountCategory.STOCK: ProjectionAssetParametersUsed(
+                    monthly_injection=100.0, return_rate=-0.4
+                )
+            },
+        ),
+        data=[],
+    )
+    monkeypatch.setattr("mcp_server.tools.build_projection", lambda *a, **k: losing)
+
+    response = _call(
+        client, "tools/call", {"name": "project_wealth", "arguments": {}},
+        token=token, name="project_wealth",
+    )
+
+    body = json.loads(response.json()["result"]["content"][0]["text"])
+    assert body["ends_below_contributions"] is True
+    assert "sous la somme des versements" in body["note"]
+    assert body["points"] == []
+
+
 def test_the_bare_path_is_served_without_a_redirect(client, session, account):
     """Clients are configured with the bare URL and must be served on first hop.
 
@@ -286,6 +360,7 @@ def test_tools_are_advertised_to_an_authenticated_client(client, session, accoun
         "get_cashflow_summary",
         "get_wealth_history",
         "list_recent_transactions",
+        "project_wealth",
         "get_investor_analytics",
     }
 

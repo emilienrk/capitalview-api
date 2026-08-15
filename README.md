@@ -62,6 +62,13 @@ Tools live in `mcp_server/tools.py` and are read-only. They call the same
 `services/` functions the REST routes do, so an agent can never see more than
 the account holder can.
 
+`project_wealth` is the one tool that answers about the future rather than the
+past. Its monthly contributions default to the pace derived from the account's
+own history — the amount invested spread over every month since the first
+transaction, which assumes the user still contributes at that rate — so it
+reports the figures it used in `assumptions`, for the agent to state rather than
+hide.
+
 ### How a token reaches encrypted data
 
 Every user record is encrypted under a Master Key that the server never stores
