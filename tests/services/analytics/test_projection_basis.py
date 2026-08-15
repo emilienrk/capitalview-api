@@ -105,14 +105,14 @@ def test_too_little_history_yields_no_rate_at_all():
 
     assert basis.annual_return_rate is None
     assert basis.return_source == "unavailable"
-    assert any("trop court" in warning for warning in basis.warnings)
+    assert [w.code for w in basis.warnings] == ["insufficient_history"]
 
 
 def test_a_short_but_usable_window_is_labelled_weak():
     basis = _category_basis(_flat_series(400, "10000", "11000"), [])
 
     assert basis.annual_return_rate is not None
-    assert any("statistiquement faible" in warning for warning in basis.warnings)
+    assert "weak_annualisation" in [w.code for w in basis.warnings]
 
 
 def test_an_implausible_rate_is_flagged_and_not_rewritten():
@@ -120,7 +120,7 @@ def test_an_implausible_rate_is_flagged_and_not_rewritten():
     basis = _category_basis(_flat_series(730, "10000", "40000"), [])
 
     assert basis.annual_return_rate > EXTREME_ANNUAL_RATE
-    assert any("tenir sur la durée" in warning for warning in basis.warnings)
+    assert "extreme_rate" in [w.code for w in basis.warnings]
 
 
 def test_money_paid_in_is_not_reported_as_money_earned():
@@ -163,7 +163,7 @@ def test_deposits_on_unpriced_days_disqualify_the_rate():
     basis = _category_basis(sparse, deposits)
 
     assert basis.annual_return_rate is None
-    assert any("sans valorisation" in warning for warning in basis.warnings)
+    assert "unaligned_flows" in [w.code for w in basis.warnings]
     # The contribution is still measurable: it never needed the series.
     assert basis.monthly_contribution is not None
 
@@ -186,3 +186,16 @@ def test_an_empty_category_carries_no_assumptions():
     basis = _category_basis([], [])
 
     assert basis == CategoryBasis()
+
+
+def test_a_warning_carries_the_number_it_hinges_on():
+    """"Too short" says nothing without the days it was short by."""
+    from services.analytics.projection_basis import describe
+
+    basis = _category_basis(_flat_series(200, "10000", "11000"), [])
+    warning = basis.warnings[0]
+
+    assert warning.code == "insufficient_history"
+    assert warning.values == {"days": 200}
+    # Rendered for a model, which needs the sentence rather than the code.
+    assert "200 j" in describe(warning)

@@ -442,9 +442,9 @@ def build_projection(
     service's own conservative default by design.
 
     Returns:
-        ``(ProjectionResponse, basis)`` — the curve, and the measurement behind
-        each default, warnings included, so a caller can state what it assumed
-        instead of presenting the curve as a forecast.
+        The service's ``ProjectionResponse`` — it now carries the measurement
+        behind each default in ``parameters_used``, so a caller can state what it
+        assumed instead of presenting the curve as a forecast.
     """
     from dtos.projection import ProjectionAssetParameters, ProjectionParameters
     from models.enums import AccountCategory
@@ -472,14 +472,13 @@ def build_projection(
         if contribution is not None or rate is not None
     }
 
-    projection = generate_wealth_projection(
+    return generate_wealth_projection(
         session,
         user,
         master_key,
         ProjectionParameters(months_to_project=months, assets=assets),
         basis=basis,
     )
-    return projection, basis
 
 
 def get_performance_since_last_login(session: Session, user_uuid: str, master_key: bytes) -> dict:

@@ -391,7 +391,7 @@ def test_a_projection_that_ends_below_its_contributions_says_so(client, session,
         ),
         data=[],
     )
-    monkeypatch.setattr("mcp_server.tools.build_projection", lambda *a, **k: (losing, {}))
+    monkeypatch.setattr("mcp_server.tools.build_projection", lambda *a, **k: losing)
 
     response = _call(
         client, "tools/call", {"name": "project_wealth", "arguments": {}},

@@ -39,6 +39,7 @@ from pydantic_core import to_jsonable_python
 
 from mcp_server.context import require_scope
 from mcp_server.db import open_session
+from services.analytics.projection_basis import BasisWarning, describe
 from services.analytics.report import build_investor_analytics
 from services.api_token import READ_SCOPE
 from services.overview import (
@@ -124,27 +125,33 @@ def _category_name(category: Any) -> str:
     return getattr(category, "value", str(category))
 
 
-def _assumption(used, measured) -> dict:
+def _assumption(used) -> dict:
     """Pair a figure the projection used with the measurement behind it.
 
     Both halves matter to a reader: the rate alone invites "your portfolio makes
     7.8% a year" stated as fact, while the provenance turns it into "measured
     over four years of history, which the last two barely support".
+
+    The reservations are rendered here rather than passed as codes — a model
+    needs the sentence, and it is the web app that writes its own wording.
     """
     assumption = {
         "monthly_injection": used.monthly_injection,
         "annual_return_rate": used.return_rate,
     }
-    if measured is None:
+    if used.basis is None:
         return assumption
 
     assumption["basis"] = {
-        "contribution": measured.contribution_source,
-        "contribution_months": measured.contribution_months,
-        "contribution_total": measured.contribution_total,
-        "return": measured.return_source,
-        "return_days": measured.return_days,
-        "warnings": measured.warnings,
+        "contribution": used.basis.contribution,
+        "contribution_months": used.basis.contribution_months,
+        "contribution_total": used.basis.contribution_total,
+        "return": used.basis.return_,
+        "return_days": used.basis.return_days,
+        "warnings": [
+            describe(BasisWarning(code=warning.code, values=warning.values))
+            for warning in used.basis.warnings
+        ],
     }
     return assumption
 
@@ -466,7 +473,7 @@ def register_tools(mcp) -> None:
         principal = require_scope(READ_SCOPE)
         horizon = _as_months(months)
         with open_session() as session:
-            projection, basis = build_projection(
+            projection = build_projection(
                 session,
                 principal.user_uuid,
                 principal.master_key,
@@ -512,9 +519,7 @@ def register_tools(mcp) -> None:
                     # because the other one inflates a long horizon.
                     "contribution_timing": "end_of_month",
                     "assets": {
-                        _category_name(category): _assumption(
-                            used, basis.get(_category_name(category))
-                        )
+                        _category_name(category): _assumption(used)
                         for category, used in assumptions.assets.items()
                     },
                 },

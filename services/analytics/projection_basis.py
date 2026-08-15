@@ -72,6 +72,55 @@ EXTREME_ANNUAL_RATE = Decimal("0.30")
 MAX_UNALIGNED_FLOW_SHARE = Decimal("0.02")
 
 
+@dataclass(frozen=True)
+class BasisWarning:
+    """A reservation about a derived figure, as a code plus what it hinges on.
+
+    A code rather than a sentence: the web app writes its own wording, and a
+    translation or a rewrite must not depend on matching a string produced by
+    the server. The values travel alongside because every one of these
+    reservations is about a quantity — "too short" means nothing without the
+    number of days it was too short by.
+    """
+
+    code: str
+    values: dict = field(default_factory=dict)
+
+
+#: The reservations a derived figure can carry, in French, for a model to relay.
+WARNING_MESSAGES = {
+    "no_contribution_found": "Aucun versement identifié dans le journal : projeté sans apport.",
+    "insufficient_history": (
+        "Historique trop court ({days} j) pour annualiser un rendement : aucun taux n'est déduit."
+    ),
+    "unaligned_flows": (
+        "{share:.0%} des versements tombent sur des jours sans valorisation : ils seraient "
+        "comptés comme de la performance. Aucun taux n'est déduit."
+    ),
+    "weak_annualisation": "Taux annualisé sur {days} j seulement : statistiquement faible.",
+    "extreme_rate": (
+        "Rendement historique de {annual_rate:.1%} par an : peu susceptible de tenir sur la "
+        "durée projetée."
+    ),
+    "not_measured": (
+        "Aucun rendement ni versement déduit pour la banque : les soldes bougent avec les "
+        "revenus et les dépenses, pas avec une performance."
+    ),
+}
+
+
+def describe(warning: BasisWarning) -> str:
+    """Render a warning in French, for callers that need prose rather than a code."""
+    template = WARNING_MESSAGES.get(warning.code)
+    if template is None:
+        return warning.code
+    try:
+        return template.format(**warning.values)
+    except (KeyError, ValueError):
+        # A message missing its values is still worth showing; a crash is not.
+        return template
+
+
 @dataclass
 class CategoryBasis:
     """One category's derived assumptions, with how each was obtained."""
@@ -83,7 +132,7 @@ class CategoryBasis:
     contribution_months: int = 0
     contribution_total: Decimal = Decimal("0")
     return_days: int = 0
-    warnings: list[str] = field(default_factory=list)
+    warnings: list[BasisWarning] = field(default_factory=list)
 
 
 def average_monthly_contribution(flows: dict[datetime.date, Decimal]) -> tuple[Decimal | None, int, Decimal]:
@@ -158,9 +207,7 @@ def _category_basis(
         # Holdings but no deposit anywhere: an imported ledger of buys, most
         # likely. Projecting no contribution is what the data supports, and
         # saying so is what stops it reading as "you save nothing".
-        basis.warnings.append(
-            "Aucun versement identifié dans le journal : projeté sans apport."
-        )
+        basis.warnings.append(BasisWarning("no_contribution_found"))
 
     series = sorted(series, key=lambda point: point[0])
     if len(series) >= 2:
@@ -171,14 +218,11 @@ def _category_basis(
 
         if span_days < MIN_DAYS_FOR_A_RATE:
             basis.warnings.append(
-                f"Historique trop court ({span_days} j) pour annualiser un rendement : "
-                "aucun taux n'est déduit."
+                BasisWarning("insufficient_history", {"days": span_days})
             )
         elif unaligned_share > MAX_UNALIGNED_FLOW_SHARE:
             basis.warnings.append(
-                f"{unaligned_share:.0%} des versements tombent sur des jours sans "
-                "valorisation : ils seraient comptés comme de la performance. "
-                "Aucun taux n'est déduit."
+                BasisWarning("unaligned_flows", {"share": float(unaligned_share)})
             )
         else:
             twr = time_weighted_return(series, flows)
@@ -192,13 +236,11 @@ def _category_basis(
                 basis.return_source = "annualised_twr"
                 if span_days < WEAK_RATE_DAYS:
                     basis.warnings.append(
-                        f"Taux annualisé sur {span_days} j seulement : "
-                        "statistiquement faible."
+                        BasisWarning("weak_annualisation", {"days": span_days})
                     )
                 if abs(annual) > EXTREME_ANNUAL_RATE:
                     basis.warnings.append(
-                        f"Rendement historique de {annual:.1%} par an : "
-                        "peu susceptible de tenir sur la durée projetée."
+                        BasisWarning("extreme_rate", {"annual_rate": float(annual)})
                     )
 
     return basis
@@ -241,10 +283,7 @@ def derive_projection_defaults(
     ]
 
     bank = CategoryBasis()
-    bank.warnings.append(
-        "Aucun rendement ni versement déduit pour la banque : les soldes bougent "
-        "avec les revenus et les dépenses, pas avec une performance."
-    )
+    bank.warnings.append(BasisWarning("not_measured"))
 
     return {
         "STOCK": _category_basis(stock_series, stock_transactions),

@@ -10,7 +10,9 @@ from models.stock import StockAccount
 from models.crypto import CryptoAccount
 from models.enums import AccountCategory
 from dtos.projection import (
+    ProjectionAssetBasis,
     ProjectionAssetParametersUsed,
+    ProjectionBasisWarning,
     ProjectionDataPoint,
     ProjectionParameters,
     ProjectionParametersUsed,
@@ -122,6 +124,29 @@ def _resolve_asset_params(
             rate = float(asset_params.return_rate)
 
     return injection, rate
+
+
+def _as_basis(measured) -> ProjectionAssetBasis | None:
+    """Expose how a default was measured, warnings and all.
+
+    The service already holds this to pick its defaults; dropping it left every
+    caller with a rate and no way to say where it came from — which is how a
+    projection gets quoted as a forecast.
+    """
+    if measured is None:
+        return None
+
+    return ProjectionAssetBasis(
+        contribution=measured.contribution_source,
+        contribution_months=measured.contribution_months,
+        contribution_total=float(measured.contribution_total),
+        **{"return": measured.return_source},
+        return_days=measured.return_days,
+        warnings=[
+            ProjectionBasisWarning(code=warning.code, values=warning.values)
+            for warning in measured.warnings
+        ],
+    )
 
 
 def generate_wealth_projection(
@@ -251,6 +276,7 @@ def generate_wealth_projection(
             category: ProjectionAssetParametersUsed(
                 monthly_injection=_round_money(used_injections[category]),
                 return_rate=round(used_rates[category], 4),
+                basis=_as_basis(basis.get(category.value)),
             )
             for category in PROJECTED_CATEGORIES
         },
