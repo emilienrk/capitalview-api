@@ -73,7 +73,11 @@ persisted — a database dump can neither be replayed nor unwrapped.
 
 That makes a token exactly as sensitive as the account password. Tokens are
 named, listed with their last use, capped per account, optionally expiring, and
-revocable with immediate effect (nothing is cached between requests).
+revocable with immediate effect (nothing is cached between requests). Changing
+the password or recovering the account revokes all of them, like the browser
+sessions: the Master Key survives both, so a token would otherwise keep reading
+everything after the change meant to cut access off. Clients have to be handed a
+new token afterwards.
 
 The KEK uses HKDF rather than the Argon2id of the password path: a token is 32
 bytes straight from the CSPRNG, so there is nothing to brute force, and a

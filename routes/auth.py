@@ -70,6 +70,7 @@ from services.totp import (
     hash_backup_code,
     normalize_recovery_key,
 )
+from services.api_token import revoke_user_api_tokens
 from services.community import refresh_community_positions
 from services.account_history import run_lazy_catchup
 
@@ -616,6 +617,11 @@ async def change_password(
 
     # Invalidate every existing session, then hand back a fresh one
     revoke_user_refresh_tokens(session, current_user.uuid)
+    # API tokens too: the Master Key is re-wrapped, never regenerated, so a
+    # token minted before the change keeps reading everything. Someone changing
+    # their password because they fear a leak expects that to cut every standing
+    # access, not just the browser sessions.
+    revoke_user_api_tokens(session, current_user.uuid)
     refresh_token_str = create_refresh_token()
     create_refresh_token_db(session, current_user.uuid, refresh_token_str)
     _set_session_cookies(response, refresh_token_str, stored_mk)
@@ -722,6 +728,9 @@ async def recover_account(
     session.commit()
 
     revoke_user_refresh_tokens(session, user.uuid)
+    # A recovery means the account was presumed lost: every standing credential
+    # goes with it, API tokens included.
+    revoke_user_api_tokens(session, user.uuid)
     refresh_token_str = create_refresh_token()
     create_refresh_token_db(session, user.uuid, refresh_token_str)
     _set_session_cookies(response, refresh_token_str, master_key)

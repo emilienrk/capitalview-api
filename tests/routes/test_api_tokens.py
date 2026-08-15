@@ -172,6 +172,62 @@ def test_expiry_is_carried_through(session):
     assert response.json()["expires_at"] is not None
 
 
+def test_changing_the_password_cuts_every_agent_access(session):
+    """A password change is what someone does when they fear a leak.
+
+    It already drops the browser sessions; a token minted before it must go the
+    same way, or an agent client keeps reading the whole account — the Master Key
+    it carries is only re-wrapped by the change, never regenerated.
+    """
+    client = TestClient(app)
+    access_token, master_key = _register(client, "pwcut@example.com")
+
+    minted = client.post(
+        "/auth/tokens",
+        json={"password": PASSWORD, "name": "Claude Desktop"},
+        headers=_auth_headers(access_token, master_key),
+    )
+    secret = minted.json()["token"]
+    assert api_token_service.authenticate_api_token(session, secret) is not None
+
+    changed = client.put(
+        "/auth/me/password",
+        json={"current_password": PASSWORD, "new_password": "AfterLeak456!"},
+        headers=_auth_headers(access_token, master_key),
+    )
+    assert changed.status_code == 200
+
+    assert api_token_service.authenticate_api_token(session, secret) is None
+
+
+def test_recovering_the_account_cuts_every_agent_access(session):
+    """A recovery means the account was presumed lost — nothing standing survives."""
+    client = TestClient(app)
+    access_token, master_key = _register(client, "recocut@example.com")
+    headers = _auth_headers(access_token, master_key)
+
+    secret = client.post(
+        "/auth/tokens", json={"password": PASSWORD, "name": "Claude Code"}, headers=headers
+    ).json()["token"]
+
+    recovery_key = client.post(
+        "/auth/recovery-key", json={"password": PASSWORD}, headers=headers
+    ).json()["recovery_key"]
+
+    client.cookies.clear()
+    recovered = client.post(
+        "/auth/recover",
+        json={
+            "email": "recocut@example.com",
+            "recovery_key": recovery_key,
+            "new_password": "Recovered456!",
+        },
+    )
+    assert recovered.status_code == 200
+
+    assert api_token_service.authenticate_api_token(session, secret) is None
+
+
 def test_mcp_connection_details_are_exposed_to_the_ui(session):
     client = TestClient(app)
     access_token, master_key = _register(client, "mcpinfo@example.com")
