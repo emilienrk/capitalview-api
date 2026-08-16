@@ -105,6 +105,18 @@ class PasswordChangeRequest(BaseModel):
     _validate_password = field_validator('new_password')(validate_password_strength)
 
 
+class AccountDeleteRequest(BaseModel):
+    """Permanently delete the account. TOTP code required when 2FA is enabled.
+
+    ``confirm_username`` must match the account's own username: the deletion is
+    irreversible and there is no email round-trip to fall back on, so the user
+    has to name what they are destroying.
+    """
+    password: str
+    totp_code: str | None = None
+    confirm_username: str
+
+
 class RecoveryKeyGenerateRequest(BaseModel):
     """Generate (or regenerate) the account recovery key."""
     password: str

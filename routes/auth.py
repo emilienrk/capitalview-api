@@ -5,9 +5,11 @@ import time
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, Header, HTTPException, Request, Response, status
+from fastapi.encoders import jsonable_encoder
 from jwt import InvalidTokenError
 from sqlmodel import Session, delete, select
 
@@ -15,6 +17,7 @@ from config import get_settings
 from database import get_session
 from models.user import TotpBackupCode, User
 from dtos.auth import (
+    AccountDeleteRequest,
     Login2FARequest,
     LoginRequest,
     MessageResponse,
@@ -70,6 +73,7 @@ from services.totp import (
     hash_backup_code,
     normalize_recovery_key,
 )
+from services.account_data import export_account_data, purge_account
 from services.api_token import revoke_user_api_tokens
 from services.community import refresh_community_positions
 from services.account_history import run_lazy_catchup
@@ -632,6 +636,97 @@ async def change_password(
         token_type="bearer",
         expires_in=settings.access_token_expire_minutes * 60
     )
+
+
+@router.get("/me/export", response_model=None)
+async def export_my_data(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session)
+) -> dict:
+    """
+    Return every piece of the account's data, decrypted, as one JSON document.
+
+    Authentication secrets are excluded on purpose — see
+    :func:`services.account_data.export_account_data`.
+
+    Decimals are serialised as strings rather than floats: this is a record of
+    someone's net worth, and a JSON float would silently round it.
+    """
+    await _check_rate_limit(request, "account_export", max_calls=10, window_seconds=3600)
+
+    payload = export_account_data(session, current_user, master_key)
+    return jsonable_encoder(payload, custom_encoder={Decimal: str})
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_my_account(
+    request: Request,
+    payload: AccountDeleteRequest,
+    response: Response,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session)
+):
+    """
+    Permanently delete the account and every row attached to it.
+
+    Gated like the recovery key and the API tokens — password, plus a 2FA code
+    when the account has 2FA on — and additionally requires the username to be
+    typed back, because nothing here can be undone.
+
+    No JWT blacklist is needed afterwards: ``get_current_user`` looks the user
+    up on every request, so the moment the row is gone any access token still
+    inside its 15-minute window stops resolving.
+    """
+    await _check_rate_limit(request, "account_delete", max_calls=5, window_seconds=3600)
+    settings = get_settings()
+
+    if not verify_password(payload.password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Mot de passe incorrect"
+        )
+
+    if current_user.totp_enabled and not verify_second_factor(session, current_user, payload.totp_code):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Code de vérification 2FA invalide"
+        )
+
+    if payload.confirm_username != current_user.username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Le nom d'utilisateur saisi ne correspond pas à votre compte"
+        )
+
+    # Same consistency guard as change_password, for a worse failure mode: with
+    # a stale or foreign Master Key every blind index computed below is wrong,
+    # so the purge would delete nothing, drop the users row anyway, and strand
+    # the data beyond any recovery.
+    if current_user.mk_wrapped_password and current_user.mk_salt_password:
+        try:
+            stored_mk = unwrap_master_key(
+                current_user.mk_wrapped_password,
+                payload.password,
+                current_user.mk_salt_password,
+            )
+        except DecryptionError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Mot de passe incorrect"
+            )
+        if stored_mk != master_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Clé de chiffrement invalide. Veuillez vous reconnecter."
+            )
+
+    purge_account(session, current_user, master_key)
+
+    response.delete_cookie(key="refresh_token", path="/auth", secure=settings.environment == "production", samesite="lax")
+    response.delete_cookie(key="master_key", path="/", secure=settings.environment == "production", samesite="lax")
 
 
 @router.post("/recovery-key", response_model=RecoveryKeyResponse)
