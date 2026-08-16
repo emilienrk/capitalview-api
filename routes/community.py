@@ -19,6 +19,7 @@ from database import get_session
 from models import User
 from services.auth import get_current_user, get_master_key
 from dtos.community import (
+    ActivityItem,
     AvailablePositionsResponse,
     CommunityProfileListItem,
     CommunityProfileResponse,
@@ -31,6 +32,7 @@ from dtos.community import (
     PickUpdate,
 )
 from services.community import (
+    get_activity_feed,
     create_pick,
     delete_pick,
     follow_user,
@@ -197,3 +199,12 @@ def remove_pick(
         raise HTTPException(status_code=404, detail=str(e))
     except PermissionError:
         raise HTTPException(status_code=403, detail="Non autorisé.")
+
+
+@router.get("/activity", response_model=list[ActivityItem])
+def get_activity(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session),
+):
+    """Recent picks from the people the current user follows."""
+    return get_activity_feed(session, current_user.uuid)

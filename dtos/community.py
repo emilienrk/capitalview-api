@@ -1,14 +1,15 @@
 """Community view DTOs.
 
-All response schemas intentionally omit amounts, quantities, and PRU.
-Only symbols, asset types, and PnL percentages are exposed.
+All response schemas intentionally omit amounts and quantities. What a shared
+line exposes is its symbol, its PnL %, the entry price (PRU) and the first buy
+date — enough to judge a call, never enough to infer position size.
 
 Privacy model:
 - Private profiles appear only when searching for the exact username.
 - Investments are visible only to mutual followers.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from pydantic import BaseModel
 
 
@@ -27,7 +28,9 @@ class CommunityPositionResponse(BaseModel):
     asset_key: str
     name: str | None = None  # Human-readable name (e.g. "Apple Inc." instead of ISIN)
     asset_type: str  # "CRYPTO" | "STOCK"
-    pnl_percentage: str | None = None  # None if market price unavailable
+    pnl_percentage: float | None = None  # None if market price unavailable
+    pru: float | None = None  # Average entry price — never the quantity held
+    first_bought_at: date | None = None  # Date of the earliest buy on this line
 
 
 class CommunityProfileResponse(BaseModel):
@@ -45,6 +48,19 @@ class CommunityProfileResponse(BaseModel):
     followers_count: int = 0
     following_count: int = 0
     created_at: datetime | None = None  # Account creation date
+
+
+class ActivityItem(BaseModel):
+    """One event in the activity feed of the people a user follows."""
+    type: str  # "pick" | "target_reached"
+    username: str
+    display_name: str | None = None
+    asset_key: str
+    asset_type: str
+    comment: str | None = None
+    target_price: float | None = None
+    performance_pct: float | None = None
+    occurred_at: datetime
 
 
 class CommunityProfileListItem(BaseModel):
@@ -132,3 +148,9 @@ class PickResponse(BaseModel):
     target_price: float | None = None
     created_at: str
     updated_at: str
+    # How the call actually played out. All nullable: an asset with no market
+    # data must render as "unknown", never as a loss.
+    price_at_pick: float | None = None
+    current_price: float | None = None
+    performance_pct: float | None = None
+    target_reached: bool | None = None  # None = no target was set
