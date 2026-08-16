@@ -25,6 +25,7 @@ from .card import Card
 from .asset import Asset, AssetValuation
 from .community import CommunityProfile, CommunityPosition, CommunityFollow, CommunityPick
 from .account_history import AccountHistory
+from .notification import Notification, NotificationType
 
 __all__ = [
     # Enums
@@ -59,4 +60,6 @@ __all__ = [
     "CommunityFollow",
     "CommunityPick",
     "AccountHistory",
+    "Notification",
+    "NotificationType",
 ]

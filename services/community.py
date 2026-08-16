@@ -9,7 +9,9 @@ Responsibilities:
 5. Listing available (positive) positions for checkbox selection.
 """
 
+from datetime import date, datetime
 from decimal import Decimal
+from typing import NamedTuple
 
 import sqlalchemy as sa
 from sqlmodel import Session, select, func
@@ -19,6 +21,7 @@ from models.community import CommunityProfile, CommunityPosition, CommunityFollo
 from models.user import User
 from models.enums import AssetType
 from dtos.community import (
+    ActivityItem,
     AvailablePosition,
     AvailablePositionsResponse,
     CommunityPositionResponse,
@@ -102,6 +105,12 @@ def follow_user(session: Session, follower_id: str, target_username: str) -> Fol
     session.commit()
 
     mutual = is_following(session, target.uuid, follower_id)
+
+    follower = session.get(User, follower_id)
+    if follower:
+        from services.notification import notify_new_follower
+        notify_new_follower(session, target.uuid, follower.username, mutual)
+
     return FollowResponse(is_following=True, is_mutual=mutual)
 
 
@@ -152,7 +161,54 @@ def get_follow_state(session: Session, current_user_id: str, target_user_id: str
     }
 
 
-def _pick_to_response(pick: CommunityPick, username: str) -> PickResponse:
+def _asset_price(
+    session: Session, asset_key: str, asset_type: str, as_of: date | None = None
+) -> Decimal | None:
+    """Price for an asset, at *as_of* or today. Returns None when unknown.
+
+    A price of 0 is the market layer's sentinel for "no data", not a real
+    quote — treating it as one would report a -100% call.
+    """
+    if asset_type == AssetType.STOCK.value:
+        _, price = get_stock_info(session, asset_key, as_of=as_of)
+    else:
+        _, price = get_crypto_info(session, asset_key, as_of=as_of)
+    return price if price and price > 0 else None
+
+
+def _score_pick(session: Session, pick: CommunityPick) -> dict:
+    """Grade a pick against what the market actually did since it was made.
+
+    A pick without this is just a like: the point is that a public call can be
+    checked afterwards. Performance is measured from the pick's own date, so a
+    target is optional — most picks will not have one.
+    """
+    picked_on = pick.created_at.date()
+    price_at_pick = _asset_price(session, pick.asset_key, pick.asset_type, as_of=picked_on)
+    current_price = _asset_price(session, pick.asset_key, pick.asset_type)
+
+    performance_pct: float | None = None
+    if price_at_pick and current_price:
+        performance_pct = round(float((current_price - price_at_pick) / price_at_pick * 100), 2)
+
+    # None means "no target set", not "target missed" — the UI must not show a
+    # red cross to someone who never made a numeric call.
+    target_reached: bool | None = None
+    if pick.target_price and current_price:
+        target_reached = float(current_price) >= pick.target_price
+
+    return {
+        "price_at_pick": float(price_at_pick) if price_at_pick else None,
+        "current_price": float(current_price) if current_price else None,
+        "performance_pct": performance_pct,
+        "target_reached": target_reached,
+    }
+
+
+def _pick_to_response(
+    pick: CommunityPick, username: str, session: Session | None = None
+) -> PickResponse:
+    score = _score_pick(session, pick) if session is not None else {}
     return PickResponse(
         id=pick.id,  # type: ignore[arg-type]
         username=username,
@@ -162,6 +218,7 @@ def _pick_to_response(pick: CommunityPick, username: str) -> PickResponse:
         target_price=pick.target_price,
         created_at=pick.created_at.isoformat(),
         updated_at=pick.updated_at.isoformat(),
+        **score,
     )
 
 
@@ -201,7 +258,7 @@ def create_pick(session: Session, user_uuid: str, data: PickCreate) -> PickRespo
     session.add(pick)
     session.commit()
     session.refresh(pick)
-    return _pick_to_response(pick, user.username)
+    return _pick_to_response(pick, user.username, session)
 
 
 def update_pick(session: Session, user_uuid: str, pick_id: int, data: PickUpdate) -> PickResponse:
@@ -221,7 +278,7 @@ def update_pick(session: Session, user_uuid: str, pick_id: int, data: PickUpdate
     session.add(pick)
     session.commit()
     session.refresh(pick)
-    return _pick_to_response(pick, user.username)  # type: ignore[union-attr]
+    return _pick_to_response(pick, user.username, session)  # type: ignore[union-attr]
 
 
 def delete_pick(session: Session, user_uuid: str, pick_id: int) -> None:
@@ -248,7 +305,7 @@ def get_user_picks(session: Session, user_uuid: str) -> list[PickResponse]:
         .where(CommunityPick.user_id == user_uuid)
         .order_by(CommunityPick.created_at.desc())  # type: ignore[union-attr]
     ).all()
-    return [_pick_to_response(p, user.username) for p in picks]
+    return [_pick_to_response(p, user.username, session) for p in picks]
 
 
 def get_picks_for_profile(session: Session, target_user_uuid: str, target_username: str) -> list[PickResponse]:
@@ -258,7 +315,24 @@ def get_picks_for_profile(session: Session, target_user_uuid: str, target_userna
         .where(CommunityPick.user_id == target_user_uuid)
         .order_by(CommunityPick.created_at.desc())  # type: ignore[union-attr]
     ).all()
-    return [_pick_to_response(p, target_username) for p in picks]
+    return [_pick_to_response(p, target_username, session) for p in picks]
+
+
+class PositionStat(NamedTuple):
+    """What a shared position exposes beyond its asset key."""
+    pru: Decimal
+    first_bought_at: date | None
+
+
+def _first_buy_date(tx_executed_at: str | None, fallback: datetime | None) -> date | None:
+    """Parse a decrypted executed_at, falling back to the row's created_at."""
+    if tx_executed_at:
+        try:
+            parsed = datetime.fromisoformat(tx_executed_at.replace("Z", "+00:00"))
+            return parsed.date()
+        except ValueError:
+            pass
+    return fallback.date() if fallback else None
 
 
 def _compute_stock_pru_for_asset_keys(
@@ -266,12 +340,13 @@ def _compute_stock_pru_for_asset_keys(
     user_uuid: str,
     master_key: str,
     asset_keys: list[str],
-) -> dict[str, Decimal]:
-    """Compute PRU for a list of stock ISINs using the user's encrypted transactions.
+) -> dict[str, PositionStat]:
+    """Compute PRU and first buy date for a list of stock ISINs.
 
-    Returns {asset_key: pru} for ISINs with a positive position.
+    Returns {asset_key: PositionStat} for ISINs with a positive position.
     """
     from models import StockAccount, StockTransaction
+    from dtos.crypto import FIAT_ASSET_KEYS
     from services.encryption import decrypt_data, hash_index
 
     user_bidx = hash_index(user_uuid, master_key)
@@ -281,7 +356,9 @@ def _compute_stock_pru_for_asset_keys(
         select(StockAccount).where(StockAccount.user_uuid_bidx == user_bidx)
     ).all()
 
-    asset_key_set = {i.upper() for i in asset_keys}
+    # Dropping fiat here also cleans up profiles that shared it before it was
+    # filtered out: the row is simply not recreated on the next refresh.
+    asset_key_set = {i.upper() for i in asset_keys} - FIAT_ASSET_KEYS
     # Aggregate across all accounts: {asset_key: {amount, cost}}
     agg: dict[str, dict] = {}
 
@@ -302,12 +379,18 @@ def _compute_stock_pru_for_asset_keys(
             fees = Decimal(decrypt_data(tx.fees_enc, master_key))
 
             if asset_key not in agg:
-                agg[asset_key] = {"amount": Decimal("0"), "cost": Decimal("0")}
+                agg[asset_key] = {"amount": Decimal("0"), "cost": Decimal("0"), "first": None}
 
             pos = agg[asset_key]
             if tx_type in ("BUY", "DIVIDEND", "DEPOSIT"):
                 pos["amount"] += amount
                 pos["cost"] += (amount * price) + fees
+                if tx_type == "BUY":
+                    bought = _first_buy_date(
+                        decrypt_data(tx.executed_at_enc, master_key), tx.created_at
+                    )
+                    if bought and (pos["first"] is None or bought < pos["first"]):
+                        pos["first"] = bought
             elif tx_type == "SELL" and pos["amount"] > 0:
                 fraction = min(amount / pos["amount"], Decimal("1"))
                 pos["amount"] -= amount
@@ -315,10 +398,13 @@ def _compute_stock_pru_for_asset_keys(
                 pos["amount"] = max(pos["amount"], Decimal("0"))
                 pos["cost"] = max(pos["cost"], Decimal("0"))
 
-    result: dict[str, Decimal] = {}
+    result: dict[str, PositionStat] = {}
     for asset_key, data in agg.items():
         if data["amount"] > 0:
-            result[asset_key] = data["cost"] / data["amount"]
+            result[asset_key] = PositionStat(
+                pru=data["cost"] / data["amount"],
+                first_bought_at=data["first"],
+            )
     return result
 
 
@@ -327,10 +413,10 @@ def _compute_crypto_pru_for_asset_keys(
     user_uuid: str,
     master_key: str,
     asset_keys: list[str],
-) -> dict[str, Decimal]:
-    """Compute PRU for a list of crypto asset keys using the user's encrypted transactions.
+) -> dict[str, PositionStat]:
+    """Compute PRU and first buy date for a list of crypto asset keys.
 
-    Returns {asset_key: pru} for asset keys with a positive position.
+    Returns {asset_key: PositionStat} for asset keys with a positive position.
     Reuses the same accounting logic as the main crypto_transaction module.
     """
     from models import CryptoAccount, CryptoTransaction
@@ -368,6 +454,9 @@ def _compute_crypto_pru_for_asset_keys(
                 "price": price,
                 "group_uuid": tx.group_uuid,
                 "created_at": tx.created_at,
+                "executed_at": _first_buy_date(
+                    decrypt_data(tx.executed_at_enc, master_key), tx.created_at
+                ),
             })
 
     all_decrypted.sort(key=lambda t: t["created_at"])
@@ -404,12 +493,15 @@ def _compute_crypto_pru_for_asset_keys(
             continue
 
         if asset_key not in positions:
-            positions[asset_key] = {"amount": Decimal("0"), "cost_basis": Decimal("0")}
+            positions[asset_key] = {"amount": Decimal("0"), "cost_basis": Decimal("0"), "first": None}
         pos = positions[asset_key]
         tx_cost = tx["amount"] * tx["price"]
 
         match tx["type"]:
             case "BUY":
+                bought = tx["executed_at"]
+                if bought and (pos["first"] is None or bought < pos["first"]):
+                    pos["first"] = bought
                 group_cost = buy_group_cost.get(tx["id"], tx_cost)
                 prev = pos["amount"]
                 pos["amount"] += tx["amount"]
@@ -430,10 +522,13 @@ def _compute_crypto_pru_for_asset_keys(
             case "FEE":
                 pos["amount"] -= tx["amount"]
 
-    result: dict[str, Decimal] = {}
+    result: dict[str, PositionStat] = {}
     for asset_key, data in positions.items():
         if data["amount"] > 0 and data["cost_basis"] > 0:
-            result[asset_key] = data["cost_basis"] / data["amount"]
+            result[asset_key] = PositionStat(
+                pru=data["cost_basis"] / data["amount"],
+                first_bought_at=data["first"],
+            )
     return result
 
 
@@ -478,22 +573,24 @@ def update_community_settings(
 
     created_count = 0
 
-    for asset_key, pru in stock_pru.items():
+    for asset_key, stat in stock_pru.items():
         pos = CommunityPosition(
             profile_user_id=profile.user_id,
             asset_type=AssetType.STOCK.value,
             asset_key_enc=community_encrypt(asset_key),
-            pru_enc=community_encrypt(str(pru)),
+            pru_enc=community_encrypt(str(stat.pru)),
+            first_bought_at=stat.first_bought_at,
         )
         session.add(pos)
         created_count += 1
 
-    for asset_key, pru in crypto_pru.items():
+    for asset_key, stat in crypto_pru.items():
         pos = CommunityPosition(
             profile_user_id=profile.user_id,
             asset_type=AssetType.CRYPTO.value,
             asset_key_enc=community_encrypt(asset_key),
-            pru_enc=community_encrypt(str(pru)),
+            pru_enc=community_encrypt(str(stat.pru)),
+            first_bought_at=stat.first_bought_at,
         )
         session.add(pos)
         created_count += 1
@@ -556,20 +653,22 @@ def refresh_community_positions(
     stock_pru = _compute_stock_pru_for_asset_keys(session, user_uuid, master_key, stock_asset_keys)
     crypto_pru = _compute_crypto_pru_for_asset_keys(session, user_uuid, master_key, crypto_asset_keys)
 
-    for asset_key, pru in stock_pru.items():
+    for asset_key, stat in stock_pru.items():
         session.add(CommunityPosition(
             profile_user_id=profile.user_id,
             asset_type=AssetType.STOCK.value,
             asset_key_enc=community_encrypt(asset_key),
-            pru_enc=community_encrypt(str(pru)),
+            pru_enc=community_encrypt(str(stat.pru)),
+            first_bought_at=stat.first_bought_at,
         ))
 
-    for asset_key, pru in crypto_pru.items():
+    for asset_key, stat in crypto_pru.items():
         session.add(CommunityPosition(
             profile_user_id=profile.user_id,
             asset_type=AssetType.CRYPTO.value,
             asset_key_enc=community_encrypt(asset_key),
-            pru_enc=community_encrypt(str(pru)),
+            pru_enc=community_encrypt(str(stat.pru)),
+            first_bought_at=stat.first_bought_at,
         ))
 
     session.commit()
@@ -758,6 +857,8 @@ def get_public_profile(
                 name=asset_name,
                 asset_type=asset_type,
                 pnl_percentage=pnl_pct,
+                pru=float(pru),
+                first_bought_at=pos.first_bought_at,
             ))
 
         if total_weight > 0:
@@ -854,6 +955,11 @@ def get_available_positions(
             asset_key = decrypt_data(tx.asset_key_enc, master_key).upper()
             tx_type = decrypt_data(tx.type_enc, master_key)
             amount = Decimal(decrypt_data(tx.amount_enc, master_key))
+            # The cash leg is not a position. Shared as one it gets resolved
+            # against a same-named ticker, which invents both a name and a
+            # nonsense P/L that then skews the profile's global figure.
+            if asset_key in FIAT_ASSET_KEYS:
+                continue
             if asset_key not in stock_agg:
                 stock_agg[asset_key] = Decimal("0")
             if tx_type in ("BUY", "DIVIDEND", "DEPOSIT"):
@@ -914,3 +1020,49 @@ def get_available_positions(
     ]
 
     return AvailablePositionsResponse(stocks=stocks, crypto=crypto)
+
+
+def get_activity_feed(session: Session, current_user_uuid: str, limit: int = 30) -> list[ActivityItem]:
+    """Recent picks from the people *current_user_uuid* follows.
+
+    Only picks are surfaced: positions are deleted and recreated on every
+    refresh, so their created_at says when the profile was last recomputed,
+    not when the user actually bought anything.
+    """
+    followed_ids = [
+        row for row in session.exec(
+            select(CommunityFollow.following_id).where(
+                CommunityFollow.follower_id == current_user_uuid
+            )
+        ).all()
+    ]
+    if not followed_ids:
+        return []
+
+    rows = session.exec(
+        select(CommunityPick, User.username, CommunityProfile.display_name)
+        .join(User, User.uuid == CommunityPick.user_id)
+        .join(CommunityProfile, CommunityProfile.user_id == CommunityPick.user_id)
+        .where(
+            CommunityPick.user_id.in_(followed_ids),
+            CommunityProfile.is_active == True,  # noqa: E712
+        )
+        .order_by(CommunityPick.created_at.desc())
+        .limit(limit)
+    ).all()
+
+    feed: list[ActivityItem] = []
+    for pick, username, display_name in rows:
+        score = _score_pick(session, pick)
+        feed.append(ActivityItem(
+            type="target_reached" if score["target_reached"] else "pick",
+            username=username,
+            display_name=display_name,
+            asset_key=pick.asset_key,
+            asset_type=pick.asset_type,
+            comment=pick.comment,
+            target_price=pick.target_price,
+            performance_pct=score["performance_pct"],
+            occurred_at=pick.created_at,
+        ))
+    return feed

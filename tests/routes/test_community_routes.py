@@ -588,6 +588,38 @@ class TestProfileDetail:
         assert picks[0]["asset_key"] == "BTC"
         assert picks[0]["username"] == "bob"
 
+    def test_a_position_with_a_market_price_serialises(self, session, bob):
+        """A visible position whose PnL can actually be computed must not 500.
+
+        Every other profile test leaves pnl_percentage at None, which validates
+        against any annotation — so a wrong type on that field only shows up
+        once a real market price makes it a number.
+        """
+        from unittest.mock import patch
+        from decimal import Decimal
+        from services.encryption import community_encrypt
+
+        _activate_profile(session, "user_2", is_private=False)
+        session.add(CommunityPosition(
+            profile_user_id="user_2",
+            asset_type="STOCK",
+            asset_key_enc=community_encrypt("US0378331005"),
+            pru_enc=community_encrypt("150.0"),
+        ))
+        session.flush()
+
+        client = TestClient(app)
+        with patch(
+            "services.community.get_stock_info",
+            return_value=("Apple Inc.", Decimal("300")),
+        ):
+            r = client.get("/community/profiles/bob")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["positions"][0]["pnl_percentage"] == 100.0
+        assert data["global_pnl_percentage"] == 100.0
+
 
 # ── Search ────────────────────────────────────────────────────────────────────
 

@@ -1,15 +1,16 @@
 """
 Community profile, follow, and position models.
 
-Allows users to share a public view of their portfolio PnL (%)
-without exposing amounts, quantities, or PRU in cleartext.
+Allows users to share a public view of their portfolio: PnL (%), entry price
+(PRU) and first buy date per line. Amounts and quantities are never exposed —
+what is shared says at what price someone entered, never how much they hold.
 
 Privacy modes:
 - is_private=False: profile appears in search results freely.
 - is_private=True: profile appears only when the exact username is searched.
   Investments are visible only if both users follow each other (mutual follow).
 """
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlmodel import SQLModel, Field
 from sqlalchemy import Column, TEXT
@@ -110,6 +111,11 @@ class CommunityPosition(SQLModel, table=True):
     asset_type: str = Field(nullable=False)  # "CRYPTO" or "STOCK"
     asset_key_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     pru_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    # Date of the earliest BUY on this line. Plaintext: it is meant to be shown
+    # to other users, and a date alone reveals nothing about size or amount.
+    first_bought_at: date | None = Field(
+        default=None, sa_column=Column(sa.Date, nullable=True)
+    )
 
     created_at: datetime = Field(
         default=sa.func.now(),

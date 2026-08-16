@@ -808,6 +808,17 @@ def update_all_prices_daily() -> None:
 
         logger.info("CRON update_all_prices_daily: updated %d prices", len(prices_collected))
 
+        # Prices have just moved, so this is the one moment where a pick can
+        # newly have reached its target. Isolated: a failure here must not make
+        # the price update look like it failed.
+        try:
+            from services.notification import check_pick_targets
+            sent = check_pick_targets(session)
+            if sent:
+                logger.info("CRON update_all_prices_daily: %d pick target notifications", sent)
+        except Exception as exc:
+            logger.error("Pick target check failed: %s", exc)
+
 
 # ---------------------------------------------------------------------------
 # Historical backfill — fill missing daily prices for a date range
