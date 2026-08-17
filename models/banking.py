@@ -7,7 +7,7 @@ the account holder themselves (see services/banking/credentials.py).
 """
 from datetime import date, datetime
 from sqlmodel import SQLModel, Field
-from sqlalchemy import Column, TEXT
+from sqlalchemy import Column, TEXT, UniqueConstraint
 import sqlalchemy as sa
 import uuid
 
@@ -132,6 +132,67 @@ class BankAccountLink(SQLModel, table=True):
     last_synced_at: date = Field(sa_column=Column(sa.Date, nullable=False))
     # NULL = no gap found at the last reconciliation check.
     last_reconciliation_gap_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+
+    created_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+    )
+    updated_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            onupdate=sa.func.now(),
+            nullable=False,
+        )
+    )
+
+
+class BankTransaction(SQLModel, table=True):
+    """A movement observed on a linked bank account.
+
+    No date is ever stored in clear (see services/banking/transactions.py for
+    how the blind indexes are built): period_bidx carries the "YYYY-MM" of the
+    retained date so a month can be fetched by equality, dedup_bidx carries the
+    (date, amount, currency, direction) fingerprint that catches the card /
+    current-account duplication — §A5 spells out a triple, the currency was
+    added to it by ruling R11 — and entry_ref_bidx carries the ASPSP's own
+    entry_reference.
+
+    The composite unique key is (account_id_bidx, entry_ref_bidx), never the
+    reference alone: entry_reference is explicitly not globally unique, so two
+    accounts may legitimately reuse one. It is nullable — the reference is
+    optional at the contract, and reference-less transactions fall back on
+    dedup_bidx.
+    """
+    __tablename__ = "bank_transactions"
+    __table_args__ = (
+        UniqueConstraint("account_id_bidx", "entry_ref_bidx", name="uq_bank_transactions_account_entry_ref"),
+        {"extend_existing": True},
+    )
+
+    uuid: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        sa_column=Column(TEXT, primary_key=True, nullable=False),
+    )
+    account_id_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
+    period_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
+    # Not indexed on its own: it is only ever looked up alongside the account,
+    # which the unique constraint above already covers.
+    entry_ref_bidx: str | None = Field(default=None, sa_column=Column(TEXT))
+    dedup_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
+    amount_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    # Currency of the operation as the bank reported it. A foreign currency
+    # arrives without an exchange rate, so it is stored unconverted and readers
+    # must check this before summing.
+    currency_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    credit_debit_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    status_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    # The three dates as provided; any of them may be absent.
+    booking_date_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    value_date_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    transaction_date_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    remittance_enc: str | None = Field(default=None, sa_column=Column(TEXT))
 
     created_at: datetime = Field(
         default=sa.func.now(),

@@ -17,7 +17,13 @@ from .user import User, UserSettings, UserAIProvider, TotpBackupCode
 from .api_token import ApiToken
 from .cashflow import Cashflow
 from .bank import BankAccount
-from .banking import UserBankConnection, BankAuthorization, BankSession, BankAccountLink
+from .banking import (
+    UserBankConnection,
+    BankAuthorization,
+    BankSession,
+    BankAccountLink,
+    BankTransaction,
+)
 from .stock import StockAccount, StockTransaction
 from .crypto import CryptoAccount, CryptoTransaction
 from .market import MarketAsset, MarketPriceHistory, MarketPrice
@@ -49,6 +55,7 @@ __all__ = [
     "BankAuthorization",
     "BankSession",
     "BankAccountLink",
+    "BankTransaction",
     "StockAccount",
     "StockTransaction",
     "CryptoAccount",
