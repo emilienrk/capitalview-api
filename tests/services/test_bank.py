@@ -1,5 +1,5 @@
 import uuid as uuid_mod
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -16,6 +16,7 @@ from services.bank import (
     get_bank_account,
     get_user_bank_accounts,
     import_bank_account_history,
+    replace_history_window,
     update_bank_account,
 )
 from services.encryption import decrypt_data, encrypt_data, hash_index
@@ -292,3 +293,118 @@ def test_import_bank_account_history_overwrite(session: Session, master_key: str
     # Old value (9999) must be replaced with new (1234)
     assert _value_on_date(rows, date(2025, 3, 1), master_key) == Decimal("1234")
     assert _value_on_date(rows, date(2025, 3, 2), master_key) == Decimal("1234")
+
+
+# ---------------------------------------------------------------------------
+# replace_history_window — the date-bounded replacement (spec §D4)
+# ---------------------------------------------------------------------------
+
+
+def _seed_snapshot(session: Session, account, master_key: str, day: date, value: str) -> str:
+    row = AccountHistory(
+        uuid=str(uuid_mod.uuid4()),
+        user_uuid_bidx=account.user_uuid_bidx,
+        account_id_bidx=hash_index(account.uuid, master_key),
+        account_type=AccountCategory.BANK,
+        snapshot_date=day,
+        total_value_enc=encrypt_data(value, master_key),
+        total_invested_enc=encrypt_data(value, master_key),
+    )
+    session.add(row)
+    session.commit()
+    return row.uuid
+
+
+def test_replace_history_window_touches_nothing_outside_the_window(
+    session: Session, master_key: str, sqlite_pg_insert
+):
+    """The whole reason this function exists: import_bank_account_history's
+    overwrite=True would have deleted every row below."""
+    acc = create_bank_account(
+        session,
+        BankAccountCreate(name="Windowed", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        "user_window",
+        master_key,
+    )
+    db_acc = session.get(BankAccount, acc.id)
+    account_id_bidx = hash_index(acc.id, master_key)
+
+    before_uuid = _seed_snapshot(session, db_acc, master_key, date(2020, 1, 1), "111")
+    inside_uuid = _seed_snapshot(session, db_acc, master_key, date(2025, 3, 2), "222")
+    after_uuid = _seed_snapshot(session, db_acc, master_key, date(2025, 4, 1), "333")
+
+    written = replace_history_window(
+        session,
+        db_acc,
+        [
+            BankHistoryEntry(snapshot_date=date(2025, 3, 1), value=Decimal("10")),
+            BankHistoryEntry(snapshot_date=date(2025, 3, 2), value=Decimal("20")),
+        ],
+        master_key,
+        date(2025, 3, 1),
+        date(2025, 3, 3),
+    )
+
+    assert written == 2
+    rows = {r.snapshot_date: r for r in _get_history_rows(session, account_id_bidx)}
+    assert rows[date(2020, 1, 1)].uuid == before_uuid
+    assert rows[date(2025, 4, 1)].uuid == after_uuid
+    assert Decimal(decrypt_data(rows[date(2020, 1, 1)].total_value_enc, master_key)) == Decimal("111")
+    assert Decimal(decrypt_data(rows[date(2025, 4, 1)].total_value_enc, master_key)) == Decimal("333")
+    # Inside the window the old row is gone, replaced by the supplied value.
+    assert rows[date(2025, 3, 2)].uuid != inside_uuid
+    assert Decimal(decrypt_data(rows[date(2025, 3, 2)].total_value_enc, master_key)) == Decimal("20")
+
+
+def test_replace_history_window_never_writes_today_or_later(
+    session: Session, master_key: str, sqlite_pg_insert
+):
+    acc = create_bank_account(
+        session,
+        BankAccountCreate(name="Yesterday", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        "user_yesterday",
+        master_key,
+    )
+    db_acc = session.get(BankAccount, acc.id)
+    today = date.today()
+
+    written = replace_history_window(
+        session,
+        db_acc,
+        [
+            BankHistoryEntry(snapshot_date=today - timedelta(days=1), value=Decimal("10")),
+            BankHistoryEntry(snapshot_date=today, value=Decimal("20")),
+            BankHistoryEntry(snapshot_date=today + timedelta(days=1), value=Decimal("30")),
+        ],
+        master_key,
+        today - timedelta(days=1),
+        today + timedelta(days=1),
+    )
+
+    rows = _get_history_rows(session, hash_index(acc.id, master_key))
+    assert written == 1
+    assert [r.snapshot_date for r in rows] == [today - timedelta(days=1)]
+
+
+def test_replace_history_window_clears_a_window_it_has_no_entries_for(
+    session: Session, master_key: str, sqlite_pg_insert
+):
+    """A window with nothing left in it still empties: that is how a snapshot
+    built on a movement the bank later withdrew disappears."""
+    acc = create_bank_account(
+        session,
+        BankAccountCreate(name="Cleared", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        "user_cleared",
+        master_key,
+    )
+    db_acc = session.get(BankAccount, acc.id)
+    kept_uuid = _seed_snapshot(session, db_acc, master_key, date(2025, 1, 1), "111")
+    _seed_snapshot(session, db_acc, master_key, date(2025, 2, 5), "222")
+
+    written = replace_history_window(
+        session, db_acc, [], master_key, date(2025, 2, 1), date(2025, 2, 28)
+    )
+
+    rows = _get_history_rows(session, hash_index(acc.id, master_key))
+    assert written == 0
+    assert [r.uuid for r in rows] == [kept_uuid]

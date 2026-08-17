@@ -1,5 +1,7 @@
 """Enable Banking connection schemas (BYO application_id + private key)."""
 
+from decimal import Decimal
+
 from pydantic import BaseModel
 
 
@@ -94,3 +96,44 @@ class BankAccountLinkResult(BaseModel):
     bank_account_uuid: str
     identification_hash: str
     reconnected: bool
+
+
+# ---------------------------------------------------------------------------
+# Synchronisation DTOs (spec §D)
+# ---------------------------------------------------------------------------
+
+
+class BankAccountSyncResult(BaseModel):
+    """What one linked account's sync did.
+
+    `status` is the branch the sequence took: `synced`, `skipped_daily_cap`
+    (the once-a-day cap, a no-op and never an error), `reconnect_required`
+    (the consent is gone; the link is preserved) or `error`.
+    """
+    bank_account_uuid: str
+    status: str
+    inserted: int = 0
+    updated: int = 0
+    skipped: int = 0
+    # Rows the bank sent without an amount, a direction or a status. Dropped,
+    # never fatal — the reconciliation gap is what makes them visible.
+    malformed: int = 0
+    removed: int = 0
+    snapshots_written: int = 0
+    reconciliation_gap: Decimal | None = None
+    # `reconciled`, `gap` or `not_reconcilable` (ruling R18); None when no check
+    # could run yet (the seeding pass has no bank anchor to compare against).
+    reconciliation_status: str | None = None
+    # Several accounts are linked and none carries a recognised card marker, so
+    # the sync order, the third reconciliation outcome and R19's "no curve" rule
+    # all lost the signal they depend on. Task 12 settles the field against a
+    # real session payload.
+    card_marker_missing: bool = False
+    detail: str | None = None
+
+
+class BankSyncResponse(BaseModel):
+    """Response of POST /banking/sync. The front re-reads the accounts payload
+    afterwards rather than depending on this shape (ruling R16)."""
+    synced: int
+    results: list[BankAccountSyncResult]

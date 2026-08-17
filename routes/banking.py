@@ -27,6 +27,7 @@ from dtos.banking import (
     BankConnectionStatus,
     BankConnectionUpdate,
     BankSessionAccount,
+    BankSyncResponse,
 )
 from models import User
 from services.auth import get_current_user, get_master_key
@@ -46,6 +47,7 @@ from services.banking.linking import (
     list_session_accounts,
     start_authorization_flow,
 )
+from services.banking.sync import sync_user_accounts
 
 router = APIRouter(prefix="/banking", tags=["Banking"])
 
@@ -240,6 +242,46 @@ def link_session_account(
         raise HTTPException(status_code=404, detail="Compte CapitalView introuvable.")
     except AccountNotFoundInSessionError:
         raise HTTPException(status_code=404, detail="Ce compte n'est pas dans la session bancaire.")
+
+
+def _psu_context(request: Request) -> dict[str, str] | None:
+    """PSU context headers, taken from the real request that triggered the sync.
+
+    They describe the human behind the call, so they are read off that request
+    and never fabricated. The API treats them as all-or-nothing (§B2), hence a
+    partial context is sent as no context at all.
+    """
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    if not ip_address or not user_agent:
+        return None
+    return {"Psu-Ip-Address": ip_address, "Psu-User-Agent": user_agent}
+
+
+@router.post("/sync", response_model=BankSyncResponse)
+def sync(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Synchronise every linked account (spec §D, ruling R16).
+
+    No body and no account identifier: the sync order is a server-side decision
+    (ruling R12), not the caller's. The once-a-day cap is re-checked here —
+    the front triggers this after every render, so a capped call is a 200 with
+    an unchanged summary, never an error.
+    """
+    try:
+        results = sync_user_accounts(
+            session, current_user.uuid, master_key, psu_context=_psu_context(request)
+        )
+    except NotConfiguredError:
+        raise HTTPException(status_code=400, detail="Configurez d'abord vos identifiants Enable Banking.")
+    return BankSyncResponse(
+        synced=sum(1 for result in results if result.status == "synced"),
+        results=results,
+    )
 
 
 @router.delete("/sessions/{bank_session_uuid}", status_code=204)

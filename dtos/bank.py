@@ -39,6 +39,15 @@ class BankAccountResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     balance_updated_at: date | None = None  # Last auto-sync date from cashflows
+    # Bank link metadata (ruling R6), read by the Banque page to decide whether
+    # to trigger POST /banking/sync after the render.
+    is_linked: bool = False
+    last_synced_at: date | None = None  # null = never synced
+    reconciliation_gap: Decimal | None = None  # null = no gap at the last check
+    link_status: str | None = None  # consent state, displayed as-is
+    # `reconciled` | `gap` | `not_reconcilable` (ruling R18), derived, never
+    # stored. Distinct from link_status, which is the consent state.
+    reconciliation_status: str | None = None
 
 
 class BankSummaryResponse(BaseModel):

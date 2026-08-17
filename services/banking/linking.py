@@ -48,6 +48,9 @@ AUTHORIZATION_TTL = timedelta(hours=1)
 STATUS_AUTHORIZED = "AUTHORIZED"
 STATUS_CLOSED = "CLOSED"
 
+# CashAccountType member, also by NAME: an account used for card payments only.
+CARD_ACCOUNT_TYPE = "CARD"
+
 
 class LinkingError(Exception):
     """Base for user-facing linking-flow errors; routes map these to HTTP responses."""
@@ -444,6 +447,42 @@ def _stored_accounts(bank_session: BankSession, master_key: str) -> list[dict[st
     if not bank_session.accounts_enc:
         return []
     return json.loads(decrypt_data(bank_session.accounts_enc, master_key))
+
+
+def find_discovered_account(
+    session: Session, link: BankAccountLink, master_key: str
+) -> dict[str, Any]:
+    """The discovered-account payload a link points at, or {} when it is gone.
+
+    identification_hash_bidx is one-way, so the match is made by re-hashing each
+    of the session's own accounts — the same inversion `_accounts_bank_account_
+    uuid_by_bidx` performs. Shared with the sync (R12's ordering and R19's
+    "not reconcilable" both read `cash_account_type` from here).
+    """
+    bank_session = session.get(BankSession, link.session_uuid)
+    if bank_session is None:
+        return {}
+    for account in _stored_accounts(bank_session, master_key):
+        identification_hash = account.get("identification_hash")
+        if (
+            identification_hash
+            and hash_index(identification_hash, master_key) == link.identification_hash_bidx
+        ):
+            return account
+    return {}
+
+
+def is_card_account(session: Session, link: BankAccountLink, master_key: str) -> bool:
+    """Whether the bank described this account as a card account.
+
+    CashAccountType member, matched by NAME (the contract's enum descriptions
+    are misaligned with their values). A card account mirrors the current
+    account it debits: it syncs last (R12) and its curve is not reconcilable
+    (R19). **Unverified against the real bank** — no capture of a POST /sessions
+    payload exists yet; `card_marker_missing` on the sync result is what makes
+    an absent marker visible rather than silent.
+    """
+    return find_discovered_account(session, link, master_key).get("cash_account_type") == CARD_ACCOUNT_TYPE
 
 
 def _account_id_label(account: dict[str, Any]) -> str | None:

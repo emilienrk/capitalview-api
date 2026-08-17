@@ -12,14 +12,81 @@ from sqlmodel import Session, select
 
 from models import BankAccount, BankAccountType
 from models.account_history import AccountHistory
+from models.banking import BankAccountLink, BankSession
 from models.enums import AccountCategory, FlowType
 from dtos import BankAccountCreate, BankAccountUpdate, BankAccountResponse, BankSummaryResponse
 from dtos.bank import BankHistoryEntry
 from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotResponse
+from services.banking.linking import is_card_account
 from services.encryption import encrypt_data, decrypt_data, hash_index
 
+# Consent wording the front reads back (ruling R16): anything but an authorized
+# session is presented as needing a fresh connection.
+LINK_STATUS_CONNECTED = "connecté"
+LINK_STATUS_RECONNECT = "à reconnecter"
 
-def _map_to_response(account: BankAccount, master_key: str) -> BankAccountResponse:
+# The three outcomes of the reconciliation check (ruling R18), kept here rather
+# than in the sync because that module already depends on this one. Distinct
+# from LINK_STATUS_*, which describes the consent, not the curve.
+RECONCILIATION_OK = "reconciled"
+RECONCILIATION_GAP = "gap"
+RECONCILIATION_NOT_POSSIBLE = "not_reconcilable"
+
+
+class LinkMetadata:
+    """The link-side fields of BankAccountResponse (ruling R6), read once per request."""
+
+    def __init__(
+        self,
+        link: BankAccountLink,
+        session_status: str | None,
+        master_key: str,
+        not_reconcilable: bool = False,
+    ):
+        # A link is created with last_synced_at one day before its bootstrap
+        # anchor, so the column is never NULL. The contract's "null = never
+        # synced" is that marker, mapped: reporting yesterday for an account the
+        # bank has never been called for would read as a successful sync.
+        never_synced = link.last_synced_at < link.anchor_date
+        self.last_synced_at = None if never_synced else link.last_synced_at
+        self.reconciliation_gap = (
+            Decimal(decrypt_data(link.last_reconciliation_gap_enc, master_key))
+            if link.last_reconciliation_gap_enc
+            else None
+        )
+        self.link_status = (
+            LINK_STATUS_CONNECTED if session_status == "AUTHORIZED" else LINK_STATUS_RECONNECT
+        )
+        # Derived, never stored (R7's precedent): three outcomes, and none yet
+        # while no check has been able to run.
+        if not_reconcilable:
+            self.reconciliation_status = RECONCILIATION_NOT_POSSIBLE
+        elif never_synced:
+            self.reconciliation_status = None
+        else:
+            self.reconciliation_status = (
+                RECONCILIATION_GAP if self.reconciliation_gap is not None else RECONCILIATION_OK
+            )
+
+
+def _link_metadata(session: Session, user_bidx: str, master_key: str) -> dict[str, LinkMetadata]:
+    """bank_account_uuid_bidx → link metadata, for every link this user holds."""
+    rows = session.exec(
+        select(BankAccountLink, BankSession.status)
+        .join(BankSession, BankSession.uuid == BankAccountLink.session_uuid, isouter=True)
+        .where(BankAccountLink.user_uuid_bidx == user_bidx)
+    ).all()
+    return {
+        link.bank_account_uuid_bidx: LinkMetadata(
+            link, status, master_key, is_card_account(session, link, master_key)
+        )
+        for link, status in rows
+    }
+
+
+def _map_to_response(
+    account: BankAccount, master_key: str, link: LinkMetadata | None = None
+) -> BankAccountResponse:
     """Decrypt and map a BankAccount to a response DTO."""
     name = decrypt_data(account.name_enc, master_key)
     balance_str = decrypt_data(account.balance_enc, master_key)
@@ -44,6 +111,11 @@ def _map_to_response(account: BankAccount, master_key: str) -> BankAccountRespon
         balance_updated_at=account.balance_updated_at,
         created_at=account.created_at,
         updated_at=account.updated_at,
+        is_linked=link is not None,
+        last_synced_at=link.last_synced_at if link else None,
+        reconciliation_gap=link.reconciliation_gap if link else None,
+        link_status=link.link_status if link else None,
+        reconciliation_status=link.reconciliation_status if link else None,
     )
 
 
@@ -113,8 +185,17 @@ def update_bank_account(
     session.add(account)
     session.commit()
     session.refresh(account)
-    
-    return _map_to_response(account, master_key)
+
+    return _map_to_response(account, master_key, _account_link(session, account, master_key))
+
+
+def _account_link(
+    session: Session, account: BankAccount, master_key: str
+) -> LinkMetadata | None:
+    """Link metadata for a single account, when it is attached to a bank."""
+    return _link_metadata(session, account.user_uuid_bidx, master_key).get(
+        hash_index(account.uuid, master_key)
+    )
 
 
 def delete_bank_account(
@@ -144,6 +225,7 @@ def _apply_pending_cashflows(
     master_key: str,
     get_cashflow_occurrences_fn,
     auto_sync_enabled: bool,
+    is_linked: bool = False,
 ) -> None:
     """Apply cashflow occurrences that have fired since balance_updated_at.
 
@@ -151,10 +233,20 @@ def _apply_pending_cashflows(
     applying anything — this prevents retroactively adjusting a manually-entered balance.
     Subsequent calls apply all occurrences in (balance_updated_at, today].
 
-    Inactive cashflows and a disabled global switch skip the balance update but
-    still advance the stamp: a paused period must never be caught up later.
+    Inactive cashflows, a disabled global switch and a bank-linked account skip
+    the balance update but still advance the stamp: a paused period must never
+    be caught up later.
     """
     today = date.today()
+
+    if is_linked:
+        # Spec §D5: a linked account carries a real balance read from the bank,
+        # so projecting a salary already inside it would double-count.
+        if account.balance_updated_at != today:
+            account.balance_updated_at = today
+            session.add(account)
+            session.commit()
+        return
 
     if account.balance_updated_at is None:
         # First run: stamp today, do not touch the balance
@@ -217,15 +309,25 @@ def get_user_bank_accounts(
     ).all()
 
     auto_sync_enabled = get_or_create_settings(session, user_uuid, master_key).bank_auto_sync_enabled
+    links = _link_metadata(session, user_bidx, master_key)
 
     # Fetch cashflows once and apply pending ones to each linked account
     cashflows = get_all_user_cashflows(session, user_uuid, master_key)
     for account in accounts:
         _apply_pending_cashflows(
-            session, account, cashflows, master_key, get_cashflow_occurrences, auto_sync_enabled
+            session,
+            account,
+            cashflows,
+            master_key,
+            get_cashflow_occurrences,
+            auto_sync_enabled,
+            is_linked=hash_index(account.uuid, master_key) in links,
         )
 
-    responses = [_map_to_response(acc, master_key) for acc in accounts]
+    responses = [
+        _map_to_response(acc, master_key, links.get(hash_index(acc.uuid, master_key)))
+        for acc in accounts
+    ]
     total_balance = sum(acc.balance for acc in responses)
 
     return BankSummaryResponse(
@@ -248,8 +350,8 @@ def get_bank_account(
     user_bidx = hash_index(user_uuid, master_key)
     if account.user_uuid_bidx != user_bidx:
         return None
-        
-    return _map_to_response(account, master_key)
+
+    return _map_to_response(account, master_key, _account_link(session, account, master_key))
 
 
 def _decode_history_row(row: AccountHistory, master_key: str) -> AccountHistorySnapshotResponse:
@@ -423,6 +525,111 @@ def import_bank_account_history(
 
     if not rows:
         return 0
+
+    stmt = pg_insert(AccountHistory).values(rows).on_conflict_do_nothing(
+        constraint="uq_account_history_account_date"
+    )
+    session.exec(stmt)
+    session.commit()
+    return len(rows)
+
+
+def replace_history_window(
+    session: Session,
+    account: BankAccount,
+    entries: list[BankHistoryEntry],
+    master_key: str,
+    start_date: date,
+    end_date: date,
+) -> int:
+    """
+    Replace the snapshots of one bank account **inside [start_date, end_date]**,
+    and touch nothing outside it. Returns the number of rows written.
+
+    This exists because neither mode of `import_bank_account_history` fits the
+    bank sync (spec §D4): `overwrite=True` deletes the account's *entire*
+    history — years of manual entry with it — and the default mode
+    (`on_conflict_do_nothing`) overwrites nothing at all, so bank data could
+    never take precedence over a manual snapshot on the seeding window
+    (decision 8).
+
+    The window is emptied first, so a day the bank no longer accounts for
+    disappears instead of lingering; only the supplied entries are written back.
+    `end_date` is clamped to yesterday, following the same convention as
+    `import_bank_account_history`: today is left out so pending operations have
+    time to settle. "Today" is the server's civil day, as everywhere else in
+    this module, so the clamp can never disagree with the caller's own notion
+    of yesterday.
+    """
+    yesterday = date.today() - timedelta(days=1)
+    end_date = min(end_date, yesterday)
+    if start_date > end_date:
+        return 0
+
+    account_id_bidx = hash_index(account.uuid, master_key)
+
+    # Read the value carried into the window before emptying it, so the first
+    # day's daily_pnl is a real delta rather than a jump from zero.
+    previous_row = session.exec(
+        select(AccountHistory)
+        .where(AccountHistory.account_id_bidx == account_id_bidx)
+        .where(AccountHistory.snapshot_date < start_date)
+        .order_by(AccountHistory.snapshot_date.desc())
+    ).first()
+    prev_value = (
+        Decimal(decrypt_data(previous_row.total_value_enc, master_key))
+        if previous_row
+        else Decimal("0")
+    )
+
+    session.exec(
+        sa.delete(AccountHistory)
+        .where(AccountHistory.account_id_bidx == account_id_bidx)
+        .where(AccountHistory.snapshot_date >= start_date)
+        .where(AccountHistory.snapshot_date <= end_date)
+    )
+
+    kept = sorted(
+        (e for e in entries if start_date <= e.snapshot_date <= end_date),
+        key=lambda e: e.snapshot_date,
+    )
+    if not kept:
+        session.commit()
+        return 0
+
+    now = datetime.now(timezone.utc)
+    rows: list[dict] = []
+    for entry in kept:
+        total_value = round(entry.value, 2)
+        daily_pnl = total_value - prev_value
+
+        positions_json: str | None = None
+        if total_value > Decimal("0"):
+            positions_json = json.dumps([{
+                "asset_key": "EUR",
+                "quantity": str(total_value),
+                "value": str(total_value),
+                "price": "1",
+                "invested": str(total_value),
+                "percentage": "100",
+            }])
+
+        rows.append({
+            "uuid": str(uuid.uuid4()),
+            "user_uuid_bidx": account.user_uuid_bidx,
+            "account_id_bidx": account_id_bidx,
+            "account_type": AccountCategory.BANK.value,
+            "snapshot_date": entry.snapshot_date,
+            "total_value_enc": encrypt_data(str(total_value), master_key),
+            "total_invested_enc": encrypt_data(str(total_value), master_key),
+            "total_deposits_enc": encrypt_data(str(total_value), master_key),
+            "total_withdrawals_enc": encrypt_data("0.00", master_key),
+            "daily_pnl_enc": encrypt_data(str(round(daily_pnl, 2)), master_key),
+            "positions_enc": encrypt_data(positions_json, master_key) if positions_json else None,
+            "created_at": now,
+            "updated_at": now,
+        })
+        prev_value = total_value
 
     stmt = pg_insert(AccountHistory).values(rows).on_conflict_do_nothing(
         constraint="uq_account_history_account_date"
