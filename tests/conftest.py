@@ -47,7 +47,11 @@ def session_fixture(engine) -> Generator[Session, None, None]:
     yield session
     
     session.close()
-    transaction.rollback()
+    # session.close() already rolls back the connection if the session was left
+    # inactive by an uncaught flush error (e.g. a test asserting IntegrityError);
+    # guard against the redundant rollback() SQLAlchemy warns about in that case.
+    if transaction.is_active:
+        transaction.rollback()
     connection.close()
 
 @pytest.fixture(name="master_key")
