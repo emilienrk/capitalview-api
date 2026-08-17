@@ -137,3 +137,19 @@ class BankSyncResponse(BaseModel):
     afterwards rather than depending on this shape (ruling R16)."""
     synced: int
     results: list[BankAccountSyncResult]
+
+
+class BankExportImportResult(BaseModel):
+    bank_account_uuid: str
+    status: str
+    inserted: int = 0
+    updated: int = 0
+    skipped: int = 0
+    malformed: int = 0
+    snapshots_written: int = 0
+    detail: str | None = None
+
+
+class BankExportImportResponse(BaseModel):
+    imported_accounts: int
+    results: list[BankExportImportResult]

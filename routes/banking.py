@@ -26,12 +26,18 @@ from dtos.banking import (
     BankConfigCheck,
     BankConnectionStatus,
     BankConnectionUpdate,
+    BankExportImportResponse,
     BankSessionAccount,
     BankSyncResponse,
 )
 from models import User
 from services.auth import get_current_user, get_master_key
-from services.banking.credentials import get_status, upsert_connection
+from services.banking.credentials import (
+    delete_connection,
+    get_connection,
+    upsert_connection,
+)
+from services.banking.export_import import import_enablebanking_export
 from services.banking.errors import BankingApiError
 from services.banking.linking import (
     AccountNotFoundInSessionError,
@@ -297,3 +303,18 @@ def delete_session(
         delete_bank_session(session, current_user.uuid, master_key, bank_session_uuid)
     except BankSessionNotFoundError:
         raise HTTPException(status_code=404, detail="Session bancaire introuvable.")
+
+
+@router.post("/import-export", response_model=BankExportImportResponse)
+def import_export(
+    payload: dict[str, Any] | list[dict[str, Any]],
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Import an Enable Banking JSON export file for history catch-up (Task 11)."""
+    try:
+        return import_enablebanking_export(session, current_user.uuid, master_key, payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
