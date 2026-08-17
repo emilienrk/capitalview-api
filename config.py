@@ -68,6 +68,18 @@ class Settings:
         self.coingecko_api_url: str = os.getenv("CG_API_URL", "https://api.coingecko.com/api/v3")
         self.coingecko_api_key: str = os.getenv("CG_API_KEY", "")
 
+        # ── Enable Banking ─────────────────────────────────────
+        # Fixed, query-parameter-free path (spec §C3): the portal refuses to
+        # register a redirect URL carrying one. Declared verbatim in each
+        # user's own Enable Banking application.
+        self.banking_callback_url: str = os.getenv(
+            "BANKING_CALLBACK_URL", "http://localhost:8000/banking/callback"
+        )
+        # Where the bank callback sends the browser back to. A setting of its
+        # own, not cors_origins[0]: that list is an allow-list whose order is
+        # incidental and which may legitimately be empty.
+        self.frontend_url: str = os.getenv("FRONTEND_URL", "http://localhost:5173").strip().rstrip("/")
+
 
 @lru_cache()
 def get_settings() -> Settings:

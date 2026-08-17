@@ -76,6 +76,12 @@ class BankSession(SQLModel, table=True):
     status: str = Field(sa_column=Column(TEXT, nullable=False))
     consent_valid_until: datetime = Field(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
     authorized_at: datetime = Field(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+    # The accounts payload of POST /sessions, JSON then encrypted (same pattern
+    # as AccountHistory.positions_enc). Written once, at the callback: the later
+    # GET /sessions/{id} returns only uid + identification hashes, so every
+    # human-readable attribute of a discovered account is delivered exactly
+    # once. Read as a whole block, never queried field by field — no blind index.
+    accounts_enc: str | None = Field(default=None, sa_column=Column(TEXT))
 
     created_at: datetime = Field(
         default=sa.func.now(),

@@ -22,6 +22,7 @@ from routes import (
     auth_router,
     api_tokens_router,
     bank_router,
+    banking_router,
     cashflow_router,
     stocks_router,
     crypto_router,
@@ -115,6 +116,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(auth_router)
 app.include_router(api_tokens_router)
 app.include_router(bank_router)
+app.include_router(banking_router)
 app.include_router(cashflow_router)
 app.include_router(stocks_router)
 app.include_router(crypto_router)

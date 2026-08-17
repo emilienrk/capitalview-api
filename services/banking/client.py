@@ -131,6 +131,14 @@ class EnableBankingClient:
         """GET /sessions/{id} — session status and accounts."""
         return self._request("GET", f"/sessions/{session_id}", headers=self._psu_headers())
 
+    def close_session(self, session_id: str) -> None:
+        """DELETE /sessions/{id} — closes the session, and the PSU's bank consent
+        with it when the ASPSP allows it. R3: never exercised against the real
+        service outside an explicit user-initiated disconnect."""
+        response = self._http.request("DELETE", f"/sessions/{session_id}")
+        if response.status_code >= 400:
+            raise error_from_response(response)
+
     # ------------------------------------------------------------------
     # Account data
     # ------------------------------------------------------------------

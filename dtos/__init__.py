@@ -4,6 +4,13 @@
 from .banking import (
     BankConnectionStatus,
     BankConnectionUpdate,
+    BankConfigCheck,
+    AspspSummary,
+    BankAuthorizeRequest,
+    BankAuthorizeResponse,
+    BankSessionAccount,
+    BankAccountLinkRequest,
+    BankAccountLinkResult,
 )
 
 # Bank schemas
@@ -143,6 +150,13 @@ __all__ = [
     # Banking (Enable Banking connection)
     "BankConnectionStatus",
     "BankConnectionUpdate",
+    "BankConfigCheck",
+    "AspspSummary",
+    "BankAuthorizeRequest",
+    "BankAuthorizeResponse",
+    "BankSessionAccount",
+    "BankAccountLinkRequest",
+    "BankAccountLinkResult",
     # Bank
     "BankAccountCreate",
     "BankAccountResponse",

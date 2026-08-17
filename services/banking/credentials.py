@@ -21,7 +21,9 @@ def get_connection(session: Session, user_uuid: str, master_key: str) -> UserBan
     ).first()
 
 
-def _map_to_status(row: UserBankConnection, master_key: str) -> BankConnectionStatus:
+def _map_to_status(row: UserBankConnection | None, master_key: str) -> BankConnectionStatus:
+    if row is None:
+        return BankConnectionStatus(has_credentials=False, application_id=None)
     application_id = (
         decrypt_data(row.application_id_enc, master_key) if row.application_id_enc else None
     )
@@ -29,6 +31,11 @@ def _map_to_status(row: UserBankConnection, master_key: str) -> BankConnectionSt
         has_credentials=bool(row.application_id_enc and row.private_key_enc),
         application_id=application_id,
     )
+
+
+def get_status(session: Session, user_uuid: str, master_key: str) -> BankConnectionStatus:
+    """Read-only status for GET /banking/status — same mapping upsert_connection returns."""
+    return _map_to_status(get_connection(session, user_uuid, master_key), master_key)
 
 
 def upsert_connection(
@@ -87,3 +94,39 @@ def delete_connection(session: Session, user_uuid: str, master_key: str) -> None
     if row is not None:
         session.delete(row)
         session.commit()
+
+
+def _decrypt_row(row: UserBankConnection | None, master_key: str) -> tuple[str, str] | None:
+    if row is None or not row.application_id_enc or not row.private_key_enc:
+        return None
+    return (
+        decrypt_data(row.application_id_enc, master_key),
+        decrypt_data(row.private_key_enc, master_key),
+    )
+
+
+def get_decrypted_credentials(
+    session: Session, user_uuid: str, master_key: str
+) -> tuple[str, str] | None:
+    """Return (application_id, private_key) decrypted, or None if not fully configured.
+
+    Extracted per Task 1's review ruling once more than one caller needed the
+    same application_id_enc/private_key_enc decryption (linking.py's config
+    check, ASPSP catalogue, authorization and rattachement flows).
+    """
+    return _decrypt_row(get_connection(session, user_uuid, master_key), master_key)
+
+
+def get_decrypted_credentials_by_bidx(
+    session: Session, user_uuid_bidx: str, master_key: str
+) -> tuple[str, str] | None:
+    """Same as get_decrypted_credentials, keyed by an already-computed blind index.
+
+    The OAuth callback route authenticates via `state`, not a Bearer token, so
+    it never recovers the caller's raw user_uuid — only the user_uuid_bidx
+    stashed on the BankAuthorization row it consumes.
+    """
+    row = session.exec(
+        select(UserBankConnection).where(UserBankConnection.user_uuid_bidx == user_uuid_bidx)
+    ).first()
+    return _decrypt_row(row, master_key)
