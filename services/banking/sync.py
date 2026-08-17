@@ -178,8 +178,9 @@ def sync_account_link(
     window_start = _window_start(session, account, master_key, link.anchor_date, today)
 
     try:
-        # 1. The accounting balance, never the real-time one.
-        accounting = _accounting_balance(client.get_balances(uid))
+        # 1. The accounting balance, never the real-time one. Strict CLBD for
+        # regular accounts (§F); card accounts fall back to OTHR.
+        accounting = _accounting_balance(client.get_balances(uid), is_card=not_reconcilable)
         # 2. The movements, from a window that always re-includes pending rows.
         feed, fetched_from = _fetch(
             client,
@@ -330,21 +331,31 @@ def _card_marker_missing(
 # ---------------------------------------------------------------------------
 
 
-def _accounting_balance(payload: dict[str, Any]) -> Decimal:
-    """The accounting balance, matched by balance type and read in euros.
+def _accounting_balance(payload: dict[str, Any], is_card: bool = False) -> Decimal:
+    """The accounting balance, matched by balance type (CLBD) and read in euros.
 
-    Two balances coexist and the real-time one is published alongside; taking
-    the first element of the list is wrong half the time (§F). The currency is
-    read off the balance object because the account-level currency is the ISO
-    code meaning "no currency".
+    Two balances coexist on checking accounts and the real-time one is published
+    alongside; taking the first element of the list is wrong half the time (§F).
+    Card accounts publish only OTHR or XPCD balance types, which are used as
+    fallback when CLBD is absent (ruling R19).
     """
-    for balance in payload.get("balances", []):
+    balances = payload.get("balances", [])
+    # 1. Prefer CLBD (closing booked)
+    for balance in balances:
         if balance.get("balance_type") != ACCOUNTING_BALANCE_TYPE:
             continue
         amount = balance.get("balance_amount") or {}
         if str(amount.get("currency") or "") != BASE_CURRENCY:
             continue
         return Decimal(str(amount.get("amount")))
+
+    # 2. Fallback to any EUR balance for card accounts only
+    if is_card:
+        for balance in balances:
+            amount = balance.get("balance_amount") or {}
+            if str(amount.get("currency") or "") == BASE_CURRENCY:
+                return Decimal(str(amount.get("amount")))
+
     raise AccountingBalanceUnavailableError(
         f"no {ACCOUNTING_BALANCE_TYPE} balance in {BASE_CURRENCY} for this account"
     )
