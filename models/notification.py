@@ -19,6 +19,7 @@ class NotificationType:
     NEW_FOLLOWER = "new_follower"
     MUTUAL_FOLLOW = "mutual_follow"
     PICK_TARGET_REACHED = "pick_target_reached"
+    BANK_CONSENT_EXPIRING = "bank_consent_expiring"
 
 
 class Notification(SQLModel, table=True):

@@ -9,6 +9,13 @@ from models.account_history import AccountHistory
 from models.api_token import ApiToken
 from models.asset import Asset, AssetValuation
 from models.bank import BankAccount
+from models.banking import (
+    BankAccountLink,
+    BankAuthorization,
+    BankSession,
+    BankTransaction,
+    UserBankConnection,
+)
 from models.card import Card
 from models.cashflow import Cashflow
 from models.community import (
@@ -67,6 +74,10 @@ BIDX_MODELS = (
     UserSettings,
     UserAIProvider,
     AccountHistory,
+    UserBankConnection,
+    BankAuthorization,
+    BankSession,
+    BankAccountLink,
 )
 FK_MODELS = (
     (ApiToken, "user_uuid"),
@@ -186,6 +197,7 @@ def _remaining_rows(session, user_uuid: str, master_key: str) -> dict[str, int]:
     for account_model, tx_model in (
         (StockAccount, StockTransaction),
         (CryptoAccount, CryptoTransaction),
+        (BankAccount, BankTransaction),
     ):
         account_uuids = session.exec(
             select(account_model.uuid).where(account_model.user_uuid_bidx == user_bidx)
@@ -406,3 +418,171 @@ def test_deleting_one_account_spares_the_other(session):
     assert keeper["notes"] == 1
 
     assert session.get(User, victim_uuid) is None
+
+
+def test_export_includes_bank_transactions_and_excludes_private_key(session):
+    client = TestClient(app)
+    access_token, master_key, user_uuid = _register(client, session, "bank_export@example.com")
+    headers = _auth_headers(access_token, master_key)
+    user_bidx = hash_index(user_uuid, master_key)
+
+    # 1. Create a bank account
+    bank_resp = client.post(
+        "/bank/accounts",
+        json={"name": "Compte Boursorama", "account_type": "CHECKING", "balance": "1500"},
+        headers=headers,
+    )
+    assert bank_resp.status_code == 201
+    bank_account_uuid = bank_resp.json()["id"]
+
+    # 2. Add credentials with a private key
+    client.put(
+        "/banking/credentials",
+        json={
+            "application_id": "app-id-123",
+            "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0...\n-----END RSA PRIVATE KEY-----",
+        },
+        headers=headers,
+    )
+
+    # 3. Add a bank transaction directly
+    from models.banking import BankTransaction
+    from services.encryption import encrypt_data
+    session.add(
+        BankTransaction(
+            account_id_bidx=hash_index(bank_account_uuid, master_key),
+            period_bidx=hash_index("2026-08", master_key),
+            entry_ref_bidx=hash_index("ref-export-1", master_key),
+            dedup_bidx=hash_index("2026-08-01|50.00|EUR|DBIT", master_key),
+            amount_enc=encrypt_data("50.00", master_key),
+            currency_enc=encrypt_data("EUR", master_key),
+            credit_debit_enc=encrypt_data("DBIT", master_key),
+            status_enc=encrypt_data("BOOK", master_key),
+            booking_date_enc=encrypt_data("2026-08-01", master_key),
+            remittance_enc=encrypt_data("Supermarché", master_key),
+        )
+    )
+    session.commit()
+
+    # 4. Fetch export
+    response = client.get("/auth/me/export", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+
+    # Check bank account has transactions
+    found_account = next(acc for acc in data["bank_accounts"] if acc["id"] == bank_account_uuid)
+    assert "transactions" in found_account
+    assert len(found_account["transactions"]) == 1
+    assert found_account["transactions"][0]["amount"] == "50.00"
+    assert found_account["transactions"][0]["remittance"] == "Supermarché"
+
+    # Crucial security check: private key is never leaked
+    raw_export = response.text
+    assert "BEGIN RSA PRIVATE KEY" not in raw_export
+    assert "private_key" not in raw_export
+    assert "app-id-123" not in raw_export
+
+
+def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeypatch):
+    client = TestClient(app)
+    access_token, master_key, user_uuid = _register(client, session, "bank_purge@example.com")
+    headers = _auth_headers(access_token, master_key)
+    user_bidx = hash_index(user_uuid, master_key)
+
+    # 1. Create bank account
+    bank_resp = client.post(
+        "/bank/accounts",
+        json={"name": "Compte à purger", "account_type": "CHECKING", "balance": "2000"},
+        headers=headers,
+    )
+    assert bank_resp.status_code == 201
+    bank_acc_uuid = bank_resp.json()["id"]
+
+    # 2. Seed banking credentials, session, link, transaction, authorization
+    from datetime import date, datetime, timezone
+    from models.banking import BankAccountLink, BankAuthorization, BankSession, BankTransaction, UserBankConnection
+    from services.encryption import encrypt_data
+
+    conn = UserBankConnection(
+        user_uuid_bidx=user_bidx,
+        application_id_enc=encrypt_data("app-123", master_key),
+        private_key_enc=encrypt_data("key-123", master_key),
+    )
+    session.add(conn)
+
+    auth = BankAuthorization(
+        user_uuid_bidx=user_bidx,
+        state_bidx=hash_index("state-abc", master_key),
+        expires_at=datetime.now(timezone.utc),
+    )
+    session.add(auth)
+
+    bsession = BankSession(
+        user_uuid_bidx=user_bidx,
+        session_id_enc=encrypt_data("sess-ext-123", master_key),
+        status="AUTHORIZED",
+        consent_valid_until=datetime.now(timezone.utc),
+        authorized_at=datetime.now(timezone.utc),
+    )
+    session.add(bsession)
+    session.commit()
+    session.refresh(bsession)
+
+    blink = BankAccountLink(
+        user_uuid_bidx=user_bidx,
+        bank_account_uuid_bidx=hash_index(bank_acc_uuid, master_key),
+        session_uuid=bsession.uuid,
+        identification_hash_bidx=hash_index("ih-123", master_key),
+        account_uid_enc=encrypt_data("uid-123", master_key),
+        anchor_date=date.today(),
+        anchor_balance_enc=encrypt_data("2000.00", master_key),
+        last_synced_at=date.today(),
+    )
+    session.add(blink)
+
+    btx = BankTransaction(
+        account_id_bidx=hash_index(bank_acc_uuid, master_key),
+        period_bidx=hash_index("2026-08", master_key),
+        entry_ref_bidx=hash_index("ref-purge-1", master_key),
+        dedup_bidx=hash_index("2026-08-01|10.00|EUR|DBIT", master_key),
+        amount_enc=encrypt_data("10.00", master_key),
+        currency_enc=encrypt_data("EUR", master_key),
+        credit_debit_enc=encrypt_data("DBIT", master_key),
+        status_enc=encrypt_data("BOOK", master_key),
+    )
+    session.add(btx)
+    session.commit()
+
+    # Track that close_session was called on the mock client
+    closed_sessions = []
+    class MockClient:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def close_session(self, sid):
+            closed_sessions.append(sid)
+
+    monkeypatch.setattr("services.banking.client.build_client", lambda *args, **kwargs: MockClient())
+
+    before = _remaining_rows(session, user_uuid, master_key)
+    assert before["bank_accounts"] == 1
+    assert before["bank_transactions"] == 1
+    assert before["bank_account_links"] == 1
+    assert before["bank_sessions"] == 1
+    assert before["user_bank_connections"] == 1
+    assert before["bank_authorizations"] == 1
+
+    # Purge
+    response = client.request(
+        "DELETE",
+        "/auth/me",
+        json={"password": PASSWORD, "confirm_username": "bank_purge"},
+        headers=headers,
+    )
+    assert response.status_code == 204
+
+    after = _remaining_rows(session, user_uuid, master_key)
+    assert after == {table: 0 for table in after}, f"tables survived purge: {after}"
+    assert "sess-ext-123" in closed_sessions
+
