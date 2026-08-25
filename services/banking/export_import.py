@@ -26,8 +26,8 @@ from models.banking import BankAccountLink, BankSession
 from services.bank import replace_history_window
 from services.banking.linking import is_card_account
 from services.banking.sync import (
-    ACCOUNTING_BALANCE_TYPE,
-    _accounting_balance,
+    AccountingBalanceUnavailableError,
+    _accounting_balance_row,
     _booked_movements,
     _curve_entries,
 )
@@ -143,61 +143,48 @@ def import_enablebanking_export(
         # Handle balances and history curve
         raw_balances = item.get("balances") or []
         snapshots_written = 0
+        status = "imported"
+        detail = None
         is_card = is_card_account(session, matched_link, master_key)
 
-        if raw_balances and not is_card and parsed:
-            # Pick closing balance (CLBD) if available, otherwise first balance
-            clbd = next(
-                (b for b in raw_balances if (b.get("balance_type") or "").upper() == ACCOUNTING_BALANCE_TYPE),
-                raw_balances[0],
-            )
-            try:
-                bal_amount = Decimal(str(clbd["balance_amount"]["amount"]))
-                ref_date_str = clbd.get("reference_date")
-                ref_date = date.fromisoformat(ref_date_str) if ref_date_str else date.today()
-
-                valid_dates = [t.effective_date for t in parsed if t.effective_date is not None]
-                if valid_dates:
-                    covered_from = min(valid_dates)
-                    movements = _booked_movements(
-                        session, target_account, master_key, covered_from, ref_date
-                    )
-                    curve_entries = _curve_entries(bal_amount, movements, covered_from, ref_date)
-                    snapshots_written = replace_history_window(
-                        session,
-                        target_account,
-                        curve_entries,
-                        master_key,
-                        covered_from,
-                        ref_date,
-                    )
-
-                    # Update anchor and account balance
-                    matched_link.anchor_date = ref_date
-                    matched_link.anchor_balance_enc = encrypt_data(
-                        str(bal_amount - movements.get(ref_date, Decimal("0"))), master_key
-                    )
-                    matched_link.last_synced_at = ref_date
-                    session.add(matched_link)
-
-                    target_account.balance_enc = encrypt_data(str(bal_amount), master_key)
-                    target_account.balance_updated_at = ref_date
-                    session.add(target_account)
-                    session.commit()
-            except Exception as e:
-                logger.exception("Failed to build balance curve from export balances: %s", e)
-
-        detail = None
         if is_card:
             detail = (
                 "Courbe rétrospective non écrite : les mouvements de ce compte sont "
                 "dédupliqués vers le compte courant (ruling R19)."
             )
+        elif not raw_balances:
+            detail = "Aucun solde dans l'export : courbe rétrospective non écrite."
+        elif not parsed:
+            detail = "Aucune transaction exploitable : courbe rétrospective non écrite."
+        else:
+            try:
+                snapshots_written, detail = _write_export_curve(
+                    session, master_key, matched_link, target_account, raw_balances, parsed
+                )
+            except AccountingBalanceUnavailableError as exc:
+                # A distinct status, never "imported" with a silent zero: that
+                # is indistinguishable from a card account doing the right thing.
+                logger.warning("export import: %s (account %s)", exc, target_account.uuid)
+                status = "balance_unavailable"
+                detail = (
+                    "Aucun solde comptable en euros dans l'export : les opérations sont "
+                    "importées, la courbe rétrospective ne l'est pas."
+                )
+            except Exception:
+                logger.exception(
+                    "export import: balance curve build failed for account %s",
+                    target_account.uuid,
+                )
+                status = "curve_error"
+                detail = (
+                    "Les opérations sont importées, mais la courbe rétrospective "
+                    "n'a pas pu être reconstruite."
+                )
 
         results.append(
             BankExportImportResult(
                 bank_account_uuid=target_account.uuid,
-                status="imported",
+                status=status,
                 inserted=inserted,
                 updated=updated,
                 skipped=skipped,
@@ -209,3 +196,68 @@ def import_enablebanking_export(
         imported_count += 1
 
     return BankExportImportResponse(imported_accounts=imported_count, results=results)
+
+
+def _write_export_curve(
+    session: Session,
+    master_key: str,
+    link: BankAccountLink,
+    account: BankAccount,
+    raw_balances: list[dict[str, Any]],
+    parsed: list[NormalizedTransaction],
+) -> tuple[int, str | None]:
+    """Rebuild the balance curve over the window the export covers.
+
+    Returns the number of snapshots written and a detail line, if any.
+    """
+    # The same reading the sync uses (§F, constraint 9): the accounting balance,
+    # matched by type. Falling back to `balances[0]` would take the real-time
+    # balance one time in two.
+    balance_row = _accounting_balance_row({"balances": raw_balances})
+    bal_amount = Decimal(str((balance_row.get("balance_amount") or {}).get("amount")))
+    ref_date_str = balance_row.get("reference_date")
+    ref_date = date.fromisoformat(ref_date_str) if ref_date_str else date.today()
+
+    valid_dates = [tx.effective_date for tx in parsed if tx.effective_date is not None]
+    if not valid_dates:
+        return 0, "Aucune opération datable dans l'export : courbe rétrospective non écrite."
+    covered_from = min(valid_dates)
+
+    movements = _booked_movements(session, account, master_key, covered_from, ref_date)
+    snapshots_written = replace_history_window(
+        session,
+        account,
+        _curve_entries(bal_amount, movements, covered_from, ref_date),
+        master_key,
+        covered_from,
+        ref_date,
+    )
+
+    # An export is a *catch-up*: its reference date is routinely older than what
+    # the link already knows. The curve above is bounded to [covered_from,
+    # ref_date] and is history, so it is written either way — but the anchor,
+    # `last_synced_at` and the account's current balance say "where we are now".
+    # Walking them backwards restores a stale balance as the current one (the
+    # trap §D5 names) and, because R7 derives "estimated" from `anchor_date`,
+    # silently re-labels already reconciled days as estimated.
+    detail: str | None = None
+    if ref_date < link.anchor_date:
+        detail = (
+            f"Export antérieur à l'ancre du compte ({link.anchor_date.isoformat()}) : "
+            "courbe rétrospective écrite, ancre et solde courant conservés."
+        )
+    else:
+        link.anchor_date = ref_date
+        link.anchor_balance_enc = encrypt_data(
+            str(bal_amount - movements.get(ref_date, Decimal("0"))), master_key
+        )
+        link.last_synced_at = max(link.last_synced_at, ref_date)
+        session.add(link)
+
+    if account.balance_updated_at is None or ref_date >= account.balance_updated_at:
+        account.balance_enc = encrypt_data(str(bal_amount), master_key)
+        account.balance_updated_at = ref_date
+        session.add(account)
+
+    session.commit()
+    return snapshots_written, detail

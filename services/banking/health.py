@@ -7,6 +7,21 @@ descriptions are misaligned with their values, documented trap).
 Operational metadata (`status` and `consent_valid_until`) are stored in clear text
 on `BankSession` so that scheduled background checks can update expired sessions
 without requiring a Master Key.
+
+**Two halves, and only one of them is a background job (ruling R20).**
+`check_session_health` runs keyless in the nightly scheduler: it reads clear-text
+columns and writes clear-text columns. `notify_user_expiring_consents` cannot,
+because a `Notification` row is keyed by a clear-text `user_uuid` and a
+`BankSession` carries only `user_uuid_bidx` — a keyless job cannot recover the
+one from the other. Adding the clear-text `user_uuid` to `bank_sessions` would
+recover it, and was rejected: it would make the database itself reveal which
+users hold a bank connection.
+
+**Accepted limitation, deliberately traded:** the warning is therefore produced
+from the sync path, where a Master Key exists — so the user is warned when they
+next open CapitalView, not while they are away. On a ninety-day consent with a
+seven-day window that is a wide enough net, and confidentiality wins over
+reaching a user who is not looking.
 """
 
 from __future__ import annotations
@@ -61,8 +76,11 @@ SESSION_STATUS_MESSAGES: dict[str, str] = {
 EXPIRATION_NOTIFICATION_WINDOW_DAYS = 7
 
 
-def is_session_active(status: str) -> bool:
-    """Whether a session is currently authorized and usable."""
+def is_session_active(status: str | None) -> bool:
+    """Whether a session is currently authorized and usable.
+
+    `None` (a link whose session row is gone) is not active.
+    """
     return status == STATUS_AUTHORIZED
 
 
@@ -111,6 +129,11 @@ def notify_user_expiring_consents(
     now: datetime | None = None,
 ) -> int:
     """Check if the user has any active bank consent expiring soon and send a notification.
+
+    Called from `sync_user_accounts`, never from the scheduler: it needs the
+    Master Key twice over — to reach this user's sessions through their blind
+    index, and to write the clear-text `user_uuid` a `Notification` is keyed by
+    (see the module docstring for the trade this settles).
 
     Prevents duplicate notifications for the same session expiry window.
     """
@@ -176,7 +199,11 @@ def notify_user_expiring_consents(
 
 
 def check_all_consents_daily() -> None:
-    """Daily cron task to check session expirations."""
+    """Daily cron task: mark consents that have passed their cutoff as EXPIRED.
+
+    It does **not** notify. Notifying needs a Master Key this job does not have
+    (ruling R20); `sync_user_accounts` carries that half.
+    """
     from database import get_engine
 
     engine = get_engine()

@@ -303,3 +303,180 @@ class TestRealExportReplay:
         assert resp.results[1].inserted == 28
         assert resp.results[1].skipped == 1436
         assert resp.results[1].inserted + resp.results[1].skipped == 1464
+
+
+# ---------------------------------------------------------------------------
+# A catch-up export is history, not "where we are now" (§D5, R7)
+# ---------------------------------------------------------------------------
+
+
+def _export(ident: str, balances: list[dict], tx_days_ago: int = 40) -> dict:
+    day = (date.today() - timedelta(days=tx_days_ago)).isoformat()
+    return {
+        "accounts": [
+            {
+                "info": {"identification_hash": ident, "cash_account_type": "CACC"},
+                "transactions": [
+                    {
+                        "entry_reference": "old-ref-1",
+                        "transaction_amount": {"currency": "EUR", "amount": "20.00"},
+                        "credit_debit_indicator": "DBIT",
+                        "status": "BOOK",
+                        "booking_date": day,
+                    }
+                ],
+                "balances": balances,
+            }
+        ]
+    }
+
+
+def _clbd(amount: str, days_ago: int) -> dict:
+    return {
+        "balance_amount": {"currency": "EUR", "amount": amount},
+        "balance_type": "CLBD",
+        "reference_date": (date.today() - timedelta(days=days_ago)).isoformat(),
+    }
+
+
+class TestAnchorIsNeverWalkedBackwards:
+    def test_an_export_older_than_the_anchor_writes_its_curve_but_keeps_the_anchor(
+        self, session: Session, master_key: str, sqlite_pg_insert
+    ):
+        """The catch-up case the fixtures never covered: a link already synced.
+
+        Regressing `anchor_date` re-labels reconciled days as estimated (R7
+        derives "estimated" from it), and regressing `balance_updated_at`
+        restores a stale balance as the account's current one — the precise
+        pattern §D5 warns about.
+        """
+        ident = "ih-anchor-guard"
+        account, link = _setup_account_and_link(session, master_key, ident)
+        today = date.today()
+        link.anchor_date = today
+        link.last_synced_at = today
+        session.add(link)
+        account.balance_enc = encrypt_data("999.00", master_key)
+        account.balance_updated_at = today
+        session.add(account)
+        session.commit()
+
+        resp = import_enablebanking_export(
+            session, USER_UUID, master_key, _export(ident, [_clbd("100.00", days_ago=30)])
+        )
+
+        session.refresh(link)
+        session.refresh(account)
+        assert link.anchor_date == today
+        assert link.last_synced_at == today
+        assert account.balance_updated_at == today
+        assert decrypt_data(account.balance_enc, master_key) == "999.00"
+        # The history it *is* authoritative over is still written.
+        assert resp.results[0].snapshots_written > 0
+        assert "conservés" in resp.results[0].detail
+
+    def test_an_export_at_or_after_the_anchor_takes_the_anchor_over(
+        self, session: Session, master_key: str, sqlite_pg_insert
+    ):
+        ident = "ih-anchor-advance"
+        account, link = _setup_account_and_link(session, master_key, ident)
+        link.anchor_date = date.today() - timedelta(days=60)
+        link.last_synced_at = date.today() - timedelta(days=61)
+        session.add(link)
+        session.commit()
+
+        ref_date = date.today() - timedelta(days=5)
+        import_enablebanking_export(
+            session, USER_UUID, master_key, _export(ident, [_clbd("100.00", days_ago=5)])
+        )
+
+        session.refresh(link)
+        session.refresh(account)
+        assert link.anchor_date == ref_date
+        assert link.last_synced_at == ref_date
+        assert account.balance_updated_at == ref_date
+        assert Decimal(decrypt_data(account.balance_enc, master_key)) == Decimal("100.00")
+
+
+class TestWhichBalanceTheImportReads:
+    def test_the_real_time_balance_is_never_taken_for_the_accounting_one(
+        self, session: Session, master_key: str, sqlite_pg_insert
+    ):
+        """Constraint 9 / §F: XPCD is published alongside CLBD and comes first
+        as often as not. `raw_balances[0]` is wrong one time in two."""
+        ident = "ih-balance-order"
+        account, link = _setup_account_and_link(session, master_key, ident)
+        balances = [
+            {
+                "balance_amount": {"currency": "EUR", "amount": "244.07"},
+                "balance_type": "XPCD",
+                "reference_date": (date.today() - timedelta(days=5)).isoformat(),
+            },
+            _clbd("406.70", days_ago=5),
+        ]
+
+        import_enablebanking_export(session, USER_UUID, master_key, _export(ident, balances))
+
+        session.refresh(account)
+        assert Decimal(decrypt_data(account.balance_enc, master_key)) == Decimal("406.70")
+
+    def test_an_export_with_only_a_real_time_balance_is_not_a_clean_import(
+        self, session: Session, master_key: str, sqlite_pg_insert
+    ):
+        """No silent substitution: reporting `imported` with `snapshots_written: 0`
+        is indistinguishable from a card account behaving correctly."""
+        ident = "ih-balance-missing"
+        account, link = _setup_account_and_link(session, master_key, ident)
+        balances = [
+            {
+                "balance_amount": {"currency": "EUR", "amount": "244.07"},
+                "balance_type": "XPCD",
+                "reference_date": date.today().isoformat(),
+            }
+        ]
+
+        resp = import_enablebanking_export(session, USER_UUID, master_key, _export(ident, balances))
+
+        assert resp.results[0].status == "balance_unavailable"
+        assert resp.results[0].snapshots_written == 0
+        # The operations themselves were still ingested.
+        assert resp.results[0].inserted == 1
+
+    def test_a_foreign_currency_closing_balance_is_not_read_as_euros(
+        self, session: Session, master_key: str, sqlite_pg_insert
+    ):
+        ident = "ih-balance-currency"
+        account, link = _setup_account_and_link(session, master_key, ident)
+        balances = [
+            {
+                "balance_amount": {"currency": "CHF", "amount": "406.70"},
+                "balance_type": "CLBD",
+                "reference_date": date.today().isoformat(),
+            }
+        ]
+
+        resp = import_enablebanking_export(session, USER_UUID, master_key, _export(ident, balances))
+
+        assert resp.results[0].status == "balance_unavailable"
+
+
+def test_a_curve_that_fails_to_build_is_never_reported_as_imported(
+    session: Session, master_key: str, sqlite_pg_insert, monkeypatch
+):
+    """A swallowed exception used to leave `imported` / `snapshots_written: 0`,
+    with nothing in the logs and nothing in the response to tell them apart."""
+    ident = "ih-curve-error"
+    account, link = _setup_account_and_link(session, master_key, ident)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("history window write failed")
+
+    monkeypatch.setattr("services.banking.export_import.replace_history_window", _boom)
+
+    resp = import_enablebanking_export(
+        session, USER_UUID, master_key, _export(ident, [_clbd("100.00", days_ago=5)])
+    )
+
+    assert resp.results[0].status == "curve_error"
+    assert resp.results[0].inserted == 1
+    assert resp.results[0].snapshots_written == 0

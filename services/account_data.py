@@ -9,6 +9,7 @@ deferred to a background job.
 """
 
 import json
+import logging
 from datetime import datetime, timezone
 
 import sqlalchemy as sa
@@ -45,6 +46,8 @@ from models.user import (
     UserSettings,
 )
 from services.encryption import DecryptionError, decrypt_data, hash_index
+
+logger = logging.getLogger(__name__)
 
 EXPORT_VERSION = 1
 
@@ -374,6 +377,7 @@ def _close_user_bank_sessions(
     """
     from services.banking.client import build_client
     from services.banking.credentials import get_decrypted_credentials
+    from services.banking.health import STATUS_AUTHORIZED
 
     try:
         creds = get_decrypted_credentials(session, user_uuid, master_key)
@@ -382,7 +386,7 @@ def _close_user_bank_sessions(
         active_sessions = session.exec(
             select(BankSession).where(
                 BankSession.user_uuid_bidx == user_bidx,
-                BankSession.status == "AUTHORIZED",
+                BankSession.status == STATUS_AUTHORIZED,
             )
         ).all()
         if not active_sessions:
@@ -393,6 +397,12 @@ def _close_user_bank_sessions(
                     session_id = decrypt_data(s.session_id_enc, master_key)
                     client.close_session(session_id)
                 except Exception:
-                    pass
+                    # Swallowed on purpose — the purge is what the user asked
+                    # for and a bank that refuses to close must not block it.
+                    # Logged, because the consent then survives at the bank with
+                    # nothing left on our side pointing at it.
+                    logger.exception(
+                        "purge: could not close an Enable Banking session for user %s", user_uuid
+                    )
     except Exception:
-        pass
+        logger.exception("purge: bank session closure step failed for user %s", user_uuid)

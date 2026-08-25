@@ -25,7 +25,12 @@ from models.enums import AccountCategory, BankAccountType
 from services.bank import create_bank_account, get_user_bank_accounts
 from services.banking.credentials import upsert_connection
 from services.banking.errors import InvalidPeriodError, SessionInvalidError
-from services.banking.sync import SEED_DATE_FROM, sync_user_accounts
+from services.banking.sync import (
+    SEED_DATE_FROM,
+    AccountingBalanceUnavailableError,
+    _accounting_balance,
+    sync_user_accounts,
+)
 from services.banking.transactions import store_transactions
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
@@ -393,6 +398,54 @@ class TestBalanceSelection:
         assert [r.status for r in results] == ["error"]
         session.refresh(link)
         assert link.anchor_date == TODAY - timedelta(days=3)
+
+    def test_the_card_fallback_is_othr_only_and_never_the_real_time_balance(self):
+        """Ruling R19 needs *a* balance on a card account — the real capture
+        publishes one single OTHR there and no CLBD at all. It does not license
+        "any EUR balance": XPCD is the real-time balance, and folding pending
+        operations into an anchor is the substitution
+        `AccountingBalanceUnavailableError` exists to forbid (§F)."""
+        othr_only = {
+            "balances": [
+                {"balance_amount": {"currency": "EUR", "amount": "0"}, "balance_type": "OTHR"}
+            ]
+        }
+        assert _accounting_balance(othr_only, is_card=True) == Decimal("0")
+
+        real_time_only = {
+            "balances": [
+                {"balance_amount": {"currency": "EUR", "amount": "244.07"}, "balance_type": "XPCD"}
+            ]
+        }
+        with pytest.raises(AccountingBalanceUnavailableError):
+            _accounting_balance(real_time_only, is_card=True)
+
+    def test_a_regular_account_never_falls_back_at_all(self):
+        othr_only = {
+            "balances": [
+                {"balance_amount": {"currency": "EUR", "amount": "0"}, "balance_type": "OTHR"}
+            ]
+        }
+        with pytest.raises(AccountingBalanceUnavailableError):
+            _accounting_balance(othr_only)
+
+    def test_a_card_account_still_prefers_the_accounting_balance_when_there_is_one(self):
+        payload = {
+            "balances": [
+                {"balance_amount": {"currency": "EUR", "amount": "0"}, "balance_type": "OTHR"},
+                {"balance_amount": {"currency": "EUR", "amount": "406.70"}, "balance_type": "CLBD"},
+            ]
+        }
+        assert _accounting_balance(payload, is_card=True) == Decimal("406.70")
+
+    def test_a_foreign_currency_balance_is_never_read_as_euros(self):
+        payload = {
+            "balances": [
+                {"balance_amount": {"currency": "CHF", "amount": "406.70"}, "balance_type": "CLBD"}
+            ]
+        }
+        with pytest.raises(AccountingBalanceUnavailableError):
+            _accounting_balance(payload, is_card=True)
 
 
 class TestFetchWindow:

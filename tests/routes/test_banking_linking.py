@@ -778,3 +778,128 @@ def test_delete_unknown_session_is_404(session, master_key, monkeypatch):
     client = TestClient(app)
     r = client.delete("/banking/sessions/does-not-exist")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /banking/status and GET /banking/aspsps — frozen in api-contract.md, and
+# until this fix round neither had a single test. `/banking/status` was calling
+# a name its module had stopped importing, so every call raised NameError.
+# ---------------------------------------------------------------------------
+
+
+def test_status_reports_no_credentials_before_anything_is_configured(session, master_key):
+    r = TestClient(app).get("/banking/status")
+
+    assert r.status_code == 200
+    assert r.json() == {"has_credentials": False, "application_id": None}
+
+
+def test_status_reports_the_application_id_but_never_the_private_key(session, master_key):
+    client = TestClient(app)
+    _configure_credentials(client)
+
+    r = client.get("/banking/status")
+
+    assert r.status_code == 200
+    assert r.json() == {"has_credentials": True, "application_id": "app-123"}
+    assert "secret" not in r.text
+    assert "private_key" not in r.text
+
+
+def test_aspsps_lists_the_catalogue_for_a_country(session, master_key, monkeypatch):
+    client = TestClient(app)
+    _configure_credentials(client)
+    fake = _patch_client(monkeypatch, FakeClient(list_aspsps={"aspsps": [BOURSORAMA_ASPSP]}))
+
+    r = client.get("/banking/aspsps", params={"country": "FR"})
+
+    assert r.status_code == 200
+    assert [a["name"] for a in r.json()] == ["Boursorama Banque"]
+    assert ("list_aspsps", "FR") in fake.calls
+
+
+def test_aspsps_without_credentials_is_a_400_not_a_crash(session, master_key):
+    r = TestClient(app).get("/banking/aspsps", params={"country": "FR"})
+
+    assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# POST /banking/import-export — Task 11's only route, and it had no test either
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sqlite_pg_insert(monkeypatch):
+    """Same workaround as tests/services/test_bank.py:30."""
+    import sqlalchemy as sa
+
+    def _fake(table):
+        class _Stmt:
+            def values(self, rows):
+                self._rows = rows
+                return self
+
+            def on_conflict_do_nothing(self, **kwargs):
+                return sa.insert(table).values(self._rows)
+
+        return _Stmt()
+
+    monkeypatch.setattr("services.bank.pg_insert", _fake)
+
+
+def test_import_export_ingests_an_export_for_a_linked_account(
+    session, master_key, monkeypatch, sqlite_pg_insert
+):
+    client = TestClient(app)
+    _configure_credentials(client)
+    bank_account_uuid = _create_bank_account(session, master_key)
+    bank_session_uuid = _create_bank_session(session, master_key)
+    _forbid_client(monkeypatch)
+    assert (
+        client.post(
+            f"/banking/sessions/{bank_session_uuid}/link",
+            json={"identification_hash": "hash-1", "bank_account_uuid": bank_account_uuid},
+        ).status_code
+        == 200
+    )
+
+    r = client.post(
+        "/banking/import-export",
+        json={
+            "accounts": [
+                {
+                    "info": {"identification_hash": "hash-1", "cash_account_type": "CACC"},
+                    "transactions": [
+                        {
+                            "entry_reference": "export-ref-1",
+                            "transaction_amount": {"currency": "EUR", "amount": "45.50"},
+                            "credit_debit_indicator": "DBIT",
+                            "status": "BOOK",
+                            "booking_date": (date.today() - timedelta(days=10)).isoformat(),
+                        }
+                    ],
+                    "balances": [
+                        {
+                            "balance_amount": {"currency": "EUR", "amount": "954.50"},
+                            "balance_type": "CLBD",
+                            "reference_date": (date.today() - timedelta(days=1)).isoformat(),
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["imported_accounts"] == 1
+    assert body["results"][0]["status"] == "imported"
+    assert body["results"][0]["inserted"] == 1
+
+
+def test_import_export_rejects_a_payload_that_is_not_an_export():
+    r = TestClient(app).post("/banking/import-export", json={"nope": True})
+
+    assert r.status_code == 400
+    assert "accounts" in r.json()["detail"]

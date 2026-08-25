@@ -15,6 +15,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
+from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession, BankTransaction
 from services.banking.transactions import normalize_transaction, store_transactions
 from services.encryption import decrypt_data, encrypt_data, hash_index
@@ -568,3 +569,104 @@ def test_real_payload_pending_and_dateless_booking_are_handled(
     without_booking = [row for row in rows if row.booking_date_enc is None]
     assert len(without_booking) == 2
     assert all(row.period_bidx for row in without_booking)
+
+
+# ---------------------------------------------------------------------------
+# The same operation, two access paths, three fields disagreeing (§F)
+#
+# `avis-7575adaa5ee1609c529260924ef7f489` is one single Denner purchase. Read
+# through the API it is `CHF 12.63 / DBIT / PDNG` with a positive amount; read
+# out of the JSON export it is `EUR -12.63 / DBIT / OTHR`. Currency, sign *and*
+# status differ by access path, and only the entry_reference is common to both.
+#
+# The sign is the dangerous half: `_booked_movements` applies `net[day] -=
+# amount` to anything that is not CRDT, so a negative amount carrying an
+# explicit DBIT would be *added* to the curve — a 12.63 debit booked as a 12.63
+# credit. Nothing but the `status != "BOOK"` filter stands between that row and
+# the balance curve today, and a bank is free to book it tomorrow.
+# ---------------------------------------------------------------------------
+
+
+DIVERGENT_EXPORT_ROW = {
+    "entry_reference": "avis-7575adaa5ee1609c529260924ef7f489",
+    "transaction_amount": {"currency": "EUR", "amount": "-12.63"},
+    "credit_debit_indicator": "DBIT",
+    "status": "OTHR",
+    "booking_date": None,
+    "value_date": None,
+    "transaction_date": "2026-08-15",
+    "remittance_information": ["DENNER GE-RTE DE FRONTENE\\GENEVE \\CH"],
+    "exchange_rate": None,
+    "transaction_id": None,
+}
+
+DIVERGENT_API_ROW = {
+    "entry_reference": "avis-7575adaa5ee1609c529260924ef7f489",
+    "transaction_amount": {"currency": "CHF", "amount": "12.63"},
+    "credit_debit_indicator": "DBIT",
+    "status": "PDNG",
+    "booking_date": None,
+    "value_date": None,
+    "transaction_date": "2026-08-15",
+    "remittance_information": ["DENNER GE-RTE DE FRONTENE\\GENEVE \\CH"],
+    "exchange_rate": None,
+    "transaction_id": None,
+}
+
+
+def test_the_two_access_paths_disagree_on_currency_sign_and_status():
+    """The divergence itself, pinned. If a capture ever stops disagreeing, this
+    is the test that says so."""
+    export_row = normalize_transaction(DIVERGENT_EXPORT_ROW)
+    api_row = normalize_transaction(DIVERGENT_API_ROW)
+
+    assert export_row.entry_reference == api_row.entry_reference
+    assert (export_row.currency, api_row.currency) == ("EUR", "CHF")
+    assert (export_row.status, api_row.status) == ("OTHR", "PDNG")
+    # Neither path supplies a booking date: both fall back to transaction_date.
+    assert export_row.booking_date is None and api_row.booking_date is None
+    assert export_row.effective_date == api_row.effective_date == date(2026, 8, 15)
+
+
+def test_a_negative_amount_with_an_explicit_dbit_is_read_as_a_debit():
+    """The direction indicator is authoritative; the amount is a magnitude.
+
+    Both paths describe the same 12.63 debit, so both must normalise to the
+    same signed reading — otherwise the export path books it backwards.
+    """
+    export_row = normalize_transaction(DIVERGENT_EXPORT_ROW)
+    api_row = normalize_transaction(DIVERGENT_API_ROW)
+
+    assert export_row.amount == api_row.amount == Decimal("12.63")
+    assert export_row.credit_debit == api_row.credit_debit == "DBIT"
+
+
+def test_a_negative_amount_never_becomes_a_credit_in_the_balance_curve(
+    session: Session, master_key: str, linked_accounts
+):
+    """The consequence, measured on the curve rather than on the dataclass.
+
+    Stored with the export's negative amount and booked, the row must lower the
+    day's net by 12.63. Read verbatim it would raise it by 12.63 — a 25.26 error
+    on one operation, and the `status != "BOOK"` filter is the only thing that
+    hides it today.
+    """
+    from services.banking.sync import _booked_movements
+
+    account = BankAccount(
+        user_uuid_bidx=hash_index(USER, master_key),
+        name_enc=encrypt_data("Compte courant", master_key),
+        balance_enc=encrypt_data("1000.00", master_key),
+        account_type_enc=encrypt_data("CHECKING", master_key),
+    )
+    session.add(account)
+    session.commit()
+
+    booked = dict(DIVERGENT_EXPORT_ROW, status="BOOK", booking_date="2026-08-15")
+    store_transactions(session, USER, master_key, account.uuid, [booked])
+
+    movements = _booked_movements(
+        session, account, master_key, date(2026, 8, 15), date(2026, 8, 15)
+    )
+
+    assert movements[date(2026, 8, 15)] == Decimal("-12.63")

@@ -28,6 +28,7 @@ rate is ever supplied); readers must check `currency_enc` before summing.
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -39,6 +40,8 @@ from sqlmodel import Session, select
 
 from models.banking import BankAccountLink, BankTransaction
 from services.encryption import decrypt_data, encrypt_data, hash_index
+
+logger = logging.getLogger(__name__)
 
 # Currency the rest of CapitalView reasons in. Anything else is stored as-is.
 BASE_CURRENCY = "EUR"
@@ -144,6 +147,21 @@ def normalize_transaction(raw: dict[str, Any]) -> NormalizedTransaction:
     status = raw.get("status")
     if not status:
         raise ValueError("status is required")
+
+    # The direction indicator carries the sign; the amount carries the
+    # magnitude. Measured on the real export: two rows publish a *negative*
+    # amount alongside an explicit DBIT, and the API publishes the same
+    # operation as a positive amount with the same DBIT — the sign is noise on
+    # one access path only. Kept as-is it would invert the movement, since
+    # `_booked_movements` subtracts a debit and subtracting a negative credits.
+    if amount < 0:
+        logger.warning(
+            "negative transaction amount %s alongside an explicit %s indicator; "
+            "reading the indicator as authoritative and the amount as a magnitude",
+            amount,
+            credit_debit,
+        )
+        amount = -amount
 
     currency = str(amount_field.get("currency") or BASE_CURRENCY)
     booking_date = _parse_date(raw.get("booking_date"))

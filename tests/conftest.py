@@ -1,6 +1,7 @@
 import pytest
 import sys
 from unittest.mock import MagicMock
+from sqlalchemy import event
 from sqlmodel import SQLModel, Session, create_engine
 from sqlalchemy.pool import StaticPool
 from typing import Generator
@@ -13,12 +14,21 @@ DATABASE_URL = "sqlite:///:memory:"
 @pytest.fixture(name="engine", scope="session")
 def engine_fixture():
     engine = create_engine(
-        DATABASE_URL, 
-        connect_args={"check_same_thread": False}, 
-        poolclass=StaticPool, 
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
         echo=False
     )
-    
+
+    # SQLite ignores foreign keys unless asked, so ordering bugs a production
+    # PostgreSQL would reject (deleting a bank_sessions row a bank_account_links
+    # row still points at) used to pass here unnoticed.
+    @event.listens_for(engine, "connect")
+    def _enforce_foreign_keys(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     # Deduplicate indexes in metadata (fix for extend_existing=True with multiple imports)
     for table in SQLModel.metadata.tables.values():
         seen_indexes = set()

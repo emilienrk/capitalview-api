@@ -24,6 +24,7 @@ Three things this module is deliberate about:
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
@@ -49,6 +50,14 @@ from services.banking.errors import (
     PaginationLimitExceededError,
     SessionInvalidError,
 )
+from services.banking.health import (
+    STATUS_CLOSED,
+    STATUS_EXPIRED,
+    STATUS_INVALID,
+    STATUS_REVOKED,
+    notify_user_expiring_consents,
+    session_status_message,
+)
 from services.banking.linking import NotConfiguredError, is_card_account
 from services.banking.transactions import (
     BASE_CURRENCY,
@@ -59,6 +68,8 @@ from services.banking.transactions import (
     store_transactions,
 )
 from services.encryption import decrypt_data, encrypt_data, hash_index
+
+logger = logging.getLogger(__name__)
 
 # The first pass needs `strategy=longest` AND a deliberately ancient date_from:
 # `longest` alone self-limits to two years despite its name, and omitting the
@@ -77,16 +88,19 @@ PENDING_LOOKBACK = timedelta(days=90)
 # accounting balance). Never by position in the list: the real-time balance
 # XPCD comes first as often as not.
 ACCOUNTING_BALANCE_TYPE = "CLBD"
+# The one substitution allowed, and only on a card account (ruling R19): the
+# real capture publishes a single OTHR balance there and no CLBD at all.
+CARD_BALANCE_TYPE = "OTHR"
 
 
 # Business error codes, never HTTP statuses (§B5), mapped onto the SessionStatus
 # member the consent moves to. The link itself is always preserved.
 _SESSION_STATUS_BY_CODE = {
-    "EXPIRED_SESSION": "EXPIRED",
-    "REVOKED_SESSION": "REVOKED",
-    "CLOSED_SESSION": "CLOSED",
-    "SESSION_DOES_NOT_EXIST": "INVALID",
-    "WRONG_SESSION_STATUS": "INVALID",
+    "EXPIRED_SESSION": STATUS_EXPIRED,
+    "REVOKED_SESSION": STATUS_REVOKED,
+    "CLOSED_SESSION": STATUS_CLOSED,
+    "SESSION_DOES_NOT_EXIST": STATUS_INVALID,
+    "WRONG_SESSION_STATUS": STATUS_INVALID,
 }
 
 
@@ -110,6 +124,16 @@ def sync_user_accounts(
     Global by design (ruling R16): a per-account trigger would hand the ordering
     decision of R12 to the caller.
     """
+    # Ruling R20: this is where a consent expiry gets announced, because this is
+    # where a Master Key exists. Before the daily cap, so a capped call still
+    # warns — the front calls this after every render. Never fatal to the sync:
+    # a synchronisation that succeeded must not be reported as failed because a
+    # notification could not be written.
+    try:
+        notify_user_expiring_consents(session, user_uuid, master_key)
+    except Exception:
+        logger.exception("failed to notify expiring bank consents")
+
     user_bidx = hash_index(user_uuid, master_key)
     links = session.exec(
         select(BankAccountLink).where(BankAccountLink.user_uuid_bidx == user_bidx)
@@ -189,9 +213,11 @@ def sync_account_link(
             SEED_STRATEGY if seeding else INCREMENTAL_STRATEGY,
         )
     except SessionInvalidError as exc:
-        _mark_consent_lost(session, link, exc)
+        # The status the consent moved to decides the wording, mapped by member
+        # name: the four ways a consent can be lost call for four different
+        # instructions, and no raw vendor string reaches the user.
         result.status = "reconnect_required"
-        result.detail = f"{exc.code}: {exc.message}"
+        result.detail = session_status_message(_mark_consent_lost(session, link, exc))
         return result
     except (BankingApiError, PaginationLimitExceededError, AccountingBalanceUnavailableError) as exc:
         result.status = "error"
@@ -331,34 +357,57 @@ def _card_marker_missing(
 # ---------------------------------------------------------------------------
 
 
-def _accounting_balance(payload: dict[str, Any], is_card: bool = False) -> Decimal:
-    """The accounting balance, matched by balance type (CLBD) and read in euros.
-
-    Two balances coexist on checking accounts and the real-time one is published
-    alongside; taking the first element of the list is wrong half the time (§F).
-    Card accounts publish only OTHR or XPCD balance types, which are used as
-    fallback when CLBD is absent (ruling R19).
-    """
-    balances = payload.get("balances", [])
-    # 1. Prefer CLBD (closing booked)
+def _balance_of_type(balances: list[dict[str, Any]], balance_type: str) -> dict[str, Any] | None:
+    """The euro balance carrying `balance_type`, or None. Never by position."""
     for balance in balances:
-        if balance.get("balance_type") != ACCOUNTING_BALANCE_TYPE:
+        if balance.get("balance_type") != balance_type:
             continue
         amount = balance.get("balance_amount") or {}
         if str(amount.get("currency") or "") != BASE_CURRENCY:
             continue
-        return Decimal(str(amount.get("amount")))
+        return balance
+    return None
 
-    # 2. Fallback to any EUR balance for card accounts only
+
+def _accounting_balance_row(payload: dict[str, Any], is_card: bool = False) -> dict[str, Any]:
+    """The balance object that carries the accounting balance, in euros.
+
+    Strict CLBD, and the substitution is enumerated rather than open: a card
+    account publishes **no** CLBD at all — the real capture holds one single
+    `OTHR` balance — so `OTHR` is accepted for card accounts and nothing else.
+    `XPCD` in particular is never a candidate: it is the real-time balance, and
+    folding pending operations into an anchor is the exact silent substitution
+    `AccountingBalanceUnavailableError` exists to forbid (§F, constraint 9).
+    The fallback is narrow, named and logged — never a "first EUR balance wins".
+    """
+    balances = payload.get("balances", [])
+    row = _balance_of_type(balances, ACCOUNTING_BALANCE_TYPE)
+    if row is not None:
+        return row
+
     if is_card:
-        for balance in balances:
-            amount = balance.get("balance_amount") or {}
-            if str(amount.get("currency") or "") == BASE_CURRENCY:
-                return Decimal(str(amount.get("amount")))
+        row = _balance_of_type(balances, CARD_BALANCE_TYPE)
+        if row is not None:
+            logger.warning(
+                "no %s balance on this card account, falling back to %s (ruling R19)",
+                ACCOUNTING_BALANCE_TYPE,
+                CARD_BALANCE_TYPE,
+            )
+            return row
 
     raise AccountingBalanceUnavailableError(
         f"no {ACCOUNTING_BALANCE_TYPE} balance in {BASE_CURRENCY} for this account"
     )
+
+
+def _accounting_balance(payload: dict[str, Any], is_card: bool = False) -> Decimal:
+    """The accounting balance, matched by balance type and read in euros.
+
+    Two balances coexist on checking accounts and the real-time one is published
+    alongside; taking the first element of the list is wrong half the time (§F).
+    """
+    amount = _accounting_balance_row(payload, is_card).get("balance_amount") or {}
+    return Decimal(str(amount.get("amount")))
 
 
 def _fetch(
@@ -383,15 +432,19 @@ def _fetch(
         ), earliest
 
 
-def _mark_consent_lost(session: Session, link: BankAccountLink, exc: SessionInvalidError) -> None:
+def _mark_consent_lost(session: Session, link: BankAccountLink, exc: SessionInvalidError) -> str:
     """The consent is gone; the rattachement is not. Only the session's status
-    moves, so a reconnection can re-point this same link (§B5)."""
+    moves, so a reconnection can re-point this same link (§B5). Returns the
+    status it moved to."""
+    logger.info("consent lost on link %s: %s: %s", link.uuid, exc.code, exc.message)
+    status = _SESSION_STATUS_BY_CODE.get(exc.code, STATUS_INVALID)
     bank_session = session.get(BankSession, link.session_uuid)
     if bank_session is None:
-        return
-    bank_session.status = _SESSION_STATUS_BY_CODE.get(exc.code, "INVALID")
+        return status
+    bank_session.status = status
     session.add(bank_session)
     session.commit()
+    return status
 
 
 # ---------------------------------------------------------------------------

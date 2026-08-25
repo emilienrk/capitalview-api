@@ -17,6 +17,7 @@ from models.enums import AccountCategory, FlowType
 from dtos import BankAccountCreate, BankAccountUpdate, BankAccountResponse, BankSummaryResponse
 from dtos.bank import BankHistoryEntry
 from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotResponse
+from services.banking.health import is_session_active
 from services.banking.linking import is_card_account
 from services.encryption import encrypt_data, decrypt_data, hash_index
 
@@ -54,8 +55,10 @@ class LinkMetadata:
             if link.last_reconciliation_gap_enc
             else None
         )
+        # Matched by SessionStatus member name, never by the raw literal: the
+        # OpenAPI enum descriptions are misaligned with their values (trap 4).
         self.link_status = (
-            LINK_STATUS_CONNECTED if session_status == "AUTHORIZED" else LINK_STATUS_RECONNECT
+            LINK_STATUS_CONNECTED if is_session_active(session_status) else LINK_STATUS_RECONNECT
         )
         # Derived, never stored (R7's precedent): three outcomes, and none yet
         # while no check has been able to run.

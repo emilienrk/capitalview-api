@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession
 from models.notification import Notification, NotificationType
+from models.user import User
 from services.banking.health import (
     ALL_SESSION_STATUSES,
     STATUS_AUTHORIZED,
@@ -31,6 +32,21 @@ from services.encryption import encrypt_data, hash_index
 
 USER_UUID = "test-health-user-uuid"
 MASTER_KEY = "test-master-key-32-chars-long!!"
+
+
+@pytest.fixture(autouse=True)
+def _user_row(session: Session) -> User:
+    """`notifications.user_uuid` is a real foreign key to `users.uuid`."""
+    user = User(
+        uuid=USER_UUID,
+        auth_salt="salt",
+        username="health",
+        email="health@test.com",
+        password_hash="x",
+    )
+    session.add(user)
+    session.commit()
+    return user
 
 
 def _seed_bank_session(
@@ -181,3 +197,24 @@ class TestExpiringConsentNotifications:
 
         notifs = session.exec(select(Notification).where(Notification.user_uuid == USER_UUID)).all()
         assert len(notifs) == 1
+
+    def test_the_keyless_job_marks_expiry_but_never_notifies(
+        self, session: Session, master_key: str
+    ):
+        """Ruling R20, written down as a test.
+
+        The nightly job has no Master Key, so it cannot recover the clear-text
+        `user_uuid` a Notification is keyed by from a session that carries only
+        `user_uuid_bidx`. It marks; the sync path warns.
+        """
+        past = datetime.now(timezone.utc) - timedelta(hours=2)
+        soon = datetime.now(timezone.utc) + timedelta(days=3)
+        _seed_bank_session(session, master_key, valid_until=past)
+        _seed_bank_session(session, master_key, valid_until=soon, aspsp_name="Autre Banque")
+
+        assert check_session_health(session) == 1
+
+        assert (
+            session.exec(select(Notification).where(Notification.user_uuid == USER_UUID)).all()
+            == []
+        )

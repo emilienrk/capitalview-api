@@ -33,8 +33,7 @@ from dtos.banking import (
 from models import User
 from services.auth import get_current_user, get_master_key
 from services.banking.credentials import (
-    delete_connection,
-    get_connection,
+    get_status,
     upsert_connection,
 )
 from services.banking.export_import import import_enablebanking_export

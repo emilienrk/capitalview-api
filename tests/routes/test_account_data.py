@@ -586,3 +586,68 @@ def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeyp
     assert after == {table: 0 for table in after}, f"tables survived purge: {after}"
     assert "sess-ext-123" in closed_sessions
 
+
+
+def test_purge_deletes_the_links_before_the_sessions_they_point_at(session, monkeypatch):
+    """The ordering itself, asserted rather than inferred from a green purge.
+
+    `bank_account_links.session_uuid` carries `ondelete="RESTRICT"`, so a purge
+    that deleted the sessions first would be rejected by PostgreSQL. SQLite only
+    started catching that once `tests/conftest.py` turned foreign keys on; the
+    returned counter is ordered by construction, so the order is pinned here
+    too — the next refactor cannot silently reverse it and stay green.
+    """
+    from datetime import date, datetime, timezone
+
+    from models.banking import BankAccountLink, BankSession
+    from services.account_data import purge_account
+    from services.encryption import encrypt_data
+
+    client = TestClient(app)
+    access_token, master_key, user_uuid = _register(client, session, "purge_order@example.com")
+    user_bidx = hash_index(user_uuid, master_key)
+    user = session.exec(select(User).where(User.uuid == user_uuid)).one()
+
+    bank_resp = client.post(
+        "/bank/accounts",
+        json={"name": "Compte lié", "account_type": "CHECKING", "balance": "10"},
+        headers=_auth_headers(access_token, master_key),
+    )
+    bank_acc_uuid = bank_resp.json()["id"]
+
+    bank_session = BankSession(
+        user_uuid_bidx=user_bidx,
+        session_id_enc=encrypt_data("sess-order", master_key),
+        status="AUTHORIZED",
+        consent_valid_until=datetime.now(timezone.utc),
+        authorized_at=datetime.now(timezone.utc),
+    )
+    session.add(bank_session)
+    session.commit()
+    session.refresh(bank_session)
+
+    session.add(
+        BankAccountLink(
+            user_uuid_bidx=user_bidx,
+            bank_account_uuid_bidx=hash_index(bank_acc_uuid, master_key),
+            session_uuid=bank_session.uuid,
+            identification_hash_bidx=hash_index("ih-order", master_key),
+            account_uid_enc=encrypt_data("uid-order", master_key),
+            anchor_date=date.today(),
+            anchor_balance_enc=encrypt_data("10.00", master_key),
+            last_synced_at=date.today(),
+        )
+    )
+    session.commit()
+
+    monkeypatch.setattr(
+        "services.banking.client.build_client",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no client expected")),
+    )
+
+    deleted = purge_account(session, user, master_key)
+
+    order = list(deleted)
+    assert order.index("bank_account_links") < order.index("bank_sessions")
+    assert deleted["bank_account_links"] == 1
+    assert deleted["bank_sessions"] == 1

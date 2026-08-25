@@ -5,7 +5,12 @@ Replays the real 4-year dataset (vendor-docs/spike/export-boursorama-2022-2026.j
 behind an offline transport double, verifying:
 - The full linking -> first sync -> second sync -> reconnection lifecycle.
 - The first import recipe (strategy=longest + ancient date_from -> 2,776 transactions).
-- Cross-account deduplication at real scale (>93% of card transactions deduplicated).
+- Cross-account deduplication at real scale: 1,436 of the card account's 1,464
+  rows are recognised on the current account. The spec, the plan and the briefs
+  all quote "1 360 / 93 %"; recomputed from the export with the code's own
+  fingerprint the figure is 1,436 (98.1 %), stable across fingerprint variants
+  and with zero shared `entry_reference`, exactly as documented. The stale
+  figure is reported to the controller, not edited into the spec.
 - Batch-size independence across paginated responses.
 """
 
@@ -26,7 +31,12 @@ from models.account_history import AccountHistory
 from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession, BankTransaction
 from services.banking.client import EnableBankingClient
-from services.banking.sync import SEED_DATE_FROM
+from services.banking.sync import (
+    INCREMENTAL_STRATEGY,
+    SEED_DATE_FROM,
+    SEED_STRATEGY,
+    _fetch,
+)
 from services.encryption import decrypt_data, hash_index
 
 SPIKE_DIR = Path(__file__).resolve().parents[3] / "vendor-docs" / "spike"
@@ -164,8 +174,13 @@ class RealDataOfflineClient:
             else self._data["accounts"][0]["transactions"]
         )
 
-        # Recipe test rule: strategy=longest alone (without very old date_from) auto-limits to 2 years (1987 txs)
-        if strategy == "longest" and (date_from is None or date_from > date(2023, 1, 1)):
+        # The trap of constraint 6, reproduced in both directions: the full
+        # history is served only when *both* halves of the recipe are right.
+        # `strategy=longest` alone self-limits to two years despite its name,
+        # and any other strategy self-limits too however ancient the lower
+        # bound — so a wrong SEED_STRATEGY is punished exactly like a wrong
+        # SEED_DATE_FROM, instead of passing unnoticed.
+        if strategy != "longest" or date_from is None or date_from > date(2023, 1, 1):
             raw_list = raw_list[:1987]
 
         # Simulate pagination in chunks of page_size
@@ -319,7 +334,8 @@ class TestBankingEndToEnd:
         assert cacc_result["inserted"] == 2776
         assert cacc_result["snapshots_written"] > 0
 
-        # Card account cross-deduplication at real scale: 98% deduplicated, 0 snapshots written (R19)
+        # Card account cross-deduplication at real scale: 1436/1464 = 98.1 %
+        # recognised on the current account, 0 snapshots written (R19).
         card_result = next(r for r in sync_data["results"] if r["bank_account_uuid"] == card_id)
         assert card_result["inserted"] == 28
         assert card_result["skipped"] == 1436
@@ -344,20 +360,34 @@ class TestBankingEndToEnd:
             # Links and history survived!
             assert acc["is_linked"] is True
 
-    def test_batch_size_independence(self, session: Session, monkeypatch, sqlite_pg_insert):
-        """Verify that chunking responses into 10, 50, or 100 items yields identical counts."""
+    def test_batch_size_independence(self):
+        """Chunking the feed into 10, 50 or 100 items yields identical counts.
+
+        Driven through the production walker, not through the double's own
+        generator: `_fetch` is the code that must not depend on a batch size.
+        """
         for test_page_size in (10, 50, 100):
             client = RealDataOfflineClient("app", "key", page_size=test_page_size)
-            txs = list(client.iter_transactions("uid-bourso-cacc", date_from=SEED_DATE_FROM, strategy="longest"))
-            assert len(txs) == 2776, f"Failed at page_size={test_page_size}"
+            rows, fetched_from = _fetch(client, "uid-bourso-cacc", SEED_DATE_FROM, SEED_STRATEGY)
+            assert len(rows) == 2776, f"Failed at page_size={test_page_size}"
+            assert fetched_from == SEED_DATE_FROM
 
-    def test_seeding_recipe_strategy_and_date_from(self, session: Session):
-        """Verify the first import recipe: strategy=longest + SEED_DATE_FROM retrieves all 2,776 rows."""
+    def test_seeding_recipe_is_the_two_module_constants(self):
+        """The first-import recipe, read off the constants the sync actually uses.
+
+        The assertion is on `SEED_STRATEGY` and `SEED_DATE_FROM` themselves, so
+        switching either one to a plausible-looking value fails here — that is
+        the whole point: constraint 6's trap loses years *without any error*.
+        """
         client = RealDataOfflineClient("app", "key")
-        # Full history with SEED_DATE_FROM
-        full_txs = list(client.iter_transactions("uid-bourso-cacc", date_from=SEED_DATE_FROM, strategy="longest"))
-        assert len(full_txs) == 2776
 
-        # Standard / recent window limits to 1,987 rows
-        recent_txs = list(client.iter_transactions("uid-bourso-cacc", date_from=date(2024, 1, 1), strategy="longest"))
-        assert len(recent_txs) == 1987
+        rows, _ = _fetch(client, "uid-bourso-cacc", SEED_DATE_FROM, SEED_STRATEGY)
+        assert len(rows) == 2776
+
+        # Right strategy, recent lower bound: two years lost, silently.
+        truncated, _ = _fetch(client, "uid-bourso-cacc", date(2024, 1, 1), SEED_STRATEGY)
+        assert len(truncated) == 1987
+
+        # Ancient lower bound, incremental strategy: the same silent loss.
+        truncated, _ = _fetch(client, "uid-bourso-cacc", SEED_DATE_FROM, INCREMENTAL_STRATEGY)
+        assert len(truncated) == 1987
