@@ -1,4 +1,4 @@
-# Reprise du chantier Enable Banking — état au 2026-08-17
+# Reprise du chantier Enable Banking — état au 2026-08-25
 
 Ce document est autosuffisant : il dit où en est le travail, ce qui a été décidé et pourquoi, et ce
 qu'il reste à faire. Il est suivi par git et voyage avec la branche.
@@ -33,18 +33,42 @@ Branche `feat/enable-banking-connection` dans **les deux dépôts**.
 | 3 — tables session/lien/autorisation | ✅ après 1 round | `01a72a0` |
 | 4 — parcours de liaison | ✅ après 1 round | `6b1b48b` |
 | 5 — transactions + déduplication | ✅ après 1 round | `502dc61` |
-| 6 — synchro, ancres, réconciliation | ⏳ **fix round 1 commité, re-revue INTERROMPUE** | `6fae804` |
-| 9+10 — front (groupées) | ⏳ **complete, puis round 3 R18 non commencé** | `26e6825` (web) |
-| 7+8 — consentements + suppression compte | ❌ à faire, **à grouper en un seul dispatch** | — |
-| 11 — import d'un export | ❌ à faire | — |
-| 12 — validation à l'échelle réelle | ❌ à faire | — |
+| 6 — synchro, ancres, réconciliation | ⚠️ implémentée, **re-revue jamais faite** | `6fae804` |
+| 9+10 — front (groupées) | ✅ revue clean (2 rounds) | `26e6825` (web) |
+| R18 front — alerte pilotée par `reconciliation_status` | ⚠️ implémentée, **non revue** | `8b83791` (web) |
+| 7+8 — consentements + suppression compte | ⚠️ implémentées, **non revues** | `d77a48f` |
+| 11 — import d'un export | ⚠️ implémentée, **non revue** | `17d6de5` |
+| 12 — validation à l'échelle réelle | ⚠️ implémentée, **non revue**, et les 2 ⚠️ non levés | `4d53304` |
 | Revue finale de branche | ❌ à faire, **sur Opus, sur tout le diff** | — |
 
-Suite API : **1042 tests verts**. Front : `pnpm type-check` propre, **85 tests**.
+Suite API : **1061 tests verts** (vérifiés le 25/08). Front : `pnpm type-check` propre, **85 tests**.
+
+## ⚠️ Mise à jour du 2026-08-25 — implémentation complète, revue absente
+
+Les 12 tâches sont implémentées. **Suite API : 1061 tests verts** (relancés et vérifiés le 25/08).
+Front : type-check propre, 85 tests. Arbres de travail propres dans les deux dépôts.
+
+**Mais rien de ce qui a été produit après le 17/08 n'a été revu**, et le process de revue est ce qui a
+trouvé tous les défauts graves de ce chantier. Concrètement, il manque :
+
+1. **La re-revue de la Task 6.** Elle n'a jamais tourné. Le correctif `6fae804` **change la sémantique
+   de `anchor_balance_enc`** — de « le solde au moment où on a regardé » à « le solde de clôture de la
+   veille ». Personne n'a vérifié la cohérence entre synchros successives (l'ancre de clôture de N doit
+   être l'ancre d'ouverture de N+1), le cas d'amorçage, ni les autres lecteurs du champ.
+2. **Tasks 7, 8, 11, 12 — aucune revue, aucun rapport.** Commits `d77a48f`, `17d6de5`, `4d53304`.
+3. **La revue finale de branche**, et le tri des ~25 findings Minor différés.
+4. **Les deux ⚠️ ne sont pas levés.** `tests/integration/test_banking_e2e.py:143` code
+   `"cash_account_type": "CARD"` **en dur dans un double** : le test *suppose* ce qu'il fallait
+   *vérifier*. Aucune capture nouvelle dans `vendor-docs/spike/`, aucun `GET /aspsps`. R12, R18 et R19
+   reposent toujours sur un champ jamais confronté à la vraie banque.
+5. **Aucune des deux branches n'est poussée.**
+
+**Vert ≠ correct.** La Task 5 l'a démontré : son test de transition en attente→comptabilisée passait sur
+une forme de donnée que la banque n'a jamais produite en 294 lignes réelles.
 
 ## Premier geste à la reprise
 
-**Relancer la re-revue scoped de la Task 6** sur `60d764d..6fae804`. Elle a été coupée en plein travail.
+**Lancer la revue finale de branche** (Opus, sur tout le diff `main..HEAD`), puis la re-revue de la Task 6 sur `60d764d..6fae804`. Elle a été coupée en plein travail.
 Le paquet de revue existe déjà (`review-60d764d..6fae804.diff`) si le workspace local est intact ;
 sinon le régénérer avec `git diff -U10 60d764d..6fae804`.
 
@@ -56,8 +80,8 @@ période N doit être l'ancre d'ouverture de N+1, sans jour compté deux fois ni
 passe d'amorçage sans ancre précédente, le cas « aucun mouvement aujourd'hui », et tout autre lecteur
 de `anchor_balance_enc` / `anchor_date`.
 
-Ensuite : **round 3 du front** (afficher `reconciliation_status`, voir R18 ci-dessous), puis 7+8, 11, 12,
-puis la revue finale.
+Ensuite : les revues manquantes des Tasks 7+8, 11, 12 et du commit front `8b83791`, puis le tri des
+findings Minor différés. **Il ne reste aucune implémentation à écrire — seulement à vérifier.**
 
 ## Les rulings — décisions prises au nom d'Emilien
 
