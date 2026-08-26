@@ -53,6 +53,7 @@ class UserSettingsUpdate(BaseModel):
     crypto_show_negative_positions: bool | None = None
     bank_module_enabled: bool | None = None
     bank_auto_sync_enabled: bool | None = None
+    open_banking_enabled: bool | None = None
     cashflow_module_enabled: bool | None = None
     wealth_module_enabled: bool | None = None
     ai_feature_enabled: bool | None = None
@@ -80,6 +81,7 @@ class UserSettingsResponse(BaseModel):
     crypto_show_negative_positions: bool = False
     bank_module_enabled: bool = False
     bank_auto_sync_enabled: bool = True
+    open_banking_enabled: bool = False
     cashflow_module_enabled: bool = True
     wealth_module_enabled: bool = False
     ai_feature_enabled: bool = False

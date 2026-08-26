@@ -42,6 +42,9 @@ def _override_deps(session, master_key):
     app.dependency_overrides[get_current_user] = _get_user
     app.dependency_overrides[get_master_key] = _get_master_key
 
+    from tests.conftest import opt_into_open_banking
+    opt_into_open_banking(session, USER_UUID, master_key)
+
     yield
 
     app.dependency_overrides.clear()
@@ -903,3 +906,114 @@ def test_import_export_rejects_a_payload_that_is_not_an_export():
 
     assert r.status_code == 400
     assert "accounts" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# The opt-in gate, and the connection listing it must survive
+# ---------------------------------------------------------------------------
+
+
+def _opt_out(session, master_key):
+    from services.settings import get_or_create_settings
+
+    settings = get_or_create_settings(session, USER_UUID, master_key)
+    settings.open_banking_enabled = False
+    session.add(settings)
+    session.commit()
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("put", "/banking/credentials", {"application_id": "a", "private_key": "k"}),
+        ("get", "/banking/aspsps?country=FR", None),
+        ("post", "/banking/authorize", {"aspsp_name": "X", "aspsp_country": "FR"}),
+        ("get", "/banking/sessions/whatever/accounts", None),
+        ("post", "/banking/sessions/whatever/link", {"identification_hash": "h", "bank_account_uuid": "b"}),
+        ("post", "/banking/sync", None),
+        ("post", "/banking/import-export", {"accounts": []}),
+    ],
+)
+def test_opting_out_closes_every_route_that_reaches_the_bank(
+    session, master_key, monkeypatch, method, path, body
+):
+    client = TestClient(app)
+    _configure_credentials(client)
+    _opt_out(session, master_key)
+    # Nothing may reach Enable Banking: the refusal has to come before the call.
+    monkeypatch.setattr(
+        "services.banking.linking.build_client",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("gated route called the bank")),
+    )
+
+    r = getattr(client, method)(path, **({"json": body} if body is not None else {}))
+    assert r.status_code == 403
+
+
+def test_opting_out_still_lets_the_user_see_and_drop_what_is_attached(
+    session, master_key, monkeypatch
+):
+    """Turning the feature off must not strand an existing connection."""
+    client = TestClient(app)
+    _configure_credentials(client)
+    bank_session_uuid = _create_bank_session(session, master_key)
+    _opt_out(session, master_key)
+
+    assert client.get("/banking/status").status_code == 200
+    listed = client.get("/banking/sessions")
+    assert listed.status_code == 200
+    assert [s["uuid"] for s in listed.json()] == [bank_session_uuid]
+
+    _patch_client(monkeypatch, FakeClient(close_session=None))
+    assert client.delete(f"/banking/sessions/{bank_session_uuid}").status_code == 204
+
+
+def test_list_sessions_reports_the_consent_and_its_attached_accounts(
+    session, master_key, monkeypatch
+):
+    client = TestClient(app)
+    _configure_credentials(client)
+    bank_account_uuid = _create_bank_account(session, master_key)
+    bank_session_uuid = _create_bank_session(session, master_key)
+    _forbid_client(monkeypatch)
+
+    assert client.post(
+        f"/banking/sessions/{bank_session_uuid}/link",
+        json={"identification_hash": "hash-1", "bank_account_uuid": bank_account_uuid},
+    ).status_code == 200
+
+    r = client.get("/banking/sessions")
+    assert r.status_code == 200
+    [summary] = r.json()
+    assert summary["uuid"] == bank_session_uuid
+    assert summary["aspsp_name"] == "Boursorama Banque"
+    assert summary["aspsp_country"] == "FR"
+    assert summary["status"] == "AUTHORIZED"
+    assert summary["active"] is True
+    assert summary["status_message"] == "Consentement actif et autorisé."
+    assert [a["bank_account_uuid"] for a in summary["accounts"]] == [bank_account_uuid]
+    assert summary["accounts"][0]["name"] == "Compte courant"
+
+
+def test_a_retired_session_is_still_listed_with_its_accounts(session, master_key, monkeypatch):
+    """An expired consent keeps its links by design — the list is where the user
+    learns that a reconnection is the only thing missing."""
+    client = TestClient(app)
+    _configure_credentials(client)
+    bank_account_uuid = _create_bank_account(session, master_key)
+    bank_session_uuid = _create_bank_session(session, master_key)
+    _forbid_client(monkeypatch)
+    assert client.post(
+        f"/banking/sessions/{bank_session_uuid}/link",
+        json={"identification_hash": "hash-1", "bank_account_uuid": bank_account_uuid},
+    ).status_code == 200
+
+    expired = session.get(BankSession, bank_session_uuid)
+    expired.status = "EXPIRED"
+    session.add(expired)
+    session.commit()
+
+    [summary] = client.get("/banking/sessions").json()
+    assert summary["active"] is False
+    assert "Reconnectez" in summary["status_message"]
+    assert [a["bank_account_uuid"] for a in summary["accounts"]] == [bank_account_uuid]

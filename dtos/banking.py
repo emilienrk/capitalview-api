@@ -1,5 +1,6 @@
 """Enable Banking connection schemas (BYO application_id + private key)."""
 
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel
@@ -83,6 +84,31 @@ class BankSessionAccount(BaseModel):
     account_id: str | None = None
     linked: bool
     bank_account_uuid: str | None = None
+
+
+class BankSessionLinkedAccount(BaseModel):
+    """One CapitalView account attached to a bank session."""
+    bank_account_uuid: str
+    name: str
+    last_synced_at: date | None = None
+
+
+class BankSessionSummary(BaseModel):
+    """GET /banking/sessions — one authorization the user has granted.
+
+    Retired sessions stay in the list: their `BankAccountLink`s survive consent
+    expiry by design, so the status is what tells the user a reconnection is
+    the only thing missing.
+    """
+    uuid: str
+    aspsp_name: str | None = None
+    aspsp_country: str | None = None
+    status: str
+    status_message: str
+    active: bool
+    consent_valid_until: datetime
+    authorized_at: datetime
+    accounts: list[BankSessionLinkedAccount] = []
 
 
 class BankAccountLinkRequest(BaseModel):

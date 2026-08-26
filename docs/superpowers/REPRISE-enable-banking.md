@@ -40,8 +40,34 @@ Branche `feat/enable-banking-connection` dans **les deux dépôts**.
 | 11 — import d'un export | ⚠️ implémentée, **non revue** | `17d6de5` |
 | 12 — validation à l'échelle réelle | ⚠️ implémentée, **non revue**, et les 2 ⚠️ non levés | `4d53304` |
 | Revue finale de branche | ❌ à faire, **sur Opus, sur tout le diff** | — |
+| 13 — opt-in `open_banking_enabled` + listing des connexions | ⚠️ implémentée, **non revue** | voir ci-dessous |
 
 Suite API : **1061 tests verts** (vérifiés le 25/08). Front : `pnpm type-check` propre, **85 tests**.
+
+## Ajout du 2026-08-26 — la fonctionnalité devient opt-in
+
+Demandé par Emilien : la connexion d'un vrai compte bancaire ne doit pas être un élément principal
+de l'app, tout en restant faisable. Ajouté par-dessus les 12 tâches, **non revu comme le reste**.
+
+- **`user_settings.open_banking_enabled`**, défaut `false`, migration `c4b81e07d5a3`. Distinct de
+  `bank_module_enabled` (défaut `true`, qui n'affiche/masque que le module Banque) — ne pas confondre.
+- **`require_open_banking`** (`routes/banking.py`) refuse en 403 tout ce qui **ouvre, prolonge ou
+  alimente** une connexion : `PUT /credentials`, `GET /aspsps`, `POST /authorize`,
+  `GET|POST /sessions/{uuid}/…`, `POST /sync`, `POST /import-export`.
+  **Délibérément non appliqué** à `GET /status`, `GET /check`, `GET /sessions`,
+  `DELETE /sessions/{uuid}` et au callback : se désactiver doit laisser voir et démonter ce qui est
+  déjà rattaché, et ne doit pas abandonner un parcours en vol chez la banque.
+- **`GET /banking/sessions`** (`list_bank_sessions`) : une ligne par autorisation, avec son statut,
+  son message, sa date d'expiration et les comptes CapitalView rattachés. Les sessions retirées y
+  restent — leurs `BankAccountLink` survivent à l'expiration par conception.
+- Front : toggle en tête de l'onglet Banque (patron `ai_feature_enabled`), tout le reste derrière ;
+  panneau « Connexions bancaires » affiché **même feature éteinte** ; boutons « Connecter une banque »
+  et « Synchroniser » retirés de `Bank.vue` et auto-synchro coupée quand l'opt-in est éteint.
+- Tests : +10 dans `tests/routes/test_banking_linking.py`, dont le gate **prouvé non-vide par
+  mutation** (retirer la dépendance de `POST /sync` rend le cas rouge). Suite API **1095 verts**,
+  front type-check propre et 85 tests.
+- **Non fait, volontairement** : aucune UI de déconnexion (`DELETE /sessions/{uuid}` reste non
+  appelée côté front — ruling R3), aucune UI d'import d'export.
 
 ## ⚠️ Mise à jour du 2026-08-25 — implémentation complète, revue absente
 
