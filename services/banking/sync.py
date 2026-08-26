@@ -132,6 +132,13 @@ def sync_user_accounts(
     try:
         notify_user_expiring_consents(session, user_uuid, master_key)
     except Exception:
+        # Rolled back, not merely logged: the failure this catches is most
+        # likely the `session.commit()` that writes the Notification, which
+        # leaves the session in a failed transaction. Without this the very next
+        # statement — the link lookup below — would raise PendingRollbackError,
+        # turning a warning that could not be written into the 500 this guard
+        # exists to prevent.
+        session.rollback()
         logger.exception("failed to notify expiring bank consents")
 
     user_bidx = hash_index(user_uuid, master_key)

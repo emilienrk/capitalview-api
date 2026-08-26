@@ -101,6 +101,16 @@ class FakeClient:
 
 @pytest.fixture
 def linked_account(session, master_key) -> BankAccount:
+    # `notifications.user_uuid` is a real foreign key to `users.uuid`, and every
+    # sync now walks the consent-expiry notifier (ruling R20). Seeded here rather
+    # than per-test: a test that shortens `consent_valid_until` without a users
+    # row would otherwise hit an FK violation swallowed inside the sync and
+    # resurface as an unrelated PendingRollbackError.
+    session.add(
+        User(uuid=USER_UUID, auth_salt="salt", username="t", email="t@test", password_hash="x")
+    )
+    session.commit()
+
     upsert_connection(
         session,
         USER_UUID,
@@ -209,14 +219,6 @@ def test_sync_without_any_link_is_a_200_not_a_configuration_error(session, maste
     assert response.json() == {"synced": 0, "results": []}
 
 
-def _persist_user(session) -> None:
-    """`notifications.user_uuid` is a real foreign key to `users.uuid`."""
-    session.add(
-        User(uuid=USER_UUID, auth_salt="salt", username="t", email="t@test", password_hash="x")
-    )
-    session.commit()
-
-
 def _expire_consent_in(session, master_key, days: int) -> None:
     bank_session = session.exec(
         select(BankSession).where(BankSession.user_uuid_bidx == hash_index(USER_UUID, master_key))
@@ -241,7 +243,6 @@ def test_sync_warns_about_a_consent_about_to_expire(
     """Ruling R20: the warning is produced on the authenticated path, since that
     is the only place a Master Key exists to write the notification with."""
     monkeypatch.setattr("services.banking.sync.build_client", lambda *a, **kw: FakeClient())
-    _persist_user(session)
     _expire_consent_in(session, master_key, days=3)
 
     assert TestClient(app).post("/banking/sync").status_code == 200
@@ -258,7 +259,6 @@ def test_a_capped_sync_still_warns_about_an_expiring_consent(
     behind the once-a-day cap — or it would be produced at most once a day, on
     whichever call happened to come first."""
     monkeypatch.setattr("services.banking.sync.build_client", lambda *a, **kw: FakeClient())
-    _persist_user(session)
     _expire_consent_in(session, master_key, days=3)
     link = session.exec(select(BankAccountLink)).first()
     link.last_synced_at = TODAY
@@ -275,7 +275,6 @@ def test_a_consent_valid_for_months_produces_no_warning(
     session, master_key, monkeypatch, linked_account, sqlite_pg_insert
 ):
     monkeypatch.setattr("services.banking.sync.build_client", lambda *a, **kw: FakeClient())
-    _persist_user(session)
 
     TestClient(app).post("/banking/sync")
 
