@@ -304,6 +304,42 @@ class TestRealExportReplay:
         assert resp.results[1].skipped == 1436
         assert resp.results[1].inserted + resp.results[1].skipped == 1464
 
+    def test_the_card_account_is_stored_last_whatever_the_file_order(
+        self, session: Session, master_key: str, sqlite_pg_insert
+    ):
+        """Ruling R12, applied to an export instead of a live sync.
+
+        Cross-account deduplication is asymmetric: whichever account is stored
+        second loses the movements the first already claimed. The sync imposes
+        current-before-card; an export file lists its accounts in whatever order
+        the portal wrote them. Measured on this capture, storing the card first
+        ends with 2 798 rows instead of 2 804 — six real operations gone and
+        209,70 € of difference, silently.
+        """
+        with open(SPIKE_DIR / "export-boursorama-2022-2026.json") as f:
+            raw_export = json.load(f)
+
+        cacc_ident = raw_export["accounts"][0]["info"]["identification_hash"]
+        card_ident = raw_export["accounts"][1]["info"]["identification_hash"]
+        _setup_account_and_link(
+            session, master_key, cacc_ident, "Boursorama Courant", cash_account_type="CACC"
+        )
+        _setup_account_and_link(
+            session, master_key, card_ident, "Boursorama Carte", cash_account_type="CARD"
+        )
+
+        # The card listed first — the order the portal is free to produce.
+        reversed_export = {"accounts": list(reversed(raw_export["accounts"]))}
+        resp = import_enablebanking_export(session, USER_UUID, master_key, reversed_export)
+
+        by_uuid = {r.bank_account_uuid: r for r in resp.results}
+        current = next(r for r in resp.results if r.inserted == 2776)
+        card = next(r for r in resp.results if r is not current)
+        assert current.inserted == 2776
+        assert card.inserted == 28
+        assert card.skipped == 1436
+        assert len(by_uuid) == 2
+
 
 # ---------------------------------------------------------------------------
 # A catch-up export is history, not "where we are now" (§D5, R7)

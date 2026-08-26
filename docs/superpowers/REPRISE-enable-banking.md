@@ -148,9 +148,43 @@ la veille » — une **troisième convention**. Elle n'est jamais lue, la récon
 pendant l'amorçage. Correct aujourd'hui, mais le couplage est implicite : rendre l'amorçage
 réconciliable casserait le calcul en silence.
 
+## Revue du cœur monétaire — partielle, 2026-08-26
+
+Les sous-agents ont échoué deux fois sur une limite de session. Fait à la main, sur invariantes
+plutôt que par lecture ligne à ligne.
+
+**Ce qui tient**, vérifié en rejouant les 4 240 opérations réelles :
+- **Idempotence** : trois passes du même export donnent 2 804 lignes et un net de −73,63 € à
+  l'identique. Une resynchro ne corrompt rien.
+- **Ordre du flux** : mélanger l'ordre des transactions dans un compte ne change rien. Le
+  commentaire « the feed's order is never relied upon » est exact.
+
+### 🔴 Majeur trouvé et corrigé — l'import d'export n'appliquait pas R12
+
+Mesuré, pas supposé :
+
+| ordre de stockage | lignes | net |
+| --- | --- | --- |
+| courant puis carte | 2 804 | −73,63 € |
+| **carte puis courant** | **2 798** | **+136,07 €** |
+
+**Six opérations réelles disparaissent et 209,70 € d'écart**, selon le seul ordre de stockage. R12
+avait vu l'asymétrie mais l'avait chiffrée comme « la courbe d'un des deux comptes est fausse » —
+c'est en réalité de l'argent qui s'évapore au niveau utilisateur.
+
+`sync_user_accounts` applique bien `_in_sync_order`. **`import_enablebanking_export` bouclait sur
+`accounts_data` dans l'ordre du fichier**, sans aucun tri. L'export d'Emilien liste le compte courant
+en premier, par chance ; rien ne le garantit pour un autre export ou un autre utilisateur.
+
+**Correctif** : `_in_import_order()` applique le même prédicat `is_card_account` que la synchro, les
+comptes non rattachés restant en fin (ils ne stockent rien). Un test rejoue le vrai export **à
+l'envers** et exige le même résultat ; retirer le tri le rougit.
+
 ### Reste à faire
 
-Les trois autres revues (cœur monétaire, liaison/secrets/routes, front) n'ont pas pu tourner.
+Les revues liaison/secrets/routes et front n'ont pas pu tourner. Le cœur monétaire n'a été vérifié
+que par invariantes : la lecture ligne à ligne de `transactions.py` (niveaux 1-2, `_claimable_row`,
+`alternate_dedup_keys`), de `flows.py` et de `matching.py` reste à faire.
 
 ## Les rulings — décisions prises au nom d'Emilien
 
