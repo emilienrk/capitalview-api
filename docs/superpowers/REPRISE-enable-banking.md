@@ -179,7 +179,10 @@ Chacun est une décision que le plan ou la spec ne tranchait pas. **Ils sont tou
   Confirmé par sonde manuelle : l'événement `selected` porte
   `{country: "FR", name: "Crédit Mutuel", beta: false, psuType: "personal", sandbox: false, service: "AIS"}`
   — le **nom du catalogue**, jamais un intitulé de réseau.
-- **🔴 DÉCISION EN ATTENTE — `no-beta` masque 73 % des banques françaises.** La même sonde a montré
+- ~~**🔴 DÉCISION EN ATTENTE — `no-beta` masque 73 % des banques françaises.**~~ **Tranché le
+  2026-08-26 par Emilien : drapeau retiré, sans badge.** Un marqueur « bêta » aurait porté sur 94
+  entrées sur 129 — trois sur quatre, donc aucun signal (raisonnement de R18). Le contexte
+  ci-dessous reste pour mémoire. La même sonde a montré
   que le sélecteur n'affiche que **35 des 129 établissements** : `element.setAttribute('no-beta', '')`
   (`BankLinkModal.vue:100`) écarte les 94 marqués `beta: true`. Sont **inaccessibles** :
   **BNP Paribas**, **Société Générale** (particuliers — seules « Entreprises » et « Professionnels »
