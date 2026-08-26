@@ -111,6 +111,47 @@ de `anchor_balance_enc` / `anchor_date`.
 Ensuite : les revues manquantes des Tasks 7+8, 11, 12 et du commit front `8b83791`, puis le tri des
 findings Minor différés. **Il ne reste aucune implémentation à écrire — seulement à vérifier.**
 
+## Revue de la Task 6 — faite le 2026-08-26
+
+Menée à la main (les sous-agents ont échoué sur une limite de session). **La sémantique d'ancre est
+correcte**, vérifiée algébriquement et non à l'œil :
+
+- L'écriture pose `ancre = comptable(T) − mouvements(T)` ; la lecture calcule
+  `écart = comptable(T′) − (ancre + Σ_{d≥T})`, qui se réduit à
+  `comptable(T′) − comptable(T) − Σ_{d>T}` — nul par définition. **Continuité bonne entre synchros
+  successives** : aucun jour compté deux fois ni sauté.
+- Le cas redouté fonctionne : des lignes datées de T **comptabilisées après** la synchro de T
+  s'annulent terme à terme, parce que `comptable(T′) − comptable(T)` en contient la différence.
+- « Aucun mouvement aujourd'hui » : l'ancre vaut le comptable, la période suivante repart de là.
+- Les **cinq** lecteurs/écrivains ont été retrouvés et vérifiés (`linking.py:647`, `sync.py:288`,
+  `sync.py:582`, `export_import.py:250`, `bank.py:51` + `sync.py:203`).
+
+### 🔴 Majeur trouvé et corrigé — l'import d'export annulait l'amorçage
+
+`export_import.py` avançait `last_synced_at` jusqu'à rejoindre `anchor_date`. Or `seeding` s'en
+déduit (`last_synced_at < anchor_date`, `sync.py:203`), et `sync.py:219-220` choisit sur lui
+`longest`+`SEED_DATE_FROM` contre `default`+ancre.
+
+Le garde `ref_date < anchor_date` protège les exports historiques, **mais pas celui daté du jour** —
+qui est le cas courant : on connecte la banque, puis on importe l'export qu'on vient de télécharger.
+`seeding` basculait à faux, la première synchro n'allait plus chercher l'historique profond, et le
+marqueur ne redevenait jamais vrai. Tout ce que l'export ne contenait pas était perdu sans un mot
+(piège n°6 : `longest` seul s'auto-limite à 2 ans).
+
+**Correctif** : l'import ne touche plus `last_synced_at` — un import n'est pas une synchro. Deux
+tests le figent, **prouvés non-vides par mutation** (réintroduire la ligne les rougit tous les deux).
+
+### Mineur non corrigé
+
+L'ancre créée dans `linking.py:648` vaut le solde CapitalView « à l'instant », pas « à la clôture de
+la veille » — une **troisième convention**. Elle n'est jamais lue, la réconciliation étant sautée
+pendant l'amorçage. Correct aujourd'hui, mais le couplage est implicite : rendre l'amorçage
+réconciliable casserait le calcul en silence.
+
+### Reste à faire
+
+Les trois autres revues (cœur monétaire, liaison/secrets/routes, front) n'ont pas pu tourner.
+
 ## Les rulings — décisions prises au nom d'Emilien
 
 Chacun est une décision que le plan ou la spec ne tranchait pas. **Ils sont tous rejouables et réversibles.**
