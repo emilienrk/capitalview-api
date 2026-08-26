@@ -27,6 +27,7 @@ from dtos.banking import (
     BankConnectionStatus,
     BankConnectionUpdate,
     BankExportImportResponse,
+    BankFlowsResponse,
     BankSessionAccount,
     BankSessionSummary,
     BankSyncResponse,
@@ -38,6 +39,7 @@ from services.banking.credentials import (
     upsert_connection,
 )
 from services.banking.export_import import import_enablebanking_export
+from services.banking.flows import compute_real_flows
 from services.banking.errors import BankingApiError
 from services.banking.linking import (
     AccountNotFoundInSessionError,
@@ -360,6 +362,28 @@ def delete_session(
         delete_bank_session(session, current_user.uuid, master_key, bank_session_uuid)
     except BankSessionNotFoundError:
         raise HTTPException(status_code=404, detail="Session bancaire introuvable.")
+
+
+@router.get("/flows", response_model=BankFlowsResponse)
+def get_flows(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    months: int = 12,
+    exclude_internal_transfers: bool = True,
+    session: Session = Depends(get_session),
+):
+    """Observed inflow and outflow per month, from the stored transactions.
+
+    Read-only and ungated like the other reads: it touches no credentials and
+    reaches no bank, and someone who opted back out still owns this history.
+    """
+    return compute_real_flows(
+        session,
+        current_user.uuid,
+        master_key,
+        months=months,
+        exclude_internal_transfers=exclude_internal_transfers,
+    )
 
 
 @router.post(
