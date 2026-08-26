@@ -66,8 +66,10 @@ de l'app, tout en restant faisable. Ajouté par-dessus les 12 tâches, **non rev
 - Tests : +10 dans `tests/routes/test_banking_linking.py`, dont le gate **prouvé non-vide par
   mutation** (retirer la dépendance de `POST /sync` rend le cas rouge). Suite API **1095 verts**,
   front type-check propre et 85 tests.
-- **Non fait, volontairement** : aucune UI de déconnexion (`DELETE /sessions/{uuid}` reste non
-  appelée côté front — ruling R3), aucune UI d'import d'export.
+- ~~**Non fait, volontairement** : aucune UI de déconnexion, aucune UI d'import d'export.~~
+  **Faites le 2026-08-26** (`caa312e` web). La déconnexion appelle bien `DELETE /sessions/{uuid}` —
+  le ruling R3 reste vrai pour autant : la fermeture du consentement côté Enable Banking n'a
+  toujours jamais été exercée pour de vrai, seulement contre un double.
 
 ## ⚠️ Mise à jour du 2026-08-25 — implémentation complète, revue absente
 
@@ -212,7 +214,9 @@ Chacun est une décision que le plan ou la spec ne tranchait pas. **Ils sont tou
   puis `pnpm type-check`. Éviter `pnpm build` (run-p).
 - Tests sur **SQLite in-memory**, production **PostgreSQL**. `pg_insert` contourné par la fixture
   `sqlite_pg_insert` (`tests/services/test_bank.py`).
-- **`PRAGMA foreign_keys` n'est jamais activé** : aucune contrainte de clé étrangère n'est réellement
-  exercée par les tests. Un test qui prétend valider une FK ne valide rien.
+- ~~**`PRAGMA foreign_keys` n'est jamais activé**~~ **Faux, constaté le 2026-08-26** : écrire un
+  `BankAccountLink` dont le `session_uuid` ne pointe sur aucune `BankSession` lève bien
+  `IntegrityError: FOREIGN KEY constraint failed`. Les contraintes de clé étrangère **sont**
+  exercées par les tests — toute fixture créant un lien doit d'abord créer sa session.
 - **Aucun appel réseau réel dans les tests** — le client est injecté et doublé.
 - Le tag `sdd-rescue-task10-preFix` protège un commit web orphelin d'une reprise antérieure.
