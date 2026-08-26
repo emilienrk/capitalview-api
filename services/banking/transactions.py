@@ -125,6 +125,15 @@ class NormalizedTransaction:
         return keys
 
     def _fingerprint(self, day: date) -> str:
+        # `self.amount` is the *normalised* amount, so anything that changes how
+        # an amount is read changes the identity of rows already stored under
+        # the old reading — they stop matching and are inserted a second time.
+        # The sign rule in `normalize_transaction` is exactly such a change: a
+        # row ingested as -12.63 fingerprints differently from the same row
+        # re-read as 12.63. Harmless here (the feature is pre-production and
+        # both real negative rows carry an entry_reference, which level 1 matches
+        # on regardless of amount), but any future change to the reading needs
+        # this checked, not assumed.
         return "|".join(
             (day.isoformat(), _canonical_amount(self.amount), self.currency, self.credit_debit)
         )
@@ -149,11 +158,17 @@ def normalize_transaction(raw: dict[str, Any]) -> NormalizedTransaction:
         raise ValueError("status is required")
 
     # The direction indicator carries the sign; the amount carries the
-    # magnitude. Measured on the real export: two rows publish a *negative*
-    # amount alongside an explicit DBIT, and the API publishes the same
-    # operation as a positive amount with the same DBIT — the sign is noise on
-    # one access path only. Kept as-is it would invert the movement, since
-    # `_booked_movements` subtracts a debit and subtracting a negative credits.
+    # magnitude. Measured on the real export: two rows of the *card* account
+    # publish a negative amount alongside an explicit DBIT, and the API
+    # publishes the same operation as a positive amount with the same DBIT —
+    # the sign is noise on one access path only. Kept as-is it would invert the
+    # movement, since `_booked_movements` subtracts a debit and subtracting a
+    # negative credits.
+    #
+    # The rule is stated for both directions, deliberately wider than the
+    # evidence: a negative amount with an explicit CRDT is read as a positive
+    # credit. No such row exists in the captures, so that half is a rule rather
+    # than a measurement — hence the warning on every occurrence.
     if amount < 0:
         logger.warning(
             "negative transaction amount %s alongside an explicit %s indicator; "
