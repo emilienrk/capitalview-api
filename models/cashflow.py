@@ -22,6 +22,9 @@ class Cashflow(SQLModel, table=True):
     transaction_date_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     # Blind index to link to a bank account (queryable without decryption)
     bank_account_uuid_bidx: str | None = Field(default=None, sa_column=Column(TEXT, nullable=True, index=True))
+    # Label signature this declaration was confirmed against, so the app can tell
+    # what actually moved for it. NULL = never confirmed; the app only suggests.
+    match_pattern_enc: str | None = Field(default=None, sa_column=Column(TEXT, nullable=True))
     # Encrypted "true"/"false". NULL means active (rows predating the column).
     is_active_enc: str | None = Field(default=None, sa_column=Column(TEXT, nullable=True))
     created_at: datetime = Field(

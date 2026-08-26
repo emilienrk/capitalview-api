@@ -9,6 +9,7 @@ from database import get_session
 from models import User, Cashflow
 from services.auth import get_current_user, get_master_key
 from models.enums import FlowType
+from dtos.cashflow import CashflowComparison, CashflowMatchUpdate
 from dtos import (
     CashflowCreate,
     CashflowUpdate,
@@ -25,6 +26,8 @@ from services.cashflow import (
     get_cashflows_by_type,
     get_user_cashflow_balance
 )
+from services.banking.matching import compare_cashflows, set_match_pattern
+from services.encryption import hash_index
 
 router = APIRouter(prefix="/cashflow", tags=["Cashflows"])
 
@@ -78,6 +81,42 @@ def get_balance(
 ):
     """Get complete cashflow balance for current authenticated user."""
     return get_user_cashflow_balance(session, current_user.uuid, master_key)
+
+
+@router.get("/me/comparison", response_model=list[CashflowComparison])
+def get_comparison(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    months: int = 6,
+    session: Session = Depends(get_session),
+):
+    """Each active declaration against what actually moved for it."""
+    return compare_cashflows(session, current_user.uuid, master_key, months=months)
+
+
+@router.put("/{cashflow_id}/match", response_model=CashflowComparison)
+def update_match(
+    cashflow_id: str,
+    data: CashflowMatchUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Confirm — or drop — the label this declaration is matched against."""
+    cashflow = session.get(Cashflow, cashflow_id)
+    if cashflow is None or cashflow.user_uuid_bidx != hash_index(current_user.uuid, master_key):
+        raise HTTPException(status_code=404, detail="Flux introuvable.")
+
+    set_match_pattern(cashflow, data.match_pattern, master_key)
+    session.add(cashflow)
+    session.commit()
+
+    # Answered with the fresh verdict: confirming a match is exactly the moment
+    # the user wants to see what it produced.
+    for comparison in compare_cashflows(session, current_user.uuid, master_key):
+        if comparison.cashflow_id == cashflow_id:
+            return comparison
+    raise HTTPException(status_code=404, detail="Flux introuvable.")
 
 
 @router.get("/{cashflow_id}", response_model=CashflowResponse)
