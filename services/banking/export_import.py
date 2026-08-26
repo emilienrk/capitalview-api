@@ -41,6 +41,53 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 logger = logging.getLogger(__name__)
 
 
+def _resolve_link(
+    item: dict[str, Any],
+    link_by_ident_bidx: dict[str, BankAccountLink],
+    master_key: str,
+) -> BankAccountLink | None:
+    """The link an exported account belongs to, matched on the durable key."""
+    info = item.get("info") or {}
+    ident_hash = info.get("identification_hash") or item.get("identification_hash")
+    ident_hashes = info.get("identification_hashes") or ([ident_hash] if ident_hash else [])
+    for h in ident_hashes:
+        link = link_by_ident_bidx.get(hash_index(h, master_key))
+        if link is not None:
+            return link
+    return None
+
+
+def _in_import_order(
+    session: Session,
+    accounts_data: list[Any],
+    link_by_ident_bidx: dict[str, BankAccountLink],
+    master_key: str,
+) -> list[tuple[dict[str, Any], BankAccountLink | None]]:
+    """Ruling R12's ordering, applied to an export instead of a live sync.
+
+    Cross-account deduplication is asymmetric: whichever account is stored second
+    loses the movements the first already claimed. The sync imposes current
+    account before card account for exactly this reason, but an export file lists
+    its accounts in whatever order the portal wrote them.
+
+    Measured on the real 4 240-row capture: storing the card first ends with
+    2 798 rows and a net of 136,07 € instead of 2 804 and −73,63 € — six
+    operations gone and 209,70 € of difference, silently. Unmatched accounts keep
+    their place at the end; they store nothing.
+    """
+    resolved = [
+        (item if isinstance(item, dict) else {}, _resolve_link(item, link_by_ident_bidx, master_key))
+        for item in accounts_data
+    ]
+    return sorted(
+        resolved,
+        key=lambda pair: (
+            pair[1] is None,
+            is_card_account(session, pair[1], master_key) if pair[1] is not None else False,
+        ),
+    )
+
+
 def import_enablebanking_export(
     session: Session,
     user_uuid: str,
@@ -85,19 +132,11 @@ def import_enablebanking_export(
     results: list[BankExportImportResult] = []
     imported_count = 0
 
-    for item in accounts_data:
+    for item, matched_link in _in_import_order(
+        session, accounts_data, link_by_ident_bidx, master_key
+    ):
         info = item.get("info") or {}
         ident_hash = info.get("identification_hash") or item.get("identification_hash")
-        ident_hashes = info.get("identification_hashes") or (
-            [ident_hash] if ident_hash else []
-        )
-
-        matched_link: BankAccountLink | None = None
-        for h in ident_hashes:
-            h_bidx = hash_index(h, master_key)
-            if h_bidx in link_by_ident_bidx:
-                matched_link = link_by_ident_bidx[h_bidx]
-                break
 
         if matched_link is None:
             account_label = (
