@@ -153,13 +153,28 @@ Chacun est une décision que le plan ou la spec ne tranchait pas. **Ils sont tou
 
 ## Points ouverts à traiter avant de clore
 
-- **⚠️ `cash_account_type == "CARD"` n'est pas vérifié contre la vraie banque.** R12, R18 et R19 en
-  dépendent tous les trois. Un drapeau `card_marker_missing` a été ajouté ; **la Task 12 doit capturer
-  une vraie réponse `POST /sessions` et trancher.**
-- **⚠️ Le sélecteur de banque** : `locale="FR"` n'est documenté que pour les deux autres composants, et
-  l'hypothèse de préfixe des caisses régionales (Crédit Agricole, Banque Populaire, Caisse d'Épargne)
-  n'est pas confirmée. La Task 12 doit capturer un vrai `GET /aspsps?country=FR`. **Si le composant liste
-  déjà les caisses, toute l'étape régionale est du code mort.**
+- ~~**⚠️ `cash_account_type == "CARD"` n'est pas vérifié contre la vraie banque.**~~ **Levé le
+  2026-08-26.** Le marqueur était déjà dans les données réelles : `export-boursorama-2022-2026.json`,
+  `.accounts[].info.cash_account_type` vaut **`CACC`** sur le compte courant (« CAV - BOURSOBANK ») et
+  **`CARD`** sur le compte carte (« Carte Visa Ultim », `details: "immediat_debit"`). Le contrat le
+  confirme : `cash_account_type` est dans le bloc `required` de `AccountResource`
+  (`enablebanking-api.yaml:1866`), et `AuthorizeSessionResponse.accounts` est un `AccountResource[]` —
+  `POST /sessions` ne peut donc pas l'omettre. R12, R18 et R19 reposent sur un champ réel et
+  correctement valué. *Reste non prouvé* : qu'une **autre** banque étiquette pareil sa carte —
+  `card_marker_missing` garde donc son utilité.
+  Au passage, `currency` vaut bien `"XXX"` sur les deux comptes, ce que le code suppose déjà.
+- ~~**⚠️ Le sélecteur de banque** : l'hypothèse de préfixe des caisses régionales n'est pas
+  confirmée.~~ **Levé le 2026-08-26** par `vendor-docs/spike/aspsps-FR-2026-08-26.json` (capture
+  réelle, HTTP 200, 129 établissements) : **aucune entrée générique n'existe**. Ni « Crédit Agricole »,
+  ni « Banque Populaire », ni « Caisse d'Épargne » seuls — les 68 caisses régionales sont listées
+  comme entrées à part entière (« Crédit Agricole du Languedoc », « Banque Populaire du Nord », …).
+  `BankLinkModal` ne déclenche son étape `region` que sur une égalité **exacte** avec un nom de
+  `REGIONAL_NETWORKS`, qui ne peut donc jamais se produire : **l'étape régionale est du code mort**
+  (`REGIONAL_NETWORKS`, `loadRegionalOptions`, `retryRegionalOptions`, `filteredRegionalOptions`,
+  `selectRegional`, l'état `region`). À supprimer.
+  *Dernière vérification à faire à la main* : ouvrir le widget et cliquer un Crédit Agricole, pour
+  écarter le cas où il grouperait par réseau et émettrait le nom du groupe.
+- **`locale="FR"` sur le sélecteur** reste non documenté pour ce composant (inoffensif s'il est ignoré).
 - **La machine à états de `BankLinkModal` n'a aucun test** — le dépôt n'a ni `@vue/test-utils` ni
   environnement DOM. Elle a été validée par relecture exhaustive des branches, pas par exécution.
 - **`Bank.vue:144-159`** (pré-existant) ouvre une confirmation depuis une modale déjà ouverte : même
