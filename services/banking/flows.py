@@ -30,6 +30,7 @@ from dtos.banking import (
     BankFlowMonth,
     BankFlowsResponse,
 )
+from models.bank import BankAccount
 from models.banking import BankAccountLink, BankTransaction
 from services.banking.transactions import FINAL_STATUSES
 from services.encryption import decrypt_data, hash_index
@@ -98,17 +99,23 @@ def _internal_transfer_legs(movements: list[_Movement]) -> set[int]:
     for index, movement in enumerate(movements):
         if movement.is_credit or movement.day is None:
             continue
+        # The nearest eligible credit, not the first one found: with three or
+        # four accounts several may sit inside the tolerance, and pairing a
+        # same-day leg with a three-day-old one leaves the true pair unmatched.
+        best: int | None = None
+        best_gap = TRANSFER_DATE_TOLERANCE_DAYS + 1
         for candidate in credits_by_key.get((movement.currency, movement.amount), ()):
             if candidate in paired:
                 continue
             other = movements[candidate]
             if other.account_bidx == movement.account_bidx or other.day is None:
                 continue
-            if abs((other.day - movement.day).days) > TRANSFER_DATE_TOLERANCE_DAYS:
-                continue
-            paired.add(candidate)
+            gap = abs((other.day - movement.day).days)
+            if gap < best_gap:
+                best, best_gap = candidate, gap
+        if best is not None:
+            paired.add(best)
             paired.add(index)
-            break
     return paired
 
 
@@ -135,7 +142,19 @@ def compute_real_flows(
         ).all()
     ]
     if not account_bidxs:
-        return _empty(periods, exclude_internal_transfers)
+        return _empty(periods)
+
+    # Named, not just counted: a total across several accounts is only
+    # trustworthy once the reader can see which ones it is made of — and which
+    # one is missing when the figures look too big.
+    linked = set(account_bidxs)
+    account_names = sorted(
+        decrypt_data(account.name_enc, master_key)
+        for account in session.exec(
+            select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
+        ).all()
+        if hash_index(account.uuid, master_key) in linked
+    )
 
     period_bidx_to_period = {hash_index(p, master_key): p for p in periods}
     rows = session.exec(
@@ -145,7 +164,7 @@ def compute_real_flows(
         )
     ).all()
 
-    movements = [
+    movements: list[_Movement] = [
         _Movement(
             account_bidx=row.account_id_bidx,
             period=period_bidx_to_period[row.period_bidx],
@@ -157,6 +176,11 @@ def compute_real_flows(
         )
         for row in rows
     ]
+
+    # Sorted before anything reads an index: the database returns rows in no
+    # promised order, and transfer pairing would otherwise hand back a different
+    # answer for the same data from one call to the next.
+    movements.sort(key=lambda m: (m.day or date.min, m.account_bidx, m.amount, m.is_credit))
 
     transfer_legs = _internal_transfer_legs(movements) if exclude_internal_transfers else set()
     transfers_amount = sum(
@@ -229,6 +253,7 @@ def compute_real_flows(
         monthly_outflow=total_out / covered,
         covered_months=covered,
         account_count=len(account_bidxs),
+        account_names=account_names,
         internal_transfers_excluded=len(transfer_legs) // 2,
         internal_transfers_amount=transfers_amount,
         pending_count=pending_count,
@@ -241,7 +266,7 @@ def compute_real_flows(
     )
 
 
-def _empty(periods: list[str], exclude_internal_transfers: bool) -> BankFlowsResponse:
+def _empty(periods: list[str]) -> BankFlowsResponse:
     return BankFlowsResponse(
         currency="EUR",
         months=[
@@ -255,6 +280,7 @@ def _empty(periods: list[str], exclude_internal_transfers: bool) -> BankFlowsRes
         monthly_outflow=Decimal("0"),
         covered_months=0,
         account_count=0,
+        account_names=[],
         internal_transfers_excluded=0,
         internal_transfers_amount=Decimal("0"),
         pending_count=0,

@@ -203,6 +203,8 @@ class BankFlowsResponse(BaseModel):
     monthly_outflow: Decimal
     covered_months: int
     account_count: int
+    # Named so a total spanning several accounts can be checked at a glance.
+    account_names: list[str] = []
     # Movements paired as one transfer between two of the user's own accounts:
     # counted, reported, and kept out of the totals.
     internal_transfers_excluded: int

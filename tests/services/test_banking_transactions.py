@@ -58,13 +58,25 @@ def _raw(**overrides) -> dict:
 
 @pytest.fixture
 def linked_accounts(session: Session, master_key: str) -> None:
-    """The user's two linked accounts — level 3 is scoped to the user through these."""
+    """The user's current account and the card account that debits it.
+
+    The session carries its accounts payload, as a real one always does (ruling
+    R10): `cash_account_type` is what tells level 3 the two mirror each other,
+    and without it the fixture would exercise a shape the bank never produces.
+    """
     bank_session = BankSession(
         user_uuid_bidx=hash_index(USER, master_key),
         session_id_enc=encrypt_data("eb-session-id", master_key),
         status="AUTHORIZED",
         consent_valid_until=datetime(2026, 12, 1, tzinfo=timezone.utc),
         authorized_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        accounts_enc=encrypt_data(
+            json.dumps([
+                {"identification_hash": "ident-current", "cash_account_type": "CACC"},
+                {"identification_hash": "ident-card", "cash_account_type": "CARD"},
+            ]),
+            master_key,
+        ),
     )
     session.add(bank_session)
     session.commit()
@@ -464,6 +476,48 @@ def test_two_currencies_on_the_same_day_are_not_confused(session: Session, maste
     assert result == (1, 0, 0)
     (row,) = _rows(session, master_key, CARD_ACCOUNT)
     assert decrypt_data(row.currency_enc, master_key) == "EUR"
+
+
+def test_two_current_accounts_never_swallow_each_other(session: Session, master_key: str):
+    """Someone holding several current accounts can pay the same amount on the
+    same day from two of them. Those are two real payments; level 3 folding them
+    together would delete one for good, and nothing would ever say so."""
+    bank_session = BankSession(
+        user_uuid_bidx=hash_index(USER, master_key),
+        session_id_enc=encrypt_data("eb-session-id", master_key),
+        status="AUTHORIZED",
+        consent_valid_until=datetime(2026, 12, 1, tzinfo=timezone.utc),
+        authorized_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        accounts_enc=encrypt_data(
+            json.dumps([
+                {"identification_hash": "ident-a", "cash_account_type": "CACC"},
+                {"identification_hash": "ident-b", "cash_account_type": "CACC"},
+            ]),
+            master_key,
+        ),
+    )
+    session.add(bank_session)
+    session.commit()
+    for account_uuid, ident in (("courant-a", "ident-a"), ("courant-b", "ident-b")):
+        session.add(
+            BankAccountLink(
+                user_uuid_bidx=hash_index(USER, master_key),
+                bank_account_uuid_bidx=hash_index(account_uuid, master_key),
+                session_uuid=bank_session.uuid,
+                identification_hash_bidx=hash_index(ident, master_key),
+                account_uid_enc=encrypt_data(f"uid-{ident}", master_key),
+                anchor_date=date(2026, 8, 1),
+                anchor_balance_enc=encrypt_data("1000.00", master_key),
+                last_synced_at=date(2026, 8, 1),
+            )
+        )
+    session.commit()
+
+    store_transactions(session, USER, master_key, "courant-a", [_raw(entry_reference="a-ref")])
+    result = store_transactions(session, USER, master_key, "courant-b", [_raw(entry_reference="b-ref")])
+
+    assert result == (1, 0, 0)
+    assert len(_rows(session, master_key, "courant-b")) == 1
 
 
 def test_cross_account_dedup_does_not_reach_another_user(session: Session, master_key: str, linked_accounts):

@@ -305,14 +305,38 @@ def _join_remittance(lines: Any) -> str | None:
 def _sibling_dedup_indexes(
     session: Session, user_uuid: str, master_key: str, account_bidx: str
 ) -> set[str]:
-    """Dedup indexes already stored on the user's *other* linked accounts —
-    level 3 is scoped to the user, not to the account."""
-    linked = session.exec(
-        select(BankAccountLink.bank_account_uuid_bidx).where(
-            BankAccountLink.user_uuid_bidx == hash_index(user_uuid, master_key)
-        )
-    ).all()
-    siblings = [bidx for bidx in linked if bidx != account_bidx]
+    """Dedup indexes stored on the accounts that can legitimately mirror this one.
+
+    Level 3 is scoped to the user, but only across a card/current pair — the one
+    shape it was measured on, where 93 % of the card feed republishes movements
+    of the current account it debits, with no shared reference.
+
+    Two current accounts mirror nothing. Someone holding several of them can pay
+    the same amount on the same day from two of them; those are two real
+    payments, and folding them together deletes one permanently. When no account
+    carries the card marker, level 3 simply does not fire: a visible duplicate,
+    reported by `card_marker_missing`, beats a silent deletion.
+    """
+    from services.banking.linking import is_card_account
+
+    links = list(
+        session.exec(
+            select(BankAccountLink).where(
+                BankAccountLink.user_uuid_bidx == hash_index(user_uuid, master_key)
+            )
+        ).all()
+    )
+    own = next((link for link in links if link.bank_account_uuid_bidx == account_bidx), None)
+    if own is None:
+        return set()
+
+    own_is_card = is_card_account(session, own, master_key)
+    siblings = [
+        link.bank_account_uuid_bidx
+        for link in links
+        if link.bank_account_uuid_bidx != account_bidx
+        and is_card_account(session, link, master_key) != own_is_card
+    ]
     if not siblings:
         return set()
     return set(
