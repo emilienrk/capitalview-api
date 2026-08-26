@@ -47,6 +47,9 @@ def _override_deps(session, master_key):
     app.dependency_overrides[get_current_user] = _get_user
     app.dependency_overrides[get_master_key] = _get_master_key
 
+    from tests.conftest import opt_into_open_banking
+    opt_into_open_banking(session, USER_UUID, master_key)
+
     yield
 
     app.dependency_overrides.clear()

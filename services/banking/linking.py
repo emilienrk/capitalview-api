@@ -27,6 +27,8 @@ from dtos.banking import (
     BankAccountLinkResult,
     BankConfigCheck,
     BankSessionAccount,
+    BankSessionLinkedAccount,
+    BankSessionSummary,
 )
 from models.bank import BankAccount
 from models.banking import BankAccountLink, BankAuthorization, BankSession
@@ -36,6 +38,7 @@ from services.banking.credentials import (
     get_decrypted_credentials_by_bidx,
 )
 from services.banking.errors import AuthorizationInvalidError, BankingApiError
+from services.banking.health import is_session_active, session_status_message
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 # Window to complete the bank's own authentication before our side of the
@@ -519,6 +522,69 @@ def list_session_accounts(
             )
         )
     return results
+
+
+def list_bank_sessions(
+    session: Session, user_uuid: str, master_key: str
+) -> list[BankSessionSummary]:
+    """Every authorization this user has granted, newest first.
+
+    Read-only and never gated on the opt-in flag: someone who turns the feature
+    back off still has to be able to see what is left attached.
+    """
+    user_bidx = hash_index(user_uuid, master_key)
+    bank_sessions = session.exec(
+        select(BankSession)
+        .where(BankSession.user_uuid_bidx == user_bidx)
+        .order_by(BankSession.authorized_at.desc())  # type: ignore[union-attr]
+    ).all()
+    if not bank_sessions:
+        return []
+
+    account_by_bidx = {
+        hash_index(account.uuid, master_key): account
+        for account in session.exec(
+            select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
+        ).all()
+    }
+    links_by_session: dict[str, list[BankAccountLink]] = {}
+    for link in session.exec(
+        select(BankAccountLink).where(BankAccountLink.user_uuid_bidx == user_bidx)
+    ).all():
+        links_by_session.setdefault(link.session_uuid, []).append(link)
+
+    summaries = []
+    for bank_session in bank_sessions:
+        aspsp = _decrypt_aspsp(bank_session, master_key)
+        attached = []
+        for link in links_by_session.get(bank_session.uuid, []):
+            account = account_by_bidx.get(link.bank_account_uuid_bidx)
+            # A link whose CapitalView account is gone: skip rather than invent
+            # a name for a row the user can no longer act on.
+            if account is None:
+                continue
+            attached.append(
+                BankSessionLinkedAccount(
+                    bank_account_uuid=account.uuid,
+                    name=decrypt_data(account.name_enc, master_key),
+                    last_synced_at=link.last_synced_at,
+                )
+            )
+        attached.sort(key=lambda a: a.name)
+        summaries.append(
+            BankSessionSummary(
+                uuid=bank_session.uuid,
+                aspsp_name=aspsp[0] if aspsp else None,
+                aspsp_country=aspsp[1] if aspsp else None,
+                status=bank_session.status,
+                status_message=session_status_message(bank_session.status),
+                active=is_session_active(bank_session.status),
+                consent_valid_until=bank_session.consent_valid_until,
+                authorized_at=bank_session.authorized_at,
+                accounts=attached,
+            )
+        )
+    return summaries
 
 
 def link_account(

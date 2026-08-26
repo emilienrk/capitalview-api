@@ -225,6 +225,13 @@ class TestBankingEndToEnd:
         client.cookies.set("master_key", master_key)
         client.cookies.set("access_token", token)
 
+        # 0. The feature is opt-in: without it every route below is a 403.
+        optin_resp = client.put(
+            "/settings", json={"open_banking_enabled": True}, headers=auth_headers
+        )
+        assert optin_resp.status_code == 200
+        assert optin_resp.json()["open_banking_enabled"] is True
+
         # 1. User configures Enable Banking credentials
         cred_resp = client.put(
             "/banking/credentials",

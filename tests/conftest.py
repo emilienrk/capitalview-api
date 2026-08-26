@@ -83,3 +83,17 @@ def disable_auth_background_catchup(monkeypatch):
     monkeypatch.setattr(account_history_service, "run_lazy_catchup", noop)
     monkeypatch.setattr(account_history_service, "rebuild_account_history_from_date", noop)
     monkeypatch.setattr(asset_routes, "rebuild_account_history_from_date", noop)
+
+
+def opt_into_open_banking(session, user_uuid: str, master_key: str) -> None:
+    """Flip the open-banking opt-in for a user, as the settings screen would.
+
+    Every route that opens or feeds a bank connection is refused without it, so
+    any test driving that flow has to start here.
+    """
+    from services.settings import get_or_create_settings
+
+    settings = get_or_create_settings(session, user_uuid, master_key)
+    settings.open_banking_enabled = True
+    session.add(settings)
+    session.commit()

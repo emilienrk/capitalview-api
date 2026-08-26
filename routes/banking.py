@@ -28,6 +28,7 @@ from dtos.banking import (
     BankConnectionUpdate,
     BankExportImportResponse,
     BankSessionAccount,
+    BankSessionSummary,
     BankSyncResponse,
 )
 from models import User
@@ -49,12 +50,35 @@ from services.banking.linking import (
     handle_callback,
     link_account,
     list_aspsps_for_country,
+    list_bank_sessions,
     list_session_accounts,
     start_authorization_flow,
 )
 from services.banking.sync import sync_user_accounts
+from services.settings import get_or_create_settings
 
 router = APIRouter(prefix="/banking", tags=["Banking"])
+
+
+def require_open_banking(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+) -> None:
+    """Refuse anything that starts, extends or feeds a bank connection when the
+    user has not opted in.
+
+    Deliberately not applied to the read-only routes, to DELETE /sessions or to
+    the callback: turning the feature back off must leave the user able to see
+    and dismantle what is already attached, and must not strand a journey that
+    is mid-flight at the bank.
+    """
+    settings = get_or_create_settings(session, current_user.uuid, master_key)
+    if not settings.open_banking_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="La connexion bancaire n'est pas activée dans vos paramètres.",
+        )
 
 
 @router.get("/status", response_model=BankConnectionStatus)
@@ -67,7 +91,11 @@ def get_connection_status(
     return get_status(session, current_user.uuid, master_key)
 
 
-@router.put("/credentials", response_model=BankConnectionStatus)
+@router.put(
+    "/credentials",
+    response_model=BankConnectionStatus,
+    dependencies=[Depends(require_open_banking)],
+)
 def update_credentials(
     data: BankConnectionUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -89,7 +117,11 @@ def check_config(
     return check_configuration(session, current_user.uuid, master_key, settings.banking_callback_url)
 
 
-@router.get("/aspsps", response_model=list[AspspSummary])
+@router.get(
+    "/aspsps",
+    response_model=list[AspspSummary],
+    dependencies=[Depends(require_open_banking)],
+)
 def get_aspsps(
     country: str,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -105,7 +137,11 @@ def get_aspsps(
         raise HTTPException(status_code=502, detail=f"{exc.code}: {exc.message}")
 
 
-@router.post("/authorize", response_model=BankAuthorizeResponse)
+@router.post(
+    "/authorize",
+    response_model=BankAuthorizeResponse,
+    dependencies=[Depends(require_open_banking)],
+)
 def authorize(
     data: BankAuthorizeRequest,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -204,7 +240,21 @@ def callback(
     return HTMLResponse(_message_page("Connexion impossible", result.detail))
 
 
-@router.get("/sessions/{bank_session_uuid}/accounts", response_model=list[BankSessionAccount])
+@router.get("/sessions", response_model=list[BankSessionSummary])
+def list_sessions(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """The user's bank connections and the accounts attached to each."""
+    return list_bank_sessions(session, current_user.uuid, master_key)
+
+
+@router.get(
+    "/sessions/{bank_session_uuid}/accounts",
+    response_model=list[BankSessionAccount],
+    dependencies=[Depends(require_open_banking)],
+)
 def get_session_accounts(
     bank_session_uuid: str,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -221,7 +271,11 @@ def get_session_accounts(
         raise HTTPException(status_code=404, detail="Session bancaire introuvable.")
 
 
-@router.post("/sessions/{bank_session_uuid}/link", response_model=BankAccountLinkResult)
+@router.post(
+    "/sessions/{bank_session_uuid}/link",
+    response_model=BankAccountLinkResult,
+    dependencies=[Depends(require_open_banking)],
+)
 def link_session_account(
     bank_session_uuid: str,
     data: BankAccountLinkRequest,
@@ -263,7 +317,11 @@ def _psu_context(request: Request) -> dict[str, str] | None:
     return {"Psu-Ip-Address": ip_address, "Psu-User-Agent": user_agent}
 
 
-@router.post("/sync", response_model=BankSyncResponse)
+@router.post(
+    "/sync",
+    response_model=BankSyncResponse,
+    dependencies=[Depends(require_open_banking)],
+)
 def sync(
     request: Request,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -304,7 +362,11 @@ def delete_session(
         raise HTTPException(status_code=404, detail="Session bancaire introuvable.")
 
 
-@router.post("/import-export", response_model=BankExportImportResponse)
+@router.post(
+    "/import-export",
+    response_model=BankExportImportResponse,
+    dependencies=[Depends(require_open_banking)],
+)
 def import_export(
     payload: dict[str, Any] | list[dict[str, Any]],
     current_user: Annotated[User, Depends(get_current_user)],
