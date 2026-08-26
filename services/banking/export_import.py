@@ -251,7 +251,13 @@ def _write_export_curve(
         link.anchor_balance_enc = encrypt_data(
             str(bal_amount - movements.get(ref_date, Decimal("0"))), master_key
         )
-        link.last_synced_at = max(link.last_synced_at, ref_date)
+        # `last_synced_at` is deliberately left alone: an import is not a sync.
+        # Advancing it to meet `anchor_date` silently clears the seeding marker
+        # (`last_synced_at < anchor_date`, sync.py), and the first real sync then
+        # runs `default` from the anchor instead of `longest` from SEED_DATE_FROM
+        # — so the years of history the API would have returned are never asked
+        # for, and the marker never comes back. An export dated today, imported
+        # right after linking, hit this on the nose.
         session.add(link)
 
     if account.balance_updated_at is None or ref_date >= account.balance_updated_at:

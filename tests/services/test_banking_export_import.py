@@ -393,9 +393,34 @@ class TestAnchorIsNeverWalkedBackwards:
         session.refresh(link)
         session.refresh(account)
         assert link.anchor_date == ref_date
-        assert link.last_synced_at == ref_date
         assert account.balance_updated_at == ref_date
         assert Decimal(decrypt_data(account.balance_enc, master_key)) == Decimal("100.00")
+
+        # An import is not a sync. Moving `last_synced_at` up to meet the anchor
+        # would clear the seeding marker and cost the account its deep history.
+        assert link.last_synced_at == date.today() - timedelta(days=61)
+        assert link.last_synced_at < link.anchor_date
+
+    def test_an_export_dated_today_does_not_cancel_the_seeding_pass(
+        self, session: Session, master_key: str, sqlite_pg_insert
+    ):
+        """The ordinary flow: connect the bank, then import the export just
+        downloaded. Its reference date is today, which equals the bootstrap
+        anchor — so the guard above does not catch it. If the import also moved
+        `last_synced_at`, the two dates would meet, `seeding` would turn false,
+        and the first sync would ask for `default` from the anchor instead of
+        `longest` from 2000-01-01. Everything the export did not contain would be
+        lost without a word, and the marker never comes back."""
+        ident = "ih-seeding-today"
+        account, link = _setup_account_and_link(session, master_key, ident)
+        assert link.last_synced_at < link.anchor_date  # seeding, before anything
+
+        import_enablebanking_export(
+            session, USER_UUID, master_key, _export(ident, [_clbd("100.00", days_ago=0)])
+        )
+
+        session.refresh(link)
+        assert link.last_synced_at < link.anchor_date
 
 
 class TestWhichBalanceTheImportReads:
