@@ -180,11 +180,51 @@ en premier, par chance ; rien ne le garantit pour un autre export ou un autre ut
 comptes non rattachés restant en fin (ils ne stockent rien). Un test rejoue le vrai export **à
 l'envers** et exige le même résultat ; retirer le tri le rougit.
 
+### Niveaux 1-2 de déduplication — mesurés, deux mineurs
+
+Quatre cas limites exercés sur une base neuve :
+
+| cas | résultat |
+| --- | --- |
+| deux opérations distinctes, réfs différentes, même jour/montant | **les deux survivent** ✅ |
+| deux opérations distinctes sans réf, dans le **même** appel | **les deux survivent** ✅ (jeu `touched`) |
+| deux opérations distinctes sans réf, en **deux** appels | une seule survit ⚠️ |
+| une opération en attente + une **autre** comptabilisée, même montant | l'attente est absorbée ⚠️ |
+
+**Les deux ⚠️ se réparent d'eux-mêmes**, vérifié : dès que la banque renvoie les deux lignes dans un
+même flux — ce que la fenêtre de synchro garantit, puisqu'elle s'ouvre **sur** l'ancre et re-couvre
+donc le jour courant — les lignes perdues reviennent. Ce sont des sous-comptages **transitoires**
+entre deux synchros du même jour, pas des pertes définitives, et l'écart de réconciliation les
+signale. **Mineurs**, pas de correctif.
+Boursorama remplit `entry_reference` à 100 % : le 3e cas ne peut pas se produire chez Emilien.
+
+### Sécurité — vérifiée, rien à signaler
+
+- **Aucune fuite de clé privée** : elle n'apparaît ni dans les journaux, ni dans une réponse d'API
+  (`BankConnectionStatus` ne porte qu'un booléen), ni dans une URL. Testé : une clé malformée,
+  une clé publique et une chaîne vide donnent toutes `InvalidKeyError: Could not parse the provided
+  public key` — PyJWT n'écho jamais le matériel fourni, donc le `error=f"...{exc}"` renvoyé au
+  navigateur par `check_configuration` est sûr en pratique. *Reste un `except Exception` fourre-tout :
+  risque latent si un autre type d'exception y atterrit un jour.*
+- **`state` du callback** : `secrets.token_urlsafe(32)`, stocké en index aveugle dérivé de la Master
+  Key (donc inutilisable sans le cookie du bon utilisateur), expiration filtrée en SQL,
+  **consommé à l'usage** (`linking.py:336`) et purgé au refus (`:398`).
+- **Propriété des ressources** : `_load_owned_session` sur les trois routes de session,
+  `link_account` vérifie en plus que le compte cible appartient à l'utilisateur, et
+  `PUT /cashflow/{id}/match` contrôle le sien.
+
+### Front — deux silences corrigés
+
+`updateCashflow` avale son erreur et répond `null`. Les deux actions des cartes de comparaison
+ignoraient ce retour : « mettre le prévu à X » se redessinait comme fait, et « désactiver ce flux »
+retirait la carte alors que le flux restait actif et continuait d'alimenter la prévision.
+
 ### Reste à faire
 
-Les revues liaison/secrets/routes et front n'ont pas pu tourner. Le cœur monétaire n'a été vérifié
-que par invariantes : la lecture ligne à ligne de `transactions.py` (niveaux 1-2, `_claimable_row`,
-`alternate_dedup_keys`), de `flows.py` et de `matching.py` reste à faire.
+- Lecture ligne à ligne de `flows.py` et `matching.py` (écrits aujourd'hui, jamais relus par un tiers).
+- Machine à états de `BankLinkModal` : chemins de sortie relus, `close`/`discard` correctement
+  distingués, mais **toujours aucun test** — le dépôt n'a ni `@vue/test-utils` ni environnement DOM.
+- Tri des ~25 findings Mineur différés du chantier d'origine.
 
 ## Les rulings — décisions prises au nom d'Emilien
 
