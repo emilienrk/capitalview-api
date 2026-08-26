@@ -200,6 +200,75 @@ class TestInternalTransfers:
         assert result.outflow == Decimal("60.00")
 
 
+class TestSeveralAccounts:
+    """A current account, a second current account and a savings account: the
+    total spans all of them, and only genuine transfers between them drop out."""
+
+    def _three(self, session: Session, master_key: str) -> None:
+        for name in (ACCOUNT_A, ACCOUNT_B, "savings"):
+            _link(session, master_key, name)
+
+    def test_the_total_spans_every_linked_account(self, session: Session, master_key: str):
+        self._three(session, master_key)
+        _store(session, master_key, ACCOUNT_A, _raw("1000.00", "CRDT", "2026-03-01", ref="pay"))
+        _store(session, master_key, ACCOUNT_B, _raw("30.00", "DBIT", "2026-03-02", ref="shop"))
+        _store(session, master_key, "savings", _raw("2.50", "CRDT", "2026-03-31", ref="interest"))
+
+        result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
+        assert result.account_count == 3
+        assert result.inflow == Decimal("1002.50")
+        assert result.outflow == Decimal("30.00")
+
+    def test_a_move_to_savings_is_neither_income_nor_spending(
+        self, session: Session, master_key: str
+    ):
+        self._three(session, master_key)
+        _store(session, master_key, ACCOUNT_A, _raw("400.00", "DBIT", "2026-03-10", ref="to-savings"))
+        _store(session, master_key, "savings", _raw("400.00", "CRDT", "2026-03-10", ref="from-current"))
+
+        result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
+        assert result.internal_transfers_excluded == 1
+        assert result.inflow == Decimal("0")
+        assert result.outflow == Decimal("0")
+
+    def test_the_nearest_leg_wins_over_the_earliest_one(
+        self, session: Session, master_key: str
+    ):
+        """Two credits sit inside the tolerance, in two different months. Pairing
+        the earlier one would leave the same-day pair unmatched — and move a
+        month's worth of income to the wrong month.
+
+        The two candidates are told apart by the month the surviving credit
+        lands in, which is the only place the choice shows.
+        """
+        self._three(session, master_key)
+        _store(session, master_key, ACCOUNT_A, _raw("250.00", "CRDT", "2026-02-27", ref="earlier"))
+        _store(session, master_key, "savings", _raw("250.00", "CRDT", "2026-03-01", ref="same-day"))
+        _store(session, master_key, ACCOUNT_B, _raw("250.00", "DBIT", "2026-03-01", ref="debit"))
+
+        result = compute_real_flows(session, USER, master_key, months=2, today=date(2026, 3, 31))
+        assert result.internal_transfers_excluded == 1
+        by_period = {m.period: m for m in result.months}
+        # The same-day credit was the transfer's other leg; February's is real.
+        assert by_period["2026-02"].inflow == Decimal("250.00")
+        assert by_period["2026-03"].inflow == Decimal("0")
+
+    def test_linked_account_names_are_reported(self, session: Session, master_key: str):
+        from dtos.bank import BankAccountCreate
+        from models.enums import BankAccountType
+        from services.bank import create_bank_account
+
+        created = create_bank_account(
+            session,
+            BankAccountCreate(name="Livret A", balance="500.00",
+                              account_type=BankAccountType.LIVRET_A),
+            USER, master_key,
+        )
+        _link(session, master_key, created.id)
+        result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
+        assert result.account_names == ["Livret A"]
+
+
 class TestCurrency:
     def test_a_foreign_amount_never_joins_the_main_total(
         self, session: Session, master_key: str
