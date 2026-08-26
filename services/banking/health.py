@@ -39,15 +39,17 @@ from services.encryption import decrypt_data, hash_index
 
 logger = logging.getLogger(__name__)
 
-# SessionStatus members referenced by NAME (OpenAPI contract descriptions are misaligned)
+# The 8 SessionStatus members, spelled exactly as the OpenAPI `enum` list — the
+# spec's x-enum-descriptions are shuffled against their values, so only the enum
+# entries themselves can be trusted, never a value's position or its description.
 STATUS_AUTHORIZED = "AUTHORIZED"
 STATUS_EXPIRED = "EXPIRED"
 STATUS_REVOKED = "REVOKED"
 STATUS_CLOSED = "CLOSED"
 STATUS_CANCELLED = "CANCELLED"
 STATUS_INVALID = "INVALID"
-STATUS_PENDING = "PENDING"
-STATUS_REJECTED = "REJECTED"
+STATUS_PENDING_AUTHORIZATION = "PENDING_AUTHORIZATION"
+STATUS_RETURNED_FROM_BANK = "RETURNED_FROM_BANK"
 
 ALL_SESSION_STATUSES = frozenset({
     STATUS_AUTHORIZED,
@@ -56,8 +58,8 @@ ALL_SESSION_STATUSES = frozenset({
     STATUS_CLOSED,
     STATUS_CANCELLED,
     STATUS_INVALID,
-    STATUS_PENDING,
-    STATUS_REJECTED,
+    STATUS_PENDING_AUTHORIZATION,
+    STATUS_RETURNED_FROM_BANK,
 })
 
 # Status explanations mapped to distinct messages
@@ -68,8 +70,8 @@ SESSION_STATUS_MESSAGES: dict[str, str] = {
     STATUS_CLOSED: "Connexion clôturée.",
     STATUS_CANCELLED: "Autorisation annulée par l'utilisateur.",
     STATUS_INVALID: "Session bancaire invalide ou inconnue.",
-    STATUS_PENDING: "En attente d'autorisation bancaire.",
-    STATUS_REJECTED: "Autorisation refusée par la banque.",
+    STATUS_PENDING_AUTHORIZATION: "En attente de l'autorisation bancaire.",
+    STATUS_RETURNED_FROM_BANK: "Retour de la banque reçu, autorisation en cours de finalisation.",
 }
 
 # How many days in advance of consent_valid_until to notify the user

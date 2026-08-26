@@ -19,8 +19,8 @@ from services.banking.health import (
     STATUS_CLOSED,
     STATUS_EXPIRED,
     STATUS_INVALID,
-    STATUS_PENDING,
-    STATUS_REJECTED,
+    STATUS_PENDING_AUTHORIZATION,
+    STATUS_RETURNED_FROM_BANK,
     STATUS_REVOKED,
     check_session_health,
     is_session_active,
@@ -110,15 +110,29 @@ def _seed_bank_link(
 
 class TestSessionStatuses:
     def test_eight_statuses_defined_and_distinct(self):
-        assert len(ALL_SESSION_STATUSES) == 8
-        assert STATUS_AUTHORIZED in ALL_SESSION_STATUSES
-        assert STATUS_EXPIRED in ALL_SESSION_STATUSES
-        assert STATUS_REVOKED in ALL_SESSION_STATUSES
-        assert STATUS_CLOSED in ALL_SESSION_STATUSES
-        assert STATUS_CANCELLED in ALL_SESSION_STATUSES
-        assert STATUS_INVALID in ALL_SESSION_STATUSES
-        assert STATUS_PENDING in ALL_SESSION_STATUSES
-        assert STATUS_REJECTED in ALL_SESSION_STATUSES
+        # The constants must spell the SessionStatus enum from
+        # vendor-docs/enablebanking-api.yaml exactly — the spec's descriptions
+        # are shuffled, so a wrong spelling here would never surface at runtime.
+        assert ALL_SESSION_STATUSES == {
+            STATUS_AUTHORIZED,
+            STATUS_EXPIRED,
+            STATUS_REVOKED,
+            STATUS_CLOSED,
+            STATUS_CANCELLED,
+            STATUS_INVALID,
+            STATUS_PENDING_AUTHORIZATION,
+            STATUS_RETURNED_FROM_BANK,
+        }
+        assert ALL_SESSION_STATUSES == {
+            "AUTHORIZED",
+            "EXPIRED",
+            "REVOKED",
+            "CLOSED",
+            "CANCELLED",
+            "INVALID",
+            "PENDING_AUTHORIZATION",
+            "RETURNED_FROM_BANK",
+        }
 
     def test_is_session_active(self):
         assert is_session_active(STATUS_AUTHORIZED) is True
