@@ -348,11 +348,12 @@ def _card_marker_missing(
     """Whether several accounts are linked and none is recognised as a card one.
 
     R12's ordering, R18's third outcome and R19's "no curve" all hang on
-    `cash_account_type`, and that field is **not verified against the real
-    bank** — no POST /sessions payload was ever captured. With two accounts and
-    no marker the order degrades silently to uuid, which is the failure this
-    flag exists to make loud. One linked account alone is not a signal: nothing
-    is being ordered, and nothing can be deduplicated across accounts.
+    `cash_account_type`. The marker itself is confirmed on real Boursorama data
+    (see `is_card_account`), but nothing says every bank spells a card account
+    the same way. With two accounts and no marker the order degrades silently
+    to uuid, which is the failure this flag exists to make loud. One linked
+    account alone is not a signal: nothing is being ordered, and nothing can be
+    deduplicated across accounts.
     """
     return len(links) > 1 and not any(
         is_card_account(session, link, master_key) for link in links

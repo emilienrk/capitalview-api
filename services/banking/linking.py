@@ -481,9 +481,14 @@ def is_card_account(session: Session, link: BankAccountLink, master_key: str) ->
     CashAccountType member, matched by NAME (the contract's enum descriptions
     are misaligned with their values). A card account mirrors the current
     account it debits: it syncs last (R12) and its curve is not reconcilable
-    (R19). **Unverified against the real bank** — no capture of a POST /sessions
-    payload exists yet; `card_marker_missing` on the sync result is what makes
-    an absent marker visible rather than silent.
+    (R19).
+
+    Confirmed on real Boursorama data: the current account carries `CACC`, the
+    card account `CARD` (vendor-docs/spike/export-boursorama-2022-2026.json,
+    `.accounts[].info`). The field is `required` on `AccountResource`, which is
+    what `POST /sessions` returns, so the marker cannot simply be absent — but
+    another bank may still label its card account differently, which is what
+    `card_marker_missing` on the sync result keeps visible.
     """
     return find_discovered_account(session, link, master_key).get("cash_account_type") == CARD_ACCOUNT_TYPE
 

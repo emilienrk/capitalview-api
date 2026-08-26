@@ -152,8 +152,8 @@ class BankAccountSyncResult(BaseModel):
     reconciliation_status: str | None = None
     # Several accounts are linked and none carries a recognised card marker, so
     # the sync order, the third reconciliation outcome and R19's "no curve" rule
-    # all lost the signal they depend on. Task 12 settles the field against a
-    # real session payload.
+    # all lost the signal they depend on. The marker is confirmed real on
+    # Boursorama; this stays for the banks that may spell it otherwise.
     card_marker_missing: bool = False
     detail: str | None = None
 

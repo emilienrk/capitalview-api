@@ -175,6 +175,21 @@ Chacun est une décision que le plan ou la spec ne tranchait pas. **Ils sont tou
   *Dernière vérification à faire à la main* : ouvrir le widget et cliquer un Crédit Agricole, pour
   écarter le cas où il grouperait par réseau et émettrait le nom du groupe.
 - **`locale="FR"` sur le sélecteur** reste non documenté pour ce composant (inoffensif s'il est ignoré).
+- ~~L'étape régionale de `BankLinkModal` est à supprimer~~ **Fait le 2026-08-26** (−131 lignes).
+  Confirmé par sonde manuelle : l'événement `selected` porte
+  `{country: "FR", name: "Crédit Mutuel", beta: false, psuType: "personal", sandbox: false, service: "AIS"}`
+  — le **nom du catalogue**, jamais un intitulé de réseau.
+- **🔴 DÉCISION EN ATTENTE — `no-beta` masque 73 % des banques françaises.** La même sonde a montré
+  que le sélecteur n'affiche que **35 des 129 établissements** : `element.setAttribute('no-beta', '')`
+  (`BankLinkModal.vue:100`) écarte les 94 marqués `beta: true`. Sont **inaccessibles** :
+  **BNP Paribas**, **Société Générale** (particuliers — seules « Entreprises » et « Professionnels »
+  passent), **La Banque Postale**, **AXA Banque**, les **39 Crédit Agricole** et les **15 Caisse
+  d'Épargne**. Passent : Boursorama, Crédit Mutuel, CIC, LCL, les Banque Populaire, N26, Revolut…
+  Le rapport de spike avait retenu `no-beta` comme « garde-fou qualité » sans mesurer son coût.
+  **Le retirer** ouvre les quatre grandes banques de détail au prix d'intégrations que le fournisseur
+  dit encore instables ; **le garder** rend la fonctionnalité inutilisable pour la majorité des
+  Français. Trancher avant d'ouvrir la fonctionnalité à quelqu'un d'autre qu'Emilien (Boursorama
+  passe, donc son propre cas fonctionne).
 - **La machine à états de `BankLinkModal` n'a aucun test** — le dépôt n'a ni `@vue/test-utils` ni
   environnement DOM. Elle a été validée par relecture exhaustive des branches, pas par exécution.
 - **`Bank.vue:144-159`** (pré-existant) ouvre une confirmation depuis une modale déjà ouverte : même

@@ -970,8 +970,8 @@ class TestNotReconcilableAccounts:
 
 
 class TestCardMarkerVisibility:
-    """R12, R18 and R19 all hang on `cash_account_type`, which is not verified
-    against the real bank. Its absence must be loud, not silent."""
+    """R12, R18 and R19 all hang on `cash_account_type`. Boursorama does send it,
+    but nothing promises every bank does — its absence must be loud, not silent."""
 
     def _two_accounts(self, session, master_key, second_type: str):
         _credentials(session, master_key)

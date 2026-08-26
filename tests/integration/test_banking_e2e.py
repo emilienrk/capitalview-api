@@ -129,30 +129,34 @@ class RealDataOfflineClient:
             "authorization_id": "auth-id-mock",
         }
 
+    def _session_account(self, index: int, uid: str) -> dict[str, Any]:
+        """One AccountResource, every field taken from the real capture.
+
+        `currency` and `cash_account_type` used to be spelled out here. That made
+        the double *less* faithful than the data it replays: the real accounts
+        carry `XXX` (the "no currency" ISO code), never `EUR`. Reading them back
+        keeps the test unable to drift from what the bank actually sends.
+        """
+        info = self._data["accounts"][index]["info"]
+        return {
+            "uid": uid,
+            "account_id": info["account_id"],
+            "identification_hash": info["identification_hash"],
+            "identification_hashes": info["identification_hashes"],
+            "currency": info["currency"],
+            "cash_account_type": info["cash_account_type"],
+            "name": info["name"],
+            "product": info["product"],
+        }
+
     def create_session(self, code: str) -> dict[str, Any]:
         return {
             "session_id": "eb-session-real-1",
             "aspsp": {"name": "Boursorama", "country": "FR"},
             "access": {"valid_until": (datetime.now(timezone.utc) + timedelta(days=90)).isoformat()},
             "accounts": [
-                {
-                    "uid": "uid-bourso-cacc",
-                    "account_id": self._data["accounts"][0]["info"]["account_id"],
-                    "identification_hash": self._data["accounts"][0]["info"]["identification_hash"],
-                    "identification_hashes": self._data["accounts"][0]["info"]["identification_hashes"],
-                    "currency": "EUR",
-                    "cash_account_type": "CACC",
-                    "name": "Compte Courant Boursorama",
-                },
-                {
-                    "uid": "uid-bourso-card",
-                    "account_id": self._data["accounts"][1]["info"]["account_id"],
-                    "identification_hash": self._data["accounts"][1]["info"]["identification_hash"],
-                    "identification_hashes": self._data["accounts"][1]["info"]["identification_hashes"],
-                    "currency": "EUR",
-                    "cash_account_type": "CARD",
-                    "name": "Carte Boursorama",
-                },
+                self._session_account(0, "uid-bourso-cacc"),
+                self._session_account(1, "uid-bourso-card"),
             ],
         }
 
