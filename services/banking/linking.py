@@ -54,6 +54,14 @@ STATUS_CLOSED = "CLOSED"
 # CashAccountType member, also by NAME: an account used for card payments only.
 CARD_ACCOUNT_TYPE = "CARD"
 
+# Environment members, by NAME for the same reason. A sandbox application reaches
+# simulated banks only, and the bank picker has to be told so: the vendor widget
+# lists production entries unless its `sandbox` attribute matches the environment
+# the application is registered in.
+ENVIRONMENT_SANDBOX = "SANDBOX"
+ENVIRONMENT_PRODUCTION = "PRODUCTION"
+APPLICATION_ENVIRONMENTS = frozenset({ENVIRONMENT_SANDBOX, ENVIRONMENT_PRODUCTION})
+
 
 class LinkingError(Exception):
     """Base for user-facing linking-flow errors; routes map these to HTTP responses."""
@@ -87,7 +95,7 @@ class AccountNotFoundInSessionError(LinkingError):
 def check_configuration(
     session: Session, user_uuid: str, master_key: str, callback_url: str
 ) -> BankConfigCheck:
-    """GET /application in one call: key validity, application active, callback declared."""
+    """GET /application in one call: key validity, application active, callback declared, environment."""
     creds = get_decrypted_credentials(session, user_uuid, master_key)
     if creds is None:
         return BankConfigCheck(
@@ -125,12 +133,14 @@ def check_configuration(
         )
 
     redirect_urls = data.get("redirect_urls", [])
+    environment = data.get("environment")
     return BankConfigCheck(
         configured=True,
         key_valid=True,
         application_active=bool(data.get("active")),
         callback_url_declared=callback_url in redirect_urls,
         callback_url=callback_url,
+        environment=environment if environment in APPLICATION_ENVIRONMENTS else None,
         error=None,
     )
 

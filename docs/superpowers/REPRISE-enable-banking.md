@@ -322,6 +322,74 @@ Chacun est une décision que le plan ou la spec ne tranchait pas. **Ils sont tou
   gaspillé, jamais de double synchro. `TZ=Europe/Paris` l'élimine. Décision de déploiement.
 - Environ **25 findings Minor** différés à la revue finale, listés dans le ledger local.
 
+## Tester en bac à sable — ajout du 2026-08-27
+
+Enable Banking sépare deux environnements, **non transférables l'un vers l'autre**
+(`vendor-docs/eb-docs-split/api-reference.md:277`) : une application `SANDBOX` n'atteint que des
+banques simulées, une application `PRODUCTION` n'atteint que les vraies. Il faut donc **deux
+applications** et **deux clés privées** — y compris quand c'est le même compte Enable Banking
+(`linked-accounts.md:34`).
+
+### Ce qui bloquait, et qui est levé
+
+Le sélecteur de banque est le widget `<enablebanking-aspsp-list>`, et son attribut `sandbox` doit
+correspondre à l'environnement de l'application (`widgets.md:157`, et la FAQ nomme la discordance
+comme cause d'échec, `faq.md:756`). Il était absent : la sonde manuelle du 2026-08-26 renvoyait
+`sandbox: false` dans l'événement `selected`. Avec une application bac à sable, l'utilisateur aurait
+donc choisi une vraie banque dans la liste, et `POST /auth` aurait échoué.
+
+`GET /application` porte déjà le champ `environment` (obligatoire dans `GetApplicationResponse`,
+`enablebanking-api.yaml:2901`). Il est désormais remonté par `GET /banking/check` jusqu'au front, qui
+en déduit l'attribut du widget. Aucune variable d'environnement : la même image sert les deux cas,
+et un utilisateur en production n'a rien à configurer.
+
+**Piège reconduit** : `x-enum-descriptions` d'`Environment` est décalé comme celui de `SessionStatus`
+— `SANDBOX` y est décrit « Live production environment ». Apparier par **nom**, jamais par position.
+Une valeur inconnue est ramenée à `None`, donc à production : montrer de vraies banques est le
+défaut sûr, pointer une application vivante vers des banques simulées ne l'est pas.
+
+### Ce qu'il reste à faire dans le portail (côté Emilien)
+
+1. <https://enablebanking.com/cp/applications> → nouvelle application, environnement **Sandbox**.
+   En bac à sable, l'enregistrement ne demande qu'un nom et les URL de redirection
+   (`control-panel.md:59`) — ni description, ni politique de confidentialité.
+2. Déclarer `http://localhost:8000/banking/callback` en redirect URL, **à l'identique**, sans
+   paramètre de requête (spec §C3 : le portail refuse une URL qui en porte un).
+3. Laisser le navigateur générer la clé : le `.pem` tombe dans les téléchargements, nommé par l'ID de
+   l'application.
+4. Dans CapitalView → Paramètres → Banque : activer la fonctionnalité, coller l'ID, déposer le `.pem`,
+   puis « Vérifier ». Le diagnostic doit passer au vert et un bandeau « Application bac à sable »
+   doit apparaître.
+
+Pas d'étape d'activation en bac à sable : « Activate by linking accounts » ne concerne que les
+applications de production (`control-panel.md`, section *Activation of Production Applications*).
+
+### Banques simulées utiles
+
+`GET /aspsps` porte aussi, en bac à sable uniquement, un bloc `sandbox.users`
+(`SandboxInfo`, `enablebanking-api.yaml:3881`) : identifiant, mot de passe et OTP de la banque
+simulée, servis par l'API elle-même. Non exploité — le sélecteur est le widget du fournisseur, qui
+va chercher sa propre liste ; notre `GET /banking/aspsps` n'est appelé par personne.
+
+Le sélecteur est figé sur `country="FR"` (`BankLinkModal.vue:28`). En bac à sable, deux entrées au
+moins devraient s'y trouver — **Mock ASPSP** (annoncé « All countries », aucun identifiant demandé)
+et **BBVA** (FR listé ; `user1` / `1234`, OTP `012345`). Les identifiants de tous les bacs à sable
+sont dans `vendor-docs/eb-docs-split/sandbox.md`. **Non vérifié empiriquement** : que la liste FR ne
+soit pas vide en bac à sable. C'est le premier écran à regarder.
+
+Mock ASPSP se peuple depuis le panneau de contrôle et accepte un export JSON de vraie banque — celui
+d'Emilien (`vendor-docs/spike/export-boursorama-2022-2026.json`, 4 240 opérations) rejouerait donc
+ses propres données à travers le vrai chemin réseau.
+
+### Ce que le bac à sable ne prouvera pas
+
+Il exerce le parcours — autorisation, callback, session, rattachement, synchro — pas la fidélité des
+données. Le fournisseur écrit lui-même que ses bacs à sable ne simulent pas fidèlement le vivant, et
+Mock ASPSP rend les transactions **par lots de 10, les plus récentes d'abord** (`sandbox.md`,
+*Limitations*) : la pagination et l'ordre y sont donc différents d'une vraie banque. Les rulings
+appuyés sur des données réelles (R12, R18, R19, l'ancre, la dédup) restent adossés au rejeu du
+spike, pas au bac à sable.
+
 ## Contraintes d'environnement
 
 - Tests API : `uv run pytest` **exige `dangerouslyDisableSandbox: true`** (cache uv bloqué).

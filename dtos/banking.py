@@ -42,6 +42,10 @@ class BankConfigCheck(BaseModel):
     application_active: bool
     callback_url_declared: bool
     callback_url: str
+    # SANDBOX or PRODUCTION, straight from GET /application. Matched by NAME:
+    # the contract's x-enum-descriptions for Environment are misaligned with
+    # their values, exactly as for SessionStatus. `None` when unreachable.
+    environment: str | None = None
     error: str | None = None
 
 
