@@ -186,6 +186,34 @@ def test_check_without_credentials_never_calls_the_client(session, master_key, m
     assert body["key_valid"] is False
 
 
+def test_check_reports_the_application_environment(session, master_key, monkeypatch):
+    """The front needs it to configure the bank picker: a sandbox application
+    reaches simulated banks only, and the widget lists production entries unless
+    told otherwise."""
+    client = TestClient(app)
+    _configure_credentials(client)
+    _patch_client(
+        monkeypatch,
+        FakeClient(get_application={"active": True, "redirect_urls": [], "environment": "SANDBOX"}),
+    )
+
+    assert client.get("/banking/check").json()["environment"] == "SANDBOX"
+
+
+def test_check_ignores_an_environment_it_does_not_recognise(session, master_key, monkeypatch):
+    """Matched by NAME against the two known members. Anything else is dropped:
+    the front falls back to production, which shows real banks rather than
+    silently pointing a live application at simulated ones."""
+    client = TestClient(app)
+    _configure_credentials(client)
+    _patch_client(
+        monkeypatch,
+        FakeClient(get_application={"active": True, "redirect_urls": [], "environment": "STAGING"}),
+    )
+
+    assert client.get("/banking/check").json()["environment"] is None
+
+
 # ---------------------------------------------------------------------------
 # Step 1 — POST /banking/authorize: valid_until requested at the bank's max (spec §C2)
 # ---------------------------------------------------------------------------
