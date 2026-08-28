@@ -30,6 +30,7 @@ from services.banking.sync import (
     _accounting_balance_row,
     _booked_movements,
     _curve_entries,
+    _in_base_currency,
 )
 from services.banking.transactions import (
     NormalizedTransaction,
@@ -267,7 +268,9 @@ def _write_export_curve(
     snapshots_written = replace_history_window(
         session,
         account,
-        _curve_entries(bal_amount, movements, covered_from, ref_date),
+        _in_base_currency(
+            session, _curve_entries(bal_amount, movements, covered_from, ref_date), currency
+        ),
         master_key,
         covered_from,
         ref_date,
