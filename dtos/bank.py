@@ -78,7 +78,9 @@ class BankAccountResponse(BaseModel):
 
 class BankSummaryResponse(BaseModel):
     """Summary of all bank accounts."""
-    total_balance: Decimal
+    # None when a currency held has no published rate: a total that silently
+    # added it one-for-one would be wrong with nothing marking it as wrong.
+    total_balance: Decimal | None
     accounts: list[BankAccountResponse]
 
 

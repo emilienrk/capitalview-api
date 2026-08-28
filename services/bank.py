@@ -381,22 +381,26 @@ def get_user_bank_accounts(
 
 def _total_in_base_currency(
     session: Session, responses: list[BankAccountResponse]
-) -> Decimal:
-    """The accounts' balances added up in euros.
+) -> Decimal | None:
+    """The accounts' balances added up in euros, or None if one cannot be.
 
     Adding the raw figures would total francs with euros. Converted at today's
     rate, not at a historical one: this is an instantaneous total, and the only
     honest rate for "what is this worth now" is the current one.
 
-    Known limitation, inherited: `get_exchange_rate` answers 1 when it has no
-    rate for a currency, so an exotic currency with no market data would be
-    added one-for-one without saying so. Pre-existing behaviour, shared with the
-    rest of the app — worth fixing, but not silently and not here.
+    `None` rather than a figure when any currency has no published rate.
+    `get_exchange_rate` answers 1 in that case, indistinguishably from a rate
+    that genuinely is 1, so adding it would put a wrong total on screen with
+    nothing marking it as wrong. A currency is checked at account creation, but
+    a rate can stop being published afterwards — the check has to happen here
+    too. Showing nothing is recoverable; showing a wrong total is not.
     """
     rates: dict[str, Decimal] = {}
     total = Decimal("0")
     for account in responses:
         if account.currency not in rates:
+            if not has_exchange_rate(session, account.currency):
+                return None
             rates[account.currency] = get_exchange_rate(session, account.currency, "EUR")
         total += account.balance * rates[account.currency]
     return total

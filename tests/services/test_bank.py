@@ -437,10 +437,11 @@ def test_the_total_adds_up_in_euros_not_across_currencies(session: Session, mast
             master_key,
         )
 
-    with patch("services.bank.get_exchange_rate", side_effect=lambda s, f, t: (
-        Decimal("1") if f == "EUR" else Decimal("0.90")
-    )):
-        summary = get_user_bank_accounts(session, user_uuid, master_key)
+    with patch("services.bank.has_exchange_rate", return_value=True):
+        with patch("services.bank.get_exchange_rate", side_effect=lambda s, f, t: (
+            Decimal("1") if f == "EUR" else Decimal("0.90")
+        )):
+            summary = get_user_bank_accounts(session, user_uuid, master_key)
 
     # 100 EUR + 200 USD × 0.90 = 280, never 300.
     assert summary.total_balance == Decimal("280.00")
@@ -484,3 +485,30 @@ def test_euros_never_need_a_rate_lookup(session: Session, master_key: str):
             master_key,
         )
     assert account.currency == "EUR"
+
+
+def test_the_total_is_withheld_when_a_currency_lost_its_rate(session: Session, master_key: str):
+    """The guard at creation cannot cover this: a rate can stop being published
+    after the account exists. Adding it one-for-one would put a wrong total on
+    screen with nothing saying so, so no total is given at all."""
+    from unittest.mock import patch
+
+    with patch("services.bank.has_exchange_rate", return_value=True):
+        create_bank_account(
+            session,
+            BankAccountCreate(
+                name="Exotique",
+                balance=Decimal("500"),
+                account_type=BankAccountType.CHECKING,
+                currency="XAF",
+            ),
+            "user_1",
+            master_key,
+        )
+
+    with patch("services.bank.has_exchange_rate", return_value=False):
+        summary = get_user_bank_accounts(session, "user_1", master_key)
+
+    assert summary.total_balance is None
+    # The accounts themselves stay readable — only the total is withheld.
+    assert [a.name for a in summary.accounts] == ["Exotique"]
