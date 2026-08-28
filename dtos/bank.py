@@ -3,9 +3,28 @@
 from datetime import datetime, date
 from decimal import Decimal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from models.enums import BankAccountType
+
+
+def _normalise_currency(value: str | None) -> str | None:
+    """ISO 4217 alphabetic code, upper-cased.
+
+    Deliberately not checked against a list of real codes: the set moves, and a
+    bank that answers with something exotic must not make an account
+    unsaveable. "XXX" — the code for "no currency", which Boursorama returns on
+    the account resource — is refused, since it would silently become the
+    currency a balance is read in.
+    """
+    if value is None:
+        return None
+    code = value.strip().upper()
+    if len(code) != 3 or not code.isalpha():
+        raise ValueError("La devise doit être un code ISO de trois lettres, par exemple EUR.")
+    if code == "XXX":
+        raise ValueError("XXX ne désigne aucune devise.")
+    return code
 
 
 class BankAccountCreate(BaseModel):
@@ -15,7 +34,10 @@ class BankAccountCreate(BaseModel):
     institution_name: str | None = None
     identifier: str | None = None
     balance: Decimal = Decimal("0")
+    currency: str = "EUR"
     opened_at: date | None = None
+
+    _check_currency = field_validator("currency")(_normalise_currency)
 
 
 class BankAccountUpdate(BaseModel):
@@ -24,7 +46,10 @@ class BankAccountUpdate(BaseModel):
     institution_name: str | None = None
     identifier: str | None = None
     balance: Decimal | None = None
+    currency: str | None = None
     opened_at: date | None = None
+
+    _check_currency = field_validator("currency")(_normalise_currency)
 
 
 class BankAccountResponse(BaseModel):
@@ -33,6 +58,7 @@ class BankAccountResponse(BaseModel):
     name: str
     institution_name: str | None = None
     balance: Decimal
+    currency: str
     account_type: BankAccountType
     identifier: str | None = None
     opened_at: date | None = None

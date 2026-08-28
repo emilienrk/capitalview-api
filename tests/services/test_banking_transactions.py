@@ -720,7 +720,7 @@ def test_a_negative_amount_never_becomes_a_credit_in_the_balance_curve(
     store_transactions(session, USER, master_key, account.uuid, [booked])
 
     movements = _booked_movements(
-        session, account, master_key, date(2026, 8, 15), date(2026, 8, 15)
+        session, account, master_key, date(2026, 8, 15), date(2026, 8, 15), "EUR"
     )
 
     assert movements[date(2026, 8, 15)] == Decimal("-12.63")

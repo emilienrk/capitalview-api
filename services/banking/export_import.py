@@ -23,7 +23,7 @@ from dtos.bank import BankHistoryEntry
 from dtos.banking import BankExportImportResponse, BankExportImportResult
 from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession
-from services.bank import replace_history_window
+from services.bank import account_currency, replace_history_window
 from services.banking.linking import is_card_account
 from services.banking.sync import (
     AccountingBalanceUnavailableError,
@@ -252,7 +252,8 @@ def _write_export_curve(
     # The same reading the sync uses (§F, constraint 9): the accounting balance,
     # matched by type. Falling back to `balances[0]` would take the real-time
     # balance one time in two.
-    balance_row = _accounting_balance_row({"balances": raw_balances})
+    currency = account_currency(account, master_key)
+    balance_row = _accounting_balance_row({"balances": raw_balances}, currency)
     bal_amount = Decimal(str((balance_row.get("balance_amount") or {}).get("amount")))
     ref_date_str = balance_row.get("reference_date")
     ref_date = date.fromisoformat(ref_date_str) if ref_date_str else date.today()
@@ -262,7 +263,7 @@ def _write_export_curve(
         return 0, "Aucune opération datable dans l'export : courbe rétrospective non écrite."
     covered_from = min(valid_dates)
 
-    movements = _booked_movements(session, account, master_key, covered_from, ref_date)
+    movements = _booked_movements(session, account, master_key, covered_from, ref_date, currency)
     snapshots_written = replace_history_window(
         session,
         account,
