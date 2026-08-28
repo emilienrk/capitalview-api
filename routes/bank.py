@@ -16,6 +16,7 @@ from dtos import (
     BankHistoryImportRequest,
 )
 from services.bank import (
+    UnconvertibleCurrencyError,
     create_bank_account,
     get_bank_account,
     get_user_bank_accounts,
@@ -53,7 +54,10 @@ def create_account(
                     detail=f"You already have a {account_data.account_type.value} account."
                 )
 
-    return create_bank_account(session, account_data, current_user.uuid, master_key)
+    try:
+        return create_bank_account(session, account_data, current_user.uuid, master_key)
+    except UnconvertibleCurrencyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/accounts", response_model=BankSummaryResponse)
@@ -160,7 +164,10 @@ def update_account(
     if not existing:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    return update_bank_account(session, account, account_data, master_key)
+    try:
+        return update_bank_account(session, account, account_data, master_key)
+    except UnconvertibleCurrencyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.delete("/accounts/{account_id}", status_code=204)
