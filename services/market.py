@@ -852,6 +852,23 @@ def _existing_dates_in_range(session: Session, asset_id: int, from_date: date, t
     return {r.price_date for r in rows}
 
 
+def _last_rate_before(session: Session, asset_id: int, day: date) -> Decimal | None:
+    """The most recent stored price strictly before `day`, or None.
+
+    Seeds the carry-forward when a range opens on a day the market was closed —
+    without it, a series starting on a Saturday would have nothing behind it.
+    """
+    row = session.exec(
+        select(MarketPriceHistory)
+        .where(
+            MarketPriceHistory.market_asset_id == asset_id,
+            MarketPriceHistory.price_date < day,
+        )
+        .order_by(MarketPriceHistory.price_date.desc())
+    ).first()
+    return row.price if row else None
+
+
 def _date_range(from_date: date, to_date: date):
     current = from_date
     while current <= to_date:
@@ -919,10 +936,27 @@ def get_historical_exchange_rates_db(
                 _bulk_upsert_rows(session, new_rows)
             result.update(fetched)
 
-    fallback = get_exchange_rate(session, currency, "EUR")
+    # Dates the market never published a rate for — weekends, public holidays —
+    # carry the last rate published before them, the way a closed market is
+    # priced everywhere else (the ECB itself publishes on business days only, and
+    # a Saturday reads at Friday's rate). Filling them with *today's* rate
+    # instead stamped a 2022 Saturday with a 2026 one, and roughly three days in
+    # ten of a multi-year series are such days.
+    carried = _last_rate_before(session, asset.id, from_date)
+    spot: Decimal | None = None
     for d in _date_range(from_date, to_date):
-        if d not in result:
-            result[d] = fallback
+        if d in result:
+            carried = result[d]
+            continue
+        if carried is not None:
+            result[d] = carried
+            continue
+        # Nothing was ever published before this date, so there is nothing to
+        # carry: the spot rate is the only value available. Fetched once, and
+        # only when that case actually arises.
+        if spot is None:
+            spot = get_exchange_rate(session, currency, "EUR")
+        result[d] = spot
 
     return result
 
