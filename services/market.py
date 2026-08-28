@@ -183,6 +183,21 @@ def get_exchange_rate(
     return rate_from_eur / rate_to_eur
 
 
+def has_exchange_rate(session: Session, currency: str) -> bool:
+    """Whether a currency can actually be converted to euros.
+
+    Exists because `get_exchange_rate` cannot say so: it answers 1 both for a
+    rate that genuinely is 1 and for a currency it knows nothing about, and the
+    caller cannot tell the two apart. Rather than change that contract at nine
+    call sites, this asks the question directly, for the one place that must
+    refuse rather than guess.
+    """
+    if not currency or currency.upper() == "EUR":
+        return True
+    _, price = _get_market_info_internal(session, currency.upper(), AssetType.FIAT)
+    return price is not None
+
+
 def _to_eur(session: Session, price: Decimal, currency: str) -> Decimal:
     """Convert *price* to EUR. Returns unchanged if already EUR."""
     if not currency or currency.upper() == "EUR":

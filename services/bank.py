@@ -20,7 +20,7 @@ from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotRespo
 from services.banking.health import is_session_active
 from services.banking.linking import is_card_account
 from services.encryption import encrypt_data, decrypt_data, hash_index
-from services.market import get_exchange_rate
+from services.market import get_exchange_rate, has_exchange_rate
 
 # Consent wording the front reads back (ruling R16): anything but an authorized
 # session is presented as needing a fresh connection.
@@ -93,6 +93,23 @@ def _link_metadata(session: Session, user_bidx: str, master_key: str) -> dict[st
 DEFAULT_CURRENCY = "EUR"
 
 
+class UnconvertibleCurrencyError(ValueError):
+    """No exchange rate is available for this currency.
+
+    Refused at the door rather than absorbed: a currency that cannot be
+    converted would be added to the euro total one-for-one, silently, and a
+    wrong total presented as a right one is worse than a refusal.
+    """
+
+
+def require_convertible(session: Session, currency: str | None) -> None:
+    if currency is not None and not has_exchange_rate(session, currency):
+        raise UnconvertibleCurrencyError(
+            f"Aucun taux de change n'est disponible pour {currency}. "
+            "Choisissez une devise dont le cours est publié."
+        )
+
+
 def account_currency(account: BankAccount, master_key: str) -> str:
     """The currency an account's balance and movements are denominated in.
 
@@ -147,6 +164,7 @@ def create_bank_account(
     master_key: str
 ) -> BankAccountResponse:
     """Create a new encrypted bank account."""
+    require_convertible(session, data.currency)
     user_bidx = hash_index(user_uuid, master_key)
     
     name_enc = encrypt_data(data.name, master_key)
@@ -186,6 +204,8 @@ def update_bank_account(
     master_key: str
 ) -> BankAccountResponse:
     """Update an existing bank account."""
+    require_convertible(session, data.currency)
+
     if data.name is not None:
         account.name_enc = encrypt_data(data.name, master_key)
         

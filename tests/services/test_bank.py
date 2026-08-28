@@ -13,6 +13,7 @@ from services.bank import (
     create_bank_account,
     delete_bank_account,
     delete_bank_account_history,
+    UnconvertibleCurrencyError,
     get_bank_account,
     get_user_bank_accounts,
     import_bank_account_history,
@@ -423,17 +424,18 @@ def test_the_total_adds_up_in_euros_not_across_currencies(session: Session, mast
         user_uuid,
         master_key,
     )
-    create_bank_account(
-        session,
-        BankAccountCreate(
-            name="Dollars",
-            balance=Decimal("200"),
-            account_type=BankAccountType.CHECKING,
-            currency="USD",
-        ),
-        user_uuid,
-        master_key,
-    )
+    with patch("services.bank.has_exchange_rate", return_value=True):
+        create_bank_account(
+            session,
+            BankAccountCreate(
+                name="Dollars",
+                balance=Decimal("200"),
+                account_type=BankAccountType.CHECKING,
+                currency="USD",
+            ),
+            user_uuid,
+            master_key,
+        )
 
     with patch("services.bank.get_exchange_rate", side_effect=lambda s, f, t: (
         Decimal("1") if f == "EUR" else Decimal("0.90")
@@ -443,3 +445,42 @@ def test_the_total_adds_up_in_euros_not_across_currencies(session: Session, mast
     # 100 EUR + 200 USD × 0.90 = 280, never 300.
     assert summary.total_balance == Decimal("280.00")
     assert {a.name: a.currency for a in summary.accounts} == {"Courant": "EUR", "Dollars": "USD"}
+
+
+def test_a_currency_with_no_published_rate_is_refused(session: Session, master_key: str):
+    """A currency that cannot be converted would be added to the euro total
+    one-for-one, silently. Refusing at the door is the whole point."""
+    from unittest.mock import patch
+
+    with patch("services.bank.has_exchange_rate", return_value=False):
+        with pytest.raises(UnconvertibleCurrencyError):
+            create_bank_account(
+                session,
+                BankAccountCreate(
+                    name="Exotique",
+                    balance=Decimal("10"),
+                    account_type=BankAccountType.CHECKING,
+                    currency="XAF",
+                ),
+                "user_1",
+                master_key,
+            )
+
+
+def test_euros_never_need_a_rate_lookup(session: Session, master_key: str):
+    """The default path must not depend on market data being reachable."""
+    from unittest.mock import patch
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("EUR must not be looked up")
+
+    with patch("services.market._get_market_info_internal", _fail):
+        account = create_bank_account(
+            session,
+            BankAccountCreate(
+                name="Courant", balance=Decimal("10"), account_type=BankAccountType.CHECKING
+            ),
+            "user_1",
+            master_key,
+        )
+    assert account.currency == "EUR"
