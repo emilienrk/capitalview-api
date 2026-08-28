@@ -38,6 +38,7 @@ from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession, BankTransaction
 from services.bank import (
     RECONCILIATION_GAP,
+    account_currency,
     RECONCILIATION_NOT_POSSIBLE,
     RECONCILIATION_OK,
     replace_history_window,
@@ -60,7 +61,6 @@ from services.banking.health import (
 )
 from services.banking.linking import NotConfiguredError, is_card_account
 from services.banking.transactions import (
-    BASE_CURRENCY,
     FINAL_STATUSES,
     STATUS_BOOKED,
     NormalizedTransaction,
@@ -105,7 +105,7 @@ _SESSION_STATUS_BY_CODE = {
 
 
 class AccountingBalanceUnavailableError(Exception):
-    """The bank published no accounting balance in euros for this account.
+    """The bank published no accounting balance in the account's own currency.
 
     Not recoverable by guessing: taking the real-time balance instead would
     silently fold pending operations into the anchor, and taking a foreign
@@ -205,13 +205,16 @@ def sync_account_link(
     # debits, so neither the check nor the curve can be built from what
     # deduplication leaves behind.
     not_reconcilable = is_card_account(session, link, master_key)
+    currency = account_currency(account, master_key)
     uid = decrypt_data(link.account_uid_enc, master_key)
     window_start = _window_start(session, account, master_key, link.anchor_date, today)
 
     try:
         # 1. The accounting balance, never the real-time one. Strict CLBD for
         # regular accounts (§F); card accounts fall back to OTHR.
-        accounting = _accounting_balance(client.get_balances(uid), is_card=not_reconcilable)
+        accounting = _accounting_balance(
+            client.get_balances(uid), currency, is_card=not_reconcilable
+        )
         # 2. The movements, from a window that always re-includes pending rows.
         feed, fetched_from = _fetch(
             client,
@@ -260,7 +263,7 @@ def sync_account_link(
         session, account, master_key, parsed, fetched_from, today
     )
 
-    movements = _booked_movements(session, account, master_key, covered_from, today)
+    movements = _booked_movements(session, account, master_key, covered_from, today, currency)
 
     # 4. Reconciliation (§D3), with three outcomes rather than two (ruling R18).
     # Skipped on the seeding pass: its anchor is the manually-entered balance,
@@ -365,20 +368,29 @@ def _card_marker_missing(
 # ---------------------------------------------------------------------------
 
 
-def _balance_of_type(balances: list[dict[str, Any]], balance_type: str) -> dict[str, Any] | None:
-    """The euro balance carrying `balance_type`, or None. Never by position."""
+def _balance_of_type(
+    balances: list[dict[str, Any]], balance_type: str, currency: str
+) -> dict[str, Any] | None:
+    """The balance carrying `balance_type`, in `currency`, or None.
+
+    Never by position, and never "the first balance of that type": a
+    multi-currency account publishes one balance per currency under the same
+    type, and reading the wrong one records francs as euros.
+    """
     for balance in balances:
         if balance.get("balance_type") != balance_type:
             continue
         amount = balance.get("balance_amount") or {}
-        if str(amount.get("currency") or "") != BASE_CURRENCY:
+        if str(amount.get("currency") or "") != currency:
             continue
         return balance
     return None
 
 
-def _accounting_balance_row(payload: dict[str, Any], is_card: bool = False) -> dict[str, Any]:
-    """The balance object that carries the accounting balance, in euros.
+def _accounting_balance_row(
+    payload: dict[str, Any], currency: str, is_card: bool = False
+) -> dict[str, Any]:
+    """The balance object that carries the accounting balance, in `currency`.
 
     Strict CLBD, and the substitution is enumerated rather than open: a card
     account publishes **no** CLBD at all — the real capture holds one single
@@ -389,12 +401,12 @@ def _accounting_balance_row(payload: dict[str, Any], is_card: bool = False) -> d
     The fallback is narrow, named and logged — never a "first EUR balance wins".
     """
     balances = payload.get("balances", [])
-    row = _balance_of_type(balances, ACCOUNTING_BALANCE_TYPE)
+    row = _balance_of_type(balances, ACCOUNTING_BALANCE_TYPE, currency)
     if row is not None:
         return row
 
     if is_card:
-        row = _balance_of_type(balances, CARD_BALANCE_TYPE)
+        row = _balance_of_type(balances, CARD_BALANCE_TYPE, currency)
         if row is not None:
             logger.warning(
                 "no %s balance on this card account, falling back to %s (ruling R19)",
@@ -404,17 +416,19 @@ def _accounting_balance_row(payload: dict[str, Any], is_card: bool = False) -> d
             return row
 
     raise AccountingBalanceUnavailableError(
-        f"no {ACCOUNTING_BALANCE_TYPE} balance in {BASE_CURRENCY} for this account"
+        f"no {ACCOUNTING_BALANCE_TYPE} balance in {currency} for this account"
     )
 
 
-def _accounting_balance(payload: dict[str, Any], is_card: bool = False) -> Decimal:
-    """The accounting balance, matched by balance type and read in euros.
+def _accounting_balance(
+    payload: dict[str, Any], currency: str, is_card: bool = False
+) -> Decimal:
+    """The accounting balance, matched by balance type and read in `currency`.
 
     Two balances coexist on checking accounts and the real-time one is published
     alongside; taking the first element of the list is wrong half the time (§F).
     """
-    amount = _accounting_balance_row(payload, is_card).get("balance_amount") or {}
+    amount = _accounting_balance_row(payload, currency, is_card).get("balance_amount") or {}
     return Decimal(str(amount.get("amount")))
 
 
@@ -534,20 +548,30 @@ def _drop_vanished_pending(
 
 
 def _booked_movements(
-    session: Session, account: BankAccount, master_key: str, start: date, end: date
+    session: Session,
+    account: BankAccount,
+    master_key: str,
+    start: date,
+    end: date,
+    currency: str,
 ) -> dict[date, Decimal]:
-    """Net signed euro amount per day, booked operations only.
+    """Net signed amount per day in the account's own currency, booked only.
 
     Two exclusions, both required for the check to compare comparable
     quantities: pending operations, which the accounting balance does not
-    contain (§D3), and unconverted foreign-currency rows, which arrive without
-    an exchange rate — adding Swiss francs to euros would make the check lie.
+    contain (§D3), and rows in any other currency, which arrive without an
+    exchange rate — adding Swiss francs to euros would make the check lie.
+
+    The comparison stays in the account's currency all the way to the
+    reconciliation. Converting first would turn every exchange-rate move into a
+    reconciliation gap on an account that is behaving perfectly, which is
+    exactly what ruling R18 exists to prevent.
     """
     net: dict[date, Decimal] = defaultdict(Decimal)
     for row in _rows_in_range(session, account, master_key, start, end):
         if decrypt_data(row.status_enc, master_key) != STATUS_BOOKED:
             continue
-        if decrypt_data(row.currency_enc, master_key) != BASE_CURRENCY:
+        if decrypt_data(row.currency_enc, master_key) != currency:
             continue
         day = _row_date(row, master_key)
         if day is None or not (start <= day <= end):

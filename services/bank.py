@@ -20,6 +20,7 @@ from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotRespo
 from services.banking.health import is_session_active
 from services.banking.linking import is_card_account
 from services.encryption import encrypt_data, decrypt_data, hash_index
+from services.market import get_exchange_rate
 
 # Consent wording the front reads back (ruling R16): anything but an authorized
 # session is presented as needing a fresh connection.
@@ -87,6 +88,22 @@ def _link_metadata(session: Session, user_bidx: str, master_key: str) -> dict[st
     }
 
 
+# Every account created before currency_enc existed is in euros, and so is every
+# account whose owner never chose otherwise.
+DEFAULT_CURRENCY = "EUR"
+
+
+def account_currency(account: BankAccount, master_key: str) -> str:
+    """The currency an account's balance and movements are denominated in.
+
+    The single reader of `currency_enc`. NULL means EUR — the column is nullable
+    because a migration cannot encrypt a back-fill it holds no Master Key for.
+    """
+    if account.currency_enc is None:
+        return DEFAULT_CURRENCY
+    return decrypt_data(account.currency_enc, master_key)
+
+
 def _map_to_response(
     account: BankAccount, master_key: str, link: LinkMetadata | None = None
 ) -> BankAccountResponse:
@@ -108,6 +125,7 @@ def _map_to_response(
         name=name,
         balance=Decimal(balance_str),
         account_type=BankAccountType(type_str),
+        currency=account_currency(account, master_key),
         institution_name=inst_name,
         identifier=identifier,
         opened_at=account.opened_at,
@@ -150,6 +168,7 @@ def create_bank_account(
         account_type_enc=type_enc,
         institution_name_enc=inst_enc,
         identifier_enc=ident_enc,
+        currency_enc=encrypt_data(data.currency, master_key),
         opened_at=data.opened_at,
     )
     
@@ -181,6 +200,9 @@ def update_bank_account(
         
     if data.identifier is not None:
         account.identifier_enc = encrypt_data(data.identifier, master_key)
+
+    if data.currency is not None:
+        account.currency_enc = encrypt_data(data.currency, master_key)
 
     if data.opened_at is not None:
         account.opened_at = data.opened_at
@@ -331,12 +353,33 @@ def get_user_bank_accounts(
         _map_to_response(acc, master_key, links.get(hash_index(acc.uuid, master_key)))
         for acc in accounts
     ]
-    total_balance = sum(acc.balance for acc in responses)
-
     return BankSummaryResponse(
-        total_balance=total_balance,
-        accounts=responses
+        total_balance=_total_in_base_currency(session, responses),
+        accounts=responses,
     )
+
+
+def _total_in_base_currency(
+    session: Session, responses: list[BankAccountResponse]
+) -> Decimal:
+    """The accounts' balances added up in euros.
+
+    Adding the raw figures would total francs with euros. Converted at today's
+    rate, not at a historical one: this is an instantaneous total, and the only
+    honest rate for "what is this worth now" is the current one.
+
+    Known limitation, inherited: `get_exchange_rate` answers 1 when it has no
+    rate for a currency, so an exotic currency with no market data would be
+    added one-for-one without saying so. Pre-existing behaviour, shared with the
+    rest of the app — worth fixing, but not silently and not here.
+    """
+    rates: dict[str, Decimal] = {}
+    total = Decimal("0")
+    for account in responses:
+        if account.currency not in rates:
+            rates[account.currency] = get_exchange_rate(session, account.currency, "EUR")
+        total += account.balance * rates[account.currency]
+    return total
 
 
 def get_bank_account(

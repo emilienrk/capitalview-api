@@ -19,6 +19,10 @@ class BankAccount(SQLModel, table=True):
     identifier_enc: str | None = Field(sa_column=Column(TEXT))
     balance_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     account_type_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    # NULL reads as EUR: every account predating this column is in euros, and a
+    # migration cannot write an encrypted value it has no Master Key for.
+    # Read through services.bank.account_currency, never directly.
+    currency_enc: str | None = Field(default=None, sa_column=Column(TEXT))
 
     created_at: datetime = Field(
         default=sa.func.now(),

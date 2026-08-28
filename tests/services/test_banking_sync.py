@@ -410,7 +410,7 @@ class TestBalanceSelection:
                 {"balance_amount": {"currency": "EUR", "amount": "0"}, "balance_type": "OTHR"}
             ]
         }
-        assert _accounting_balance(othr_only, is_card=True) == Decimal("0")
+        assert _accounting_balance(othr_only, "EUR", is_card=True) == Decimal("0")
 
         real_time_only = {
             "balances": [
@@ -418,7 +418,7 @@ class TestBalanceSelection:
             ]
         }
         with pytest.raises(AccountingBalanceUnavailableError):
-            _accounting_balance(real_time_only, is_card=True)
+            _accounting_balance(real_time_only, "EUR", is_card=True)
 
     def test_a_regular_account_never_falls_back_at_all(self):
         othr_only = {
@@ -427,7 +427,7 @@ class TestBalanceSelection:
             ]
         }
         with pytest.raises(AccountingBalanceUnavailableError):
-            _accounting_balance(othr_only)
+            _accounting_balance(othr_only, "EUR")
 
     def test_a_card_account_still_prefers_the_accounting_balance_when_there_is_one(self):
         payload = {
@@ -436,7 +436,7 @@ class TestBalanceSelection:
                 {"balance_amount": {"currency": "EUR", "amount": "406.70"}, "balance_type": "CLBD"},
             ]
         }
-        assert _accounting_balance(payload, is_card=True) == Decimal("406.70")
+        assert _accounting_balance(payload, "EUR", is_card=True) == Decimal("406.70")
 
     def test_a_foreign_currency_balance_is_never_read_as_euros(self):
         payload = {
@@ -445,7 +445,29 @@ class TestBalanceSelection:
             ]
         }
         with pytest.raises(AccountingBalanceUnavailableError):
-            _accounting_balance(payload, is_card=True)
+            _accounting_balance(payload, "EUR", is_card=True)
+
+    def test_that_same_balance_is_read_when_the_account_is_in_francs(self):
+        """The refusal above is about a mismatch, not about foreign currencies:
+        an account in Swiss francs reads its own balance."""
+        payload = {
+            "balances": [
+                {"balance_amount": {"currency": "CHF", "amount": "406.70"}, "balance_type": "CLBD"}
+            ]
+        }
+        assert _accounting_balance(payload, "CHF") == Decimal("406.70")
+
+    def test_a_multi_currency_account_picks_its_own_currency_not_the_first_row(self):
+        """One balance per currency under the same type. Reading the first would
+        record francs as euros — the exact substitution §F forbids."""
+        payload = {
+            "balances": [
+                {"balance_amount": {"currency": "CHF", "amount": "999.99"}, "balance_type": "CLBD"},
+                {"balance_amount": {"currency": "EUR", "amount": "406.70"}, "balance_type": "CLBD"},
+            ]
+        }
+        assert _accounting_balance(payload, "EUR") == Decimal("406.70")
+        assert _accounting_balance(payload, "CHF") == Decimal("999.99")
 
 
 class TestFetchWindow:

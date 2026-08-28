@@ -408,3 +408,38 @@ def test_replace_history_window_clears_a_window_it_has_no_entries_for(
     rows = _get_history_rows(session, hash_index(acc.id, master_key))
     assert written == 0
     assert [r.uuid for r in rows] == [kept_uuid]
+
+
+def test_the_total_adds_up_in_euros_not_across_currencies(session: Session, master_key: str):
+    """Two accounts, one in euros and one in dollars. Adding the raw figures
+    would total dollars with euros; the answer must be the euro value."""
+    from unittest.mock import patch
+
+    user_uuid = "user_1"
+
+    create_bank_account(
+        session,
+        BankAccountCreate(name="Courant", balance=Decimal("100"), account_type=BankAccountType.CHECKING),
+        user_uuid,
+        master_key,
+    )
+    create_bank_account(
+        session,
+        BankAccountCreate(
+            name="Dollars",
+            balance=Decimal("200"),
+            account_type=BankAccountType.CHECKING,
+            currency="USD",
+        ),
+        user_uuid,
+        master_key,
+    )
+
+    with patch("services.bank.get_exchange_rate", side_effect=lambda s, f, t: (
+        Decimal("1") if f == "EUR" else Decimal("0.90")
+    )):
+        summary = get_user_bank_accounts(session, user_uuid, master_key)
+
+    # 100 EUR + 200 USD × 0.90 = 280, never 300.
+    assert summary.total_balance == Decimal("280.00")
+    assert {a.name: a.currency for a in summary.accounts} == {"Courant": "EUR", "Dollars": "USD"}
