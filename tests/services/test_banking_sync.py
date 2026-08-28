@@ -9,6 +9,7 @@ hide the "never past yesterday" convention rather than exercise it.
 """
 
 import json
+from unittest.mock import patch
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -177,13 +178,20 @@ def _account(
     name: str = "Compte courant",
     balance: Decimal = Decimal("1000"),
     user_uuid: str = USER,
+    currency: str = "EUR",
 ) -> BankAccount:
-    resp = create_bank_account(
-        session,
-        BankAccountCreate(name=name, balance=balance, account_type=BankAccountType.CHECKING),
-        user_uuid,
-        master_key,
-    )
+    with patch("services.bank.has_exchange_rate", return_value=True):
+        resp = create_bank_account(
+            session,
+            BankAccountCreate(
+                name=name,
+                balance=balance,
+                account_type=BankAccountType.CHECKING,
+                currency=currency,
+            ),
+            user_uuid,
+            master_key,
+        )
     return session.get(BankAccount, resp.id)
 
 
@@ -231,6 +239,7 @@ def _one_account_setup(
     last_synced_at: date | None = None,
     real_time: str | None = "0.00",
     cash_account_type: str = "CACC",
+    currency: str = "EUR",
 ):
     """The common case: one linked current account, already seeded unless told
     otherwise (last_synced_at >= anchor_date is the seeded marker)."""
@@ -244,7 +253,7 @@ def _one_account_setup(
             "cash_account_type": cash_account_type,
         }],
     )
-    account = _account(session, master_key)
+    account = _account(session, master_key, currency=currency)
     link = _link(
         session,
         master_key,
@@ -257,7 +266,7 @@ def _one_account_setup(
         last_synced_at if last_synced_at is not None else anchor_date,
     )
     client = FakeClient(
-        balances={"uid-current": _balances(accounting, real_time)},
+        balances={"uid-current": _balances(accounting, real_time, currency)},
         feeds={"uid-current": feed},
     )
     return account, link, client
@@ -1392,3 +1401,127 @@ class TestCapturedPayloads:
         rows = _history(session, account, master_key)
         assert rows, "the seeding pass wrote no curve"
         assert max(r.snapshot_date for r in rows) == YESTERDAY
+
+
+class TestForeignCurrencyAccount:
+    """A whole account denominated in dollars, end to end (points 1 to 4).
+
+    The rule the branch settles on: the account's own currency travels all the
+    way to the reconciliation, and euros begin at the curve — which is a euro
+    store, since `get_all_bank_accounts_history` adds the accounts up by date.
+    """
+
+    def test_the_dollar_balance_is_read_anchored_and_reconciled_without_conversion(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="900.00",
+            feed=[_raw("100", TODAY - timedelta(days=1), currency="USD", ref="usd-1")],
+            anchor_date=TODAY - timedelta(days=3),
+            anchor_balance=Decimal("1000.00"),
+            currency="USD",
+        )
+        _install(monkeypatch, client)
+        # 1 USD = 0.90 EUR every day of the window.
+        monkeypatch.setattr(
+            "services.banking.sync.get_historical_exchange_rates_db",
+            lambda s, c, f, t: {d: Decimal("0.90") for d in _days(f, t)},
+        )
+
+        [result] = sync_user_accounts(session, USER, master_key)
+
+        assert result.status == "synced"
+        session.refresh(link)
+        # The anchor stays in dollars: 900 read from the bank, not 810.
+        assert Decimal(decrypt_data(link.anchor_balance_enc, master_key)) == Decimal("900.00")
+        # 1000 - 100 = 900 in dollars, so no gap. Converting either side first
+        # would have invented one out of the exchange rate alone (ruling R18).
+        assert link.last_reconciliation_gap_enc is None
+
+    def test_the_curve_is_stored_in_euros(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="900.00",
+            feed=[_raw("100", TODAY - timedelta(days=1), currency="USD", ref="usd-1")],
+            anchor_date=TODAY - timedelta(days=3),
+            anchor_balance=Decimal("1000.00"),
+            currency="USD",
+        )
+        _install(monkeypatch, client)
+        monkeypatch.setattr(
+            "services.banking.sync.get_historical_exchange_rates_db",
+            lambda s, c, f, t: {d: Decimal("0.90") for d in _days(f, t)},
+        )
+
+        sync_user_accounts(session, USER, master_key)
+
+        rows = _history(session, account, master_key)
+        # Yesterday closes at 900 USD → 810 EUR; the day before at 1000 → 900.
+        assert _value_on(rows, TODAY - timedelta(days=1), master_key) == Decimal("810.00")
+        assert _value_on(rows, TODAY - timedelta(days=2), master_key) == Decimal("900.00")
+
+    def test_each_day_converts_at_its_own_rate(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """A single rate across the window would draw the exchange rate's shape
+        rather than the balance's."""
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="1000.00",
+            feed=[],
+            anchor_date=TODAY - timedelta(days=3),
+            anchor_balance=Decimal("1000.00"),
+            currency="USD",
+        )
+        _install(monkeypatch, client)
+        rates = {
+            TODAY: Decimal("1.00"),
+            TODAY - timedelta(days=1): Decimal("0.50"),
+            TODAY - timedelta(days=2): Decimal("0.25"),
+            TODAY - timedelta(days=3): Decimal("0.10"),
+        }
+        monkeypatch.setattr(
+            "services.banking.sync.get_historical_exchange_rates_db",
+            lambda s, c, f, t: rates,
+        )
+
+        sync_user_accounts(session, USER, master_key)
+
+        rows = _history(session, account, master_key)
+        # The balance never moves — only the rate does.
+        assert _value_on(rows, TODAY - timedelta(days=1), master_key) == Decimal("500.00")
+        assert _value_on(rows, TODAY - timedelta(days=2), master_key) == Decimal("250.00")
+
+    def test_a_euro_account_never_looks_a_rate_up(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """The ordinary path must not depend on market data being reachable."""
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="1000.00",
+            feed=[],
+            anchor_date=TODAY - timedelta(days=3),
+            anchor_balance=Decimal("1000.00"),
+        )
+        _install(monkeypatch, client)
+
+        def _fail(*args, **kwargs):
+            raise AssertionError("a euro account must not need an exchange rate")
+
+        monkeypatch.setattr("services.banking.sync.get_historical_exchange_rates_db", _fail)
+
+        assert sync_user_accounts(session, USER, master_key)[0].status == "synced"
+
+
+def _days(start: date, end: date):
+    day = start
+    while day <= end:
+        yield day
+        day += timedelta(days=1)
