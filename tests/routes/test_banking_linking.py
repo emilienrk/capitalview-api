@@ -764,6 +764,54 @@ def test_reconnection_updates_existing_link_instead_of_creating_a_new_one(sessio
     assert decrypt_data(links[0].account_uid_enc, master_key) == "uid-9"
 
 
+def test_two_bank_accounts_cannot_share_one_capitalview_account(session, master_key, monkeypatch):
+    """The UNIQUE index already forbids it, but it answers with an IntegrityError
+    the route lets through as a 500 — on a step reached only after a strong
+    authentication. R12 and R18 also need the card and the current account to
+    stay two separate CapitalView accounts."""
+    client = TestClient(app)
+    _configure_credentials(client)
+    bank_account_uuid = _create_bank_account(session, master_key)
+    bank_session_uuid = _create_bank_session(
+        session,
+        master_key,
+        accounts=[COURANT_ACCOUNT, {"uid": "uid-2", "identification_hash": "hash-2"}],
+    )
+    _forbid_client(monkeypatch)
+
+    first = client.post(
+        f"/banking/sessions/{bank_session_uuid}/link",
+        json={"identification_hash": "hash-1", "bank_account_uuid": bank_account_uuid},
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        f"/banking/sessions/{bank_session_uuid}/link",
+        json={"identification_hash": "hash-2", "bank_account_uuid": bank_account_uuid},
+    )
+    assert second.status_code == 409
+    assert "déjà rattaché" in second.json()["detail"]
+    # The refusal must not cost the attachment that was already made.
+    assert len(session.exec(select(BankAccountLink)).all()) == 1
+
+
+def test_relinking_the_same_account_to_the_same_target_still_works(session, master_key, monkeypatch):
+    """The guard keys on the discovered account, not on the target alone: a
+    reconnection re-points an existing link onto the target it already holds."""
+    client = TestClient(app)
+    _configure_credentials(client)
+    bank_account_uuid = _create_bank_account(session, master_key)
+    bank_session_uuid = _create_bank_session(session, master_key)
+    _forbid_client(monkeypatch)
+
+    body = {"identification_hash": "hash-1", "bank_account_uuid": bank_account_uuid}
+    assert client.post(f"/banking/sessions/{bank_session_uuid}/link", json=body).status_code == 200
+    again = client.post(f"/banking/sessions/{bank_session_uuid}/link", json=body)
+
+    assert again.status_code == 200
+    assert again.json()["reconnected"] is True
+
+
 def test_link_account_not_in_session_is_rejected(session, master_key, monkeypatch):
     client = TestClient(app)
     _configure_credentials(client)
