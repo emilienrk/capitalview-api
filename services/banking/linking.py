@@ -87,6 +87,18 @@ class AccountNotFoundInSessionError(LinkingError):
     """The identification_hash isn't among the session's current accounts."""
 
 
+class TargetAccountAlreadyLinkedError(LinkingError):
+    """That CapitalView account already carries a different bank account.
+
+    The attachment is one-to-one by construction (`bank_account_uuid_bidx` is
+    UNIQUE), and it has to stay that way: the card/current deduplication reads
+    two *separate* CapitalView accounts to tell a card echo from a real payment
+    (rulings R12 and R18). Folding both onto one account would leave that
+    machinery nothing to compare, and the reconciliation gap of a card would be
+    reported against a current account it does not belong to.
+    """
+
+
 # ---------------------------------------------------------------------------
 # C1 — Configuration check
 # ---------------------------------------------------------------------------
@@ -634,6 +646,18 @@ def link_account(
     bank_account_bidx = hash_index(bank_account_uuid, master_key)
 
     existing_link = _find_link_by_ident(session, user_bidx, ident_bidx)
+
+    # Without this the UNIQUE index answers instead, as an IntegrityError the
+    # route does not catch — a 500 on a step the user reaches only after a
+    # strong authentication at their bank.
+    occupant = session.exec(
+        select(BankAccountLink).where(
+            BankAccountLink.user_uuid_bidx == user_bidx,
+            BankAccountLink.bank_account_uuid_bidx == bank_account_bidx,
+        )
+    ).first()
+    if occupant is not None and occupant.identification_hash_bidx != ident_bidx:
+        raise TargetAccountAlreadyLinkedError()
 
     reconnected = existing_link is not None
     if existing_link is not None:

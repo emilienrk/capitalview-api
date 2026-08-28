@@ -52,6 +52,7 @@ from services.banking.linking import (
     handle_callback,
     link_account,
     list_aspsps_for_country,
+    TargetAccountAlreadyLinkedError,
     list_bank_sessions,
     list_session_accounts,
     start_authorization_flow,
@@ -303,6 +304,12 @@ def link_session_account(
         raise HTTPException(status_code=404, detail="Compte CapitalView introuvable.")
     except AccountNotFoundInSessionError:
         raise HTTPException(status_code=404, detail="Ce compte n'est pas dans la session bancaire.")
+    except TargetAccountAlreadyLinkedError:
+        raise HTTPException(
+            status_code=409,
+            detail="Ce compte CapitalView est déjà rattaché à un autre compte bancaire. "
+                   "Créez-en un second — un compte carte et un compte courant doivent rester séparés.",
+        )
 
 
 def _psu_context(request: Request) -> dict[str, str] | None:
