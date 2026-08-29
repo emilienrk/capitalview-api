@@ -12,13 +12,19 @@ concurrent MCP calls from different accounts cannot see each other's data.
 
 from contextvars import ContextVar
 
+from mcp.server.mcpserver.exceptions import ToolError
+
 from services.api_token import ApiTokenPrincipal
 
 _principal: ContextVar[ApiTokenPrincipal | None] = ContextVar("mcp_principal", default=None)
 
 
-class McpAuthError(Exception):
-    """Raised inside a tool when the request carries no usable principal."""
+class McpAuthError(ToolError):
+    """Raised inside a tool when the request carries no usable principal.
+
+    A ToolError rather than a plain exception so the refusal reaches the caller
+    as itself: the SDK withholds the message of anything it reads as a crash.
+    """
 
 
 def set_principal(principal: ApiTokenPrincipal | None) -> None:

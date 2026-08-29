@@ -35,6 +35,7 @@ import datetime
 from decimal import Decimal
 from typing import Any
 
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic_core import to_jsonable_python
 
 from mcp_server.context import require_scope
@@ -74,6 +75,8 @@ MAX_TRANSACTIONS = 200
 MAX_HISTORY_POINTS = 120
 
 
+# Only a ToolError carries its message back to the model; the SDK reads anything
+# else as a crash and answers "Error executing tool <name>" with nothing in it.
 def _as_date(value: str | None) -> datetime.date | None:
     """Parse a YYYY-MM-DD bound, refusing anything else rather than guessing."""
     if not value:
@@ -81,7 +84,7 @@ def _as_date(value: str | None) -> datetime.date | None:
     try:
         return datetime.date.fromisoformat(value)
     except ValueError as exc:
-        raise ValueError(f"Date attendue au format YYYY-MM-DD, reçu {value!r}.") from exc
+        raise ToolError(f"Date attendue au format YYYY-MM-DD, reçu {value!r}.") from exc
 
 
 ACCOUNT_TYPES = ("stock", "crypto", "all")
@@ -99,7 +102,7 @@ def _as_account_type(value: str) -> str:
     and let the model retry.
     """
     if value not in ACCOUNT_TYPES:
-        raise ValueError(
+        raise ToolError(
             f"account_type doit valoir 'stock', 'crypto' ou 'all', reçu {value!r}. "
             "Les mouvements bancaires ne sont pas exposés ici."
         )
@@ -109,7 +112,7 @@ def _as_account_type(value: str) -> str:
 def _as_flow_type(value: str | None) -> str | None:
     """Same refusal for the cashflow direction, which silently ignores typos."""
     if value is not None and value.lower() not in FLOW_TYPES:
-        raise ValueError(f"flow_type doit valoir 'inflow' ou 'outflow', reçu {value!r}.")
+        raise ToolError(f"flow_type doit valoir 'inflow' ou 'outflow', reçu {value!r}.")
     return value
 
 
