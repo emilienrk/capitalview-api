@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, field_validator
 
+from models.currency import BASE_CURRENCY, NO_CURRENCY
 from models.enums import BankAccountType
 
 
@@ -22,8 +23,8 @@ def _normalise_currency(value: str | None) -> str | None:
     code = value.strip().upper()
     if len(code) != 3 or not code.isalpha():
         raise ValueError("La devise doit être un code ISO de trois lettres, par exemple EUR.")
-    if code == "XXX":
-        raise ValueError("XXX ne désigne aucune devise.")
+    if code == NO_CURRENCY:
+        raise ValueError(f"{NO_CURRENCY} ne désigne aucune devise.")
     return code
 
 
@@ -34,7 +35,7 @@ class BankAccountCreate(BaseModel):
     institution_name: str | None = None
     identifier: str | None = None
     balance: Decimal = Decimal("0")
-    currency: str = "EUR"
+    currency: str = BASE_CURRENCY
     opened_at: date | None = None
 
     _check_currency = field_validator("currency")(_normalise_currency)
