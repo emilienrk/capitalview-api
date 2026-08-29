@@ -20,16 +20,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v10
         with:
           python-version: '3.14'
-          cache: pip
+          enable-cache: true
 
+      # --frozen so the run fails on a stale lockfile rather than silently
+      # testing a resolution the image will never ship.
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
+        run: uv sync --frozen
 
       - name: Run tests
-        run: pytest -v --tb=short
+        run: uv run --frozen pytest -v --tb=short

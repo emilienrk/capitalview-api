@@ -10,11 +10,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+COPY --from=ghcr.io/astral-sh/uv:0.12.7 /uv /usr/local/bin/uv
 
-COPY pyproject.toml .
-RUN pip install --no-cache-dir -e .
+# Only the locked dependencies go in the venv: the code is copied in whole at
+# the runtime stage, so this layer stays cached across code-only changes.
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 
 # ===================================
 # Stage 2: Runtime
@@ -35,6 +38,8 @@ COPY --from=builder --chown=appuser:appuser /opt/venv /opt/venv
 COPY --chown=appuser:appuser . .
 
 ENV PATH="/opt/venv/bin:$PATH"
+# The venv carries the dependencies alone, so /app has to be importable itself.
+ENV PYTHONPATH=/app
 
 USER appuser
 
