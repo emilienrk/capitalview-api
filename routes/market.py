@@ -9,6 +9,7 @@ from sqlmodel import Session
 
 from database import get_session
 from models import User
+from models.currency import BASE_CURRENCY, SUPPORTED_CURRENCIES
 from models.enums import AssetType
 from services.auth import get_current_user, get_master_key
 from services.market import backfill_price_history, get_all_assets, get_non_trading_days
@@ -39,6 +40,40 @@ class PriceBackfillResponse(BaseModel):
     """Number of new price rows inserted."""
     skipped: int
     """Number of dates that already had a price (not overwritten)."""
+
+
+class CurrencyOption(BaseModel):
+    """One currency the interface may offer."""
+
+    code: str
+    """ISO 4217 alphabetic code."""
+    name: str
+
+
+class SupportedCurrencies(BaseModel):
+    """The currencies the interface offers, and the one everything is totalled in."""
+
+    base: str
+    currencies: list[CurrencyOption]
+
+
+@router.get("/currencies", response_model=SupportedCurrencies)
+def get_supported_currencies():
+    """The curated list the web app builds its currency pickers from.
+
+    Unauthenticated on purpose: it is a static catalogue, identical for
+    everyone, and carries nothing about the caller. Serving it here rather than
+    duplicating it in the web app is the whole point — the list moved three
+    times out of sync before it lived in one place.
+
+    Not a validation whitelist: what the API enforces on an account is that a
+    currency can actually be converted, which is a market-data question, not a
+    membership one.
+    """
+    return SupportedCurrencies(
+        base=BASE_CURRENCY,
+        currencies=[CurrencyOption(code=c.code, name=c.name) for c in SUPPORTED_CURRENCIES],
+    )
 
 
 @router.post(

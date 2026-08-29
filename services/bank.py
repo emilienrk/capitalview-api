@@ -13,6 +13,7 @@ from sqlmodel import Session, select
 from models import BankAccount, BankAccountType
 from models.account_history import AccountHistory
 from models.banking import BankAccountLink, BankSession
+from models.currency import BASE_CURRENCY
 from models.enums import AccountCategory, FlowType
 from dtos import BankAccountCreate, BankAccountUpdate, BankAccountResponse, BankSummaryResponse
 from dtos.bank import BankHistoryEntry
@@ -90,7 +91,7 @@ def _link_metadata(session: Session, user_bidx: str, master_key: str) -> dict[st
 
 # Every account created before currency_enc existed is in euros, and so is every
 # account whose owner never chose otherwise.
-DEFAULT_CURRENCY = "EUR"
+DEFAULT_CURRENCY = BASE_CURRENCY
 
 
 class UnconvertibleCurrencyError(ValueError):

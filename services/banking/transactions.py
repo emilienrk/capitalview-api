@@ -39,12 +39,12 @@ from typing import Any
 from sqlmodel import Session, select
 
 from models.banking import BankAccountLink, BankTransaction
+# Currency the rest of CapitalView reasons in; anything else is stored as-is.
+# Re-exported from here because the banking modules already read it from this one.
+from models.currency import BASE_CURRENCY
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 logger = logging.getLogger(__name__)
-
-# Currency the rest of CapitalView reasons in. Anything else is stored as-is.
-BASE_CURRENCY = "EUR"
 
 # TransactionStatus members, referenced by NAME. The contract's
 # x-enum-descriptions are misaligned with their values (documented trap), so a
