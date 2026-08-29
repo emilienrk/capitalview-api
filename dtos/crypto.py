@@ -13,6 +13,7 @@ from dtos._dates import (
 
 
 from models.enums import CryptoCompositeTransactionType, CryptoTransactionType
+from models.currency import CURRENCY_CODES
 
 
 class CryptoAccountCreate(BaseModel):
@@ -125,9 +126,10 @@ class CryptoCompositeTransactionResponse(BaseModel):
     info: str | None = None
 
 
-FIAT_ASSET_KEYS: frozenset[str] = frozenset(
-    {"EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "CNY", "NZD", "SEK", "NOK", "DKK"}
-)
+# Historical name, kept because ~50 call sites across crypto, community and the
+# import paths read it. The codes themselves now live in models.currency, which
+# is the single source the web app and the API route read too.
+FIAT_ASSET_KEYS: frozenset[str] = CURRENCY_CODES
 
 
 class CrossAccountTransferCreate(BaseModel):

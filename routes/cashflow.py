@@ -25,6 +25,7 @@ from services.cashflow import (
     get_cashflows_by_type,
     get_user_cashflow_balance
 )
+from services.encryption import hash_index
 
 router = APIRouter(prefix="/cashflow", tags=["Cashflows"])
 

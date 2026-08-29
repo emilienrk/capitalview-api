@@ -1,7 +1,7 @@
 """Tests for asset service layer."""
 
 import pytest
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from sqlmodel import Session
 
@@ -304,7 +304,7 @@ def test_get_asset_valuations(session: Session, master_key: str):
     valuations = get_asset_valuations(session, asset.id, master_key)
     assert len(valuations) == 4
     # Should be sorted by valued_at descending
-    assert valuations[0].valued_at == date.today().isoformat()
+    assert valuations[0].valued_at == datetime.now(timezone.utc).date().isoformat()
     assert valuations[-1].valued_at == "2024-01-01"
 
 

@@ -77,3 +77,8 @@ class CashflowBalanceResponse(BaseModel):
     savings_rate: Decimal | None = None  # (inflows - outflows) / inflows * 100
     inflows: CashflowSummaryResponse
     outflows: CashflowSummaryResponse
+
+
+# ---------------------------------------------------------------------------
+# Declared vs observed
+# ---------------------------------------------------------------------------

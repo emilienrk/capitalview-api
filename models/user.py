@@ -92,6 +92,10 @@ class UserSettings(SQLModel, table=True):
     bank_module_enabled: bool = Field(default=True, nullable=False)
     # False = linked cashflows no longer adjust bank balances automatically
     bank_auto_sync_enabled: bool = Field(default=True, nullable=False)
+    # Opt-in: linking a real bank through Enable Banking. Off by default — it
+    # costs the user their own Enable Banking application and a strong
+    # authentication, and every other bank feature works without it.
+    open_banking_enabled: bool = Field(default=False, nullable=False)
     cashflow_module_enabled: bool = Field(default=True, nullable=False)
     wealth_module_enabled: bool = Field(default=True, nullable=False)
     ai_feature_enabled: bool = Field(default=False, nullable=False)
