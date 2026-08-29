@@ -14,6 +14,7 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from mcp.server.mcpserver.exceptions import ToolError
 
 import main
 from models.user import User
@@ -173,7 +174,7 @@ def test_a_malformed_date_bound_is_refused_rather_than_guessed():
 
     assert _as_date(None) is None
     assert _as_date("2026-03-01") == datetime.date(2026, 3, 1)
-    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+    with pytest.raises(ToolError, match="YYYY-MM-DD"):
         _as_date("01/03/2026")
 
 
@@ -182,7 +183,7 @@ def test_an_unknown_account_type_is_refused_rather_than_answered_empty():
     from mcp_server.tools import _as_account_type
 
     assert _as_account_type("all") == "all"
-    with pytest.raises(ValueError, match="'stock', 'crypto' ou 'all'"):
+    with pytest.raises(ToolError, match="'stock', 'crypto' ou 'all'"):
         _as_account_type("bank")
 
 
@@ -191,7 +192,7 @@ def test_an_unknown_flow_type_is_refused_rather_than_ignored():
 
     assert _as_flow_type(None) is None
     assert _as_flow_type("inflow") == "inflow"
-    with pytest.raises(ValueError, match="'inflow' ou 'outflow'"):
+    with pytest.raises(ToolError, match="'inflow' ou 'outflow'"):
         _as_flow_type("revenus")
 
 
