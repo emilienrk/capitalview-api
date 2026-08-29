@@ -3,6 +3,7 @@
 from .auth import router as auth_router
 from .api_tokens import router as api_tokens_router
 from .bank import router as bank_router
+from .banking import router as banking_router
 from .cashflow import router as cashflow_router
 from .stocks import router as stocks_router
 from .crypto import router as crypto_router
@@ -21,6 +22,7 @@ __all__ = [
     "auth_router",
     "api_tokens_router",
     "bank_router",
+    "banking_router",
     "cashflow_router",
     "stocks_router",
     "crypto_router",

@@ -71,6 +71,7 @@ def _map_settings_to_response(
         crypto_show_negative_positions=settings.crypto_show_negative_positions,
         bank_module_enabled=settings.bank_module_enabled,
         bank_auto_sync_enabled=settings.bank_auto_sync_enabled,
+        open_banking_enabled=settings.open_banking_enabled,
         cashflow_module_enabled=settings.cashflow_module_enabled,
         wealth_module_enabled=settings.wealth_module_enabled,
         ai_feature_enabled=settings.ai_feature_enabled,
@@ -194,6 +195,11 @@ def update_settings(
 
     if data.bank_auto_sync_enabled is not None:
         settings.bank_auto_sync_enabled = data.bank_auto_sync_enabled
+
+    # Turning it off never dismantles anything: existing connections stay
+    # attached and readable, they just stop being reachable from the UI.
+    if data.open_banking_enabled is not None:
+        settings.open_banking_enabled = data.open_banking_enabled
 
     if data.cashflow_module_enabled is not None:
         settings.cashflow_module_enabled = data.cashflow_module_enabled

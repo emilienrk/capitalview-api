@@ -9,6 +9,7 @@ deferred to a background job.
 """
 
 import json
+import logging
 from datetime import datetime, timezone
 
 import sqlalchemy as sa
@@ -18,6 +19,13 @@ from models.account_history import AccountHistory
 from models.api_token import ApiToken
 from models.asset import Asset, AssetValuation
 from models.bank import BankAccount
+from models.banking import (
+    BankAccountLink,
+    BankAuthorization,
+    BankSession,
+    BankTransaction,
+    UserBankConnection,
+)
 from models.card import Card
 from models.cashflow import Cashflow
 from models.community import (
@@ -38,6 +46,8 @@ from models.user import (
     UserSettings,
 )
 from services.encryption import DecryptionError, decrypt_data, hash_index
+
+logger = logging.getLogger(__name__)
 
 EXPORT_VERSION = 1
 
@@ -178,6 +188,34 @@ def export_account_data(session: Session, user: User, master_key: str) -> dict:
         for asset in asset_summary.assets
     ]
 
+    bank_accounts = []
+    for account in get_user_bank_accounts(session, user.uuid, master_key).accounts:
+        account_bidx = hash_index(account.id, master_key)
+        tx_rows = session.exec(
+            select(BankTransaction)
+            .where(BankTransaction.account_id_bidx == account_bidx)
+            .order_by(BankTransaction.created_at)
+        ).all()
+        bank_accounts.append(
+            {
+                **account.model_dump(),
+                "transactions": [
+                    {
+                        "uuid": tx.uuid,
+                        "amount": _safe_decrypt(tx.amount_enc, master_key),
+                        "currency": _safe_decrypt(tx.currency_enc, master_key),
+                        "credit_debit": _safe_decrypt(tx.credit_debit_enc, master_key),
+                        "status": _safe_decrypt(tx.status_enc, master_key),
+                        "booking_date": _safe_decrypt(tx.booking_date_enc, master_key),
+                        "value_date": _safe_decrypt(tx.value_date_enc, master_key),
+                        "transaction_date": _safe_decrypt(tx.transaction_date_enc, master_key),
+                        "remittance": _safe_decrypt(tx.remittance_enc, master_key),
+                    }
+                    for tx in tx_rows
+                ],
+            }
+        )
+
     return {
         "export_version": EXPORT_VERSION,
         "generated_at": datetime.now(timezone.utc),
@@ -192,7 +230,7 @@ def export_account_data(session: Session, user: User, master_key: str) -> dict:
             "totp_enabled": user.totp_enabled,
         },
         "settings": get_settings(session, user.uuid, master_key),
-        "bank_accounts": get_user_bank_accounts(session, user.uuid, master_key).accounts,
+        "bank_accounts": bank_accounts,
         "stock_accounts": stock_accounts,
         "crypto_accounts": crypto_accounts,
         "cashflows": get_all_user_cashflows(session, user.uuid, master_key),
@@ -238,6 +276,15 @@ def purge_account(session: Session, user: User, master_key: str) -> dict[str, in
 
     # 1. Transactions hang off accounts, not off the user: their account_id_bidx
     #    has to be recomputed from each account before the accounts are gone.
+    bank_account_bidx = [
+        hash_index(uuid, master_key)
+        for uuid in session.exec(
+            select(BankAccount.uuid).where(BankAccount.user_uuid_bidx == user_bidx)
+        ).all()
+    ]
+    if bank_account_bidx:
+        wipe(BankTransaction, BankTransaction.account_id_bidx.in_(bank_account_bidx))
+
     stock_account_bidx = [
         hash_index(uuid, master_key)
         for uuid in session.exec(
@@ -255,6 +302,18 @@ def purge_account(session: Session, user: User, master_key: str) -> dict[str, in
     ]
     if crypto_account_bidx:
         wipe(CryptoTransaction, CryptoTransaction.account_id_bidx.in_(crypto_account_bidx))
+
+    # 1b. Banking attachments: BankAccountLink must be wiped BEFORE BankSession
+    #     because `bank_account_links.session_uuid` has `ondelete="RESTRICT"`.
+    wipe(BankAccountLink, BankAccountLink.user_uuid_bidx == user_bidx)
+
+    # Best-effort closure of active Enable Banking sessions before wiping session rows
+    # (ruling R3: always behind build_client double in tests, never blocks account deletion).
+    _close_user_bank_sessions(session, user.uuid, user_bidx, master_key)
+
+    wipe(BankSession, BankSession.user_uuid_bidx == user_bidx)
+    wipe(BankAuthorization, BankAuthorization.user_uuid_bidx == user_bidx)
+    wipe(UserBankConnection, UserBankConnection.user_uuid_bidx == user_bidx)
 
     # 2. Asset valuations cascade from assets in Postgres, but assets themselves
     #    never cascade from the user, so the chain has to be walked by hand.
@@ -306,3 +365,44 @@ def purge_account(session: Session, user: User, master_key: str) -> dict[str, in
 
     session.commit()
     return deleted
+
+
+def _close_user_bank_sessions(
+    session: Session, user_uuid: str, user_bidx: str, master_key: str
+) -> None:
+    """Best-effort graceful closure of active Enable Banking sessions before purge.
+
+    Uses `build_client` so that test monkeypatching catches the calls. Never
+    blocks account deletion if a network error or client error occurs.
+    """
+    from services.banking.client import build_client
+    from services.banking.credentials import get_decrypted_credentials
+    from services.banking.health import STATUS_AUTHORIZED
+
+    try:
+        creds = get_decrypted_credentials(session, user_uuid, master_key)
+        if creds is None:
+            return
+        active_sessions = session.exec(
+            select(BankSession).where(
+                BankSession.user_uuid_bidx == user_bidx,
+                BankSession.status == STATUS_AUTHORIZED,
+            )
+        ).all()
+        if not active_sessions:
+            return
+        with build_client(*creds) as client:
+            for s in active_sessions:
+                try:
+                    session_id = decrypt_data(s.session_id_enc, master_key)
+                    client.close_session(session_id)
+                except Exception:
+                    # Swallowed on purpose — the purge is what the user asked
+                    # for and a bank that refuses to close must not block it.
+                    # Logged, because the consent then survives at the bank with
+                    # nothing left on our side pointing at it.
+                    logger.exception(
+                        "purge: could not close an Enable Banking session for user %s", user_uuid
+                    )
+    except Exception:
+        logger.exception("purge: bank session closure step failed for user %s", user_uuid)

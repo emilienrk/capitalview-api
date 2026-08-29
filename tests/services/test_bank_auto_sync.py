@@ -360,3 +360,61 @@ class TestGlobalAutoSyncSwitch:
         assert summary.accounts[0].balance == Decimal("1000")
         session.refresh(acc)
         assert acc.balance_updated_at == date(2026, 3, 21)
+
+
+class TestLinkedAccountProjection:
+    """Spec §D5: a linked account carries a real bank balance, so projecting
+    cashflows onto it would double-count a salary already inside that balance."""
+
+    def _link_account(self, session, master_key, account, user_uuid):
+        from datetime import datetime, timedelta, timezone
+        import json
+
+        from models.banking import BankAccountLink, BankSession
+        from services.encryption import encrypt_data, hash_index
+
+        bank_session = BankSession(
+            user_uuid_bidx=hash_index(user_uuid, master_key),
+            session_id_enc=encrypt_data("sess", master_key),
+            status="AUTHORIZED",
+            consent_valid_until=datetime.now(timezone.utc) + timedelta(days=180),
+            authorized_at=datetime.now(timezone.utc),
+            accounts_enc=encrypt_data(json.dumps([]), master_key),
+        )
+        session.add(bank_session)
+        session.commit()
+        link = BankAccountLink(
+            user_uuid_bidx=hash_index(user_uuid, master_key),
+            bank_account_uuid_bidx=hash_index(account.uuid, master_key),
+            session_uuid=bank_session.uuid,
+            identification_hash_bidx=hash_index("ih", master_key),
+            account_uid_enc=encrypt_data("uid", master_key),
+            anchor_date=date(2026, 3, 21),
+            anchor_balance_enc=encrypt_data("1000", master_key),
+            last_synced_at=date(2026, 3, 21),
+        )
+        session.add(link)
+        session.commit()
+
+    def test_linked_account_freezes_balance_but_advances_stamp(
+        self, session: Session, master_key: str
+    ):
+        user_uuid = "linked_user"
+        acc = _make_account(session, master_key, user_uuid=user_uuid, balance=Decimal("1000"))
+        acc.balance_updated_at = date(2026, 2, 1)
+        session.add(acc)
+        session.commit()
+
+        _link_cashflow(session, master_key, acc.uuid, Decimal("500"), FlowType.OUTFLOW,
+                       Frequency.MONTHLY, date(2026, 1, 10), user_uuid=user_uuid)
+        self._link_account(session, master_key, acc, user_uuid)
+
+        with patch("services.bank.date") as mock_date:
+            mock_date.today.return_value = date(2026, 3, 21)
+            summary = get_user_bank_accounts(session, user_uuid, master_key)
+
+        assert summary.accounts[0].balance == Decimal("1000")
+        session.refresh(acc)
+        # The stamp still advances: a later disconnection must not replay
+        # months of occurrences in one go.
+        assert acc.balance_updated_at == date(2026, 3, 21)

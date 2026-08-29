@@ -22,6 +22,7 @@ from routes import (
     auth_router,
     api_tokens_router,
     bank_router,
+    banking_router,
     cashflow_router,
     stocks_router,
     crypto_router,
@@ -51,14 +52,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"❌ Database connection failed: {e}")
 
-    # Start APScheduler for nightly price updates
+    # Start APScheduler for nightly price updates and banking consent health checks
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from services.market import update_all_prices_daily
+    from services.banking.health import check_all_consents_daily
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(update_all_prices_daily, "cron", hour=23, minute=30, id="daily_price_update")
+    scheduler.add_job(check_all_consents_daily, "cron", hour=2, minute=0, id="daily_bank_consent_check")
     scheduler.start()
-    print("⏰ Scheduler started (daily price update at 23:30)")
+    print("⏰ Scheduler started (daily price update at 23:30, bank consent check at 02:00)")
 
     if mcp_server is None:
         yield
@@ -115,6 +118,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(auth_router)
 app.include_router(api_tokens_router)
 app.include_router(bank_router)
+app.include_router(banking_router)
 app.include_router(cashflow_router)
 app.include_router(stocks_router)
 app.include_router(crypto_router)

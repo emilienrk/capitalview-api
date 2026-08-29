@@ -483,3 +483,54 @@ def test_get_all_assets_owned_ordering(session: Session, master_key: str):
     owned_keys = {a["asset_key"] for a in owned_assets}
     assert owned_keys == {"ISIN_AAPL", "BTC"}
 
+
+
+def test_a_day_the_market_was_closed_carries_the_last_published_rate(session: Session):
+    """Friday 2024-01-05, then a weekend, then Monday. Forex publishes nothing on
+    Saturday or Sunday, and those two days must read at Friday's rate — not at
+    the spot rate, which on a multi-year curve is years away from the truth."""
+    fetched = {
+        date(2024, 1, 5): Decimal("0.91"),   # vendredi
+        date(2024, 1, 8): Decimal("0.93"),   # lundi
+    }
+    with patch("services.market.market_data_manager.get_historical_prices", return_value=fetched):
+        with patch("services.market.get_exchange_rate", return_value=Decimal("5.55")) as spot:
+            result = get_historical_exchange_rates_db(
+                session, "USD", date(2024, 1, 5), date(2024, 1, 8)
+            )
+
+    assert result[date(2024, 1, 6)] == Decimal("0.91")
+    assert result[date(2024, 1, 7)] == Decimal("0.91")
+    assert result[date(2024, 1, 8)] == Decimal("0.93")
+    # Nothing to carry never arose, so the spot rate was never even asked for.
+    spot.assert_not_called()
+
+
+def test_a_range_opening_on_a_closed_day_is_seeded_from_an_earlier_rate(session: Session):
+    """The carry needs something behind it: a window starting on a Sunday reads
+    the last rate stored before it, not the spot rate."""
+    with patch("services.market.market_data_manager.get_historical_prices", return_value={
+        date(2024, 3, 1): Decimal("0.88")
+    }):
+        with patch("services.market.get_exchange_rate", return_value=Decimal("5.55")):
+            get_historical_exchange_rates_db(session, "USD", date(2024, 3, 1), date(2024, 3, 1))
+
+    with patch("services.market.market_data_manager.get_historical_prices", return_value={}):
+        with patch("services.market.get_exchange_rate", return_value=Decimal("5.55")):
+            result = get_historical_exchange_rates_db(
+                session, "USD", date(2024, 3, 3), date(2024, 3, 3)
+            )
+
+    assert result[date(2024, 3, 3)] == Decimal("0.88")
+
+
+def test_the_spot_rate_is_used_only_when_nothing_was_ever_published_before(session: Session):
+    """No earlier rate exists, so there is genuinely nothing to carry."""
+    with patch("services.market.market_data_manager.get_historical_prices", return_value={}):
+        with patch("services.market.get_exchange_rate", return_value=Decimal("0.95")):
+            result = get_historical_exchange_rates_db(
+                session, "USD", date(2024, 5, 1), date(2024, 5, 2)
+            )
+
+    assert result[date(2024, 5, 1)] == Decimal("0.95")
+    assert result[date(2024, 5, 2)] == Decimal("0.95")

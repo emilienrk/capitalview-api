@@ -1,6 +1,7 @@
 import pytest
 import sys
 from unittest.mock import MagicMock
+from sqlalchemy import event
 from sqlmodel import SQLModel, Session, create_engine
 from sqlalchemy.pool import StaticPool
 from typing import Generator
@@ -13,12 +14,21 @@ DATABASE_URL = "sqlite:///:memory:"
 @pytest.fixture(name="engine", scope="session")
 def engine_fixture():
     engine = create_engine(
-        DATABASE_URL, 
-        connect_args={"check_same_thread": False}, 
-        poolclass=StaticPool, 
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
         echo=False
     )
-    
+
+    # SQLite ignores foreign keys unless asked, so ordering bugs a production
+    # PostgreSQL would reject (deleting a bank_sessions row a bank_account_links
+    # row still points at) used to pass here unnoticed.
+    @event.listens_for(engine, "connect")
+    def _enforce_foreign_keys(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     # Deduplicate indexes in metadata (fix for extend_existing=True with multiple imports)
     for table in SQLModel.metadata.tables.values():
         seen_indexes = set()
@@ -47,7 +57,11 @@ def session_fixture(engine) -> Generator[Session, None, None]:
     yield session
     
     session.close()
-    transaction.rollback()
+    # session.close() already rolls back the connection if the session was left
+    # inactive by an uncaught flush error (e.g. a test asserting IntegrityError);
+    # guard against the redundant rollback() SQLAlchemy warns about in that case.
+    if transaction.is_active:
+        transaction.rollback()
     connection.close()
 
 @pytest.fixture(name="master_key")
@@ -69,3 +83,17 @@ def disable_auth_background_catchup(monkeypatch):
     monkeypatch.setattr(account_history_service, "run_lazy_catchup", noop)
     monkeypatch.setattr(account_history_service, "rebuild_account_history_from_date", noop)
     monkeypatch.setattr(asset_routes, "rebuild_account_history_from_date", noop)
+
+
+def opt_into_open_banking(session, user_uuid: str, master_key: str) -> None:
+    """Flip the open-banking opt-in for a user, as the settings screen would.
+
+    Every route that opens or feeds a bank connection is refused without it, so
+    any test driving that flow has to start here.
+    """
+    from services.settings import get_or_create_settings
+
+    settings = get_or_create_settings(session, user_uuid, master_key)
+    settings.open_banking_enabled = True
+    session.add(settings)
+    session.commit()

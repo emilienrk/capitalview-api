@@ -36,6 +36,9 @@ def alice(session) -> User:
 def bob(session) -> User:
     u = _make_user("user_2", "bob")
     session.add(u)
+    # Flushed before the profile: community_profiles.user_id points at users.uuid
+    # and SQLAlchemy does not order these two inserts for us.
+    session.flush()
     session.add(CommunityProfile(user_id="user_2", is_active=True, is_private=False))
     session.flush()
     return u

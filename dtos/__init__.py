@@ -1,5 +1,18 @@
 """Schemas for API responses - Re-exports for backward compatibility."""
 
+# Banking (Enable Banking connection) schemas
+from .banking import (
+    BankConnectionStatus,
+    BankConnectionUpdate,
+    BankConfigCheck,
+    AspspSummary,
+    BankAuthorizeRequest,
+    BankAuthorizeResponse,
+    BankSessionAccount,
+    BankAccountLinkRequest,
+    BankAccountLinkResult,
+)
+
 # Bank schemas
 from .bank import (
     BankAccountCreate,
@@ -134,6 +147,16 @@ from .analytics import (
 
 
 __all__ = [
+    # Banking (Enable Banking connection)
+    "BankConnectionStatus",
+    "BankConnectionUpdate",
+    "BankConfigCheck",
+    "AspspSummary",
+    "BankAuthorizeRequest",
+    "BankAuthorizeResponse",
+    "BankSessionAccount",
+    "BankAccountLinkRequest",
+    "BankAccountLinkResult",
     # Bank
     "BankAccountCreate",
     "BankAccountResponse",
