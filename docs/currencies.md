@@ -104,6 +104,37 @@ Les jours de fermeture des marchés (week-ends, fériés) **reportent le dernier
 cours publié**, comme la BCE qui ne publie que les jours ouvrés et dont un
 samedi se lit au taux du vendredi.
 
+## Qui convertit, et où
+
+**L'écriture de la courbe convertit.** `import_bank_account_history` et
+`replace_history_window` appellent `curve_in_base_currency` elles-mêmes, au lieu
+de l'attendre de leur appelant. Les quatre chemins qui écrivent
+`account_history` — synchro bancaire, import d'export, import CSV, import
+manuel — étaient censés convertir ; les deux imports avaient oublié. Une règle
+laissée à l'appelant est une règle qu'un cinquième appelant oubliera.
+
+Même raison pour `_build_bank_snapshots` (`services/account_history.py`), qui
+fige le solde du jour dans la courbe de patrimoine : il convertit au taux du
+jour, le solde qu'il fige étant lui-même celui du jour.
+
+| Écrit dans `account_history` | Convertit |
+| --- | --- |
+| `import_bank_account_history` | taux de chaque date |
+| `replace_history_window` | taux de chaque date |
+| `_build_bank_snapshots` | taux du jour |
+
+## Ce qui est refusé côté application
+
+**La déduction automatique depuis un compte en devise étrangère.** Déposer des
+euros sur un PEA en cochant « déduire du compte » réécrit le solde du compte
+bancaire. Le dépôt est en euros, le solde dans la devise du compte : convertir
+mettrait un taux dont l'application ne répond pas *dans une donnée stockée*, et
+plus rien ne dirait ensuite que le solde est une estimation.
+
+Les sélecteurs de Bourse et de Crypto ne proposent donc que les comptes en
+euros, et l'écran le dit quand il n'y en a aucun. Le compte en devise se règle à
+la main — l'ajustement est rare, la fausse écriture serait permanente.
+
 ## Limites connues
 
 - Une devise dont le cours cesse d'être publié après la création du compte fait

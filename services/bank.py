@@ -21,7 +21,11 @@ from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotRespo
 from services.banking.health import is_session_active
 from services.banking.linking import is_card_account
 from services.encryption import encrypt_data, decrypt_data, hash_index
-from services.market import get_exchange_rate, has_exchange_rate
+from services.market import (
+    get_exchange_rate,
+    get_historical_exchange_rates_db,
+    has_exchange_rate,
+)
 
 # Consent wording the front reads back (ruling R16): anything but an authorized
 # session is presented as needing a fresh connection.
@@ -429,6 +433,39 @@ def get_bank_account(
     return _map_to_response(account, master_key, _account_link(session, account, master_key))
 
 
+def curve_in_base_currency(
+    session: Session, entries: list[BankHistoryEntry], currency: str
+) -> list[BankHistoryEntry]:
+    """The curve, converted to euros day by day.
+
+    `account_history` is a euro store — `get_all_bank_accounts_history` adds the
+    accounts together by date and says so outright ("the bank position is always
+    EUR so values are simply summed"). A curve left in dollars would be summed
+    into a euro total.
+
+    Called by the two functions that write the store, never by their callers:
+    a conversion left to the caller is one an eighth caller will forget, and the
+    CSV and manual imports had already forgotten it.
+
+    Each day converts at *its own* rate, never at today's: a single rate applied
+    across four years would draw the shape of the exchange rate rather than the
+    shape of the balance. Days the market was closed carry the last published
+    rate (services.market).
+    """
+    if currency == DEFAULT_CURRENCY or not entries:
+        return entries
+
+    days = [entry.snapshot_date for entry in entries]
+    rates = get_historical_exchange_rates_db(session, currency, min(days), max(days))
+    return [
+        BankHistoryEntry(
+            snapshot_date=entry.snapshot_date,
+            value=entry.value * rates[entry.snapshot_date],
+        )
+        for entry in entries
+    ]
+
+
 def _decode_history_row(row: AccountHistory, master_key: str) -> AccountHistorySnapshotResponse:
     """Decrypt a single AccountHistory row into a response DTO."""
     total_value = Decimal(decrypt_data(row.total_value_enc, master_key))
@@ -553,10 +590,11 @@ def import_bank_account_history(
     now = datetime.now(timezone.utc)
     account_id_bidx = hash_index(account.uuid, master_key)
 
-    rows: list[dict] = []
+    # Fill first, convert second. The balance stands still between two
+    # statements while its euro value moves with the rate, so carrying a
+    # *converted* value forward would freeze the rate along with the balance.
+    filled: list[BankHistoryEntry] = []
     last_value = Decimal("0")
-    prev_value = Decimal("0")
-
     d = fill_start
     while d <= yesterday:
         if d < first_entry_date:
@@ -564,8 +602,17 @@ def import_bank_account_history(
         elif d in value_by_date:
             last_value = value_by_date[d]
         # else: carry forward last_value
+        filled.append(BankHistoryEntry(snapshot_date=d, value=last_value))
+        d += timedelta(days=1)
 
-        total_value = last_value
+    filled = curve_in_base_currency(session, filled, account_currency(account, master_key))
+
+    rows: list[dict] = []
+    prev_value = Decimal("0")
+
+    for entry in filled:
+        d = entry.snapshot_date
+        total_value = entry.value
         daily_pnl = total_value - prev_value
 
         positions_json: str | None = None
@@ -596,7 +643,6 @@ def import_bank_account_history(
         })
 
         prev_value = total_value
-        d += timedelta(days=1)
 
     if not rows:
         return 0
@@ -671,6 +717,8 @@ def replace_history_window(
     if not kept:
         session.commit()
         return 0
+
+    kept = curve_in_base_currency(session, kept, account_currency(account, master_key))
 
     now = datetime.now(timezone.utc)
     rows: list[dict] = []
