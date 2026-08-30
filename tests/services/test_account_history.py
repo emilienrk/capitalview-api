@@ -1546,3 +1546,70 @@ def test_generate_missing_snapshots_stamps_zero_for_bank(
     )
 
     assert rows[0]["calc_version"] == 0
+
+
+def test_a_bank_snapshot_is_frozen_in_euros(session: Session, master_key: str):
+    """The wealth curve sums accounts by date, and `FrozenPosition.total_invested`
+    says "already in EUR". A balance in francs frozen at face value would be
+    added to the euro ones — the substitution the currency rule exists to stop.
+    """
+    from unittest.mock import patch
+
+    from dtos.bank import BankAccountCreate
+    from models.enums import BankAccountType
+    from services.account_history import _build_bank_snapshots
+    from services.bank import create_bank_account
+    from services.encryption import hash_index
+
+    user_uuid = "user_snapshot_currency"
+    with patch("services.bank.has_exchange_rate", return_value=True):
+        create_bank_account(
+            session,
+            BankAccountCreate(
+                name="Suisse",
+                balance=Decimal("1000"),
+                account_type=BankAccountType.CHECKING,
+                currency="CHF",
+            ),
+            user_uuid,
+            master_key,
+        )
+
+    with patch("services.account_history.get_exchange_rate", return_value=Decimal("0.90")):
+        snapshots = _build_bank_snapshots(
+            session, master_key, hash_index(user_uuid, master_key)
+        )
+
+    assert len(snapshots) == 1
+    assert snapshots[0].frozen_positions[0].quantity == Decimal("900.0")
+    assert snapshots[0].total_invested == Decimal("900.0")
+
+
+def test_a_euro_bank_snapshot_never_looks_a_rate_up(session: Session, master_key: str):
+    from unittest.mock import patch
+
+    from dtos.bank import BankAccountCreate
+    from models.enums import BankAccountType
+    from services.account_history import _build_bank_snapshots
+    from services.bank import create_bank_account
+    from services.encryption import hash_index
+
+    user_uuid = "user_snapshot_eur"
+    create_bank_account(
+        session,
+        BankAccountCreate(
+            name="Courant", balance=Decimal("1000"), account_type=BankAccountType.CHECKING
+        ),
+        user_uuid,
+        master_key,
+    )
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("a euro account must not need an exchange rate")
+
+    with patch("services.account_history.get_exchange_rate", _fail):
+        snapshots = _build_bank_snapshots(
+            session, master_key, hash_index(user_uuid, master_key)
+        )
+
+    assert snapshots[0].frozen_positions[0].quantity == Decimal("1000")
