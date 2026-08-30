@@ -9,15 +9,40 @@ mouvements au solde publié par la banque **dans sa devise à elle**. Convertir
 avant de comparer transformerait chaque variation de change en faux écart de
 réconciliation, sur un compte qui fonctionne parfaitement.
 
-L'euro commence à l'agrégation : soldes totaux, courbes d'historique, flux.
+L'euro commence à l'agrégation : soldes totaux, courbes d'historique, totaux de
+flux.
 
 | Étage | Devise |
 | --- | --- |
 | Solde d'un compte, affichage | celle du compte |
 | Ancre de synchronisation | celle du compte |
 | Réconciliation | celle du compte |
+| Montant d'un flux | celle du compte lié |
 | `account_history` (courbe) | **EUR** |
-| Solde total, agrégats | **EUR** |
+| Solde total, agrégats, totaux de flux | **EUR** |
+
+## Un flux n'a pas de devise à lui
+
+**Un flux est libellé par le compte qu'il frappe.** `CashflowResponse.currency`
+se lit, ne se saisit pas : il n'y a pas de colonne, pas de sélecteur, et
+`CashflowCreate` ne l'accepte pas. Un flux qu'aucun compte ne reçoit est en
+euros, comme tout ce qui est agrégé.
+
+C'est la règle du compte poussée d'un cran : ce qui frappe un compte en francs
+est un montant en francs, et c'est ce montant-là que
+`_apply_pending_cashflows` ajoute au solde — sans conversion, comme la banque
+elle-même. Le salaire annoncé en dollars par un employeur qui vire sur un compte
+en euros arrive en euros : c'est la banque qui convertit, et son taux fait foi.
+Même arbitrage que pour une opération en devise étrangère (voir *Limites
+connues*).
+
+Ce que ça évite : un montant saisi dans une devise, appliqué au solde d'un
+compte dans une autre, au taux d'un troisième jour — un solde qui ne
+correspondrait à aucun relevé.
+
+Les **totaux** de flux, eux, croisent les comptes, donc les devises : ils sont
+convertis en euros au taux du jour (`_euro_rates`), et valent `null` si un cours
+manque, comme le total bancaire.
 
 ## Où vit la liste
 

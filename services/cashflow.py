@@ -5,9 +5,12 @@ from decimal import Decimal
 from datetime import date, timedelta
 from collections import defaultdict
 
+from typing import NamedTuple
+
 from sqlmodel import Session, select
 
 from models import Cashflow
+from models.currency import BASE_CURRENCY
 from models.enums import FlowType, Frequency
 from dtos import (
     CashflowCreate,
@@ -18,6 +21,7 @@ from dtos import (
     CashflowBalanceResponse,
 )
 from services.encryption import encrypt_data, decrypt_data, hash_index
+from services.market import get_exchange_rate, has_exchange_rate
 
 
 def get_monthly_amount(amount: Decimal, frequency: Frequency) -> Decimal:
@@ -32,15 +36,21 @@ def get_monthly_amount(amount: Decimal, frequency: Frequency) -> Decimal:
     return amount * multipliers.get(frequency, Decimal("1"))
 
 
+class LinkedAccount(NamedTuple):
+    """What a cashflow needs to know about the account it is attached to."""
+    uuid: str
+    currency: str
+
+
 def _map_cashflow_to_response(
     cashflow: Cashflow,
     master_key: str,
-    bank_bidx_map: dict | None = None,
+    bank_bidx_map: dict[str, LinkedAccount] | None = None,
 ) -> CashflowResponse:
     """Decrypt and map Cashflow to response DTO.
 
-    bank_bidx_map: optional dict of {bank_account_uuid_bidx -> bank_account_uuid},
-    used to resolve the linked bank account UUID from its blind index.
+    bank_bidx_map: optional dict of {bank_account_uuid_bidx -> LinkedAccount},
+    used to resolve the linked bank account from its blind index.
     """
     name = decrypt_data(cashflow.name_enc, master_key)
     flow_type_str = decrypt_data(cashflow.flow_type_enc, master_key)
@@ -54,9 +64,17 @@ def _map_cashflow_to_response(
     flow_type = FlowType(flow_type_str)
     transaction_date = date.fromisoformat(date_str)
 
-    bank_account_id = None
-    if cashflow.bank_account_uuid_bidx and bank_bidx_map:
-        bank_account_id = bank_bidx_map.get(cashflow.bank_account_uuid_bidx)
+    # A flow is denominated by the account it hits: the bank posts what it
+    # actually moved, in its own currency, and that figure is the one applied to
+    # the balance. Unattached, there is no such account — euros, like every
+    # other aggregate. See docs/currencies.md.
+    linked = (
+        bank_bidx_map.get(cashflow.bank_account_uuid_bidx)
+        if cashflow.bank_account_uuid_bidx and bank_bidx_map
+        else None
+    )
+    bank_account_id = linked.uuid if linked else None
+    currency = linked.currency if linked else BASE_CURRENCY
 
     is_active = True
     if cashflow.is_active_enc:
@@ -72,6 +90,7 @@ def _map_cashflow_to_response(
         transaction_date=transaction_date,
         monthly_amount=get_monthly_amount(amount, frequency),
         bank_account_id=bank_account_id,
+        currency=currency,
         is_active=is_active,
         created_at=cashflow.created_at,
         updated_at=cashflow.updated_at,
@@ -113,7 +132,8 @@ def create_cashflow(
     session.refresh(cashflow)
     
     bank_bidx_map = _build_bank_bidx_map(session, user_uuid, master_key)
-    return _map_cashflow_to_response(cashflow, master_key, bank_bidx_map)
+    response = _map_cashflow_to_response(cashflow, master_key, bank_bidx_map)
+    return _fill_euro_amounts(session, [response])[0]
 
 
 def update_cashflow(
@@ -154,7 +174,8 @@ def update_cashflow(
     session.refresh(cashflow)
     
     bank_bidx_map = _build_bank_bidx_map(session, user_uuid, master_key)
-    return _map_cashflow_to_response(cashflow, master_key, bank_bidx_map)
+    response = _map_cashflow_to_response(cashflow, master_key, bank_bidx_map)
+    return _fill_euro_amounts(session, [response])[0]
 
 
 def delete_cashflow(
@@ -187,11 +208,82 @@ def get_cashflow(
         return None
 
     bank_bidx_map = _build_bank_bidx_map(session, user_uuid, master_key)
-    return _map_cashflow_to_response(cashflow, master_key, bank_bidx_map)
+    response = _map_cashflow_to_response(cashflow, master_key, bank_bidx_map)
+    return _fill_euro_amounts(session, [response])[0]
 
 
-def aggregate_by_category(cashflows: list[CashflowResponse]) -> list[CashflowCategoryResponse]:
-    """Group cashflows by category."""
+def _euro_rates(session: Session, cashflows: list[CashflowResponse]) -> dict[str, Decimal]:
+    """The euro rate of each currency in play; absent when none is published.
+
+    Totals cross accounts, so they cross currencies, and adding the raw figures
+    would total francs with euros.
+
+    A currency stays out of the map rather than converting at 1:
+    `get_exchange_rate` answers 1 both for a rate that genuinely is 1 and for a
+    currency it knows nothing about, so a total built on it would be wrong with
+    nothing marking it as wrong. `services.bank._total_in_base_currency` makes
+    the same call for the same reason.
+
+    Today's rate, not each flow's own date: these are standing declarations,
+    not dated movements — "what does my month look like" is a question about
+    now.
+    """
+    rates: dict[str, Decimal] = {}
+    for cf in cashflows:
+        if cf.currency in rates:
+            continue
+        if has_exchange_rate(session, cf.currency):
+            rates[cf.currency] = get_exchange_rate(session, cf.currency, BASE_CURRENCY)
+    return rates
+
+
+def _fill_euro_amounts(
+    session: Session, cashflows: list[CashflowResponse]
+) -> list[CashflowResponse]:
+    """Set each flow's euro equivalent, so callers can add them up themselves.
+
+    The web app aggregates client-side — a Sankey diagram needs a value per
+    flow, not just the totals — and it holds no exchange rates. Without this it
+    would sum francs with euros, exactly what the totals below refuse to do.
+    """
+    rates = _euro_rates(session, cashflows)
+    for cf in cashflows:
+        rate = rates.get(cf.currency)
+        cf.monthly_amount_eur = cf.monthly_amount * rate if rate is not None else None
+    return cashflows
+
+
+def _total_in_euros(
+    cashflows: list[CashflowResponse],
+    rates: dict[str, Decimal],
+    field: str,
+) -> Decimal | None:
+    """Sum one amount field across currencies, in euros.
+
+    One unconvertible flow drops the whole total: a sum over the rest would
+    read as the total it is not.
+    """
+    total = Decimal("0")
+    for cf in cashflows:
+        rate = rates.get(cf.currency)
+        if rate is None:
+            return None
+        total += getattr(cf, field) * rate
+    return total
+
+
+def _difference(left: Decimal | None, right: Decimal | None) -> Decimal | None:
+    """Subtract two totals, unless either is unavailable."""
+    if left is None or right is None:
+        return None
+    return left - right
+
+
+def aggregate_by_category(
+    cashflows: list[CashflowResponse],
+    rates: dict[str, Decimal],
+) -> list[CashflowCategoryResponse]:
+    """Group cashflows by category, with each category totalled in euros."""
     categories: dict[str, list[CashflowResponse]] = defaultdict(list)
     
     for cf in cashflows:
@@ -199,12 +291,10 @@ def aggregate_by_category(cashflows: list[CashflowResponse]) -> list[CashflowCat
     
     result = []
     for category, items in sorted(categories.items()):
-        total_amount = sum(item.amount for item in items)
-        monthly_total = sum(item.monthly_amount for item in items)
         result.append(CashflowCategoryResponse(
             category=category,
-            total_amount=total_amount,
-            monthly_total=monthly_total,
+            total_amount=_total_in_euros(items, rates, "amount"),
+            monthly_total=_total_in_euros(items, rates, "monthly_amount"),
             count=len(items),
             items=items,
         ))
@@ -212,14 +302,25 @@ def aggregate_by_category(cashflows: list[CashflowResponse]) -> list[CashflowCat
     return result
 
 
-def _build_bank_bidx_map(session: Session, user_uuid: str, master_key: str) -> dict:
-    """Build a map of {bank_account_uuid_bidx -> bank_account.uuid} for a user."""
+def _build_bank_bidx_map(
+    session: Session, user_uuid: str, master_key: str
+) -> dict[str, LinkedAccount]:
+    """Build a map of {bank_account_uuid_bidx -> LinkedAccount} for a user."""
+    # Lazy, like the mirror import in services.bank: the two modules need each
+    # other and neither can be the one loaded second.
     from models import BankAccount
+    from services.bank import account_currency
+
     user_bidx = hash_index(user_uuid, master_key)
     accounts = session.exec(
         select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
     ).all()
-    return {hash_index(acc.uuid, master_key): acc.uuid for acc in accounts}
+    return {
+        hash_index(acc.uuid, master_key): LinkedAccount(
+            acc.uuid, account_currency(acc, master_key)
+        )
+        for acc in accounts
+    }
 
 
 def get_all_user_cashflows(
@@ -233,7 +334,8 @@ def get_all_user_cashflows(
         select(Cashflow).where(Cashflow.user_uuid_bidx == user_bidx)
     ).all()
     bank_bidx_map = _build_bank_bidx_map(session, user_uuid, master_key)
-    return [_map_cashflow_to_response(cf, master_key, bank_bidx_map) for cf in cashflows]
+    responses = [_map_cashflow_to_response(cf, master_key, bank_bidx_map) for cf in cashflows]
+    return _fill_euro_amounts(session, responses)
 
 
 def get_cashflows_by_type(
@@ -248,17 +350,14 @@ def get_cashflows_by_type(
     all_cashflows = get_all_user_cashflows(session, user_uuid, master_key)
     
     filtered = [cf for cf in all_cashflows if cf.flow_type == flow_type.value]
-    
-    categories = aggregate_by_category(filtered)
-    
-    total_amount = sum(cf.amount for cf in filtered)
-    monthly_total = sum(cf.monthly_amount for cf in filtered)
-    
+
+    rates = _euro_rates(session, filtered)
+
     return CashflowSummaryResponse(
         flow_type=flow_type.value,
-        total_amount=total_amount,
-        monthly_total=monthly_total,
-        categories=categories,
+        total_amount=_total_in_euros(filtered, rates, "amount"),
+        monthly_total=_total_in_euros(filtered, rates, "monthly_amount"),
+        categories=aggregate_by_category(filtered, rates),
     )
 
 
@@ -288,14 +387,15 @@ def get_user_cashflow_balance(
     """Get the complete cashflow balance for a user."""
     inflows = get_cashflows_by_type(session, user_uuid, master_key, FlowType.INFLOW)
     outflows = get_cashflows_by_type(session, user_uuid, master_key, FlowType.OUTFLOW)
-    
-    net_balance = inflows.total_amount - outflows.total_amount
-    monthly_balance = inflows.monthly_total - outflows.monthly_total
 
-    
+    # One unconvertible side takes the balance with it: a net worked out from
+    # only half the flows would read as a real figure.
+    net_balance = _difference(inflows.total_amount, outflows.total_amount)
+    monthly_balance = _difference(inflows.monthly_total, outflows.monthly_total)
+
     # Calculate savings rate
     savings_rate = None
-    if inflows.monthly_total > 0:
+    if monthly_balance is not None and inflows.monthly_total:
         savings_rate = (monthly_balance / inflows.monthly_total) * Decimal("100")
     
     return CashflowBalanceResponse(

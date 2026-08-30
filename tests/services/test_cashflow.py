@@ -21,6 +21,7 @@ from models.bank import BankAccount
 from services.bank import create_bank_account
 from dtos.bank import BankAccountCreate
 from services.encryption import hash_index, decrypt_data, encrypt_data
+from unittest.mock import patch
 
 
 def test_get_monthly_amount():
@@ -396,3 +397,207 @@ class TestCashflowIsActive:
         row = session.get(Cashflow, created.id)
         renamed = update_cashflow(session, row, CashflowUpdate(name="Prime annuelle"), master_key, "preserve_user")
         assert renamed.is_active is False
+
+
+# ─── Currencies ──────────────────────────────────────────────
+# A flow is denominated by the account it hits, and never by a choice of its
+# own: there is no currency column, and CashflowCreate does not accept one.
+# See docs/currencies.md.
+
+
+def _account_in(session: Session, master_key: str, user_uuid: str, currency: str) -> str:
+    """A bank account in the given currency, whatever the market data knows."""
+    with patch("services.bank.has_exchange_rate", return_value=True):
+        return create_bank_account(
+            session,
+            BankAccountCreate(
+                name=f"Compte {currency}",
+                balance=Decimal("0"),
+                account_type=BankAccountType.CHECKING,
+                currency=currency,
+            ),
+            user_uuid,
+            master_key,
+        ).id
+
+
+def test_a_flow_takes_the_currency_of_the_account_it_hits(session: Session, master_key: str):
+    user_uuid = "user_cf_currency"
+    chf_account = _account_in(session, master_key, user_uuid, "CHF")
+
+    linked = create_cashflow(
+        session,
+        CashflowCreate(
+            name="Loyer",
+            flow_type=FlowType.OUTFLOW,
+            category="Housing",
+            amount=Decimal("1000"),
+            frequency=Frequency.MONTHLY,
+            transaction_date=date.today(),
+            bank_account_id=chf_account,
+        ),
+        user_uuid,
+        master_key,
+    )
+    assert linked.currency == "CHF"
+
+    # Nothing to hit, nothing to be denominated by: euros, like every aggregate.
+    unlinked = create_cashflow(
+        session,
+        CashflowCreate(
+            name="Abonnement",
+            flow_type=FlowType.OUTFLOW,
+            category="Subs",
+            amount=Decimal("10"),
+            frequency=Frequency.MONTHLY,
+            transaction_date=date.today(),
+        ),
+        user_uuid,
+        master_key,
+    )
+    assert unlinked.currency == "EUR"
+
+
+def test_totals_add_up_in_euros_not_across_currencies(session: Session, master_key: str):
+    """Two outflows of 1000, one in euros and one in francs. Adding the raw
+    figures would total francs with euros; the answer must be the euro value."""
+    user_uuid = "user_cf_total"
+    chf_account = _account_in(session, master_key, user_uuid, "CHF")
+
+    for account_id in (None, chf_account):
+        create_cashflow(
+            session,
+            CashflowCreate(
+                name="Loyer",
+                flow_type=FlowType.OUTFLOW,
+                category="Housing",
+                amount=Decimal("1000"),
+                frequency=Frequency.MONTHLY,
+                transaction_date=date.today(),
+                bank_account_id=account_id,
+            ),
+            user_uuid,
+            master_key,
+        )
+
+    with patch("services.cashflow.has_exchange_rate", return_value=True):
+        with patch("services.cashflow.get_exchange_rate", side_effect=lambda s, f, t: (
+            Decimal("1") if f == "EUR" else Decimal("0.95")
+        )):
+            outflows = get_user_outflows(session, user_uuid, master_key)
+
+    # 1000 EUR + 1000 CHF × 0.95 = 1950, never 2000.
+    assert outflows.total_amount == Decimal("1950.00")
+    assert outflows.monthly_total == Decimal("1950.00")
+    # The category total is converted too, not just the grand total.
+    assert outflows.categories[0].total_amount == Decimal("1950.00")
+    # Each line keeps its own currency: it is what the bank actually moved.
+    assert sorted(cf.currency for cf in outflows.categories[0].items) == ["CHF", "EUR"]
+
+
+def test_a_currency_with_no_published_rate_drops_the_total(session: Session, master_key: str):
+    """`get_exchange_rate` answers 1 for a currency it knows nothing about, so a
+    converted total would be wrong with nothing marking it as wrong. The total
+    goes, the flows stay."""
+    user_uuid = "user_cf_norate"
+    account = _account_in(session, master_key, user_uuid, "XAF")
+
+    create_cashflow(
+        session,
+        CashflowCreate(
+            name="Loyer",
+            flow_type=FlowType.OUTFLOW,
+            category="Housing",
+            amount=Decimal("1000"),
+            frequency=Frequency.MONTHLY,
+            transaction_date=date.today(),
+            bank_account_id=account,
+        ),
+        user_uuid,
+        master_key,
+    )
+    create_cashflow(
+        session,
+        CashflowCreate(
+            name="Salaire",
+            flow_type=FlowType.INFLOW,
+            category="Job",
+            amount=Decimal("3000"),
+            frequency=Frequency.MONTHLY,
+            transaction_date=date.today(),
+        ),
+        user_uuid,
+        master_key,
+    )
+
+    with patch("services.cashflow.has_exchange_rate", side_effect=lambda s, c: c != "XAF"):
+        balance = get_user_cashflow_balance(session, user_uuid, master_key)
+
+    assert balance.total_outflows is None
+    assert balance.outflows.categories[0].total_amount is None
+    # The flows themselves are untouched — only the figure that cannot be
+    # worked out disappears.
+    assert [cf.name for cf in balance.outflows.categories[0].items] == ["Loyer"]
+    # The convertible side still totals; the net, which needs both, does not.
+    assert balance.total_inflows == Decimal("3000")
+    assert balance.net_balance is None
+    assert balance.monthly_balance is None
+    assert balance.savings_rate is None
+
+
+def test_each_flow_carries_its_euro_equivalent(session: Session, master_key: str):
+    """The web app aggregates client-side and holds no rates, so the euro value
+    of every flow travels with it."""
+    user_uuid = "user_cf_eur"
+    chf_account = _account_in(session, master_key, user_uuid, "CHF")
+
+    create_cashflow(
+        session,
+        CashflowCreate(
+            name="Loyer",
+            flow_type=FlowType.OUTFLOW,
+            category="Housing",
+            amount=Decimal("1000"),
+            frequency=Frequency.MONTHLY,
+            transaction_date=date.today(),
+            bank_account_id=chf_account,
+        ),
+        user_uuid,
+        master_key,
+    )
+
+    with patch("services.cashflow.has_exchange_rate", return_value=True):
+        with patch("services.cashflow.get_exchange_rate", return_value=Decimal("0.95")):
+            flows = get_all_user_cashflows(session, user_uuid, master_key)
+
+    assert flows[0].monthly_amount == Decimal("1000")  # what the bank moves
+    assert flows[0].monthly_amount_eur == Decimal("950.00")  # what it is worth
+
+
+def test_an_unconvertible_flow_has_no_euro_equivalent(session: Session, master_key: str):
+    """Only the flow that cannot be converted loses its euro figure — the ones
+    beside it keep theirs."""
+    user_uuid = "user_cf_eur_missing"
+    exotic_account = _account_in(session, master_key, user_uuid, "XAF")
+
+    for account_id, name in ((exotic_account, "Exotique"), (None, "Abonnement")):
+        create_cashflow(
+            session,
+            CashflowCreate(
+                name=name,
+                flow_type=FlowType.OUTFLOW,
+                category="Divers",
+                amount=Decimal("100"),
+                frequency=Frequency.MONTHLY,
+                transaction_date=date.today(),
+                bank_account_id=account_id,
+            ),
+            user_uuid,
+            master_key,
+        )
+
+    with patch("services.cashflow.has_exchange_rate", side_effect=lambda s, c: c != "XAF"):
+        flows = {cf.name: cf for cf in get_all_user_cashflows(session, user_uuid, master_key)}
+
+    assert flows["Exotique"].monthly_amount_eur is None
+    assert flows["Abonnement"].monthly_amount_eur == Decimal("100")
