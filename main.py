@@ -1,6 +1,8 @@
 """CapitalView API - Main entry point."""
 
+import logging
 import tomllib
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,6 +19,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import get_settings
 from database import get_session, get_engine
+from logging_config import request_id_var, setup_logging
 from mcp_server import build_mcp_route, build_mcp_server
 from models import User
 from routes import (
@@ -49,9 +52,9 @@ async def lifespan(app: FastAPI):
     try:
         with Session(engine) as session:
             session.exec(select(1))
-        print("✅ Database connection successful!")
+        logger.info("startup: database connection ok")
     except Exception as e:
-        print(f"❌ Database connection failed: {e}")
+        logger.error("startup: database connection failed: %s", e)
 
     # Start APScheduler for nightly price updates and banking consent health checks
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -62,7 +65,7 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(update_all_prices_daily, "cron", hour=23, minute=30, id="daily_price_update")
     scheduler.add_job(check_all_consents_daily, "cron", hour=2, minute=0, id="daily_bank_consent_check")
     scheduler.start()
-    print("⏰ Scheduler started (daily price update at 23:30, bank consent check at 02:00)")
+    logger.info("startup: scheduler started (prices 23:30, bank consent 02:00)")
 
     if mcp_server is None:
         yield
@@ -71,14 +74,19 @@ async def lifespan(app: FastAPI):
         # owns the session manager's task group. Skipping this makes the first
         # MCP request fail with "Task group is not initialized".
         async with mcp_server.session_manager.run():
-            print(f"🔌 MCP server listening at {settings.mcp_path}")
+            logger.info("startup: MCP server listening at %s", settings.mcp_path)
             yield
 
     scheduler.shutdown(wait=False)
-    print("👋 Shutting down...")
+    logger.info("shutdown complete")
 
 
 settings = get_settings()
+
+# Before anything else logs: uvicorn has already applied its own config by the
+# time it imports this module, and this replaces it.
+setup_logging(settings.log_level)
+logger = logging.getLogger(__name__)
 
 mcp_server = build_mcp_server() if settings.mcp_enabled else None
 
@@ -114,6 +122,27 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(SecurityHeadersMiddleware)
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Carry an id through every log line of one request.
+
+    Honours an inbound X-Request-ID so a trace started by the frontend or a
+    proxy keeps its identity, and echoes it back for the caller to quote.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+        token = request_id_var.set(request_id)
+        try:
+            response: Response = await call_next(request)
+        finally:
+            request_id_var.reset(token)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+
+app.add_middleware(RequestIdMiddleware)
 
 
 app.include_router(auth_router)
