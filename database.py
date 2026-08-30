@@ -14,7 +14,15 @@ import models  # noqa: F401
 def get_engine():
     """Create and cache database engine."""
     settings = get_settings()
-    return create_engine(settings.database_url, echo=settings.debug)
+    # pre_ping so a connection the server closed under us (Postgres restart,
+    # long idle) is discovered and replaced here rather than as a 500 on the
+    # first request that draws it from the pool.
+    return create_engine(
+        settings.database_url,
+        echo=settings.debug,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+    )
 
 
 def get_session():
