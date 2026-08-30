@@ -285,7 +285,9 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
 
         else:
             bank_summary = get_user_bank_accounts(session, user_uuid, master_key)
-            cash_total = bank_summary.total_balance
+            # None when a held currency has no published rate; zero rather than
+            # a TypeError three lines down.
+            cash_total = bank_summary.total_balance or Decimal(0)
             accounts = bank_summary.accounts or []
 
         if details:
