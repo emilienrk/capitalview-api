@@ -512,3 +512,82 @@ def test_the_total_is_withheld_when_a_currency_lost_its_rate(session: Session, m
     assert summary.total_balance is None
     # The accounts themselves stay readable — only the total is withheld.
     assert [a.name for a in summary.accounts] == ["Exotique"]
+
+
+def test_an_imported_curve_is_stored_in_euros(
+    session: Session, master_key: str, sqlite_pg_insert, monkeypatch
+):
+    """`account_history` is a euro store, and the CSV and manual imports write
+    into it. A statement in francs must not land there at face value."""
+    from unittest.mock import patch
+
+    user_uuid = "user_import_currency"
+    with patch("services.bank.has_exchange_rate", return_value=True):
+        acc = create_bank_account(
+            session,
+            BankAccountCreate(
+                name="Suisse",
+                balance=Decimal("0"),
+                account_type=BankAccountType.CHECKING,
+                currency="CHF",
+            ),
+            user_uuid,
+            master_key,
+        )
+    db_acc = session.get(BankAccount, acc.id)
+    account_id_bidx = hash_index(acc.id, master_key)
+
+    # Each day at its own rate — a single rate would draw the exchange rate's
+    # shape instead of the balance's.
+    rates = {date(2025, 1, 1): Decimal("0.90"), date(2025, 1, 2): Decimal("0.95")}
+    monkeypatch.setattr(
+        "services.bank.get_historical_exchange_rates_db",
+        lambda session, currency, start, end: {
+            day: rates.get(day, Decimal("1.00"))
+            for day in _days(start, end)
+        },
+    )
+
+    import_bank_account_history(
+        session,
+        db_acc,
+        [BankHistoryEntry(snapshot_date=date(2025, 1, 1), value=Decimal("1000"))],
+        master_key,
+    )
+
+    rows = _get_history_rows(session, account_id_bidx)
+    assert _value_on_date(rows, date(2025, 1, 1), master_key) == Decimal("900.00")
+    # The balance stands still; its euro value follows the rate.
+    assert _value_on_date(rows, date(2025, 1, 2), master_key) == Decimal("950.00")
+
+
+def test_a_euro_import_never_looks_a_rate_up(
+    session: Session, master_key: str, sqlite_pg_insert, monkeypatch
+):
+    """The conversion is skipped outright for euro accounts, which is all of
+    them until one is opened elsewhere."""
+    def _fail(*args, **kwargs):
+        raise AssertionError("a euro account must not need an exchange rate")
+
+    monkeypatch.setattr("services.bank.get_historical_exchange_rates_db", _fail)
+
+    acc = create_bank_account(
+        session,
+        BankAccountCreate(name="Courant", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        "user_import_eur",
+        master_key,
+    )
+    written = import_bank_account_history(
+        session,
+        session.get(BankAccount, acc.id),
+        [BankHistoryEntry(snapshot_date=date(2025, 1, 1), value=Decimal("1000"))],
+        master_key,
+    )
+    assert written > 0
+
+
+def _days(start: date, end: date):
+    day = start
+    while day <= end:
+        yield day
+        day += timedelta(days=1)

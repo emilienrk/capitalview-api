@@ -1426,7 +1426,7 @@ class TestForeignCurrencyAccount:
         _install(monkeypatch, client)
         # 1 USD = 0.90 EUR every day of the window.
         monkeypatch.setattr(
-            "services.banking.sync.get_historical_exchange_rates_db",
+            "services.bank.get_historical_exchange_rates_db",
             lambda s, c, f, t: {d: Decimal("0.90") for d in _days(f, t)},
         )
 
@@ -1454,7 +1454,7 @@ class TestForeignCurrencyAccount:
         )
         _install(monkeypatch, client)
         monkeypatch.setattr(
-            "services.banking.sync.get_historical_exchange_rates_db",
+            "services.bank.get_historical_exchange_rates_db",
             lambda s, c, f, t: {d: Decimal("0.90") for d in _days(f, t)},
         )
 
@@ -1487,7 +1487,7 @@ class TestForeignCurrencyAccount:
             TODAY - timedelta(days=3): Decimal("0.10"),
         }
         monkeypatch.setattr(
-            "services.banking.sync.get_historical_exchange_rates_db",
+            "services.bank.get_historical_exchange_rates_db",
             lambda s, c, f, t: rates,
         )
 
@@ -1515,7 +1515,7 @@ class TestForeignCurrencyAccount:
         def _fail(*args, **kwargs):
             raise AssertionError("a euro account must not need an exchange rate")
 
-        monkeypatch.setattr("services.banking.sync.get_historical_exchange_rates_db", _fail)
+        monkeypatch.setattr("services.bank.get_historical_exchange_rates_db", _fail)
 
         assert sync_user_accounts(session, USER, master_key)[0].status == "synced"
 

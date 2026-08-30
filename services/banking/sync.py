@@ -45,7 +45,6 @@ from services.bank import (
     replace_history_window,
 )
 from services.banking.client import build_client
-from services.market import get_historical_exchange_rates_db
 from services.banking.credentials import get_decrypted_credentials
 from services.banking.errors import (
     BankingApiError,
@@ -317,12 +316,11 @@ def sync_account_link(
         )
         return result
 
+    # Native currency: `replace_history_window` converts, being the writer.
     result.snapshots_written = replace_history_window(
         session,
         account,
-        _in_base_currency(
-            session, _curve_entries(accounting, movements, covered_from, today), currency
-        ),
+        _curve_entries(accounting, movements, covered_from, today),
         master_key,
         covered_from,
         today,
@@ -614,36 +612,6 @@ def _reconciliation_gap(
     )
     gap = accounting - (previous + period)
     return None if gap == 0 else gap
-
-
-def _in_base_currency(
-    session: Session, entries: list[BankHistoryEntry], currency: str
-) -> list[BankHistoryEntry]:
-    """The curve, converted to euros day by day.
-
-    `account_history` is a euro store — `get_all_bank_accounts_history` adds the
-    accounts together by date and says so outright ("the bank position is always
-    EUR so values are simply summed"). A curve left in dollars would be summed
-    into a euro total, which is the very substitution this branch spent its
-    effort removing everywhere else.
-
-    Each day converts at *its own* rate, never at today's: a single rate applied
-    across four years would draw the shape of the exchange rate rather than the
-    shape of the balance. Days the market was closed carry the last published
-    rate (services.market).
-    """
-    if currency == DEFAULT_CURRENCY or not entries:
-        return entries
-
-    days = [entry.snapshot_date for entry in entries]
-    rates = get_historical_exchange_rates_db(session, currency, min(days), max(days))
-    return [
-        BankHistoryEntry(
-            snapshot_date=entry.snapshot_date,
-            value=entry.value * rates[entry.snapshot_date],
-        )
-        for entry in entries
-    ]
 
 
 def _curve_entries(
