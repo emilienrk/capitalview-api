@@ -40,6 +40,7 @@ class Settings:
         self.debug: bool = os.getenv("DEBUG", "false").lower() == "true" and env != "production"
         self.app_name: str = os.getenv("APP_NAME", "CapitalView API")
         self.trusted_proxy_count: int = int(os.getenv("TRUSTED_PROXY_COUNT", "0"))
+        self.log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
         # ── MCP (agent access to the API) ─────────────────────
         self.mcp_enabled: bool = os.getenv("MCP_ENABLED", "true").lower() == "true"
