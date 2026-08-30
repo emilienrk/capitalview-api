@@ -399,18 +399,23 @@ def get_user_cashflow(session: Session, user_uuid: str, master_key: bytes, detai
         except ValueError:
             pass
 
+    # A total is None when a currency in play has no published rate; it travels
+    # as null rather than as a made-up number.
+    def _euros(total) -> float | None:
+        return float(total) if total is not None else None
+
     output = dict()
     balance = get_user_cashflow_balance(session, user_uuid, master_key)
     if details:
         return json.loads(balance.model_dump_json())
     if parsed_flow == FlowType.INFLOW or parsed_flow is None:
-        output["inflow"] = { "total": float(balance.total_inflows), "monthly_inflows": float(balance.monthly_inflows) }
+        output["inflow"] = { "total": _euros(balance.total_inflows), "monthly_inflows": _euros(balance.monthly_inflows) }
     if parsed_flow == FlowType.OUTFLOW or parsed_flow is None:
-        output["outflow"] = { "total": float(balance.total_outflows), "monthly_outflows": float(balance.monthly_outflows) }
+        output["outflow"] = { "total": _euros(balance.total_outflows), "monthly_outflows": _euros(balance.monthly_outflows) }
     if parsed_flow is None:
-        output["balance"] = float(balance.net_balance)
-        output["monthly_balance"] = float(balance.monthly_balance)
-        output["savings_rate"] = float(balance.savings_rate) if balance.savings_rate else None
+        output["balance"] = _euros(balance.net_balance)
+        output["monthly_balance"] = _euros(balance.monthly_balance)
+        output["savings_rate"] = _euros(balance.savings_rate)
     return output
 
 

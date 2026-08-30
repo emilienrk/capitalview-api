@@ -282,6 +282,10 @@ def _apply_pending_cashflows(
     Inactive cashflows, a disabled global switch and a bank-linked account skip
     the balance update but still advance the stamp: a paused period must never
     be caught up later.
+
+    Amounts are added as they stand, in the account's own currency: a flow is
+    denominated by the account it hits (docs/currencies.md), so there is nothing
+    to convert here. Conversion starts one storey up, at the aggregate.
     """
     today = date.today()
 
