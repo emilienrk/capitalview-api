@@ -10,6 +10,7 @@ _pyproject = Path(__file__).parent / "pyproject.toml"
 with _pyproject.open("rb") as _f:
     __version__: str = tomllib.load(_f)["project"]["version"]
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from sqlmodel import Session, select
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -154,9 +155,15 @@ def health():
 
 @app.get("/health/db")
 def health_db(session: Session = Depends(get_session)):
-    """Check database connection."""
+    """Check database connection.
+
+    Answers 503 when the database is unreachable: an external monitor watches
+    the HTTP status, and a 200 carrying {"status": "error"} reads as green.
+    """
     try:
         session.exec(select(1))
         return {"status": "ok", "database": "connected"}
     except Exception:
-        return {"status": "error", "database": "unavailable"}
+        return JSONResponse(
+            status_code=503, content={"status": "error", "database": "unavailable"}
+        )
