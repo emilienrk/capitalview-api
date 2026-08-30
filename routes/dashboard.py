@@ -265,7 +265,10 @@ def get_dashboard_statistics(
     # ── Cash (bank balances) ────────────────────────────────
     if settings.bank_module_enabled:
         bank_summary = get_user_bank_accounts(session, current_user.uuid, master_key)
-        cash_total = bank_summary.total_balance
+        # None when a held currency has no published rate. Counted as zero here
+        # rather than propagated: the alternative is a 500 on the whole
+        # dashboard. The bank page is where that gap is shown for what it is.
+        cash_total = bank_summary.total_balance or Decimal(0)
     else:
         cash_total = Decimal(0)
 
