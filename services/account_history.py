@@ -29,12 +29,15 @@ from database import get_engine
 from models.account_history import AccountHistory
 from models.asset import Asset, AssetValuation
 from models.enums import AccountCategory, AssetType
+from models.currency import BASE_CURRENCY
 from models.market import MarketAsset, MarketPriceHistory
 from models import BankAccount, CryptoAccount, StockAccount
 from dtos.crypto import FIAT_ASSET_KEYS
 from services.analytics.flows import stock_external_flow_for_day
 from services.analytics.prices import fill_price_gaps, get_price_matrix
+from services.bank import account_currency
 from services.encryption import decrypt_data, encrypt_data, hash_index
+from services.market import get_exchange_rate
 from services.settings import get_or_create_settings
 from models.enums import CryptoTransactionType, StockTransactionType
 
@@ -671,7 +674,14 @@ def _build_bank_snapshots(
 
     result: list[_AccountSnapshot] = []
     for acc in accounts:
+        # In euros, like every figure this store holds: the snapshots are summed
+        # across accounts by date, and `FrozenPosition.total_invested` says
+        # "already in EUR". Today's rate, because the balance itself is today's,
+        # repeated back over the days with no snapshot.
         balance = Decimal(decrypt_data(acc.balance_enc, master_key))
+        currency = account_currency(acc, master_key)
+        if currency != BASE_CURRENCY:
+            balance *= get_exchange_rate(session, currency, BASE_CURRENCY)
         result.append(
             _AccountSnapshot(
                 account_id=acc.uuid,
