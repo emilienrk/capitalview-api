@@ -60,10 +60,19 @@ async def lifespan(app: FastAPI):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from services.market import update_all_prices_daily
     from services.banking.health import check_all_consents_daily
+    from services.jobs import single_run
 
+    # Every worker starts this scheduler, so the jobs coordinate through a
+    # Postgres advisory lock and only one of the four actually runs them.
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(update_all_prices_daily, "cron", hour=23, minute=30, id="daily_price_update")
-    scheduler.add_job(check_all_consents_daily, "cron", hour=2, minute=0, id="daily_bank_consent_check")
+    scheduler.add_job(
+        single_run("daily_price_update", update_all_prices_daily),
+        "cron", hour=23, minute=30, id="daily_price_update",
+    )
+    scheduler.add_job(
+        single_run("daily_bank_consent_check", check_all_consents_daily),
+        "cron", hour=2, minute=0, id="daily_bank_consent_check",
+    )
     scheduler.start()
     logger.info("startup: scheduler started (prices 23:30, bank consent 02:00)")
 
