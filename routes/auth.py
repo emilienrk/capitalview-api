@@ -1,9 +1,6 @@
 """Authentication routes."""
 
-import asyncio
-import time
 import uuid
-from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Annotated
@@ -77,13 +74,14 @@ from services.account_data import export_account_data, purge_account
 from services.api_token import revoke_user_api_tokens
 from services.community import refresh_community_positions
 from services.account_history import run_lazy_catchup
+from services.rate_limit import bucket_id, check_and_record
 
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-_rate_lock = asyncio.Lock()
-_rate_hits: dict[str, list[float]] = defaultdict(list)
+# The window itself lives in Postgres (services.rate_limit): four uvicorn
+# workers each counting in their own memory multiplied every limit by four.
 
 
 def _get_client_ip(request: Request) -> str:
@@ -114,26 +112,13 @@ async def _check_rate_limit(request: Request, key: str, max_calls: int, window_s
     if request.method == "OPTIONS":
         return
 
-    ip = _get_client_ip(request)
-    bucket = f"{ip}:{key}"
-    now = time.monotonic()
-    cutoff = now - window_seconds
-
-    async with _rate_lock:
-        # Prune timestamps outside the sliding window
-        hits = [t for t in _rate_hits[bucket] if t > cutoff]
-        if not hits:
-            # No recent hits: free the key to avoid accumulation of ephemeral IPs
-            _rate_hits.pop(bucket, None)
-        else:
-            _rate_hits[bucket] = hits
-        if len(hits) >= max_calls:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Trop de requêtes, veuillez réessayer plus tard.",
-                headers={"Retry-After": str(window_seconds)},
-            )
-        _rate_hits[bucket].append(now)
+    bucket = bucket_id(_get_client_ip(request), key)
+    if not check_and_record(bucket, max_calls, window_seconds):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Trop de requêtes, veuillez réessayer plus tard.",
+            headers={"Retry-After": str(window_seconds)},
+        )
 
 
 

@@ -71,6 +71,44 @@ def master_key_fixture() -> str:
     return base64.b64encode(b"0" * 32).decode("utf-8") 
 
 
+@pytest.fixture(name="rate_limit_engine", scope="session")
+def rate_limit_engine_fixture():
+    """A database of its own for the shared rate limiter.
+
+    The limiter commits on its own Session — that is what makes the window
+    shared across workers — and the test engine is a StaticPool, so those
+    commits would land on the very connection the `session` fixture holds its
+    rollback transaction on and destroy every test's isolation. In production
+    the limiter genuinely holds a separate connection; this reproduces that.
+    """
+    from models import RateLimitHit
+
+    engine = create_engine(
+        DATABASE_URL, connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    RateLimitHit.__table__.create(engine, checkfirst=True)
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def isolate_rate_limiter(rate_limit_engine, monkeypatch):
+    """Point the limiter at that database and empty its window between tests."""
+    import sqlalchemy as sa
+    import services.rate_limit as rate_limit
+    from models import RateLimitHit
+
+    def _clear():
+        with Session(rate_limit_engine) as cleanup:
+            cleanup.exec(sa.delete(RateLimitHit))
+            cleanup.commit()
+
+    monkeypatch.setattr(rate_limit, "get_engine", lambda: rate_limit_engine)
+    _clear()
+    yield
+    _clear()
+
+
 @pytest.fixture(autouse=True)
 def disable_auth_background_catchup(monkeypatch):
     """Prevent account-history background jobs from opening a real PostgreSQL connection in tests."""

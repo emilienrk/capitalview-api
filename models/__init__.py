@@ -34,6 +34,7 @@ from .community import CommunityProfile, CommunityPosition, CommunityFollow, Com
 from .account_history import AccountHistory
 from .notification import Notification, NotificationType
 from .job_run import JobRun, JobStatus
+from .rate_limit import RateLimitHit
 
 __all__ = [
     # Enums
@@ -76,5 +77,6 @@ __all__ = [
     "Notification",
     "JobRun",
     "JobStatus",
+    "RateLimitHit",
     "NotificationType",
 ]

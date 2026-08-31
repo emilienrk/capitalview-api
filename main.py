@@ -62,6 +62,7 @@ async def lifespan(app: FastAPI):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from services.market import update_all_prices_daily
     from services.banking.health import check_all_consents_daily
+    from services.rate_limit import purge_rate_limit_hits
     from services.jobs import single_run
 
     # Every worker starts this scheduler, so the jobs coordinate through a
@@ -75,8 +76,14 @@ async def lifespan(app: FastAPI):
         single_run("daily_bank_consent_check", check_all_consents_daily),
         "cron", hour=2, minute=0, id="daily_bank_consent_check",
     )
+    # The per-call purge only touches the bucket in front of it, so buckets that
+    # go quiet need a sweep of their own.
+    scheduler.add_job(
+        single_run("purge_rate_limit_hits", purge_rate_limit_hits),
+        "cron", hour=3, minute=0, id="purge_rate_limit_hits",
+    )
     scheduler.start()
-    logger.info("startup: scheduler started (prices 23:30, bank consent 02:00)")
+    logger.info("startup: scheduler started (prices 23:30, bank consent 02:00, rate purge 03:00)")
 
     if mcp_server is None:
         yield
