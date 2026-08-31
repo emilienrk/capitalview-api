@@ -393,8 +393,7 @@ spike, pas au bac à sable.
 ## Contraintes d'environnement
 
 - Tests API : `uv run pytest` **exige `dangerouslyDisableSandbox: true`** (cache uv bloqué).
-- Front : `node` absent du PATH → `export PATH="$(dirname $(head -1 $(which pnpm) | sed 's|^#!||')):$PATH"`,
-  puis `pnpm type-check`. Éviter `pnpm build` (run-p).
+- Front : `pnpm type-check`. Éviter `pnpm build` (run-p).
 - Tests sur **SQLite in-memory**, production **PostgreSQL**. `pg_insert` contourné par la fixture
   `sqlite_pg_insert` (`tests/services/test_bank.py`).
 - ~~**`PRAGMA foreign_keys` n'est jamais activé**~~ **Faux, constaté le 2026-08-26** : écrire un
