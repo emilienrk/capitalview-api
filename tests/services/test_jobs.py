@@ -8,6 +8,8 @@ protocol — try-lock, run or skip, always unlock.
 from contextlib import contextmanager
 
 import pytest
+import sqlalchemy as sa
+from sqlmodel import Session, select
 
 from services import jobs
 
@@ -37,7 +39,15 @@ class _FakeConnection:
 
 @pytest.fixture
 def fake_engine(monkeypatch):
-    """Patch services.jobs.get_engine, returning the connection it hands out."""
+    """Patch services.jobs.get_engine, returning the connection it hands out.
+
+    `job_run` is neutralised alongside: these tests are about the lock protocol,
+    and the execution record has its own tests further down.
+    """
+
+    @contextmanager
+    def _no_record(name, user_uuid=None):
+        yield {}
 
     def _install(obtained: bool) -> _FakeConnection:
         conn = _FakeConnection(obtained)
@@ -47,6 +57,7 @@ def fake_engine(monkeypatch):
             yield conn
 
         monkeypatch.setattr(jobs, "get_engine", lambda: type("E", (), {"connect": staticmethod(_connect)}))
+        monkeypatch.setattr(jobs, "job_run", _no_record)
         return conn
 
     return _install
@@ -94,3 +105,83 @@ def test_the_lock_is_released_when_the_job_raises(fake_engine):
         jobs.single_run("daily_price_update", _boom)()
 
     assert any("pg_advisory_unlock" in s for s in conn.statements)
+
+
+# ---------------------------------------------------------------------------
+# job_run — the execution record (point 6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def recording_engine(engine, monkeypatch):
+    """Point services.jobs at the test database so job_runs rows are real.
+
+    `job_run` commits on a Session of its own — that is the point of it — so its
+    rows escape the rollback the `session` fixture relies on and have to be
+    cleared by hand.
+    """
+    from models import JobRun
+
+    def _clear():
+        with Session(engine) as cleanup:
+            cleanup.exec(sa.delete(JobRun))
+            cleanup.commit()
+
+    _clear()
+    monkeypatch.setattr(jobs, "get_engine", lambda: engine)
+    yield engine
+    _clear()
+
+
+def _runs(session):
+    from models import JobRun
+
+    return list(session.exec(select(JobRun).order_by(JobRun.id)).all())
+
+
+def test_a_successful_run_is_recorded_with_its_counters(recording_engine, session):
+    from models import JobStatus
+
+    with jobs.job_run("nightly_prices") as counters:
+        counters["prices"] = 847
+
+    (run,) = _runs(session)
+    assert run.job_name == "nightly_prices"
+    assert run.status == JobStatus.OK
+    assert run.counters == {"prices": 847}
+    assert run.finished_at is not None
+    assert run.error is None
+
+
+def test_a_failed_run_keeps_the_reason_and_re_raises(recording_engine, session):
+    from models import JobStatus
+
+    with pytest.raises(RuntimeError):
+        with jobs.job_run("rebuild_account_history", user_uuid="user-1"):
+            raise RuntimeError("provider down")
+
+    (run,) = _runs(session)
+    assert run.status == JobStatus.FAILED
+    assert run.user_uuid == "user-1"
+    assert "RuntimeError: provider down" in run.error
+
+
+def test_a_run_that_never_finishes_stays_visible_as_running(recording_engine, session):
+    """The row is committed up front, so a job that dies mid-way is not simply absent."""
+    from models import JobStatus
+
+    cm = jobs.job_run("rebuild_account_history", user_uuid="user-2")
+    cm.__enter__()  # entered, never exited — the process died here
+
+    (run,) = _runs(session)
+    assert run.status == JobStatus.RUNNING
+    assert run.finished_at is None
+
+
+def test_the_error_message_is_truncated(recording_engine, session):
+    with pytest.raises(ValueError):
+        with jobs.job_run("nightly_prices"):
+            raise ValueError("x" * 5000)
+
+    (run,) = _runs(session)
+    assert len(run.error) == jobs._MAX_ERROR_CHARS
