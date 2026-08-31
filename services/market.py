@@ -709,13 +709,15 @@ def get_crypto_info(
 # ---------------------------------------------------------------------------
 
 
-def update_all_prices_daily() -> None:
+def update_all_prices_daily() -> dict:
     """
     Single entry-point for the nightly CRON job.
 
     * Stocks  — Yahoo Finance, batches of 50, 2 s sleep
     * Cryptos — CoinMarketCap, batches of 100, 3 s sleep
     * Bulk upsert into market_price_history (one price per asset per day)
+
+    Returns the counters the scheduler records in `job_runs`.
     """
     engine = get_engine()
     yahoo = YahooProvider()
@@ -826,13 +828,16 @@ def update_all_prices_daily() -> None:
         # Prices have just moved, so this is the one moment where a pick can
         # newly have reached its target. Isolated: a failure here must not make
         # the price update look like it failed.
+        notified = 0
         try:
             from services.notification import check_pick_targets
-            sent = check_pick_targets(session)
-            if sent:
-                logger.info("CRON update_all_prices_daily: %d pick target notifications", sent)
+            notified = check_pick_targets(session)
+            if notified:
+                logger.info("CRON update_all_prices_daily: %d pick target notifications", notified)
         except Exception as exc:
             logger.error("Pick target check failed: %s", exc)
+
+        return {"prices": len(prices_collected), "pick_notifications": notified}
 
 
 # ---------------------------------------------------------------------------

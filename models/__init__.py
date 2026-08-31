@@ -33,6 +33,7 @@ from .asset import Asset, AssetValuation
 from .community import CommunityProfile, CommunityPosition, CommunityFollow, CommunityPick
 from .account_history import AccountHistory
 from .notification import Notification, NotificationType
+from .job_run import JobRun, JobStatus
 
 __all__ = [
     # Enums
@@ -73,5 +74,7 @@ __all__ = [
     "CommunityPick",
     "AccountHistory",
     "Notification",
+    "JobRun",
+    "JobStatus",
     "NotificationType",
 ]

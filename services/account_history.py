@@ -1038,28 +1038,34 @@ def rebuild_account_history_from_date(
     created, updated, or deleted with an *executed_at* date that falls before today.
     """
     from services.market import ensure_price_history
+    from services.jobs import job_run
 
     engine = get_engine()
 
-    with Session(engine) as session:
-        deleted = session.exec(
-            sa.delete(AccountHistory).where(
-                AccountHistory.account_id_bidx == account_id_bidx,
-                AccountHistory.snapshot_date >= from_date,
+    # Recorded because the DELETE below commits before the rebuild that follows
+    # it: a process that dies in between leaves the curve truncated until the
+    # next catchup, and without this row nothing would say it ever happened.
+    with job_run("rebuild_account_history", user_uuid=user_uuid) as counters:
+        with Session(engine) as session:
+            deleted = session.exec(
+                sa.delete(AccountHistory).where(
+                    AccountHistory.account_id_bidx == account_id_bidx,
+                    AccountHistory.snapshot_date >= from_date,
+                )
             )
-        )
-        logger.info(
-            "account_history: invalidated %d snapshot(s) from %s for account_bidx=%s",
-            deleted.rowcount,
-            from_date,
-            account_id_bidx[:8] + "…",
-        )
+            counters["invalidated"] = deleted.rowcount
+            logger.info(
+                "account_history: invalidated %d snapshot(s) from %s for account_bidx=%s",
+                deleted.rowcount,
+                from_date,
+                account_id_bidx[:8] + "…",
+            )
 
-        if asset_keys and asset_type is not None:
-            for asset_key in asset_keys:
-                ensure_price_history(session, asset_key, asset_type, from_date)
-        session.commit()
-    run_lazy_catchup(user_uuid, master_key)
+            if asset_keys and asset_type is not None:
+                for asset_key in asset_keys:
+                    ensure_price_history(session, asset_key, asset_type, from_date)
+            session.commit()
+        run_lazy_catchup(user_uuid, master_key)
 
 
 def trigger_post_transaction_updates(
