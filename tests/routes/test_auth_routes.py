@@ -14,14 +14,10 @@ def _override_deps(session, master_key):
     from database import get_session
     app.dependency_overrides[get_session] = _get_session
 
-    # Reset the in-memory rate limiter between tests
-    from routes.auth import _rate_hits
-    _rate_hits.clear()
 
     yield
 
     app.dependency_overrides.clear()
-    _rate_hits.clear()
 
 
 def test_register_and_me(session):

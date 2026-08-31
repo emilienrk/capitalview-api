@@ -48,14 +48,11 @@ def _override_deps(session):
 
     app.dependency_overrides[get_session] = _get_session
 
-    from routes.auth import _rate_hits
 
-    _rate_hits.clear()
 
     yield
 
     app.dependency_overrides.clear()
-    _rate_hits.clear()
 
 
 PASSWORD = "StrongDelete1!"
