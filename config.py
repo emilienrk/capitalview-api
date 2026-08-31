@@ -41,6 +41,10 @@ class Settings:
         self.app_name: str = os.getenv("APP_NAME", "CapitalView API")
         self.trusted_proxy_count: int = int(os.getenv("TRUSTED_PROXY_COUNT", "0"))
         self.log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
+        # Guards /health/deep, which tells a caller what is broken and how stale
+        # the data is. Unset outside production leaves it open for local use;
+        # unset in production hides the route entirely rather than exposing it.
+        self.health_token: str = os.getenv("HEALTH_TOKEN", "")
 
         # ── MCP (agent access to the API) ─────────────────────
         self.mcp_enabled: bool = os.getenv("MCP_ENABLED", "true").lower() == "true"

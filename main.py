@@ -1,6 +1,7 @@
 """CapitalView API - Main entry point."""
 
 import logging
+import secrets
 import tomllib
 import uuid
 from contextlib import asynccontextmanager
@@ -21,6 +22,7 @@ from config import get_settings
 from database import get_session, get_engine
 from logging_config import request_id_var, setup_logging
 from mcp_server import build_mcp_route, build_mcp_server
+from services.health import build_health_report
 from models import User
 from routes import (
     auth_router,
@@ -205,3 +207,32 @@ def health_db(session: Session = Depends(get_session)):
         return JSONResponse(
             status_code=503, content={"status": "error", "database": "unavailable"}
         )
+
+
+@app.get("/health/deep")
+def health_deep(request: Request, session: Session = Depends(get_session)):
+    """Everything an external dashboard needs, in one document.
+
+    draft-inadarei-api-health-check: `application/health+json`, a rolled-up
+    status, and one entry per component. `pass` and `warn` answer 2xx, `fail`
+    answers 503 — so a monitor reading the status code alone still sees red.
+
+    Deliberately not what `/health` does: that one stays a shallow liveness
+    probe the Docker HEALTHCHECK uses, and must never fail because a component
+    it does not need is degraded.
+    """
+    if settings.health_token:
+        supplied = request.headers.get("X-Health-Token", "")
+        if not secrets.compare_digest(supplied, settings.health_token):
+            return JSONResponse(status_code=401, content={"status": "fail"})
+    elif settings.environment == "production":
+        # No token configured: the route says what is broken and how stale the
+        # data is, so it stays unadvertised rather than open.
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
+    report, overall = build_health_report(session, __version__, "capitalview-api")
+    return JSONResponse(
+        status_code=503 if overall == "fail" else 200,
+        content=report,
+        media_type="application/health+json",
+    )
