@@ -29,6 +29,9 @@ jobs:
         with:
           context: .
           file: ./Dockerfile.prod
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ github.event.repository.updated_at }}
           push: true
           tags: |
             ghcr.io/${{ github.repository }}:latest

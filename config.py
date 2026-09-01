@@ -45,6 +45,11 @@ class Settings:
         # the data is. Unset outside production leaves it open for local use;
         # unset in production hides the route entirely rather than exposing it.
         self.health_token: str = os.getenv("HEALTH_TOKEN", "")
+        # Build provenance, injected as build args by the CI and frozen as ENV
+        # in the image. Both None in a working tree, as the shared /version
+        # contract expects.
+        self.git_sha: str | None = os.getenv("GIT_SHA") or None
+        self.build_time: str | None = os.getenv("BUILD_TIME") or None
 
         # ── MCP (agent access to the API) ─────────────────────
         self.mcp_enabled: bool = os.getenv("MCP_ENABLED", "true").lower() == "true"

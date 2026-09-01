@@ -20,9 +20,10 @@ from services import health
 
 @pytest.fixture
 def client(session, monkeypatch):
-    """A bare app carrying just the deep route, bound to the test session."""
+    """A bare app carrying the two ops routes, bound to the test session."""
     app = FastAPI()
     app.get("/health/deep")(main.health_deep)
+    app.get("/version")(main.version)
     app.dependency_overrides[main.get_session] = lambda: session
     return TestClient(app, raise_server_exceptions=False)
 
@@ -89,7 +90,44 @@ def test_every_expected_component_is_reported(client):
         "market:priceFreshness",
         "banking:lastSync",
         "jobs:runs",
+        "build:info",
     }
+
+
+def test_version_answers_the_shared_contract(client):
+    """The same fields the other self-hosted services expose."""
+    body = client.get("/version").json()
+    assert set(body) == {"service", "version", "commit", "built_at"}
+    assert body["service"] == "capitalview-api"
+    assert body["version"]
+
+
+def test_version_needs_no_token(client, monkeypatch):
+    """The point of keeping it separate: it answers when the token does not.
+
+    /health/deep hides behind a 404 in production without HEALTH_TOKEN, so
+    /version is the only thing left that can say which commit is running.
+    """
+    # `main.settings`, like the autouse fixture above: patching the object
+    # returned by get_settings() is not guaranteed to be the same instance.
+    monkeypatch.setattr(main.settings, "health_token", "")
+    monkeypatch.setattr(main.settings, "environment", "production")
+
+    assert client.get("/health/deep").status_code == 404
+    assert client.get("/version").status_code == 200
+
+
+def test_the_deep_report_carries_the_same_build_data(client):
+    """One source, two exposures — they must not drift apart."""
+    version = client.get("/version").json()
+    report = client.get("/health/deep").json()
+
+    assert report["commit"] == version["commit"]
+    assert report["builtAt"] == version["built_at"]
+    entry = report["checks"]["build:info"][0]
+    assert entry["observedValue"] == version["version"]
+    # Information, never a verdict: an unknown build must not colour the report.
+    assert entry["status"] == "pass"
 
 
 # ---------------------------------------------------------------------------
