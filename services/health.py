@@ -233,6 +233,35 @@ def _check_job_failures(session: Session) -> list[dict]:
     return entries
 
 
+def build_provenance(release_id: str, service_id: str, git_sha, build_time) -> dict:
+    """The /version payload — the shared contract across self-hosted services.
+
+    Also folded into /health/deep as `build:info`, so the deep report answers
+    "what is running" alongside "is it well". The two are not redundant:
+    /version stays unauthenticated, and is therefore the only one that can be
+    read the day HEALTH_TOKEN is missing — which is exactly the day it matters.
+    """
+    return {
+        "service": service_id,
+        "version": release_id,
+        "commit": git_sha,
+        "built_at": build_time,
+    }
+
+
+def _check_build(provenance: dict) -> list[dict]:
+    """Reports the running build. Never fails: it is information, not a verdict."""
+    return [
+        _entry(
+            PASS,
+            componentType="system",
+            observedValue=provenance["version"],
+            output=provenance["commit"] or "no commit (working tree)",
+            builtAt=provenance["built_at"],
+        )
+    ]
+
+
 _CHECKS = {
     "postgres:responseTime": _check_postgres,
     "alembic:revision": _check_migrations,
@@ -243,7 +272,13 @@ _CHECKS = {
 }
 
 
-def build_health_report(session: Session, release_id: str, service_id: str) -> tuple[dict, str]:
+def build_health_report(
+    session: Session,
+    release_id: str,
+    service_id: str,
+    git_sha: str | None = None,
+    build_time: str | None = None,
+) -> tuple[dict, str]:
     """Assemble the report and the status it rolls up to.
 
     A check that raises becomes a failing entry rather than a 500: a health
@@ -261,6 +296,9 @@ def build_health_report(session: Session, release_id: str, service_id: str) -> t
             savepoint.rollback()
             checks[key] = [_entry(FAIL, output=f"{type(exc).__name__}: {exc}"[:200])]
 
+    provenance = build_provenance(release_id, service_id, git_sha, build_time)
+    checks["build:info"] = _check_build(provenance)
+
     overall = PASS
     for entries in checks.values():
         for entry in entries:
@@ -272,5 +310,7 @@ def build_health_report(session: Session, release_id: str, service_id: str) -> t
         "releaseId": release_id,
         "serviceId": service_id,
         "description": "CapitalView API",
+        "commit": provenance["commit"],
+        "builtAt": provenance["built_at"],
         "checks": checks,
     }, overall

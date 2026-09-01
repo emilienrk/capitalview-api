@@ -22,7 +22,7 @@ from config import get_settings
 from database import get_session, get_engine
 from logging_config import request_id_var, setup_logging
 from mcp_server import build_mcp_route, build_mcp_server
-from services.health import build_health_report
+from services.health import build_health_report, build_provenance
 from models import User
 from routes import (
     auth_router,
@@ -200,6 +200,19 @@ def health():
     return {"status": "ok", "app": settings.app_name, "version": __version__}
 
 
+@app.get("/version", include_in_schema=False)
+def version():
+    """Build provenance, unauthenticated on purpose.
+
+    /health/deep carries the same fields, but behind HEALTH_TOKEN. This route
+    is what still answers "which commit is running" the day that token is
+    missing or wrong — the day the question actually gets asked.
+    """
+    return build_provenance(
+        __version__, "capitalview-api", settings.git_sha, settings.build_time
+    )
+
+
 @app.get("/health/db")
 def health_db(session: Session = Depends(get_session)):
     """Check database connection.
@@ -237,7 +250,9 @@ def health_deep(request: Request, session: Session = Depends(get_session)):
         # data is, so it stays unadvertised rather than open.
         return JSONResponse(status_code=404, content={"detail": "Not Found"})
 
-    report, overall = build_health_report(session, __version__, "capitalview-api")
+    report, overall = build_health_report(
+        session, __version__, "capitalview-api", settings.git_sha, settings.build_time
+    )
     return JSONResponse(
         status_code=503 if overall == "fail" else 200,
         content=report,

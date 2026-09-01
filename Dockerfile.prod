@@ -37,6 +37,13 @@ COPY --from=builder --chown=appuser:appuser /opt/venv /opt/venv
 
 COPY --chown=appuser:appuser . .
 
+# Build provenance, surfaced by GET /version and by /health/deep. Placed
+# after the COPY so a new SHA does not invalidate the dependency layers.
+ARG GIT_SHA
+ARG BUILD_TIME
+ENV GIT_SHA=${GIT_SHA}
+ENV BUILD_TIME=${BUILD_TIME}
+
 ENV PATH="/opt/venv/bin:$PATH"
 # The venv carries the dependencies alone, so /app has to be importable itself.
 ENV PYTHONPATH=/app
