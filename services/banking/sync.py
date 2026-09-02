@@ -389,6 +389,25 @@ def _balance_of_type(
     return None
 
 
+def _published_balances(balances: list[dict[str, Any]]) -> str:
+    """`type/currency` of everything the bank did publish, for the refusal message.
+
+    Which balance types an ASPSP publishes is not in any contract and varies by
+    account kind, so a refusal that only names what was expected leaves nobody
+    able to say what to accept instead. Amounts are deliberately left out: this
+    string reaches the user's screen through `BankAccountSyncResult.detail`.
+    """
+    if not balances:
+        return "aucun"
+    seen = []
+    for balance in balances:
+        amount = balance.get("balance_amount") or {}
+        pair = f"{balance.get('balance_type') or '?'}/{amount.get('currency') or '?'}"
+        if pair not in seen:
+            seen.append(pair)
+    return ", ".join(seen)
+
+
 def _accounting_balance_row(
     payload: dict[str, Any], currency: str, is_card: bool = False
 ) -> dict[str, Any]:
@@ -418,7 +437,8 @@ def _accounting_balance_row(
             return row
 
     raise AccountingBalanceUnavailableError(
-        f"no {ACCOUNTING_BALANCE_TYPE} balance in {currency} for this account"
+        f"votre banque ne publie pas de solde comptable ({ACCOUNTING_BALANCE_TYPE}) "
+        f"en {currency} pour ce compte. Soldes publiés : {_published_balances(balances)}."
     )
 
 
