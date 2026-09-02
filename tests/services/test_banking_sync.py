@@ -438,6 +438,30 @@ class TestBalanceSelection:
         with pytest.raises(AccountingBalanceUnavailableError):
             _accounting_balance(othr_only, "EUR")
 
+    def test_the_refusal_names_what_the_bank_did_publish(self):
+        """The message reaches the user's screen through `BankAccountSyncResult
+        .detail`, and it is the only place the ASPSP's actual balance types are
+        ever visible: which ones a bank publishes is in no contract."""
+        payload = {
+            "balances": [
+                {"balance_amount": {"currency": "EUR", "amount": "3000"}, "balance_type": "ITAV"},
+                {"balance_amount": {"currency": "CHF", "amount": "12.63"}, "balance_type": "CLBD"},
+            ]
+        }
+        with pytest.raises(AccountingBalanceUnavailableError) as excinfo:
+            _accounting_balance(payload, "EUR")
+
+        message = str(excinfo.value)
+        assert "ITAV/EUR" in message
+        assert "CLBD/CHF" in message
+        # No amount: this string is displayed, and a balance is not an error detail.
+        assert "3000" not in message
+
+    def test_the_refusal_says_so_when_the_bank_published_nothing(self):
+        with pytest.raises(AccountingBalanceUnavailableError) as excinfo:
+            _accounting_balance({"balances": []}, "EUR")
+        assert "aucun" in str(excinfo.value)
+
     def test_a_card_account_still_prefers_the_accounting_balance_when_there_is_one(self):
         payload = {
             "balances": [
