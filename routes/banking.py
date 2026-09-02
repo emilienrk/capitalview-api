@@ -21,6 +21,7 @@ from dtos.banking import (
     AspspSummary,
     BankAccountLinkRequest,
     BankAccountLinkResult,
+    BankAccountUnlinkResult,
     BankAuthorizeRequest,
     BankAuthorizeResponse,
     BankConfigCheck,
@@ -47,8 +48,10 @@ from services.banking.linking import (
     TargetAccountNotFoundError,
     check_configuration,
     delete_bank_session,
+    BankAccountNotLinkedError,
     handle_callback,
     link_account,
+    unlink_account,
     list_aspsps_for_country,
     TargetAccountAlreadyLinkedError,
     list_bank_sessions,
@@ -352,6 +355,31 @@ def sync(
         synced=sum(1 for result in results if result.status == "synced"),
         results=results,
     )
+
+
+@router.delete(
+    "/accounts/{bank_account_uuid}/link",
+    response_model=BankAccountUnlinkResult,
+)
+def unlink_bank_account(
+    bank_account_uuid: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    delete_transactions: bool = False,
+    session: Session = Depends(get_session),
+):
+    """Detach one account, leaving the authorization live for the others.
+
+    Deliberately outside `require_open_banking`, like DELETE /sessions/{uuid}:
+    turning the feature off must never trap the user with an attachment they
+    can no longer undo.
+    """
+    try:
+        return unlink_account(
+            session, current_user.uuid, master_key, bank_account_uuid, delete_transactions
+        )
+    except BankAccountNotLinkedError:
+        raise HTTPException(status_code=404, detail="Ce compte n'est rattaché à aucun compte bancaire.")
 
 
 @router.delete("/sessions/{bank_session_uuid}", status_code=204)
