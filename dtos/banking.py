@@ -128,6 +128,18 @@ class BankAccountLinkResult(BaseModel):
     reconnected: bool
 
 
+class BankAccountUnlinkResult(BaseModel):
+    """Response of DELETE /banking/accounts/{uuid}/link.
+
+    `reseeded_accounts` are the accounts that were being deduplicated against
+    the detached one and are now scheduled for a full re-seed: whatever the
+    detached account had shadowed can finally be stored on them.
+    """
+    bank_account_uuid: str
+    transactions_deleted: int
+    reseeded_accounts: list[str]
+
+
 # ---------------------------------------------------------------------------
 # Synchronisation DTOs (spec §D)
 # ---------------------------------------------------------------------------

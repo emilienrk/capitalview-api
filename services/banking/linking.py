@@ -26,12 +26,13 @@ from dtos.banking import (
     AspspSummary,
     BankAccountLinkResult,
     BankConfigCheck,
+    BankAccountUnlinkResult,
     BankSessionAccount,
     BankSessionLinkedAccount,
     BankSessionSummary,
 )
 from models.bank import BankAccount
-from models.banking import BankAccountLink, BankAuthorization, BankSession
+from models.banking import BankAccountLink, BankAuthorization, BankSession, BankTransaction
 from services.banking.client import build_client
 from services.banking.credentials import (
     get_decrypted_credentials,
@@ -77,6 +78,10 @@ class AspspNotFoundError(LinkingError):
 
 class BankSessionNotFoundError(LinkingError):
     """No bank session with that uuid belongs to this user."""
+
+
+class BankAccountNotLinkedError(LinkingError):
+    """That CapitalView account carries no bank account to detach."""
 
 
 class TargetAccountNotFoundError(LinkingError):
@@ -698,6 +703,98 @@ def link_account(
 # DELETE /banking/sessions/{uuid} (ruling R3: never exercised against the real
 # service in tests — always behind an injected client double)
 # ---------------------------------------------------------------------------
+
+
+def unlink_account(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    bank_account_uuid: str,
+    delete_transactions: bool,
+) -> BankAccountUnlinkResult:
+    """Detach one CapitalView account from its bank account.
+
+    Distinct from `delete_bank_session`, which detaches every account and closes
+    the consent: here the authorization stays live for the accounts that keep
+    using it, and only this one goes back to being manual. Its balance and its
+    stored history are left alone — they are the user's data, not the link's.
+
+    Two consequences the caller does not have to know about:
+
+    * **Re-seeding the mirrored accounts.** Cross-account deduplication drops a
+      row on whichever account of a card/current pair was stored second
+      (`_sibling_dedup_indexes`). Everything the detached account shadowed is
+      therefore missing from its counterpart, and nothing would ever fetch it
+      again: an incremental sync only reaches back to the anchor. The
+      counterparts are put back into the seeding state, which is what makes the
+      next sync ask the bank for its full window with no sibling left to
+      deduplicate against.
+    * **Deleting its rows, on request.** They came from a bank this account is
+      no longer connected to. Kept, they would shadow the counterpart again the
+      day it is re-attached — which is the failure this whole function exists
+      to undo.
+    """
+    user_bidx = hash_index(user_uuid, master_key)
+    account_bidx = hash_index(bank_account_uuid, master_key)
+    link = session.exec(
+        select(BankAccountLink).where(
+            BankAccountLink.user_uuid_bidx == user_bidx,
+            BankAccountLink.bank_account_uuid_bidx == account_bidx,
+        )
+    ).first()
+    if link is None:
+        raise BankAccountNotLinkedError()
+
+    # Read before the link is gone: the card/current role is derived from it.
+    reseeded = _reseed_mirrored_links(session, master_key, user_bidx, link)
+
+    transactions_deleted = 0
+    if delete_transactions:
+        rows = session.exec(
+            select(BankTransaction).where(BankTransaction.account_id_bidx == account_bidx)
+        ).all()
+        for row in rows:
+            session.delete(row)
+        transactions_deleted = len(rows)
+
+    session.delete(link)
+    session.commit()
+
+    return BankAccountUnlinkResult(
+        bank_account_uuid=bank_account_uuid,
+        transactions_deleted=transactions_deleted,
+        reseeded_accounts=reseeded,
+    )
+
+
+def _reseed_mirrored_links(
+    session: Session, master_key: str, user_bidx: str, leaving: BankAccountLink
+) -> list[str]:
+    """Put every link that was deduplicated against `leaving` back into seeding.
+
+    The pairing rule is `_sibling_dedup_indexes`': a card account and a
+    non-card one mirror each other, two accounts of the same kind never do.
+    Seeding is the state `last_synced_at < anchor_date` (sync.py:204), so the
+    marker is moved rather than a flag added — the same convention the
+    rattachement step writes on a brand-new link.
+    """
+    leaving_is_card = is_card_account(session, leaving, master_key)
+    uuid_by_bidx = _accounts_bank_account_uuid_by_bidx(session, user_bidx, master_key)
+
+    reseeded = []
+    for link in session.exec(
+        select(BankAccountLink).where(BankAccountLink.user_uuid_bidx == user_bidx)
+    ).all():
+        if link.uuid == leaving.uuid:
+            continue
+        if is_card_account(session, link, master_key) == leaving_is_card:
+            continue
+        link.last_synced_at = link.anchor_date - timedelta(days=1)
+        session.add(link)
+        account_uuid = uuid_by_bidx.get(link.bank_account_uuid_bidx)
+        if account_uuid is not None:
+            reseeded.append(account_uuid)
+    return reseeded
 
 
 def delete_bank_session(session: Session, user_uuid: str, master_key: str, bank_session_uuid: str) -> None:
