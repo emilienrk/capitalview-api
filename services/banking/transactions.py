@@ -6,7 +6,7 @@ quirk §F measured against a real bank: `booking_date` is sometimes absent, a
 foreign currency arrives without any exchange rate, amounts are decimal strings,
 and `transaction_id` must never be used to identify anything.
 
-`store_transactions` owns the three deduplication levels of §E, from the most
+`store_transactions` owns the two deduplication levels of §E, from the most
 reliable to the most approximate:
 
 1. intra-account, by `entry_reference` — survives a reconnection, but the key
@@ -14,10 +14,26 @@ reliable to the most approximate:
    globally unique;
 2. intra-account, by `dedup_bidx` — the fallback when a bank supplies no
    reference, and the only way to follow a pending operation whose reference
-   changes when it books;
-3. cross-account, by `dedup_bidx`, scoped to the **user** — 93 % of card
-   operations also exist on the current account with a different reference;
-   without this level, nearly all card spending is counted twice.
+   changes when it books.
+
+A third level once existed: cross-account, scoped to the user, dropping a row
+whose fingerprint already sat on a card/current sibling. Its measurement was
+right — 98 % of a real card feed republishes the current account it debits, with
+no shared reference. Its *invariant* was wrong. It kept the row on whichever
+account was stored first, and "current account first" (ruling R12,
+`sync._in_stable_order`) only ever held **inside one run**; nothing held it
+between two. A card account that seeded on the day its current account's sync
+was failing cost that account **1 442 of its 2 776 movements**, and dragged its
+rebuilt curve from +541,81 € to −5 288,06 €.
+
+It was removed rather than repaired, because it protected nothing: every read of
+`BankTransaction` filters on a single `account_id_bidx` (`account_data.py`,
+`sync.py`, `linking.py`), balances come from the bank's own published figure and
+never from a sum of rows, and each curve is built from its own account's rows
+alone. Card accounts are no longer attachable either (`linking.
+list_session_accounts`), so the shape it guarded against cannot be created any
+more. The one visible cost: on a card link predating that rule, a purchase now
+exists on both accounts — which is what the bank itself publishes.
 
 Cancelled and rejected operations are never stored: they invalidate a row
 already ingested, and are dropped outright when they were never seen.
@@ -38,7 +54,8 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from models.banking import BankAccountLink, BankTransaction
+from models.banking import BankTransaction
+
 # Currency the rest of CapitalView reasons in; anything else is stored as-is.
 # Re-exported from here because the banking modules already read it from this one.
 from models.currency import BASE_CURRENCY
@@ -210,7 +227,6 @@ def store_transactions(
     """Store an account's transaction feed, deduplicated. Returns
     (inserted, updated, skipped). The feed's order is never relied upon."""
     account_bidx = hash_index(bank_account_uuid, master_key)
-    sibling_dedup = _sibling_dedup_indexes(session, user_uuid, master_key, account_bidx)
 
     existing = list(
         session.exec(
@@ -263,10 +279,6 @@ def store_transactions(
             skipped += 1
             continue
 
-        if dedup_bidx in sibling_dedup:
-            skipped += 1
-            continue
-
         row = BankTransaction(account_id_bidx=account_bidx)
         _apply(row, tx, ref_bidx, dedup_bidx, master_key)
         session.add(row)
@@ -300,52 +312,6 @@ def _join_remittance(lines: Any) -> str | None:
         return None
     parts = [str(line).strip() for line in lines if str(line).strip()]
     return " ".join(parts) or None
-
-
-def _sibling_dedup_indexes(
-    session: Session, user_uuid: str, master_key: str, account_bidx: str
-) -> set[str]:
-    """Dedup indexes stored on the accounts that can legitimately mirror this one.
-
-    Level 3 is scoped to the user, but only across a card/current pair — the one
-    shape it was measured on, where 93 % of the card feed republishes movements
-    of the current account it debits, with no shared reference.
-
-    Two current accounts mirror nothing. Someone holding several of them can pay
-    the same amount on the same day from two of them; those are two real
-    payments, and folding them together deletes one permanently. When no account
-    carries the card marker, level 3 simply does not fire: a visible duplicate,
-    reported by `card_marker_missing`, beats a silent deletion.
-    """
-    from services.banking.linking import is_card_account
-
-    links = list(
-        session.exec(
-            select(BankAccountLink).where(
-                BankAccountLink.user_uuid_bidx == hash_index(user_uuid, master_key)
-            )
-        ).all()
-    )
-    own = next((link for link in links if link.bank_account_uuid_bidx == account_bidx), None)
-    if own is None:
-        return set()
-
-    own_is_card = is_card_account(session, own, master_key)
-    siblings = [
-        link.bank_account_uuid_bidx
-        for link in links
-        if link.bank_account_uuid_bidx != account_bidx
-        and is_card_account(session, link, master_key) != own_is_card
-    ]
-    if not siblings:
-        return set()
-    return set(
-        session.exec(
-            select(BankTransaction.dedup_bidx).where(
-                BankTransaction.account_id_bidx.in_(siblings)
-            )
-        ).all()
-    )
 
 
 def _claimable_row(

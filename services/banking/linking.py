@@ -84,6 +84,17 @@ class BankAccountNotLinkedError(LinkingError):
     """That CapitalView account carries no bank account to detach."""
 
 
+class CardAccountNotLinkableError(LinkingError):
+    """A card account cannot be attached: its movements belong to another account.
+
+    93 % of a card feed republishes the current account it debits, with no shared
+    reference — attaching it stores the same purchase twice. And its balance is
+    not a stock: the real capture publishes a single `OTHR` of 0 on a
+    debit-immédiat card, so walking a curve back from it invents money the
+    account never held (+27 887 € eighteen months back, measured).
+    """
+
+
 class TargetAccountNotFoundError(LinkingError):
     """The CapitalView bank account to attach to doesn't belong to this user."""
 
@@ -96,11 +107,9 @@ class TargetAccountAlreadyLinkedError(LinkingError):
     """That CapitalView account already carries a different bank account.
 
     The attachment is one-to-one by construction (`bank_account_uuid_bidx` is
-    UNIQUE), and it has to stay that way: the card/current deduplication reads
-    two *separate* CapitalView accounts to tell a card echo from a real payment
-    (rulings R12 and R18). Folding both onto one account would leave that
-    machinery nothing to compare, and the reconciliation gap of a card would be
-    reported against a current account it does not belong to.
+    UNIQUE), and it has to stay that way: each CapitalView account carries its
+    own balance, its own anchor and its own curve, and a single row cannot hold
+    two of each.
     """
 
 
@@ -513,9 +522,11 @@ def is_card_account(session: Session, link: BankAccountLink, master_key: str) ->
     Confirmed on real Boursorama data: the current account carries `CACC`, the
     card account `CARD` (vendor-docs/spike/export-boursorama-2022-2026.json,
     `.accounts[].info`). The field is `required` on `AccountResource`, which is
-    what `POST /sessions` returns, so the marker cannot simply be absent — but
-    another bank may still label its card account differently, which is what
-    `card_marker_missing` on the sync result keeps visible.
+    what `POST /sessions` returns, so the marker cannot simply be absent.
+
+    A card account can no longer be attached at all (`list_session_accounts`),
+    so this only ever describes links predating that rule: it decides R19 and
+    the `OTHR` balance fallback, and nothing else.
     """
     return find_discovered_account(session, link, master_key).get("cash_account_type") == CARD_ACCOUNT_TYPE
 
@@ -529,6 +540,15 @@ def _account_id_label(account: dict[str, Any]) -> str | None:
 def list_session_accounts(
     session: Session, user_uuid: str, master_key: str, bank_session_uuid: str
 ) -> list[BankSessionAccount]:
+    """The session's accounts that can be attached — card accounts excluded.
+
+    A card account republishes the movements of the current account it debits
+    (93 % of the real capture, with no shared reference), so attaching it stores
+    the same purchases twice and its own balance is not a stock: reconstructing
+    a curve backwards from it fabricates tens of thousands of euros the account
+    never held. `cash_account_type` is `required` on `AccountResource`, so the
+    marker is present whatever the bank.
+    """
     bank_session, user_bidx = _load_owned_session(session, user_uuid, master_key, bank_session_uuid)
     uuid_by_bidx = _accounts_bank_account_uuid_by_bidx(session, user_bidx, master_key)
 
@@ -536,6 +556,8 @@ def list_session_accounts(
     for account in _stored_accounts(bank_session, master_key):
         identification_hash = account.get("identification_hash")
         if not identification_hash:
+            continue
+        if account.get("cash_account_type") == CARD_ACCOUNT_TYPE:
             continue
         link = _find_link_by_ident(
             session, user_bidx, hash_index(identification_hash, master_key)
@@ -636,16 +658,22 @@ def link_account(
     if target_account is None or target_account.user_uuid_bidx != user_bidx:
         raise TargetAccountNotFoundError()
 
-    matching_uid = next(
+    discovered = next(
         (
-            account.get("uid")
+            account
             for account in _stored_accounts(bank_session, master_key)
             if account.get("identification_hash") == identification_hash
         ),
         None,
     )
-    if matching_uid is None:
+    if discovered is None or not discovered.get("uid"):
         raise AccountNotFoundInSessionError()
+    # `list_session_accounts` already hides these, but a hash is guessable from
+    # an earlier payload and the refusal has to hold at the door, not at the
+    # display.
+    if discovered.get("cash_account_type") == CARD_ACCOUNT_TYPE:
+        raise CardAccountNotLinkableError()
+    matching_uid = discovered["uid"]
 
     ident_bidx = hash_index(identification_hash, master_key)
     bank_account_bidx = hash_index(bank_account_uuid, master_key)
@@ -721,14 +749,14 @@ def unlink_account(
 
     Two consequences the caller does not have to know about:
 
-    * **Re-seeding the mirrored accounts.** Cross-account deduplication drops a
-      row on whichever account of a card/current pair was stored second
-      (`_sibling_dedup_indexes`). Everything the detached account shadowed is
-      therefore missing from its counterpart, and nothing would ever fetch it
-      again: an incremental sync only reaches back to the anchor. The
-      counterparts are put back into the seeding state, which is what makes the
-      next sync ask the bank for its full window with no sibling left to
-      deduplicate against.
+    * **Re-seeding the mirrored accounts.** Cross-account deduplication used to
+      drop a row on whichever account of a card/current pair was stored second.
+      It is gone, but everything it shadowed *before* it was removed is still
+      missing from the counterpart, and nothing would ever fetch it again: an
+      incremental sync only reaches back to the anchor. The counterparts are put
+      back into the seeding state, which is what makes the next sync ask the
+      bank for its full window. On data ingested since the removal this is a
+      costly no-op, never a risk.
     * **Deleting its rows, on request.** They came from a bank this account is
       no longer connected to. Kept, they would shadow the counterpart again the
       day it is re-attached — which is the failure this whole function exists
@@ -772,8 +800,9 @@ def _reseed_mirrored_links(
 ) -> list[str]:
     """Put every link that was deduplicated against `leaving` back into seeding.
 
-    The pairing rule is `_sibling_dedup_indexes`': a card account and a
-    non-card one mirror each other, two accounts of the same kind never do.
+    The pairing rule is the one the removed deduplication used: a card account
+    and a non-card one mirror each other, two accounts of the same kind never
+    do. It describes the pair that may be damaged, not a live mechanism.
     Seeding is the state `last_synced_at < anchor_date` (sync.py:204), so the
     marker is moved rather than a flag added — the same convention the
     rattachement step writes on a brand-new link.

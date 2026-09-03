@@ -166,11 +166,6 @@ class BankAccountSyncResult(BaseModel):
     # `reconciled`, `gap` or `not_reconcilable` (ruling R18); None when no check
     # could run yet (the seeding pass has no bank anchor to compare against).
     reconciliation_status: str | None = None
-    # Several accounts are linked and none carries a recognised card marker, so
-    # the sync order, the third reconciliation outcome and R19's "no curve" rule
-    # all lost the signal they depend on. The marker is confirmed real on
-    # Boursorama; this stays for the banks that may spell it otherwise.
-    card_marker_missing: bool = False
     detail: str | None = None
 
 

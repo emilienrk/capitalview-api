@@ -5,12 +5,11 @@ Replays the real 4-year dataset (vendor-docs/spike/export-boursorama-2022-2026.j
 behind an offline transport double, verifying:
 - The full linking -> first sync -> second sync -> reconnection lifecycle.
 - The first import recipe (strategy=longest + ancient date_from -> 2,776 transactions).
-- Cross-account deduplication at real scale: 1,436 of the card account's 1,464
-  rows are recognised on the current account. The spec, the plan and the briefs
-  all quote "1 360 / 93 %"; recomputed from the export with the code's own
-  fingerprint the figure is 1,436 (98.1 %), stable across fingerprint variants
-  and with zero shared `entry_reference`, exactly as documented. The stale
-  figure is reported to the controller, not edited into the spec.
+- Both accounts keep their own feed in full: 2,776 and 1,464 rows, whatever
+  order they are linked in. Cross-account deduplication used to drop 1,436 of
+  the card's rows (98.1 % of its feed also exists on the current account, with
+  zero shared `entry_reference`) onto whichever account was stored first — the
+  measurement was right, the ordering invariant was not.
 - Batch-size independence across paginated responses.
 """
 
@@ -30,6 +29,7 @@ from main import app
 from models.account_history import AccountHistory
 from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession, BankTransaction
+from models.user import User
 from services.banking.client import EnableBankingClient
 from services.banking.sync import (
     INCREMENTAL_STRATEGY,
@@ -37,7 +37,7 @@ from services.banking.sync import (
     SEED_STRATEGY,
     _fetch,
 )
-from services.encryption import decrypt_data, hash_index
+from services.encryption import decrypt_data, encrypt_data, hash_index
 
 SPIKE_DIR = Path(__file__).resolve().parents[3] / "vendor-docs" / "spike"
 PASSWORD = "IntegrationTestPassword123!"
@@ -310,19 +310,43 @@ class TestBankingEndToEnd:
         )
         assert disc_resp.status_code == 200
         disc_accounts = disc_resp.json()
-        assert len(disc_accounts) == 2
+        # The card account is not offered: its movements are the current
+        # account's, republished, and its balance is not a stock.
+        assert len(disc_accounts) == 1
+        assert disc_accounts[0]["cash_account_type"] == "CACC"
 
-        # 7. Link both accounts
-        # Link card FIRST in DB to prove that sync ordering (R12) still syncs checking first!
-        link_card = client.post(
+        # 7a. The refusal holds at the door, not only at the display: a card's
+        # identification_hash is guessable from an earlier payload.
+        with open(SPIKE_DIR / "export-boursorama-2022-2026.json") as f:
+            card_ident = next(
+                a["info"]["identification_hash"]
+                for a in json.load(f)["accounts"]
+                if a["info"]["cash_account_type"] == "CARD"
+            )
+        refused = client.post(
             f"/banking/sessions/{bsession.uuid}/link",
-            json={
-                "identification_hash": disc_accounts[1]["identification_hash"],
-                "bank_account_uuid": card_id,
-            },
+            json={"identification_hash": card_ident, "bank_account_uuid": card_id},
             headers=auth_headers,
         )
-        assert link_card.status_code == 200
+        assert refused.status_code == 409
+
+        # 7b. A card link predating that rule still exists in the wild, and must
+        # keep syncing. Written straight to the table, which is the only way it
+        # can be created now.
+        user_uuid = session.exec(select(User).where(User.username == username)).one().uuid
+        session.add(
+            BankAccountLink(
+                user_uuid_bidx=hash_index(user_uuid, master_key),
+                bank_account_uuid_bidx=hash_index(card_id, master_key),
+                session_uuid=bsession.uuid,
+                identification_hash_bidx=hash_index(card_ident, master_key),
+                account_uid_enc=encrypt_data("uid-bourso-card", master_key),
+                anchor_date=date.today(),
+                anchor_balance_enc=encrypt_data("0", master_key),
+                last_synced_at=date.today() - timedelta(days=1),
+            )
+        )
+        session.commit()
 
         link_cacc = client.post(
             f"/banking/sessions/{bsession.uuid}/link",
@@ -334,22 +358,25 @@ class TestBankingEndToEnd:
         )
         assert link_cacc.status_code == 200
 
-        # 8. First sync: executes both accounts in order (checking before card)
+        # 8. First sync. The card was linked *before* the current account, which
+        # is exactly the sequence that used to cost the current account 1 442 of
+        # its 2 776 movements. Both now keep their own feed in full.
         sync_resp = client.post("/banking/sync", headers=auth_headers)
         assert sync_resp.status_code == 200
         sync_data = sync_resp.json()
         assert sync_data["synced"] == 2
 
-        # Checking account received all 2,776 transactions
         cacc_result = next(r for r in sync_data["results"] if r["bank_account_uuid"] == cacc_id)
         assert cacc_result["inserted"] == 2776
+        assert cacc_result["skipped"] == 0
         assert cacc_result["snapshots_written"] > 0
 
-        # Card account cross-deduplication at real scale: 1436/1464 = 98.1 %
-        # recognised on the current account, 0 snapshots written (R19).
+        # R19 is unchanged and its reason is now the balance, not the dedup: the
+        # bank publishes a single OTHR on this account and no CLBD, so there is
+        # nothing to walk a curve back from.
         card_result = next(r for r in sync_data["results"] if r["bank_account_uuid"] == card_id)
-        assert card_result["inserted"] == 28
-        assert card_result["skipped"] == 1436
+        assert card_result["inserted"] == 1464
+        assert card_result["skipped"] == 0
         assert card_result["snapshots_written"] == 0
         assert card_result["reconciliation_status"] == "not_reconcilable"
 

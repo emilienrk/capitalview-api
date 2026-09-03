@@ -12,9 +12,14 @@ from decimal import Decimal
 
 import pytest
 
-from models.banking import BankAccountLink, BankTransaction
+from sqlmodel import select
+
+from models.banking import BankAccountLink, BankSession, BankTransaction
 from services.banking.linking import (
     BankAccountNotLinkedError,
+    CardAccountNotLinkableError,
+    link_account,
+    list_session_accounts,
     unlink_account,
 )
 from services.banking.transactions import store_transactions
@@ -107,9 +112,9 @@ class TestUnlinkAccount:
     def test_two_accounts_of_the_same_kind_are_not_re_seeded(
         self, session, master_key, sqlite_pg_insert  # noqa: F811
     ):
-        """Two current accounts mirror nothing, so nothing was deduplicated
-        between them and there is nothing to recover — the pairing rule is
-        `_sibling_dedup_indexes`', not "every other account"."""
+        """Two current accounts mirror nothing, so nothing was ever deduplicated
+        between them and there is nothing to recover — the pairing rule is the
+        one the removed deduplication used, not "every other account"."""
         payload = [
             {"uid": "uid-a", "identification_hash": "h-a", "cash_account_type": "CACC"},
             {"uid": "uid-b", "identification_hash": "h-b", "cash_account_type": "CACC"},
@@ -189,3 +194,45 @@ class TestUnlinkAccount:
 
         with pytest.raises(BankAccountNotLinkedError):
             unlink_account(session, "someone-else", master_key, card.uuid, delete_transactions=False)
+
+
+class TestCardAccountsAreNotAttachable:
+    """A card account republishes the current account it debits (98 % of the real
+    capture, no shared reference), and its balance is not a stock: the bank
+    publishes a single OTHR, so walking a curve back from it invents money the
+    account never held. It is therefore never offered, and never accepted."""
+
+    def _session_with_both(self, session, master_key):
+        return _bank_session(session, master_key, ACCOUNTS_PAYLOAD)
+
+    def test_a_card_account_is_never_offered_for_attachment(
+        self, session, master_key, sqlite_pg_insert  # noqa: F811
+    ):
+        self._session_with_both(session, master_key)
+        bank_session = session.exec(select(BankSession)).one()
+
+        discovered = list_session_accounts(session, USER, master_key, bank_session.uuid)
+
+        assert [a.cash_account_type for a in discovered] == ["CACC"]
+
+    def test_the_refusal_holds_at_the_door_and_not_only_at_the_display(
+        self, session, master_key, sqlite_pg_insert  # noqa: F811
+    ):
+        """`list_session_accounts` hides them, but an identification_hash is
+        guessable from a payload captured before the rule existed."""
+        bank_session = self._session_with_both(session, master_key)
+        target = _account(session, master_key, name="Compte plaisir", balance=Decimal("10"))
+
+        with pytest.raises(CardAccountNotLinkableError):
+            link_account(session, USER, master_key, bank_session.uuid, "h-card", target.uuid)
+
+    def test_a_current_account_is_still_attachable(
+        self, session, master_key, sqlite_pg_insert  # noqa: F811
+    ):
+        bank_session = self._session_with_both(session, master_key)
+        target = _account(session, master_key, name="Compte courant", balance=Decimal("300"))
+
+        result = link_account(session, USER, master_key, bank_session.uuid, "h-cacc", target.uuid)
+
+        assert result.bank_account_uuid == target.uuid
+        assert result.reconnected is False

@@ -1,5 +1,5 @@
 """
-Tests for bank transaction storage and the three-level deduplication (spec §E/§F).
+Tests for bank transaction storage and its two deduplication levels (spec §E/§F).
 
 Two of the three levels can only be exercised with the *shapes* the bank really
 returns, so the cross-account cases replay the captured Boursorama payloads
@@ -436,52 +436,25 @@ def test_foreign_currency_keeps_its_own_currency_on_the_stored_row(
 
 
 # ---------------------------------------------------------------------------
-# store_transactions — level 3: cross-account, scoped to the user
+# No account's outcome depends on another's (the removed level 3)
 # ---------------------------------------------------------------------------
 
 
-def test_same_operation_on_card_and_current_account_is_deduplicated(
-    session: Session, master_key: str, linked_accounts
+@pytest.mark.parametrize(
+    "first_type,second_type",
+    [("CACC", "CACC"), ("CACC", "CARD"), ("CARD", "CACC")],
+)
+def test_no_pair_of_accounts_ever_swallows_the_other(
+    session: Session, master_key: str, first_type: str, second_type: str
 ):
-    # The dominant case: 93 % of card operations also exist on the current
-    # account, and none of them share a reference.
-    store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [_raw(entry_reference="current-ref")])
+    """Whatever the two roles, both accounts keep their own row.
 
-    result = store_transactions(session, USER, master_key, CARD_ACCOUNT, [_raw(entry_reference="card-ref")])
-
-    assert result == (0, 0, 1)
-    assert _rows(session, master_key, CARD_ACCOUNT) == []
-
-
-def test_two_currencies_on_the_same_day_are_not_confused(session: Session, master_key: str, linked_accounts):
-    # Ruling R11: the fingerprint carries the currency. The captured data holds
-    # an unconverted CHF 12.63 debit; a EUR 12.63 debit on the same day and
-    # direction is a different operation and must survive level 3.
-    store_transactions(
-        session,
-        USER,
-        master_key,
-        CURRENT_ACCOUNT,
-        [_raw(entry_reference="chf-1", transaction_amount={"currency": "CHF", "amount": "12.63"})],
-    )
-
-    result = store_transactions(
-        session,
-        USER,
-        master_key,
-        CARD_ACCOUNT,
-        [_raw(entry_reference="eur-1", transaction_amount={"currency": "EUR", "amount": "12.63"})],
-    )
-
-    assert result == (1, 0, 0)
-    (row,) = _rows(session, master_key, CARD_ACCOUNT)
-    assert decrypt_data(row.currency_enc, master_key) == "EUR"
-
-
-def test_two_current_accounts_never_swallow_each_other(session: Session, master_key: str):
-    """Someone holding several current accounts can pay the same amount on the
-    same day from two of them. Those are two real payments; level 3 folding them
-    together would delete one for good, and nothing would ever say so."""
+    Cross-account deduplication used to drop the second account's copy of a
+    card/current echo. It kept the row on whichever account was stored first,
+    and nothing enforced that order between two runs — a card seeding on the day
+    its current account's sync was failing cost that account 1 442 of its 2 776
+    movements. The level is gone; the roles no longer decide anything here.
+    """
     bank_session = BankSession(
         user_uuid_bidx=hash_index(USER, master_key),
         session_id_enc=encrypt_data("eb-session-id", master_key),
@@ -490,15 +463,15 @@ def test_two_current_accounts_never_swallow_each_other(session: Session, master_
         authorized_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
         accounts_enc=encrypt_data(
             json.dumps([
-                {"identification_hash": "ident-a", "cash_account_type": "CACC"},
-                {"identification_hash": "ident-b", "cash_account_type": "CACC"},
+                {"identification_hash": "ident-a", "cash_account_type": first_type},
+                {"identification_hash": "ident-b", "cash_account_type": second_type},
             ]),
             master_key,
         ),
     )
     session.add(bank_session)
     session.commit()
-    for account_uuid, ident in (("courant-a", "ident-a"), ("courant-b", "ident-b")):
+    for account_uuid, ident in (("compte-a", "ident-a"), ("compte-b", "ident-b")):
         session.add(
             BankAccountLink(
                 user_uuid_bidx=hash_index(USER, master_key),
@@ -513,42 +486,59 @@ def test_two_current_accounts_never_swallow_each_other(session: Session, master_
         )
     session.commit()
 
-    store_transactions(session, USER, master_key, "courant-a", [_raw(entry_reference="a-ref")])
-    result = store_transactions(session, USER, master_key, "courant-b", [_raw(entry_reference="b-ref")])
+    # The same operation, republished on both accounts with different references.
+    store_transactions(session, USER, master_key, "compte-a", [_raw(entry_reference="a-ref")])
+    result = store_transactions(session, USER, master_key, "compte-b", [_raw(entry_reference="b-ref")])
 
     assert result == (1, 0, 0)
-    assert len(_rows(session, master_key, "courant-b")) == 1
+    assert len(_rows(session, master_key, "compte-a")) == 1
+    assert len(_rows(session, master_key, "compte-b")) == 1
 
 
-def test_cross_account_dedup_does_not_reach_another_user(session: Session, master_key: str, linked_accounts):
-    other_account = "bank-account-other-user"
-    other_session = BankSession(
-        user_uuid_bidx=hash_index("user-2", master_key),
-        session_id_enc=encrypt_data("eb-session-2", master_key),
-        status="AUTHORIZED",
-        consent_valid_until=datetime(2026, 12, 1, tzinfo=timezone.utc),
-        authorized_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+def test_the_storage_order_of_the_two_accounts_no_longer_matters(
+    session: Session, master_key: str, linked_accounts
+):
+    """The card stored *first* — the sequence that destroyed real data.
+
+    This is the regression guard: reintroducing any cross-account level makes
+    the second account lose its row and turns this red.
+    """
+    store_transactions(session, USER, master_key, CARD_ACCOUNT, [_raw(entry_reference="card-ref")])
+    result = store_transactions(
+        session, USER, master_key, CURRENT_ACCOUNT, [_raw(entry_reference="current-ref")]
     )
-    session.add(other_session)
-    session.commit()
-    session.add(
-        BankAccountLink(
-            user_uuid_bidx=hash_index("user-2", master_key),
-            bank_account_uuid_bidx=hash_index(other_account, master_key),
-            session_uuid=other_session.uuid,
-            identification_hash_bidx=hash_index("ident-other", master_key),
-            account_uid_enc=encrypt_data("uid-other", master_key),
-            anchor_date=date(2026, 8, 1),
-            anchor_balance_enc=encrypt_data("1.00", master_key),
-            last_synced_at=date(2026, 8, 1),
-        )
-    )
-    session.commit()
-
-    store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [_raw(entry_reference="mine")])
-    result = store_transactions(session, "user-2", master_key, other_account, [_raw(entry_reference="theirs")])
 
     assert result == (1, 0, 0)
+    assert len(_rows(session, master_key, CARD_ACCOUNT)) == 1
+    assert len(_rows(session, master_key, CURRENT_ACCOUNT)) == 1
+
+
+def test_two_currencies_on_the_same_day_are_not_confused(session: Session, master_key: str, linked_accounts):
+    """Ruling R11: the fingerprint carries the currency.
+
+    Measured on the real capture, which holds an unconverted CHF 12.63 debit. A
+    EUR 12.63 debit on the same day and direction is a different operation.
+    Deliberately on ONE account and with no `entry_reference`: level 1 would
+    otherwise tell them apart on the reference alone and the fingerprint would
+    never be consulted — level 2 is now its only consumer.
+    """
+    result = store_transactions(
+        session,
+        USER,
+        master_key,
+        CURRENT_ACCOUNT,
+        [
+            _raw(entry_reference=None, transaction_amount={"currency": "CHF", "amount": "12.63"}),
+            _raw(entry_reference=None, transaction_amount={"currency": "EUR", "amount": "12.63"}),
+        ],
+    )
+
+    assert result == (2, 0, 0)
+    currencies = {
+        decrypt_data(row.currency_enc, master_key)
+        for row in _rows(session, master_key, CURRENT_ACCOUNT)
+    }
+    assert currencies == {"CHF", "EUR"}
 
 
 def test_out_of_order_stream_produces_the_same_result(session: Session, master_key: str, linked_accounts):
@@ -592,21 +582,21 @@ def test_real_current_account_payload_is_stored_in_full(session: Session, master
     )
 
 
-def test_real_card_payload_is_deduplicated_against_the_current_account(
+def test_the_real_card_payload_is_stored_in_full_alongside_the_current_account(
     session: Session, master_key: str, linked_accounts
 ):
+    """197 of these 202 card operations also exist on the current account, none
+    of them sharing a numeric reference. Cross-account deduplication dropped
+    those 197; now both accounts keep the feed their bank published."""
     current = _load_spike("tx_courant.json")
     card = _load_spike("tx_carte.json")
     store_transactions(session, USER, master_key, CURRENT_ACCOUNT, current)
 
     inserted, updated, skipped = store_transactions(session, USER, master_key, CARD_ACCOUNT, card)
 
-    assert updated == 0
-    assert inserted + skipped == len(card)
-    # Measured on the captured payloads: 197 of the 202 card operations also
-    # exist on the current account, none of them sharing a numeric reference.
-    assert skipped == 197
-    assert inserted == 5
+    assert (inserted, updated, skipped) == (len(card), 0, 0)
+    assert len(_rows(session, master_key, CURRENT_ACCOUNT)) == len(current)
+    assert len(_rows(session, master_key, CARD_ACCOUNT)) == len(card)
 
 
 def test_real_payload_pending_and_dateless_booking_are_handled(

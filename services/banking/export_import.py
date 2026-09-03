@@ -13,16 +13,15 @@ Transactions are normalized via `normalize_transaction` and stored via
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
 from sqlmodel import Session, select
 
-from dtos.bank import BankHistoryEntry
 from dtos.banking import BankExportImportResponse, BankExportImportResult
 from models.bank import BankAccount
-from models.banking import BankAccountLink, BankSession
+from models.banking import BankAccountLink
 from services.bank import account_currency, replace_history_window
 from services.banking.linking import is_card_account
 from services.banking.sync import (
@@ -36,7 +35,7 @@ from services.banking.transactions import (
     normalize_transaction,
     store_transactions,
 )
-from services.encryption import decrypt_data, encrypt_data, hash_index
+from services.encryption import encrypt_data, hash_index
 
 logger = logging.getLogger(__name__)
 
@@ -55,37 +54,6 @@ def _resolve_link(
         if link is not None:
             return link
     return None
-
-
-def _in_import_order(
-    session: Session,
-    accounts_data: list[Any],
-    link_by_ident_bidx: dict[str, BankAccountLink],
-    master_key: str,
-) -> list[tuple[dict[str, Any], BankAccountLink | None]]:
-    """Ruling R12's ordering, applied to an export instead of a live sync.
-
-    Cross-account deduplication is asymmetric: whichever account is stored second
-    loses the movements the first already claimed. The sync imposes current
-    account before card account for exactly this reason, but an export file lists
-    its accounts in whatever order the portal wrote them.
-
-    Measured on the real 4 240-row capture: storing the card first ends with
-    2 798 rows and a net of 136,07 € instead of 2 804 and −73,63 € — six
-    operations gone and 209,70 € of difference, silently. Unmatched accounts keep
-    their place at the end; they store nothing.
-    """
-    resolved = [
-        (item if isinstance(item, dict) else {}, _resolve_link(item, link_by_ident_bidx, master_key))
-        for item in accounts_data
-    ]
-    return sorted(
-        resolved,
-        key=lambda pair: (
-            pair[1] is None,
-            is_card_account(session, pair[1], master_key) if pair[1] is not None else False,
-        ),
-    )
 
 
 def import_enablebanking_export(
@@ -132,9 +100,11 @@ def import_enablebanking_export(
     results: list[BankExportImportResult] = []
     imported_count = 0
 
-    for item, matched_link in _in_import_order(
-        session, accounts_data, link_by_ident_bidx, master_key
-    ):
+    # File order, unsorted: cross-account deduplication is gone, so no account's
+    # outcome depends on another's any more and there is nothing left to order.
+    for item in accounts_data:
+        matched_link = _resolve_link(item, link_by_ident_bidx, master_key)
+        item = item if isinstance(item, dict) else {}
         info = item.get("info") or {}
         ident_hash = info.get("identification_hash") or item.get("identification_hash")
 
@@ -188,8 +158,9 @@ def import_enablebanking_export(
 
         if is_card:
             detail = (
-                "Courbe rétrospective non écrite : les mouvements de ce compte sont "
-                "dédupliqués vers le compte courant (ruling R19)."
+                "Courbe non écrite : votre banque ne publie pas de solde comptable pour ce "
+                "compte carte, seulement un solde de type OTHR — il n'y a rien à quoi "
+                "rattacher une courbe."
             )
         elif not raw_balances:
             detail = "Aucun solde dans l'export : courbe rétrospective non écrite."
