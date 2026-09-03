@@ -557,7 +557,6 @@ class TestFetchWindow:
         )
         store_transactions(
             session,
-            USER,
             master_key,
             account.uuid,
             [_raw("42", pending_day, status="PDNG", ref="pend-1")],
@@ -1060,7 +1059,6 @@ class TestVanishedPendingOperations:
         )
         store_transactions(
             session,
-            USER,
             master_key,
             account.uuid,
             [_raw("77", pending_day, status="PDNG", ref="ghost")],
@@ -1095,7 +1093,6 @@ class TestVanishedPendingOperations:
         )
         store_transactions(
             session,
-            USER,
             master_key,
             account.uuid,
             [_raw("77", pending_day, status="PDNG", ref="far-pending")],
@@ -1131,8 +1128,7 @@ class TestVanishedPendingOperations:
             anchor_date=TODAY - timedelta(days=6),
             anchor_balance=Decimal("1000"),
         )
-        store_transactions(
-            session, USER, master_key, account.uuid, [_raw("77", booked_day, ref="settled")]
+        store_transactions(session, master_key, account.uuid, [_raw("77", booked_day, ref="settled")]
         )
         _install(monkeypatch, client)
 

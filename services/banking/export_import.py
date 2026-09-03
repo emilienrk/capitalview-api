@@ -145,8 +145,7 @@ def import_enablebanking_export(
             except Exception:
                 malformed += 1
 
-        inserted, updated, skipped = store_transactions(
-            session, user_uuid, master_key, target_account.uuid, raw_txs
+        inserted, updated, skipped = store_transactions(session, master_key, target_account.uuid, raw_txs
         )
 
         # Handle balances and history curve

@@ -141,8 +141,7 @@ class TestUnlinkAccount:
         self, session, master_key, sqlite_pg_insert  # noqa: F811
     ):
         _, card, _, _ = _pair(session, master_key)
-        store_transactions(
-            session, USER, master_key, card.uuid,
+        store_transactions(session, master_key, card.uuid,
             [_raw("12.50", TODAY, ref="a"), _raw("30", TODAY, ref="b")],
         )
         card_bidx = hash_index(card.uuid, master_key)
@@ -164,8 +163,7 @@ class TestUnlinkAccount:
         self, session, master_key, sqlite_pg_insert  # noqa: F811
     ):
         _, card, _, _ = _pair(session, master_key)
-        store_transactions(
-            session, USER, master_key, card.uuid,
+        store_transactions(session, master_key, card.uuid,
             [_raw("12.50", TODAY, ref="a"), _raw("30", TODAY, ref="b")],
         )
 
