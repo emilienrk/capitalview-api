@@ -101,3 +101,125 @@ def test_positions_carry_what_they_cost_next_to_what_they_are_worth(
     assert position["current_value"] == 1500.0
     assert position["profit_loss"] == 217.60
     assert position["average_buy_price"] == 106.8667
+
+
+class TestCashflowDirectionFilter:
+    """`get_user_cashflow(flow_type=…)` is what the in-app assistant and the MCP
+    server call to answer "how much do I spend". Both speak lowercase; FlowType's
+    values are uppercase. Lowercasing raised on every call, the filter silently
+    did nothing, and asking for spending alone answered with everything."""
+
+    def _two_flows(self, session, master_key, user_uuid):
+        from datetime import date
+
+        from dtos.cashflow import CashflowCreate
+        from models.enums import FlowType, Frequency
+        from services.cashflow import create_cashflow
+
+        for name, flow_type, amount in (
+            ("Salaire", FlowType.INFLOW, "2000"),
+            ("Loyer", FlowType.OUTFLOW, "800"),
+        ):
+            create_cashflow(
+                session,
+                CashflowCreate(
+                    name=name,
+                    flow_type=flow_type,
+                    category="test",
+                    amount=Decimal(amount),
+                    frequency=Frequency.MONTHLY,
+                    transaction_date=date(2026, 1, 1),
+                ),
+                user_uuid,
+                master_key,
+            )
+
+    @pytest.mark.parametrize(
+        "flow_type,kept,dropped",
+        [("outflow", "outflow", "inflow"), ("inflow", "inflow", "outflow")],
+    )
+    def test_one_direction_returns_only_that_direction(
+        self, session, master_key, flow_type, kept, dropped
+    ):
+        user_uuid = str(uuid_lib.uuid4())
+        self._two_flows(session, master_key, user_uuid)
+
+        result = overview.get_user_cashflow(session, user_uuid, master_key, flow_type=flow_type)
+
+        assert kept in result
+        assert dropped not in result
+        # The balance keys belong to the unfiltered answer only.
+        assert "savings_rate" not in result
+
+    def test_no_direction_returns_both_and_the_balance(self, session, master_key):
+        user_uuid = str(uuid_lib.uuid4())
+        self._two_flows(session, master_key, user_uuid)
+
+        result = overview.get_user_cashflow(session, user_uuid, master_key)
+
+        assert {"inflow", "outflow", "balance", "savings_rate"} <= set(result)
+
+
+class TestBalanceAtADate:
+    """`get_user_balance(date=…)` reaches `get_all_bank_accounts_snapshot_for_date`,
+    which answers with a dict while the undated branch answers with a
+    `BankSummaryResponse`. Attribute access on the dict raised for every user who
+    owned a bank account — reachable from the MCP `get_portfolio_overview(date=…)`."""
+
+    def _bank_account(self, session, master_key, user_uuid):
+        from unittest.mock import patch
+
+        from dtos.bank import BankAccountCreate
+        from models.enums import BankAccountType
+        from services.bank import create_bank_account
+
+        with patch("services.bank.has_exchange_rate", return_value=True):
+            return create_bank_account(
+                session,
+                BankAccountCreate(
+                    name="Compte courant",
+                    balance=Decimal("300"),
+                    account_type=BankAccountType.CHECKING,
+                    currency="EUR",
+                ),
+                user_uuid,
+                master_key,
+            )
+
+    def test_a_dated_balance_does_not_raise_when_an_account_exists(self, session, master_key):
+        from datetime import date
+
+        user_uuid = str(uuid_lib.uuid4())
+        self._bank_account(session, master_key, user_uuid)
+
+        result = overview.get_user_balance(
+            session, user_uuid, master_key, date=date(2026, 1, 15).isoformat()
+        )
+
+        assert "cash_total" in result
+
+    def test_a_dated_balance_with_details_names_the_account(self, session, master_key):
+        """`getattr` on a dict answered None for every field, so the detail rows
+        came back nameless and at zero."""
+        from datetime import date
+
+        user_uuid = str(uuid_lib.uuid4())
+        self._bank_account(session, master_key, user_uuid)
+
+        result = overview.get_user_balance(
+            session, user_uuid, master_key, details=True, date=date(2026, 1, 15).isoformat()
+        )
+
+        rows = result["bank_accounts_details"]
+        assert [row["name"] for row in rows] == ["Compte courant"]
+
+    def test_the_undated_details_path_still_names_the_account(self, session, master_key):
+        """The other branch answers with `BankAccountResponse` objects, not dicts."""
+        user_uuid = str(uuid_lib.uuid4())
+        self._bank_account(session, master_key, user_uuid)
+
+        result = overview.get_user_balance(session, user_uuid, master_key, details=True)
+
+        rows = result["bank_accounts_details"]
+        assert [row["name"] for row in rows] == ["Compte courant"]
+        assert [row["balance"] for row in rows] == [300.0]
