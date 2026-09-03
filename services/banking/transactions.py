@@ -219,7 +219,6 @@ def normalize_transaction(raw: dict[str, Any]) -> NormalizedTransaction:
 
 def store_transactions(
     session: Session,
-    user_uuid: str,
     master_key: str,
     bank_account_uuid: str,
     transactions: Iterable[dict[str, Any]],

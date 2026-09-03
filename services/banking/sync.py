@@ -252,8 +252,7 @@ def sync_account_link(
         [window_start] + [tx.effective_date for tx in parsed if tx.effective_date]
     )
 
-    result.inserted, result.updated, result.skipped = store_transactions(
-        session, user_uuid, master_key, account.uuid, raws
+    result.inserted, result.updated, result.skipped = store_transactions(session, master_key, account.uuid, raws
     )
     # Pruning is bounded by what the bank was actually asked for and answered —
     # never by what we wanted. A bank that refuses to serve beyond ninety days

@@ -236,7 +236,7 @@ def test_normalize_never_uses_transaction_id():
 
 
 def test_store_inserts_new_transactions(session: Session, master_key: str, linked_accounts):
-    result = store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [_raw()])
+    result = store_transactions(session, master_key, CURRENT_ACCOUNT, [_raw()])
 
     assert result == (1, 0, 0)
     (row,) = _rows(session, master_key, CURRENT_ACCOUNT)
@@ -250,9 +250,9 @@ def test_store_inserts_new_transactions(session: Session, master_key: str, linke
 
 
 def test_same_reference_on_same_account_is_deduplicated(session: Session, master_key: str, linked_accounts):
-    store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [_raw()])
+    store_transactions(session, master_key, CURRENT_ACCOUNT, [_raw()])
     # A later sync returns the same operation, with a fresh transaction_id.
-    result = store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [_raw(transaction_id="other")])
+    result = store_transactions(session, master_key, CURRENT_ACCOUNT, [_raw(transaction_id="other")])
 
     assert result == (0, 1, 0)
     assert len(_rows(session, master_key, CURRENT_ACCOUNT)) == 1
@@ -261,10 +261,9 @@ def test_same_reference_on_same_account_is_deduplicated(session: Session, master
 def test_same_reference_on_two_accounts_is_not_deduplicated(session: Session, master_key: str, linked_accounts):
     # entry_reference is explicitly not globally unique: two accounts may reuse
     # one for genuinely different operations. Only the composite key deduplicates.
-    store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [_raw(entry_reference="42")])
+    store_transactions(session, master_key, CURRENT_ACCOUNT, [_raw(entry_reference="42")])
     result = store_transactions(
         session,
-        USER,
         master_key,
         CARD_ACCOUNT,
         [
@@ -296,9 +295,9 @@ def test_transactions_without_reference_fall_back_to_the_dedup_index(
         _raw(entry_reference=None, transaction_amount={"currency": "EUR", "amount": "3.50"}),
     ]
 
-    assert store_transactions(session, USER, master_key, CURRENT_ACCOUNT, batch) == (2, 0, 0)
+    assert store_transactions(session, master_key, CURRENT_ACCOUNT, batch) == (2, 0, 0)
     # Re-syncing the very same feed must correct the rows, never duplicate them.
-    assert store_transactions(session, USER, master_key, CURRENT_ACCOUNT, batch) == (0, 2, 0)
+    assert store_transactions(session, master_key, CURRENT_ACCOUNT, batch) == (0, 2, 0)
     assert len(_rows(session, master_key, CURRENT_ACCOUNT)) == 2
 
 
@@ -309,7 +308,7 @@ def test_two_identical_operations_in_one_batch_are_both_kept(
     # operations, not one seen twice.
     batch = [_raw(entry_reference="ref-a"), _raw(entry_reference="ref-b")]
 
-    assert store_transactions(session, USER, master_key, CURRENT_ACCOUNT, batch) == (2, 0, 0)
+    assert store_transactions(session, master_key, CURRENT_ACCOUNT, batch) == (2, 0, 0)
 
 
 def test_pending_becoming_booked_with_a_new_reference_updates_the_row(
@@ -328,7 +327,7 @@ def test_pending_becoming_booked_with_a_new_reference_updates_the_row(
         value_date=None,
         transaction_date="2026-08-15",
     )
-    store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [pending])
+    store_transactions(session, master_key, CURRENT_ACCOUNT, [pending])
 
     booked = _raw(
         entry_reference="5852467521",
@@ -337,7 +336,7 @@ def test_pending_becoming_booked_with_a_new_reference_updates_the_row(
         value_date="2026-08-17",
         transaction_date="2026-08-15",
     )
-    result = store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [booked])
+    result = store_transactions(session, master_key, CURRENT_ACCOUNT, [booked])
 
     assert result == (0, 1, 0)
     (row,) = _rows(session, master_key, CURRENT_ACCOUNT)
@@ -354,7 +353,7 @@ def test_a_booked_row_is_never_claimed_by_another_date_of_a_later_transaction(
     # The multi-date lookup above must stay confined to claimable rows: a booked
     # row carrying its own reference is a settled, distinct operation.
     settled = _raw(entry_reference="settled-1", status="BOOK", booking_date="2026-08-15")
-    store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [settled])
+    store_transactions(session, master_key, CURRENT_ACCOUNT, [settled])
 
     later = _raw(
         entry_reference="settled-2",
@@ -363,7 +362,7 @@ def test_a_booked_row_is_never_claimed_by_another_date_of_a_later_transaction(
         value_date="2026-08-17",
         transaction_date="2026-08-15",
     )
-    result = store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [later])
+    result = store_transactions(session, master_key, CURRENT_ACCOUNT, [later])
 
     assert result == (1, 0, 0)
     assert len(_rows(session, master_key, CURRENT_ACCOUNT)) == 2
@@ -372,9 +371,9 @@ def test_a_booked_row_is_never_claimed_by_another_date_of_a_later_transaction(
 def test_cancelled_status_invalidates_an_already_ingested_row(
     session: Session, master_key: str, linked_accounts
 ):
-    store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [_raw()])
+    store_transactions(session, master_key, CURRENT_ACCOUNT, [_raw()])
 
-    result = store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [_raw(status="CNCL")])
+    result = store_transactions(session, master_key, CURRENT_ACCOUNT, [_raw(status="CNCL")])
 
     assert result == (0, 1, 0)
     assert _rows(session, master_key, CURRENT_ACCOUNT) == []
@@ -383,23 +382,23 @@ def test_cancelled_status_invalidates_an_already_ingested_row(
 def test_rejected_status_invalidates_an_already_ingested_row(
     session: Session, master_key: str, linked_accounts
 ):
-    store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [_raw(status="PDNG")])
+    store_transactions(session, master_key, CURRENT_ACCOUNT, [_raw(status="PDNG")])
 
-    result = store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [_raw(status="RJCT")])
+    result = store_transactions(session, master_key, CURRENT_ACCOUNT, [_raw(status="RJCT")])
 
     assert result == (0, 1, 0)
     assert _rows(session, master_key, CURRENT_ACCOUNT) == []
 
 
 def test_cancelled_transaction_never_ingested_is_skipped(session: Session, master_key: str, linked_accounts):
-    assert store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [_raw(status="CNCL")]) == (0, 0, 1)
+    assert store_transactions(session, master_key, CURRENT_ACCOUNT, [_raw(status="CNCL")]) == (0, 0, 1)
     assert _rows(session, master_key, CURRENT_ACCOUNT) == []
 
 
 def test_transaction_without_any_date_is_skipped(session: Session, master_key: str, linked_accounts):
     undated = _raw(booking_date=None, value_date=None, transaction_date=None)
 
-    assert store_transactions(session, USER, master_key, CURRENT_ACCOUNT, [undated]) == (0, 0, 1)
+    assert store_transactions(session, master_key, CURRENT_ACCOUNT, [undated]) == (0, 0, 1)
 
 
 def test_missing_booking_date_is_indexed_on_the_fallback_date(
@@ -407,7 +406,6 @@ def test_missing_booking_date_is_indexed_on_the_fallback_date(
 ):
     store_transactions(
         session,
-        USER,
         master_key,
         CURRENT_ACCOUNT,
         [_raw(booking_date=None, value_date=None, transaction_date="2026-07-15")],
@@ -424,7 +422,6 @@ def test_foreign_currency_keeps_its_own_currency_on_the_stored_row(
 ):
     store_transactions(
         session,
-        USER,
         master_key,
         CURRENT_ACCOUNT,
         [_raw(transaction_amount={"currency": "CHF", "amount": "12.63"})],
@@ -487,8 +484,8 @@ def test_no_pair_of_accounts_ever_swallows_the_other(
     session.commit()
 
     # The same operation, republished on both accounts with different references.
-    store_transactions(session, USER, master_key, "compte-a", [_raw(entry_reference="a-ref")])
-    result = store_transactions(session, USER, master_key, "compte-b", [_raw(entry_reference="b-ref")])
+    store_transactions(session, master_key, "compte-a", [_raw(entry_reference="a-ref")])
+    result = store_transactions(session, master_key, "compte-b", [_raw(entry_reference="b-ref")])
 
     assert result == (1, 0, 0)
     assert len(_rows(session, master_key, "compte-a")) == 1
@@ -503,9 +500,8 @@ def test_the_storage_order_of_the_two_accounts_no_longer_matters(
     This is the regression guard: reintroducing any cross-account level makes
     the second account lose its row and turns this red.
     """
-    store_transactions(session, USER, master_key, CARD_ACCOUNT, [_raw(entry_reference="card-ref")])
-    result = store_transactions(
-        session, USER, master_key, CURRENT_ACCOUNT, [_raw(entry_reference="current-ref")]
+    store_transactions(session, master_key, CARD_ACCOUNT, [_raw(entry_reference="card-ref")])
+    result = store_transactions(session, master_key, CURRENT_ACCOUNT, [_raw(entry_reference="current-ref")]
     )
 
     assert result == (1, 0, 0)
@@ -524,7 +520,6 @@ def test_two_currencies_on_the_same_day_are_not_confused(session: Session, maste
     """
     result = store_transactions(
         session,
-        USER,
         master_key,
         CURRENT_ACCOUNT,
         [
@@ -549,9 +544,9 @@ def test_out_of_order_stream_produces_the_same_result(session: Session, master_k
         _raw(entry_reference="c", booking_date="2026-07-05", transaction_amount={"currency": "EUR", "amount": "3.00"}),
     ]
 
-    assert store_transactions(session, USER, master_key, CURRENT_ACCOUNT, batch) == (3, 0, 0)
+    assert store_transactions(session, master_key, CURRENT_ACCOUNT, batch) == (3, 0, 0)
     shuffled = [batch[2], batch[0], batch[1]]
-    assert store_transactions(session, USER, master_key, CURRENT_ACCOUNT, shuffled) == (0, 3, 0)
+    assert store_transactions(session, master_key, CURRENT_ACCOUNT, shuffled) == (0, 3, 0)
 
     periods = {row.period_bidx for row in _rows(session, master_key, CURRENT_ACCOUNT)}
     assert periods == {
@@ -569,13 +564,12 @@ def test_out_of_order_stream_produces_the_same_result(session: Session, master_k
 def test_real_current_account_payload_is_stored_in_full(session: Session, master_key: str, linked_accounts):
     raw_transactions = _load_spike("tx_courant.json")
 
-    inserted, updated, skipped = store_transactions(
-        session, USER, master_key, CURRENT_ACCOUNT, raw_transactions
+    inserted, updated, skipped = store_transactions(session, master_key, CURRENT_ACCOUNT, raw_transactions
     )
 
     assert (inserted, updated, skipped) == (len(raw_transactions), 0, 0)
     # Re-running the same feed must be a no-op in row count.
-    assert store_transactions(session, USER, master_key, CURRENT_ACCOUNT, raw_transactions) == (
+    assert store_transactions(session, master_key, CURRENT_ACCOUNT, raw_transactions) == (
         0,
         len(raw_transactions),
         0,
@@ -590,9 +584,9 @@ def test_the_real_card_payload_is_stored_in_full_alongside_the_current_account(
     those 197; now both accounts keep the feed their bank published."""
     current = _load_spike("tx_courant.json")
     card = _load_spike("tx_carte.json")
-    store_transactions(session, USER, master_key, CURRENT_ACCOUNT, current)
+    store_transactions(session, master_key, CURRENT_ACCOUNT, current)
 
-    inserted, updated, skipped = store_transactions(session, USER, master_key, CARD_ACCOUNT, card)
+    inserted, updated, skipped = store_transactions(session, master_key, CARD_ACCOUNT, card)
 
     assert (inserted, updated, skipped) == (len(card), 0, 0)
     assert len(_rows(session, master_key, CURRENT_ACCOUNT)) == len(current)
@@ -603,7 +597,7 @@ def test_real_payload_pending_and_dateless_booking_are_handled(
     session: Session, master_key: str, linked_accounts
 ):
     raw_transactions = _load_spike("tx_courant.json")
-    store_transactions(session, USER, master_key, CURRENT_ACCOUNT, raw_transactions)
+    store_transactions(session, master_key, CURRENT_ACCOUNT, raw_transactions)
 
     rows = _rows(session, master_key, CURRENT_ACCOUNT)
     statuses = [decrypt_data(row.status_enc, master_key) for row in rows]
@@ -707,7 +701,7 @@ def test_a_negative_amount_never_becomes_a_credit_in_the_balance_curve(
     session.commit()
 
     booked = dict(DIVERGENT_EXPORT_ROW, status="BOOK", booking_date="2026-08-15")
-    store_transactions(session, USER, master_key, account.uuid, [booked])
+    store_transactions(session, master_key, account.uuid, [booked])
 
     movements = _booked_movements(
         session, account, master_key, date(2026, 8, 15), date(2026, 8, 15), "EUR"
