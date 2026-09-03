@@ -839,8 +839,11 @@ def get_all_bank_accounts_snapshot_for_date(
         select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
     ).all()
 
+    # A dict either way, as the annotation promises: the caller reads
+    # ["total_value"] / ["accounts"] and a bare list made that an AttributeError
+    # on every user who owned an account.
     if not accounts:
-        return []
+        return {"total_value": Decimal("0"), "accounts": []}
 
     result = []
     total_value = Decimal("0")

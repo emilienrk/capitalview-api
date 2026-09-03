@@ -276,12 +276,10 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
             from datetime import datetime
             target_date = datetime.strptime(date, "%Y-%m-%d").date()
             bank_summary = get_all_bank_accounts_snapshot_for_date(session, user_uuid, target_date, master_key)
-            if bank_summary:
-                cash_total = bank_summary.total_value
-                accounts = bank_summary.accounts
-            else:
-                cash_total = Decimal(0)
-                accounts = []
+            # Keyed, not attribute access: this one answers with a dict, unlike
+            # the `BankSummaryResponse` of the branch below.
+            cash_total = bank_summary.get("total_value") or Decimal(0)
+            accounts = bank_summary.get("accounts") or []
 
         else:
             bank_summary = get_user_bank_accounts(session, user_uuid, master_key)
@@ -291,11 +289,15 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
             accounts = bank_summary.accounts or []
 
         if details:
+            # The two branches above answer with different shapes — a dict per
+            # account when a date is given, a `BankAccountResponse` otherwise —
+            # and `getattr` on a dict silently returned None for every field.
             for bank_acc in accounts:
+                fields = bank_acc if isinstance(bank_acc, dict) else vars(bank_acc)
                 bank_accounts_details.append({
-                    "name": getattr(bank_acc, "name", None),
-                    "institution": getattr(bank_acc, "institution_name", None) or getattr(bank_acc, "institution", None),
-                    "balance": float(getattr(bank_acc, "balance", 0))
+                    "name": fields.get("name"),
+                    "institution": fields.get("institution_name") or fields.get("institution"),
+                    "balance": float(fields.get("balance") or 0),
                 })
 
     # --- Real Estate / Other Assets ---
@@ -397,7 +399,12 @@ def get_user_cashflow(session: Session, user_uuid: str, master_key: bytes, detai
     parsed_flow = None
     if flow_type:
         try:
-            parsed_flow = FlowType(flow_type.lower())
+            # Upper, not lower: FlowType's values are "INFLOW"/"OUTFLOW", while
+            # both callers speak lowercase (services/ai/tools.py,
+            # mcp_server/tools.py). Lowercasing raised on every single call, so
+            # the filter silently did nothing and "only my spending" answered
+            # with everything.
+            parsed_flow = FlowType(flow_type.upper())
         except ValueError:
             pass
 
