@@ -15,6 +15,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from types import SimpleNamespace
 from sqlmodel import Session, select
 
 from dtos.bank import BankAccountCreate
@@ -922,7 +923,26 @@ class TestCurve:
 
 
 class TestSyncOrder:
-    def test_the_current_account_is_synced_before_the_card_account(
+    """Ruling R12 forced current-before-card because cross-account deduplication
+    kept a row on whichever account was stored first. That level is gone, so the
+    order carries no meaning — but it still has to be *stable*, because the link
+    query has no ORDER BY and Postgres guarantees nothing without one."""
+
+    def test_the_order_is_deterministic(self, session: Session, master_key: str):
+        from services.banking.sync import _in_stable_order
+
+        links = [
+            SimpleNamespace(uuid="c-uuid"),
+            SimpleNamespace(uuid="a-uuid"),
+            SimpleNamespace(uuid="b-uuid"),
+        ]
+
+        first = [link.uuid for link in _in_stable_order(links)]
+        second = [link.uuid for link in _in_stable_order(list(reversed(links)))]
+
+        assert first == second == ["a-uuid", "b-uuid", "c-uuid"]
+
+    def test_every_linked_account_is_synced_exactly_once(
         self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
     ):
         _credentials(session, master_key)
@@ -936,7 +956,6 @@ class TestSyncOrder:
         )
         card = _account(session, master_key, name="Carte")
         current = _account(session, master_key, name="Compte courant")
-        # The card link is created *first*, so a naive iteration would sync it first.
         _link(session, master_key, bank_session, card, "ih-card", "uid-card", TODAY - timedelta(days=2), Decimal("0"), TODAY - timedelta(days=2))
         _link(session, master_key, bank_session, current, "ih-current", "uid-current", TODAY - timedelta(days=2), Decimal("0"), TODAY - timedelta(days=2))
 
@@ -948,13 +967,16 @@ class TestSyncOrder:
 
         sync_user_accounts(session, USER, master_key)
 
-        assert client.balance_calls == ["uid-current", "uid-card"]
-        assert [call[0] for call in client.transaction_calls] == ["uid-current", "uid-card"]
+        assert sorted(client.balance_calls) == ["uid-card", "uid-current"]
+        assert sorted(call[0] for call in client.transaction_calls) == ["uid-card", "uid-current"]
 
 
 class TestNotReconcilableAccounts:
-    """Ruling R19: what survives deduplication on a card account is a fraction
-    of its movements, so no retrospective curve is written from it."""
+    """Ruling R19: a card account publishes a single OTHR balance and no CLBD.
+    A curve is walked back *from* a balance and the reconciliation compares *to*
+    one; with none that can be named, neither says anything. Measured, walking
+    back from the OTHR of 0 of a debit-immédiat card invents +27 887 € eighteen
+    months back — the spending history read as a balance."""
 
     def _card_setup(self, session, master_key, feed):
         return _one_account_setup(
@@ -1006,8 +1028,7 @@ class TestNotReconcilableAccounts:
     def test_a_card_account_still_stores_its_movements(
         self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
     ):
-        """R19 withholds the curve, not the data: the rows still feed the
-        cross-account deduplication of whatever syncs after it."""
+        """R19 withholds the curve, not the data: the rows are still stored."""
         account, link, client = self._card_setup(
             session, master_key, feed=[_raw("100", TODAY - timedelta(days=10), ref="card-1")]
         )
@@ -1022,71 +1043,6 @@ class TestNotReconcilableAccounts:
             )
         ).all()
         assert len(rows) == 1
-
-
-class TestCardMarkerVisibility:
-    """R12, R18 and R19 all hang on `cash_account_type`. Boursorama does send it,
-    but nothing promises every bank does — its absence must be loud, not silent."""
-
-    def _two_accounts(self, session, master_key, second_type: str):
-        _credentials(session, master_key)
-        bank_session = _bank_session(
-            session,
-            master_key,
-            [
-                {"uid": "uid-a", "identification_hash": "ih-a", "cash_account_type": "CACC"},
-                {"uid": "uid-b", "identification_hash": "ih-b", "cash_account_type": second_type},
-            ],
-        )
-        first = _account(session, master_key, name="Compte A")
-        second = _account(session, master_key, name="Compte B")
-        for account, ident, uid in ((first, "ih-a", "uid-a"), (second, "ih-b", "uid-b")):
-            _link(
-                session, master_key, bank_session, account, ident, uid,
-                TODAY - timedelta(days=2), Decimal("0"), TODAY - timedelta(days=2),
-            )
-        client = FakeClient(
-            balances={"uid-a": _balances("0.00"), "uid-b": _balances("0.00")},
-            feeds={"uid-a": [], "uid-b": []},
-        )
-        return client
-
-    def test_two_accounts_and_no_card_marker_raises_the_flag(
-        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
-    ):
-        client = self._two_accounts(session, master_key, second_type="CACC")
-        _install(monkeypatch, client)
-
-        results = sync_user_accounts(session, USER, master_key)
-
-        assert all(r.card_marker_missing for r in results)
-
-    def test_a_recognised_card_marker_leaves_the_flag_down(
-        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
-    ):
-        client = self._two_accounts(session, master_key, second_type="CARD")
-        _install(monkeypatch, client)
-
-        results = sync_user_accounts(session, USER, master_key)
-
-        assert not any(r.card_marker_missing for r in results)
-
-    def test_a_single_linked_account_is_not_a_signal(
-        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
-    ):
-        account, link, client = _one_account_setup(
-            session,
-            master_key,
-            accounting="0.00",
-            feed=[],
-            anchor_date=TODAY - timedelta(days=2),
-            anchor_balance=Decimal("0"),
-        )
-        _install(monkeypatch, client)
-
-        results = sync_user_accounts(session, USER, master_key)
-
-        assert not results[0].card_marker_missing
 
 
 class TestVanishedPendingOperations:
@@ -1273,7 +1229,10 @@ class TestErrors:
 
         results = sync_user_accounts(session, USER, master_key)
 
-        assert [r.status for r in results] == ["error", "synced"]
+        # Keyed by account, never by position: the sync order is now only
+        # required to be stable, not to put any role first.
+        by_account = {r.bank_account_uuid: r.status for r in results}
+        assert by_account == {current.uuid: "error", card.uuid: "synced"}
 
 
 # ---------------------------------------------------------------------------

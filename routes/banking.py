@@ -49,6 +49,7 @@ from services.banking.linking import (
     check_configuration,
     delete_bank_session,
     BankAccountNotLinkedError,
+    CardAccountNotLinkableError,
     handle_callback,
     link_account,
     unlink_account,
@@ -305,11 +306,18 @@ def link_session_account(
         raise HTTPException(status_code=404, detail="Compte CapitalView introuvable.")
     except AccountNotFoundInSessionError:
         raise HTTPException(status_code=404, detail="Ce compte n'est pas dans la session bancaire.")
+    except CardAccountNotLinkableError:
+        raise HTTPException(
+            status_code=409,
+            detail="Un compte carte ne peut pas être rattaché : ses opérations sont déjà celles "
+                   "du compte qu'il débite, et son solde n'est pas un solde de compte.",
+        )
     except TargetAccountAlreadyLinkedError:
         raise HTTPException(
             status_code=409,
             detail="Ce compte CapitalView est déjà rattaché à un autre compte bancaire. "
-                   "Créez-en un second — un compte carte et un compte courant doivent rester séparés.",
+                   "Un compte CapitalView ne peut en porter qu'un : chacun garde son propre "
+                   "solde, sa propre ancre et sa propre courbe. Créez-en un second.",
         )
 
 

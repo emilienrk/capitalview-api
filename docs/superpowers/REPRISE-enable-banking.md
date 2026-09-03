@@ -243,14 +243,16 @@ Chacun est une décision que le plan ou la spec ne tranchait pas. **Ils sont tou
 | R9 | Branches créées dans les deux dépôts depuis `main` | nul |
 | **R10** | **`bank_sessions.accounts_enc`** : le callback persiste la charge complète des comptes. `POST /sessions` renvoie des `AccountResource` riches, `GET /sessions/{id}` ne renvoie que `{uid, identification_hash, identification_hashes}` — le §C4 « fourni une seule fois » était littéralement inversé | une table à extraire si ces métadonnées devaient un jour être interrogées champ par champ |
 | **R11** | **La devise entre dans `dedup_bidx`**, contre la lettre de §A5. La donnée réelle contient un débit CHF 12,63 ; un EUR 12,63 le même jour aurait partagé son empreinte et une opération aurait disparu | empreinte plus discriminante que prévu — comportement correct de toute façon |
-| R12 | **Ordre de synchro stable, compte courant avant compte carte.** La dédup croisée est asymétrique : le compte synchronisé en second perd 197 de ses 297 mouvements | la courbe d'un des deux comptes est fausse |
+| ~~R12~~ | ~~Ordre de synchro stable, compte courant avant compte carte.~~ **RETIRÉ le 2026-09-02** : l'invariant ne tenait qu'**à l'intérieur d'un run**. La carte d'Emilien s'est amorcée le 1er septembre pendant que son compte courant échouait ; amorcé le 2, celui-ci a perdu **1 442 de ses 2 776 mouvements** et sa courbe est passée de +541,81 € à −5 288,06 €. Remplacé par R21 et R22 | — |
 | R13 | Un Minor (`ValueError` sur sens/statut manquants) ajouté au fix round de T5 car il partageait la mécanique du Critical | périmètre de fix un peu large |
 | R14 | Le contrat d'API est **figé** dans `api-contract.md` et fait autorité **dans les deux sens** — c'est ce qui a permis de développer le front avant la synchro | le front s'ajuste sur les champs concernés |
 | R15 | Parallélisation **entre les deux dépôts**, jamais à l'intérieur d'un dépôt (deux implémenteurs sur une même branche git s'écrasent) | aucun |
 | R16 | **`POST /banking/sync` : corps vide, déclencheur global.** Un déclencheur par compte rendrait l'ordre de R12 au front, c'est-à-dire à personne | une route par compte s'ajouterait sans casser celle-ci |
 | R17 | Quatre Minor ajoutés au fix round front (dont deux qui racontaient une contre-vérité à l'utilisateur) | périmètre un peu large |
 | **R18** | **La réconciliation a trois issues** : `reconciled` / `gap` / `not_reconcilable`. Un compte carte a un écart **permanent et normal** ; une alerte permanente sur un fonctionnement normal détruit le signal sur *tous* les comptes | un état d'affichage à retirer |
-| **R19** | **Sur un compte non réconciliable, la synchro n'écrit AUCUNE courbe rétrospective.** La borne d'amorçage remontait à la plus ancienne ligne *envoyée par la banque*, dédup comprise : on supprimait des instantanés réels pour écrire une courbe bâtie sur 7 % des mouvements | un compte carte sans courbe rétrospective — réversible, contrairement à la destruction |
+| **R19** | **Sur un compte non réconciliable, la synchro n'écrit AUCUNE courbe rétrospective.** Justification refondue le 2026-09-02 : ce n'est plus « la dédup n'en laisse qu'une fraction » (devenu faux avec R22) mais **le solde d'une carte à débit immédiat n'est pas une grandeur de stock**. La banque publie un unique `OTHR` et aucun `CLBD` ; reconstruire à rebours depuis cet `OTHR` de 0 fabrique **+27 887 € dix-huit mois en arrière**, l'historique des dépenses relu comme un solde | un compte carte sans courbe rétrospective — réversible, contrairement à la destruction |
+| **R21** | **Les comptes carte ne sont plus rattachables du tout.** `list_session_accounts` les écarte et `link_account` les refuse en 409. `cash_account_type` est `required` au contrat, donc le marqueur est présent chez toutes les banques | un compte carte qu'on ne peut plus suivre — réversible, contrairement à la perte de données |
+| **R22** | **Le niveau 3 de déduplication (croisé, cadré utilisateur) est supprimé.** Il n'avait aucun consommateur : toute lecture de `BankTransaction` filtre sur un seul `account_id_bidx`, les soldes viennent de la banque et chaque courbe n'utilise que ses propres lignes | les opérations d'un lien carte hérité existent en double dans les données et l'export — irréversible pour les lignes déjà stockées, le rallumer ne filtrerait que les insertions |
 
 ## Pièges vérifiés sur le terrain — ne pas les rouvrir
 
@@ -263,7 +265,9 @@ Chacun est une décision que le plan ou la spec ne tranchait pas. **Ils sont tou
 4. **Les descriptions d'énumérations du fichier OpenAPI sont désalignées de leurs valeurs.** Mapper par
    nom, jamais par position.
 5. **93 % des transactions carte existent aussi sur le compte courant, sans référence commune.**
-   La dédup croisée est scopée **utilisateur**, pas compte.
+   ~~La dédup croisée est scopée **utilisateur**, pas compte.~~ **La mesure reste vraie** (98,1 %
+   recalculé sur l'export), **la conclusion est retirée** : voir R21 et R22. On ne déduplique plus
+   entre comptes, on n'accepte plus de rattacher un compte carte.
 6. `strategy=longest` **seul** s'auto-limite à 2 ans : le premier import exige `longest` **et** un
    `date_from` très ancien.
 7. **Ne jamais appeler `DELETE /sessions/{id}` pour de vrai.**

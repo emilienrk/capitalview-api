@@ -265,7 +265,7 @@ class TestExportImport:
 
         resp = import_enablebanking_export(session, USER_UUID, master_key, export_data)
         assert resp.results[0].snapshots_written == 0
-        assert "Courbe rétrospective non écrite" in resp.results[0].detail
+        assert "solde comptable" in resp.results[0].detail
 
     def test_invalid_payload_raises_value_error(self, session: Session, master_key: str):
         with pytest.raises(ValueError, match="accounts"):
@@ -296,35 +296,34 @@ class TestRealExportReplay:
         resp = import_enablebanking_export(session, USER_UUID, master_key, raw_export)
         assert resp.imported_accounts == 2
 
-        # 2776 transactions on current account
+        # Every row of both accounts is stored. Cross-account deduplication used
+        # to drop 1 436 of the card's 1 464 rows onto the current account; that
+        # level is gone, so the card keeps its own feed in full.
         assert resp.results[0].inserted == 2776
-        # 1464 total transactions on card account, 1436 cross-deduplicated onto current account
-        # => 28 inserted, 1436 skipped (28 + 1436 = 1464)
-        assert resp.results[1].inserted == 28
-        assert resp.results[1].skipped == 1436
-        assert resp.results[1].inserted + resp.results[1].skipped == 1464
+        assert resp.results[1].inserted == 1464
+        assert resp.results[1].skipped == 0
 
-    def test_the_card_account_is_stored_last_whatever_the_file_order(
+    def test_the_file_order_no_longer_changes_what_is_stored(
         self, session: Session, master_key: str, sqlite_pg_insert
     ):
-        """Ruling R12, applied to an export instead of a live sync.
+        """The invariant that replaced ruling R12, and a stronger one.
 
-        Cross-account deduplication is asymmetric: whichever account is stored
-        second loses the movements the first already claimed. The sync imposes
-        current-before-card; an export file lists its accounts in whatever order
-        the portal wrote them. Measured on this capture, storing the card first
-        ends with 2 798 rows instead of 2 804 — six real operations gone and
-        209,70 € of difference, silently.
+        R12 forced current-before-card because cross-account deduplication made
+        the second account lose whatever the first had claimed — storing the card
+        first ended with 2 798 rows instead of 2 804, six real operations gone
+        and 209,70 € of difference, silently. With that level removed, the file
+        order is simply irrelevant: this asserts the *same* numbers as the
+        forward replay above, which the old test could never do.
         """
         with open(SPIKE_DIR / "export-boursorama-2022-2026.json") as f:
             raw_export = json.load(f)
 
         cacc_ident = raw_export["accounts"][0]["info"]["identification_hash"]
         card_ident = raw_export["accounts"][1]["info"]["identification_hash"]
-        _setup_account_and_link(
+        acc_cacc, _ = _setup_account_and_link(
             session, master_key, cacc_ident, "Boursorama Courant", cash_account_type="CACC"
         )
-        _setup_account_and_link(
+        acc_card, _ = _setup_account_and_link(
             session, master_key, card_ident, "Boursorama Carte", cash_account_type="CARD"
         )
 
@@ -333,12 +332,11 @@ class TestRealExportReplay:
         resp = import_enablebanking_export(session, USER_UUID, master_key, reversed_export)
 
         by_uuid = {r.bank_account_uuid: r for r in resp.results}
-        current = next(r for r in resp.results if r.inserted == 2776)
-        card = next(r for r in resp.results if r is not current)
-        assert current.inserted == 2776
-        assert card.inserted == 28
-        assert card.skipped == 1436
         assert len(by_uuid) == 2
+        assert by_uuid[acc_cacc.uuid].inserted == 2776
+        assert by_uuid[acc_cacc.uuid].skipped == 0
+        assert by_uuid[acc_card.uuid].inserted == 1464
+        assert by_uuid[acc_card.uuid].skipped == 0
 
 
 # ---------------------------------------------------------------------------

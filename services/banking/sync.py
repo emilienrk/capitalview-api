@@ -15,9 +15,9 @@ Three things this module is deliberate about:
   `last_synced_at` from the accounts payload and calls `POST /banking/sync`
   after the render; the once-a-day cap is re-checked here, server-side, because
   the front is not an authority (§D1).
-* **Order matters.** Cross-account deduplication (§E) is asymmetric: whichever
-  account is synced first keeps the row, and §D4 builds each account's curve
-  from the rows it kept. Card accounts therefore always sync last (ruling R12).
+* **Accounts no longer depend on each other.** Cross-account deduplication was
+  removed (see `transactions.py`), so each account's curve is built from its own
+  rows alone and the sync order carries no meaning beyond reproducibility.
 * **The accounting balance is authoritative.** Two balances coexist and the
   account-level currency is unusable; both are read the way §F prescribes.
 """
@@ -122,8 +122,8 @@ def sync_user_accounts(
 ) -> list[BankAccountSyncResult]:
     """Synchronise every account this user has linked, in a stable order.
 
-    Global by design (ruling R16): a per-account trigger would hand the ordering
-    decision of R12 to the caller.
+    Global by design (ruling R16): one trigger, one daily cap, one place where
+    a consent expiry is announced while a Master Key is in hand.
     """
     # Ruling R20: this is where a consent expiry gets announced, because this is
     # where a Master Key exists. Before the daily cap, so a capped call still
@@ -157,7 +157,7 @@ def sync_user_accounts(
     }
     ordered = [
         (link, accounts[link.bank_account_uuid_bidx])
-        for link in _in_sync_order(session, links, master_key)
+        for link in _in_stable_order(links)
         if link.bank_account_uuid_bidx in accounts
     ]
 
@@ -171,14 +171,12 @@ def sync_user_accounts(
     if creds is None:
         raise NotConfiguredError()
 
-    marker_missing = _card_marker_missing(session, [link for link, _ in ordered], master_key)
-
     results = []
     with build_client(*creds, psu_context=psu_context) as client:
         for link, account in ordered:
-            result = sync_account_link(session, user_uuid, master_key, link, account, client)
-            result.card_marker_missing = marker_missing
-            results.append(result)
+            results.append(
+                sync_account_link(session, user_uuid, master_key, link, account, client)
+            )
     return results
 
 
@@ -304,15 +302,19 @@ def sync_account_link(
     session.commit()
 
     # 6. Rewrite the snapshots of the window just processed, and only those —
-    # unless nothing reconcilable can be built (ruling R19). On a card account
-    # the movements that survived deduplication are a fraction of the truth, so
-    # a curve drawn from them would be flat and false; overwriting real
-    # snapshots with it destroys data that decision 8 never licensed. The day's
-    # balance is still exact, because it is the anchor.
+    # unless nothing reconcilable can be built (ruling R19). A card account
+    # publishes a single OTHR balance and no CLBD at all, and OTHR has no defined
+    # meaning in the contract. A curve is walked back *from a balance* and the
+    # reconciliation check compares *to a balance*: with none that can be named,
+    # neither says anything. Measured on the real capture, walking back from the
+    # OTHR of 0 of a debit-immédiat card invents +27 887 € eighteen months back —
+    # the spending history read as a balance, added to the wealth curve.
+    # The day's balance is still exact, because it is the anchor.
     if not_reconcilable:
         result.detail = (
-            "Courbe rétrospective non écrite : les mouvements de ce compte sont "
-            "dédupliqués vers le compte courant."
+            "Courbe non écrite : votre banque ne publie pas de solde comptable pour ce "
+            "compte carte, seulement un solde de type OTHR — il n'y a rien à quoi "
+            "rattacher une courbe."
         )
         return result
 
@@ -329,45 +331,23 @@ def sync_account_link(
 
 
 # ---------------------------------------------------------------------------
-# Ordering (ruling R12)
+# Ordering
 # ---------------------------------------------------------------------------
 
 
-def _in_sync_order(
-    session: Session, links: list[BankAccountLink], master_key: str
-) -> list[BankAccountLink]:
-    """Current accounts first, card accounts last.
+def _in_stable_order(links: list[BankAccountLink]) -> list[BankAccountLink]:
+    """A deterministic order, and nothing more.
 
-    Cross-account deduplication keeps the row on whichever account was synced
-    first, and §D4 rebuilds each account's curve from the rows it kept. On the
-    real captures, syncing the card account first costs the current account 197
-    of its 297 movements. A card account mirrors the current account it debits,
-    so it is the one that can afford to lose them.
+    Card accounts used to be forced last (ruling R12) because cross-account
+    deduplication kept a row on whichever account was stored first. That level
+    is gone: no account's outcome depends on another's any more, so no role
+    ordering is left to enforce.
+
+    The sort stays because the link query has no ORDER BY, and Postgres
+    guarantees no order without one — an unordered sync would make any future
+    failure irreproducible.
     """
-    return sorted(links, key=lambda link: (is_card_account(session, link, master_key), link.uuid))
-
-
-def _card_marker_missing(
-    session: Session, links: list[BankAccountLink], master_key: str
-) -> bool:
-    """Whether several accounts are linked and none is recognised as a card one.
-
-    R12's ordering, R18's third outcome and R19's "no curve" all hang on
-    `cash_account_type`. The marker itself is confirmed on real Boursorama data
-    (see `is_card_account`), but nothing says every bank spells a card account
-    the same way. With two accounts and no marker the order degrades silently
-    to uuid, which is the failure this flag exists to make loud. One linked
-    account alone is not a signal: nothing is being ordered, and nothing can be
-    deduplicated across accounts.
-    """
-    return len(links) > 1 and not any(
-        is_card_account(session, link, master_key) for link in links
-    )
-
-
-# ---------------------------------------------------------------------------
-# Reading the bank (§B4, §F)
-# ---------------------------------------------------------------------------
+    return sorted(links, key=lambda link: link.uuid)
 
 
 def _balance_of_type(
