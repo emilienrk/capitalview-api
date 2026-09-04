@@ -34,7 +34,7 @@ from models.banking import BankTransaction
 from models.cashflow import Cashflow
 from models.currency import BASE_CURRENCY
 from models.enums import FlowType, Frequency
-from services.banking.linking import unmirrored_account_bidxs
+from services.banking.linking import readable_account_bidxs
 from services.banking.transactions import FINAL_STATUSES
 from services.cashflow import LinkedAccount, build_bank_bidx_map
 from services.encryption import decrypt_data, encrypt_data, hash_index
@@ -138,7 +138,7 @@ def load_signature_groups(
     # A mirrored card account is left out: its rows repeat the current
     # account's, and a signature seen twice for one movement would inflate the
     # occurrence count MIN_OCCURRENCES and the `duplicated` verdict rest on.
-    account_bidxs = unmirrored_account_bidxs(session, user_bidx, master_key)
+    account_bidxs = readable_account_bidxs(session, user_bidx, master_key)
     if not account_bidxs:
         return {}
 
