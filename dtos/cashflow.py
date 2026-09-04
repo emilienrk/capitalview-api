@@ -132,6 +132,9 @@ class CashflowComparison(BaseModel):
     frequency: Frequency
     category: str
     declared_amount: Decimal
+    # The declaration's own currency — the linked account's, euros without one.
+    # Observed movements in any other currency are never compared against it.
+    currency: str = BASE_CURRENCY
     status: str
     match_pattern: str | None = None
     observed_amount: Decimal | None = None

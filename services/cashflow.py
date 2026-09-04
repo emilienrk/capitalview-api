@@ -131,7 +131,7 @@ def create_cashflow(
     session.commit()
     session.refresh(cashflow)
     
-    bank_bidx_map = _build_bank_bidx_map(session, user_uuid, master_key)
+    bank_bidx_map = build_bank_bidx_map(session, user_uuid, master_key)
     response = _map_cashflow_to_response(cashflow, master_key, bank_bidx_map)
     return _fill_euro_amounts(session, [response])[0]
 
@@ -173,7 +173,7 @@ def update_cashflow(
     session.commit()
     session.refresh(cashflow)
     
-    bank_bidx_map = _build_bank_bidx_map(session, user_uuid, master_key)
+    bank_bidx_map = build_bank_bidx_map(session, user_uuid, master_key)
     response = _map_cashflow_to_response(cashflow, master_key, bank_bidx_map)
     return _fill_euro_amounts(session, [response])[0]
 
@@ -207,7 +207,7 @@ def get_cashflow(
     if cashflow.user_uuid_bidx != user_bidx:
         return None
 
-    bank_bidx_map = _build_bank_bidx_map(session, user_uuid, master_key)
+    bank_bidx_map = build_bank_bidx_map(session, user_uuid, master_key)
     response = _map_cashflow_to_response(cashflow, master_key, bank_bidx_map)
     return _fill_euro_amounts(session, [response])[0]
 
@@ -302,7 +302,7 @@ def aggregate_by_category(
     return result
 
 
-def _build_bank_bidx_map(
+def build_bank_bidx_map(
     session: Session, user_uuid: str, master_key: str
 ) -> dict[str, LinkedAccount]:
     """Build a map of {bank_account_uuid_bidx -> LinkedAccount} for a user."""
@@ -333,7 +333,7 @@ def get_all_user_cashflows(
     cashflows = session.exec(
         select(Cashflow).where(Cashflow.user_uuid_bidx == user_bidx)
     ).all()
-    bank_bidx_map = _build_bank_bidx_map(session, user_uuid, master_key)
+    bank_bidx_map = build_bank_bidx_map(session, user_uuid, master_key)
     responses = [_map_cashflow_to_response(cf, master_key, bank_bidx_map) for cf in cashflows]
     return _fill_euro_amounts(session, responses)
 
