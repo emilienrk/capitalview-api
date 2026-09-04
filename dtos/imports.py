@@ -6,6 +6,7 @@ from decimal import Decimal
 from pydantic import BaseModel, Field
 
 from dtos.crypto import BinanceImportGroupPreview, BinanceImportPreviewResponse
+from models.currency import BASE_CURRENCY
 
 
 class ImportSourceInfo(BaseModel):
@@ -68,6 +69,21 @@ class BankImportPointPreview(BaseModel):
     is_duplicate: bool = False
 
 
+class BankImportTransactionPreview(BaseModel):
+    """One movement read from a bank statement CSV.
+
+    The direction is read from the sign in the file, and `amount` carries the
+    magnitude — the shape `normalize_transaction` expects, so an imported
+    movement is indistinguishable from a synced one once stored.
+    """
+    day: date
+    amount: Decimal
+    direction: str  # "CRDT" | "DBIT"
+    label: str = ""
+    currency: str = BASE_CURRENCY
+    is_duplicate: bool = False
+
+
 class ImportPreviewResponse(BaseModel):
     """Common envelope; exactly one category payload is set."""
     source_id: str
@@ -79,6 +95,7 @@ class ImportPreviewResponse(BaseModel):
     crypto: BinanceImportPreviewResponse | None = None
     stock_rows: list[StockImportRowPreview] | None = None
     bank_points: list[BankImportPointPreview] | None = None
+    bank_transactions: list[BankImportTransactionPreview] | None = None
 
 
 class ImportConfirmRequest(BaseModel):
@@ -93,6 +110,7 @@ class ImportConfirmRequest(BaseModel):
     crypto_groups: list[BinanceImportGroupPreview] | None = None
     stock_rows: list[StockImportRowPreview] | None = None
     bank_points: list[BankImportPointPreview] | None = None
+    bank_transactions: list[BankImportTransactionPreview] | None = None
     overwrite: bool = False  # bank only: replace existing history
 
 

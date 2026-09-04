@@ -531,14 +531,20 @@ def is_card_account(session: Session, link: BankAccountLink, master_key: str) ->
     return find_discovered_account(session, link, master_key).get("cash_account_type") == CARD_ACCOUNT_TYPE
 
 
-def unmirrored_account_bidxs(session: Session, user_bidx: str, master_key: str) -> list[str]:
-    """The linked accounts a reader may sum without counting anything twice.
+def readable_account_bidxs(session: Session, user_bidx: str, master_key: str) -> list[str]:
+    """The accounts whose stored movements a reader may sum, mirrors dropped.
 
-    A card account republishes the movements of the current account it debits,
-    and cross-account deduplication is gone (R22) — deliberately, since it
-    destroyed rows to achieve this. Both copies therefore exist, and anything
-    summing them counts every card purchase twice. The filter belongs here, at
-    read time, never back at write time.
+    Wider than the linked accounts: an account no bank API reaches — a Livret A,
+    a passbook — gets its movements from a CSV import, and they are as real as a
+    synced feed's. An unlinked account only counts once it actually carries
+    rows, so a manual account nobody imported anything into stays out of the
+    totals it would otherwise name without contributing to.
+
+    Narrower on the other side: a card account republishes the movements of the
+    current account it debits, and cross-account deduplication is gone (R22) —
+    deliberately, since it destroyed rows to achieve this. Both copies exist, so
+    anything summing them counts every card purchase twice. The filter belongs
+    here, at read time, never back at write time.
 
     Only a card account whose current account is linked in the *same* bank
     session is dropped: a card account linked on its own echoes nothing, and
@@ -553,11 +559,34 @@ def unmirrored_account_bidxs(session: Session, user_bidx: str, master_key: str) 
         ).all()
     ]
     mirroring_sessions = {link.session_uuid for link, is_card in roles if not is_card}
-    return [
+    linked = {
         link.bank_account_uuid_bidx
         for link, is_card in roles
         if not (is_card and link.session_uuid in mirroring_sessions)
+    }
+    # Every link of the user, mirrors included: a dropped card account must not
+    # come back in through the unlinked door.
+    all_linked = {link.bank_account_uuid_bidx for link, _ in roles}
+
+    candidates = [
+        bidx
+        for bidx in (
+            hash_index(account.uuid, master_key)
+            for account in session.exec(
+                select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
+            ).all()
+        )
+        if bidx not in all_linked
     ]
+    imported = set(
+        session.exec(
+            select(BankTransaction.account_id_bidx)
+            .where(BankTransaction.account_id_bidx.in_(candidates))  # type: ignore[attr-defined]
+            .distinct()
+        ).all()
+    ) if candidates else set()
+
+    return sorted(linked | imported)
 
 
 def _account_id_label(account: dict[str, Any]) -> str | None:

@@ -65,3 +65,26 @@ def bank_existing_dates(session: Session, account_id: str, master_key: str) -> s
         select(AccountHistory.snapshot_date).where(AccountHistory.account_id_bidx == account_bidx)
     ).all()
     return set(rows)
+
+
+def bank_existing_transaction_refs(
+    session: Session, account_id: str, master_key: str
+) -> set[str]:
+    """Entry-reference blind indexes already stored for the bank account.
+
+    Compared against, never decrypted: the reference a CSV row is given is
+    synthesised from its own content, so hashing it the same way is enough to
+    tell an already-imported row from a new one.
+    """
+    from sqlmodel import select
+
+    from models.banking import BankTransaction
+    from services.encryption import hash_index
+
+    account_bidx = hash_index(account_id, master_key)
+    rows = session.exec(
+        select(BankTransaction.entry_ref_bidx).where(
+            BankTransaction.account_id_bidx == account_bidx
+        )
+    ).all()
+    return {row for row in rows if row}

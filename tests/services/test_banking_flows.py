@@ -393,3 +393,58 @@ class TestMirroredCardAccount:
         result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
         assert result.account_count == 2
         assert result.outflow == Decimal("42.00")
+
+
+class TestImportedAccount:
+    """An account no bank API reaches gets its movements from a CSV import.
+
+    That is the whole point for a Livret A: without its side of the transfer,
+    the debit leaving the current account has no credit to pair with, and every
+    euro moved to savings reads as spending.
+    """
+
+    def _livret(self, session: Session, master_key: str) -> str:
+        from dtos.bank import BankAccountCreate
+        from models.enums import BankAccountType
+        from services.bank import create_bank_account
+
+        return create_bank_account(
+            session,
+            BankAccountCreate(name="Livret A", balance="0",
+                              account_type=BankAccountType.LIVRET_A),
+            USER, master_key,
+        ).id
+
+    def test_an_imported_movement_counts_like_a_synced_one(
+        self, session: Session, master_key: str
+    ):
+        livret = self._livret(session, master_key)
+        _store(session, master_key, livret, _raw("2.50", "CRDT", "2026-03-31", ref="interest"))
+
+        result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
+        assert result.account_count == 1
+        assert result.inflow == Decimal("2.50")
+
+    def test_a_move_to_an_imported_savings_account_is_not_spending(
+        self, session: Session, master_key: str
+    ):
+        _link(session, master_key, ACCOUNT_A)
+        livret = self._livret(session, master_key)
+        _store(session, master_key, ACCOUNT_A, _raw("400.00", "DBIT", "2026-03-10", ref="out"))
+        _store(session, master_key, livret, _raw("400.00", "CRDT", "2026-03-10", ref="in"))
+
+        result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
+        assert result.internal_transfers_excluded == 1
+        assert result.internal_transfers_amount == Decimal("400.00")
+        assert result.outflow == Decimal("0")
+
+    def test_an_account_nobody_imported_anything_into_stays_out(
+        self, session: Session, master_key: str
+    ):
+        """It would name a total it contributes nothing to."""
+        _link(session, master_key, ACCOUNT_A)
+        self._livret(session, master_key)
+        _store(session, master_key, ACCOUNT_A, _raw("30.00", "DBIT", "2026-03-02", ref="shop"))
+
+        result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
+        assert result.account_count == 1

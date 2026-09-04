@@ -152,7 +152,7 @@ class NormalizedTransaction:
         # on regardless of amount), but any future change to the reading needs
         # this checked, not assumed.
         return "|".join(
-            (day.isoformat(), _canonical_amount(self.amount), self.currency, self.credit_debit)
+            (day.isoformat(), canonical_amount(self.amount), self.currency, self.credit_debit)
         )
 
 
@@ -298,9 +298,14 @@ def _parse_date(value: Any) -> date | None:
     return date.fromisoformat(value) if isinstance(value, str) and value else None
 
 
-def _canonical_amount(amount: Decimal) -> str:
+def canonical_amount(amount: Decimal) -> str:
     """A single rendering per value, so "150" and "150.00" share a dedup_bidx.
-    normalize() renders integers in exponent form (150 -> 1.5E+2); 'f' undoes it."""
+    normalize() renders integers in exponent form (150 -> 1.5E+2); 'f' undoes it.
+
+    Public because identity is built on it outside this module too: the CSV
+    import synthesises an entry reference from a row's amount, and a second
+    rendering of the same value would give the same row two identities.
+    """
     return format(amount.normalize(), "f")
 
 
@@ -339,7 +344,7 @@ def _apply(
     row.period_bidx = hash_index(tx.period, master_key)
     row.entry_ref_bidx = ref_bidx
     row.dedup_bidx = dedup_bidx
-    row.amount_enc = encrypt_data(_canonical_amount(tx.amount), master_key)
+    row.amount_enc = encrypt_data(canonical_amount(tx.amount), master_key)
     row.currency_enc = encrypt_data(tx.currency, master_key)
     row.credit_debit_enc = encrypt_data(tx.credit_debit, master_key)
     row.status_enc = encrypt_data(tx.status, master_key)
