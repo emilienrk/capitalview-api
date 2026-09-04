@@ -465,6 +465,7 @@ def test_tools_are_advertised_to_an_authenticated_client(client, session, accoun
         "get_portfolio_overview",
         "get_performance",
         "get_cashflow_summary",
+        "get_observed_flows",
         "get_wealth_history",
         "list_recent_transactions",
         "project_wealth",
@@ -507,6 +508,55 @@ def test_the_overview_reports_cost_basis_alongside_value(client, session, accoun
         "crypto_invested",
         "unrealized_profit_loss",
     }
+
+
+def test_observed_flows_report_transfers_apart_from_spending(client, session, account, master_key):
+    """Money moved between the user's own accounts is neither income nor
+    spending — but it is not hidden either: it is counted and named."""
+    from datetime import date as _date
+
+    from dtos.bank import BankAccountCreate
+    from models.enums import BankAccountType
+    from services.bank import create_bank_account
+    from services.banking.transactions import store_transactions
+
+    user, _, token = account
+    accounts = [
+        create_bank_account(
+            session,
+            BankAccountCreate(name=name, balance="0", account_type=kind),
+            user.uuid, master_key,
+        ).id
+        for name, kind in (("Courant", BankAccountType.CHECKING),
+                           ("Livret A", BankAccountType.LIVRET_A))
+    ]
+    today = _date.today()
+    day = today.replace(day=1).isoformat()
+    for account_id, direction, amount, ref in (
+        (accounts[0], "DBIT", "400.00", "to-savings"),
+        (accounts[1], "CRDT", "400.00", "from-current"),
+        (accounts[0], "DBIT", "30.00", "groceries"),
+    ):
+        store_transactions(session, master_key, account_id, [{
+            "entry_reference": ref,
+            "transaction_amount": {"currency": "EUR", "amount": amount},
+            "credit_debit_indicator": direction,
+            "status": "BOOK",
+            "booking_date": day,
+            "remittance_information": ["peu importe"],
+        }])
+
+    response = _call(
+        client, "tools/call", {"name": "get_observed_flows", "arguments": {"months": 1}},
+        token=token, name="get_observed_flows",
+    )
+
+    assert response.status_code == 200
+    flows = json.loads(response.json()["result"]["content"][0]["text"])
+    assert flows["outflow"] == 30.0
+    assert flows["internal_transfers_excluded"] == 1
+    assert flows["internal_transfers_amount"] == 400.0
+    assert sorted(flows["account_names"]) == ["Courant", "Livret A"]
 
 
 def test_the_wealth_curve_answers_on_an_empty_account(client, session, account):

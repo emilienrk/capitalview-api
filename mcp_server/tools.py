@@ -5,7 +5,7 @@ context, opens its own short-lived database session, and hands the account's
 Master Key down to the service layer — the same key path the web app uses, so a
 tool can never see more than the user themselves can.
 
-The set is deliberately small. Seven tools that answer the questions people
+The set is deliberately small. Eight tools that answer the questions people
 actually ask about their money beat twenty that mirror the REST surface: an
 agent picks better from a short menu, and each extra tool costs context on every
 single request.
@@ -20,9 +20,10 @@ the web app charts the same curves at full resolution and must keep every point.
 another consumer's module. A tool may call ``services/overview`` (cross-domain
 read models) or ``services/analytics`` (its own subsystem, entered through
 ``report``) because both are owned by nobody and read by several callers as
-peers. A tool may not reach into ``services/ai/`` or a ``routes/`` module: those
-belong to the assistant and the web app, and shaping them around MCP's needs
-would break their owner silently.
+peers. ``services/banking/flows`` qualifies on the same test — the banking route and
+this module read it as peers, and neither owns it. A tool may not reach into
+``services/ai/`` or a ``routes/`` module: those belong to the assistant and the
+web app, and shaping them around MCP's needs would break their owner silently.
 
 The two allowed sources look uneven — one small module, one 5 000-line
 subsystem — but that is a difference of size, not of kind. Do not wrap the
@@ -43,6 +44,7 @@ from mcp_server.db import open_session
 from services.analytics.projection_basis import BasisWarning, describe
 from services.analytics.report import build_investor_analytics
 from services.api_token import READ_SCOPE
+from services.banking.flows import compute_real_flows
 from services.overview import (
     build_projection,
     build_wealth_history,
@@ -104,7 +106,8 @@ def _as_account_type(value: str) -> str:
     if value not in ACCOUNT_TYPES:
         raise ToolError(
             f"account_type doit valoir 'stock', 'crypto' ou 'all', reçu {value!r}. "
-            "Les mouvements bancaires ne sont pas exposés ici."
+            "Le journal des opérations bancaires ligne à ligne n'est pas exposé ; "
+            "get_observed_flows en donne les totaux mensuels."
         )
     return value
 
@@ -382,6 +385,33 @@ def register_tools(mcp) -> None:
                     flow_type=direction,
                 )
             )
+
+    @mcp.tool(
+        title="Dépenses et revenus observés",
+        description=(
+            "Ce qui a réellement bougé sur les comptes bancaires de l'utilisateur, "
+            "mois par mois, sur les `months` derniers mois (12 par défaut, 120 au "
+            "maximum). C'est la source à utiliser pour « combien je dépense par "
+            "mois » : elle est mesurée sur les opérations bancaires, alors que "
+            "get_cashflow_summary donne ce que l'utilisateur a déclaré prévoir. "
+            "Les virements entre ses propres comptes sont retirés des totaux et "
+            "comptés à part (`internal_transfers_excluded`, "
+            "`internal_transfers_amount`) : de l'argent déplacé, ni un revenu ni "
+            "une dépense. Les opérations pas encore comptabilisées et celles dans "
+            "une autre devise sont tenues à l'écart des totaux mensuels et "
+            "rapportées séparément."
+        ),
+    )
+    def get_observed_flows(months: int = 12) -> dict:
+        principal = require_scope(READ_SCOPE)
+        with open_session() as session:
+            observed = compute_real_flows(
+                session,
+                principal.user_uuid,
+                principal.master_key,
+                months=months,
+            )
+        return _jsonable(observed.model_dump())
 
     @mcp.tool(
         title="Courbe du patrimoine",
