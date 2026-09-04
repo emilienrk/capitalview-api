@@ -17,6 +17,7 @@ qu'il reste à faire. Il est suivi par git et voyage avec la branche.
 | Contrat d'API figé | `.superpowers/sdd/2026-08-17-enable-banking-connection/api-contract.md` (local) |
 | Contraintes globales | `.superpowers/sdd/2026-08-17-enable-banking-connection/constraints.md` (local) |
 | Doc vendeur, contrat OpenAPI, jeux de données réels | `../vendor-docs/` (hors dépôt git) |
+| **Flux observés et virements internes (lot 3)** | **`REPRISE-flux-observes.md`, à côté de ce fichier** |
 
 **Méthode employée :** `superpowers:subagent-driven-development` — un sous-agent implémenteur par tâche,
 une revue après chaque tâche, des rounds de correction, puis une revue finale de branche.
