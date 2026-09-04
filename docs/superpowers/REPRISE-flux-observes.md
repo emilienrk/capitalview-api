@@ -4,6 +4,11 @@
 été livré, où est le code à reprendre, ce que son audit a trouvé, et dans quel ordre travailler.
 Il est suivi par git.
 
+> **Le lot 3 est livré** — les six points de l'ordre de travail sont faits, sur les branches
+> `feat/observed-flows-internal-transfers` des dépôts API et web. Ce qui suit reste le contexte et
+> l'audit d'origine ; ce qui a été décidé chemin faisant est consigné à la fin, sous
+> « Ce que le lot 3 a livré ».
+
 Complément de `REPRISE-enable-banking.md`, qui couvre la connexion bancaire elle-même.
 
 ---
@@ -258,3 +263,82 @@ ne rompt aucun lien existant. Tant qu'il l'est, ses opérations existent en doub
 dans l'export, et c'est exactement le cas que le filtre du point 2 doit couvrir. Son parcours de
 réparation, à faire par lui : détacher « Compte plaisir » en cochant la suppression des opérations →
 aller sur Comptes Bancaires (ré-amorçage automatique du compte courant) → importer son JSON d'export.
+
+---
+
+## Ce que le lot 3 a livré — 2026-09-04
+
+Branche `feat/observed-flows-internal-transfers`, des deux côtés. API : 1 247 tests (1 180 avant).
+Web : 100 tests (92 avant), `pnpm type-check` vert.
+
+### 1. Résurrection
+
+`flows.py`, `matching.py`, leurs 642 lignes de tests, les six DTO et les trois routes remis par
+`git revert 77e70bf`, sans conflit. Seul ajustement : les appels à `store_transactions` dans les
+tests, qui a perdu `user_uuid` (`3159622`). Les deux en-têtes de section orphelines de
+`dtos/cashflow.py` et `dtos/banking.py` ont retrouvé leur contenu. `Cashflow.match_pattern_enc`
+n'est plus un schéma mort — `matching.py` le lit et l'écrit à nouveau : **rien à supprimer**.
+
+### 2. Le filtre carte — `linking.readable_account_bidxs`
+
+Une seule fonction, lue par `compute_real_flows` et `load_signature_groups`. À la lecture, jamais à
+l'écriture.
+
+Un compte carte n'est écarté que si un compte non-carte est rattaché **dans la même session
+bancaire**. Écarter toute carte sans condition viderait l'historique d'un compte carte rattaché
+seul, ce qui est le pire échec possible ici — c'est exactement le bug d'origine du chantier.
+Les deux garde-fous sont prouvés par mutation.
+
+### 3. Les faux positifs d'appariement — aucun ne reste
+
+Rejeu de l'export réel : les **26 paires / 1 236,38 €** étaient toutes des échos de carte. Avec le
+filtre, il en reste **0**. La tolérance de 3 jours n'a donc **pas** été resserrée : rien ne le
+justifie, et la seule paire de comptes mesurable ne contient aucun virement interne réel. Épinglé
+dans `tests/integration/test_banking_e2e.py`, sur les 4 240 lignes réelles.
+
+### 4. La devise dans `matching.py`
+
+`Occurrence` porte sa devise ; une déclaration n'est comparée qu'aux mouvements de **sa** devise
+(celle du compte qu'elle touche, euros sans compte — la règle de `27d972c`). Une déclaration en
+francs face à des mouvements en euros échoue au lieu d'inventer. `CashflowComparison` expose
+`currency`. `_build_bank_bidx_map` est devenue publique pour éviter de dupliquer la règle.
+
+### 5. L'import CSV transactionnel — `generic_bank_transactions`
+
+Nouveau parser, à côté de `generic_bank` / `native_bank` qui ne bougent pas. Colonnes
+`date,amount,label` par défaut, le **signe du montant porte le sens**, écriture par
+`store_transactions`.
+
+- **La référence synthétique** est un SHA-256 du contenu de la ligne **plus son rang parmi les
+  lignes identiques** — pas son rang dans le fichier. Un relevé exporté du plus récent au plus
+  ancien décalerait sinon tous les rangs et réinsérerait tout l'historique. Deux opérations jumelles
+  gardent chacune la sienne. Le montant entre dans l'empreinte via `canonical_amount` (rendue
+  publique) : `42.5` et `42.50` sont le même mouvement.
+- **Pas d'instantané `AccountHistory`** : un relevé ne porte pas toujours le solde de référence
+  qu'il faudrait pour reconstruire une courbe. Les deux imports bancaires sont complémentaires.
+- **Conséquence assumée** : `readable_account_bidxs` renvoie aussi les comptes **non rattachés qui
+  portent des opérations**. Sans ça l'import n'aurait alimenté personne — le Livret A n'a pas de
+  lien bancaire, et son côté du virement n'aurait jamais été apparié. Un compte manuel dans lequel
+  rien n'a été importé reste dehors : il nommerait un total auquel il ne contribue pas.
+
+### 6. Branchement
+
+- **API** : `get_observed_flows` côté MCP (totaux mensuels seulement). Le refus du journal ligne à
+  ligne reste en place, mais son message pointe désormais l'outil au lieu d'affirmer que les
+  chiffres n'existent pas. Le docstring de `mcp_server/tools.py` compte `services/banking/flows`
+  parmi ses sources neutres, sur le même critère que les deux autres.
+- **Web** : `ObservedFlowsCard` dans Comptes Bancaires (entrées/sorties par mois, comptes couverts,
+  en attente et devises étrangères à part, et « X € déplacés entre vos comptes » **affiché**, pas
+  caché) ; `CashflowComparisonCard` en tête de la liste des flux déclarés (verdict par flux, choix
+  du libellé à apparier, déliaison).
+- **N'ont pas bougé** : la page Flux elle-même, l'épargne mensuelle et le taux d'épargne du tableau
+  de bord, la mise à jour automatique des soldes manuels, la dénomination en devise des flux.
+
+### Ce qui reste ouvert
+
+- Le rejeu réel ne couvre que la paire compte courant / carte Boursorama. **Aucun vrai virement
+  interne n'a pu être mesuré** : Revolut, Livret A et LDDS ne sont pas dans l'export. La tolérance
+  de 3 jours et l'appariement au plus proche restent donc justifiés par l'audit, pas par une mesure.
+- Le parcours de réparation d'Emilien est inchangé et toujours à faire par lui : détacher
+  « Compte plaisir » en cochant la suppression des opérations → Comptes Bancaires → réimporter le
+  JSON d'export.
