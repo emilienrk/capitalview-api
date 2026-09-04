@@ -4,6 +4,7 @@ Declared cashflows against what actually moved (services/banking/matching.py).
 Transactions go in through `store_transactions`, so the comparison reads exactly
 what a real sync would have written.
 """
+import json
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
@@ -27,10 +28,11 @@ from services.banking.matching import (
 )
 from services.banking.transactions import store_transactions
 from services.cashflow import create_cashflow
-from services.encryption import encrypt_data, hash_index
+from services.encryption import decrypt_data, encrypt_data, hash_index
 
 USER = "match_user"
 ACCOUNT = "match-account"
+CARD_ACCOUNT = "match-card-account"
 TODAY = date(2026, 8, 20)
 
 
@@ -43,6 +45,10 @@ def _link(session: Session, master_key: str) -> None:
             status="AUTHORIZED",
             consent_valid_until=datetime(2027, 1, 1, tzinfo=timezone.utc),
             authorized_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            accounts_enc=encrypt_data(
+                json.dumps([{"identification_hash": "ih", "cash_account_type": "CACC"}]),
+                master_key,
+            ),
         )
     )
     session.commit()
@@ -52,6 +58,28 @@ def _link(session: Session, master_key: str) -> None:
             bank_account_uuid_bidx=hash_index(ACCOUNT, master_key),
             session_uuid="sess-match",
             identification_hash_bidx=hash_index("ih", master_key),
+            account_uid_enc=encrypt_data("uid", master_key),
+            anchor_date=date(2026, 1, 1),
+            anchor_balance_enc=encrypt_data("0", master_key),
+            last_synced_at=TODAY,
+        )
+    )
+    session.commit()
+
+
+def _link_card(session: Session, master_key: str) -> None:
+    """The card account that debits `ACCOUNT`, as a pre-R21 link left behind."""
+    bank_session = session.get(BankSession, "sess-match")
+    accounts = json.loads(decrypt_data(bank_session.accounts_enc, master_key))
+    accounts.append({"identification_hash": "ih-card", "cash_account_type": "CARD"})
+    bank_session.accounts_enc = encrypt_data(json.dumps(accounts), master_key)
+    session.add(bank_session)
+    session.add(
+        BankAccountLink(
+            user_uuid_bidx=hash_index(USER, master_key),
+            bank_account_uuid_bidx=hash_index(CARD_ACCOUNT, master_key),
+            session_uuid="sess-match",
+            identification_hash_bidx=hash_index("ih-card", master_key),
             account_uid_enc=encrypt_data("uid", master_key),
             anchor_date=date(2026, 1, 1),
             anchor_balance_enc=encrypt_data("0", master_key),
@@ -129,7 +157,7 @@ class TestVerdicts:
         so, until someone confirms."""
         _link(session, master_key)
         for i, day in enumerate(("2026-06-05", "2026-07-05", "2026-08-05")):
-            store_transactions(session, USER, master_key, ACCOUNT,
+            store_transactions(session, master_key, ACCOUNT,
                                [_movement(day, "850.00", "PRLV SEPA FONCIA", f"r{i}")])
         cashflow_id = _declare(session, master_key, "Loyer", "850.00")
 
@@ -143,7 +171,7 @@ class TestVerdicts:
     def test_a_confirmed_match_that_holds_is_on_track(self, session: Session, master_key: str):
         _link(session, master_key)
         for i, day in enumerate(("2026-06-05", "2026-07-05", "2026-08-05")):
-            store_transactions(session, USER, master_key, ACCOUNT,
+            store_transactions(session, master_key, ACCOUNT,
                                [_movement(day, "850.00", "PRLV SEPA FONCIA", f"r{i}")])
         cashflow_id = _declare(session, master_key, "Loyer", "850.00")
         _confirm(session, master_key, cashflow_id, "PRLV SEPA FONCIA")
@@ -159,7 +187,7 @@ class TestVerdicts:
         """The whole point: the declared 850 is stale and nothing else says so."""
         _link(session, master_key)
         for i, day in enumerate(("2026-06-05", "2026-07-05", "2026-08-05")):
-            store_transactions(session, USER, master_key, ACCOUNT,
+            store_transactions(session, master_key, ACCOUNT,
                                [_movement(day, "880.00", "PRLV SEPA FONCIA", f"r{i}")])
         cashflow_id = _declare(session, master_key, "Loyer", "850.00")
         _confirm(session, master_key, cashflow_id, "PRLV SEPA FONCIA")
@@ -173,7 +201,7 @@ class TestVerdicts:
         for i, (day, amount) in enumerate(
             (("2026-06-05", "12.49"), ("2026-07-05", "12.50"), ("2026-08-05", "12.51"))
         ):
-            store_transactions(session, USER, master_key, ACCOUNT,
+            store_transactions(session, master_key, ACCOUNT,
                                [_movement(day, amount, "PRLV SEPA SPOTIFY", f"r{i}")])
         cashflow_id = _declare(session, master_key, "Musique", "12.50")
         _confirm(session, master_key, cashflow_id, "PRLV SEPA SPOTIFY")
@@ -188,7 +216,7 @@ class TestVerdicts:
         _link(session, master_key)
         # 3 % above 900 — over the line.
         for i, day in enumerate(("2026-06-05", "2026-07-05", "2026-08-05")):
-            store_transactions(session, USER, master_key, ACCOUNT,
+            store_transactions(session, master_key, ACCOUNT,
                                [_movement(day, "927.00", "PRLV SEPA FONCIA", f"r{i}")])
         cashflow_id = _declare(session, master_key, "Loyer", "900.00")
         _confirm(session, master_key, cashflow_id, "PRLV SEPA FONCIA")
@@ -201,7 +229,7 @@ class TestVerdicts:
         budgeting for and no longer pay."""
         _link(session, master_key)
         for i, day in enumerate(("2026-03-05", "2026-04-05")):
-            store_transactions(session, USER, master_key, ACCOUNT,
+            store_transactions(session, master_key, ACCOUNT,
                                [_movement(day, "9.99", "PRLV SEPA GYMCLUB", f"r{i}")])
         cashflow_id = _declare(session, master_key, "Salle de sport", "9.99")
         _confirm(session, master_key, cashflow_id, "PRLV SEPA GYMCLUB")
@@ -228,7 +256,7 @@ class TestVerdicts:
         the bank, and averaging it away would hide it for good."""
         _link(session, master_key)
         for i, day in enumerate(("2026-07-05", "2026-08-05", "2026-08-14")):
-            store_transactions(session, USER, master_key, ACCOUNT,
+            store_transactions(session, master_key, ACCOUNT,
                                [_movement(day, "58.55", "PRLV SEPA EDF", f"r{i}")])
         cashflow_id = _declare(session, master_key, "Électricité", "58.55")
         _confirm(session, master_key, cashflow_id, "PRLV SEPA EDF")
@@ -239,7 +267,7 @@ class TestVerdicts:
         """A credit can never satisfy a declared expense, whatever its label."""
         _link(session, master_key)
         for i, day in enumerate(("2026-07-05", "2026-08-05")):
-            store_transactions(session, USER, master_key, ACCOUNT,
+            store_transactions(session, master_key, ACCOUNT,
                                [_movement(day, "850.00", "PRLV SEPA FONCIA", f"r{i}",
                                           direction="CRDT")])
         cashflow_id = _declare(session, master_key, "Loyer", "850.00")
@@ -262,7 +290,7 @@ class TestSuggestion:
     def test_a_single_occurrence_is_never_proposed(self, session: Session, master_key: str):
         """One movement is an event, not a recurrence."""
         _link(session, master_key)
-        store_transactions(session, USER, master_key, ACCOUNT,
+        store_transactions(session, master_key, ACCOUNT,
                            [_movement("2026-08-05", "850.00", "PRLV SEPA FONCIA", "r0")])
         _declare(session, master_key, "Loyer", "850.00")
 
@@ -276,10 +304,10 @@ class TestSuggestion:
         what a coincidence looks like."""
         _link(session, master_key)
         for i, day in enumerate(("2026-06-05", "2026-07-05", "2026-08-05")):
-            store_transactions(session, USER, master_key, ACCOUNT,
+            store_transactions(session, master_key, ACCOUNT,
                                [_movement(day, "30.00", "PRLV SEPA MONTHLY", f"m{i}")])
         for i, day in enumerate(("2026-08-01", "2026-08-03", "2026-08-05")):
-            store_transactions(session, USER, master_key, ACCOUNT,
+            store_transactions(session, master_key, ACCOUNT,
                                [_movement(day, "30.00", "CARTE DAILY SHOP", f"d{i}")])
         _declare(session, master_key, "Abonnement", "30.00")
 
@@ -295,10 +323,10 @@ class TestSuggestion:
         for i, day in enumerate(
             ("2026-03-05", "2026-04-05", "2026-05-05", "2026-06-05", "2026-07-05")
         ):
-            store_transactions(session, USER, master_key, ACCOUNT,
+            store_transactions(session, master_key, ACCOUNT,
                                [_movement(day, "60.00", "PRLV SEPA EDF", f"e{i}")])
         for i, day in enumerate(("2026-06-11", "2026-07-11")):
-            store_transactions(session, USER, master_key, ACCOUNT,
+            store_transactions(session, master_key, ACCOUNT,
                                [_movement(day, "58.65", "CARTE LECLERC", f"l{i}")])
         _declare(session, master_key, "Électricité", "58.55")
 
@@ -311,7 +339,7 @@ class TestSuggestion:
         _link(session, master_key)
         for n in range(8):
             for i, day in enumerate(("2026-06-05", "2026-07-05")):
-                store_transactions(session, USER, master_key, ACCOUNT,
+                store_transactions(session, master_key, ACCOUNT,
                                    [_movement(day, f"{50 + n}.00", f"CARTE SHOP{chr(65+n)}", f"s{n}{i}")])
         _declare(session, master_key, "Divers", "55.00")
 
@@ -322,7 +350,7 @@ class TestSuggestion:
     ):
         _link(session, master_key)
         for i, day in enumerate(("2026-07-05", "2026-08-05")):
-            store_transactions(session, USER, master_key, ACCOUNT,
+            store_transactions(session, master_key, ACCOUNT,
                                [_movement(day, "850.00", "PRLV SEPA FONCIA", f"r{i}")])
         cashflow_id = _declare(session, master_key, "Loyer", "850.00")
         _confirm(session, master_key, cashflow_id, "PRLV SEPA FONCIA")
@@ -336,3 +364,42 @@ class TestSuggestion:
         result = _only(session, master_key)
         assert result.status == UNMATCHED
         assert result.match_pattern is None
+
+
+class TestMirroredCardAccount:
+    """The card account republishes the current account's rows (R22 keeps both).
+
+    Read unfiltered, one movement becomes two occurrences of the same signature
+    — enough to turn a single purchase into a recurrence, and a monthly flow
+    into a `duplicated` verdict on a perfectly healthy declaration.
+    """
+
+    def _both_sides(self, session: Session, master_key: str, day: str, ref: str) -> None:
+        for account in (ACCOUNT, CARD_ACCOUNT):
+            store_transactions(session, master_key, account,
+                               [_movement(day, "9.99", "PRLV SEPA GYMCLUB", f"{ref}-{account}")])
+
+    def test_a_healthy_monthly_flow_is_not_reported_as_duplicated(
+        self, session: Session, master_key: str
+    ):
+        _link(session, master_key)
+        _link_card(session, master_key)
+        for i, day in enumerate(("2026-06-05", "2026-07-05", "2026-08-05")):
+            self._both_sides(session, master_key, day, f"r{i}")
+        cashflow_id = _declare(session, master_key, "Salle de sport", "9.99")
+        _confirm(session, master_key, cashflow_id, "PRLV SEPA GYMCLUB")
+
+        result = _only(session, master_key)
+        assert result.status == ON_TRACK
+        assert result.occurrences == 3
+
+    def test_one_purchase_seen_twice_is_not_a_recurrence(
+        self, session: Session, master_key: str
+    ):
+        """Below MIN_OCCURRENCES it must stay: the echo is not a second event."""
+        _link(session, master_key)
+        _link_card(session, master_key)
+        self._both_sides(session, master_key, "2026-08-05", "r0")
+        _declare(session, master_key, "Salle de sport", "9.99")
+
+        assert _only(session, master_key).candidates == []

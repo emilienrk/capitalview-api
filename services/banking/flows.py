@@ -31,7 +31,8 @@ from dtos.banking import (
     BankFlowsResponse,
 )
 from models.bank import BankAccount
-from models.banking import BankAccountLink, BankTransaction
+from models.banking import BankTransaction
+from services.banking.linking import unmirrored_account_bidxs
 from services.banking.transactions import FINAL_STATUSES
 from services.encryption import decrypt_data, hash_index
 
@@ -134,13 +135,10 @@ def compute_real_flows(
 
     user_bidx = hash_index(user_uuid, master_key)
     # `BankAccountLink.bank_account_uuid_bidx` and `BankTransaction.account_id_bidx`
-    # are the same blind index of the same CapitalView account uuid.
-    account_bidxs = [
-        link.bank_account_uuid_bidx
-        for link in session.exec(
-            select(BankAccountLink).where(BankAccountLink.user_uuid_bidx == user_bidx)
-        ).all()
-    ]
+    # are the same blind index of the same CapitalView account uuid. A mirrored
+    # card account is left out: its rows are the current account's own, and
+    # summing both would count every card purchase twice.
+    account_bidxs = unmirrored_account_bidxs(session, user_bidx, master_key)
     if not account_bidxs:
         return _empty(periods)
 

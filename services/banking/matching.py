@@ -30,9 +30,10 @@ from typing import NamedTuple
 from sqlmodel import Session, select
 
 from dtos.cashflow import CashflowComparison, MatchCandidate, RecentOccurrence
-from models.banking import BankAccountLink, BankTransaction
+from models.banking import BankTransaction
 from models.cashflow import Cashflow
 from models.enums import FlowType, Frequency
+from services.banking.linking import unmirrored_account_bidxs
 from services.banking.transactions import FINAL_STATUSES
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
@@ -129,12 +130,10 @@ def load_signature_groups(
 ) -> dict[str, SignatureGroup]:
     """Every booked movement since `since`, grouped by label signature."""
     user_bidx = hash_index(user_uuid, master_key)
-    account_bidxs = [
-        link.bank_account_uuid_bidx
-        for link in session.exec(
-            select(BankAccountLink).where(BankAccountLink.user_uuid_bidx == user_bidx)
-        ).all()
-    ]
+    # A mirrored card account is left out: its rows repeat the current
+    # account's, and a signature seen twice for one movement would inflate the
+    # occurrence count MIN_OCCURRENCES and the `duplicated` verdict rest on.
+    account_bidxs = unmirrored_account_bidxs(session, user_bidx, master_key)
     if not account_bidxs:
         return {}
 
