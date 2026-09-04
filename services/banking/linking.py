@@ -531,6 +531,35 @@ def is_card_account(session: Session, link: BankAccountLink, master_key: str) ->
     return find_discovered_account(session, link, master_key).get("cash_account_type") == CARD_ACCOUNT_TYPE
 
 
+def unmirrored_account_bidxs(session: Session, user_bidx: str, master_key: str) -> list[str]:
+    """The linked accounts a reader may sum without counting anything twice.
+
+    A card account republishes the movements of the current account it debits,
+    and cross-account deduplication is gone (R22) — deliberately, since it
+    destroyed rows to achieve this. Both copies therefore exist, and anything
+    summing them counts every card purchase twice. The filter belongs here, at
+    read time, never back at write time.
+
+    Only a card account whose current account is linked in the *same* bank
+    session is dropped: a card account linked on its own echoes nothing, and
+    silently returning none of its movements would be the worse failure. Card
+    accounts can no longer be attached at all (R21), so this only ever concerns
+    links predating that rule.
+    """
+    roles = [
+        (link, is_card_account(session, link, master_key))
+        for link in session.exec(
+            select(BankAccountLink).where(BankAccountLink.user_uuid_bidx == user_bidx)
+        ).all()
+    ]
+    mirroring_sessions = {link.session_uuid for link, is_card in roles if not is_card}
+    return [
+        link.bank_account_uuid_bidx
+        for link, is_card in roles
+        if not (is_card and link.session_uuid in mirroring_sessions)
+    ]
+
+
 def _account_id_label(account: dict[str, Any]) -> str | None:
     """IBAN if the bank gave one, else the "other" identification (BBAN, …)."""
     account_id = account.get("account_id") or {}
