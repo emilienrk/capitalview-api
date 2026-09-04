@@ -136,8 +136,7 @@ def compute_real_flows(
     user_bidx = hash_index(user_uuid, master_key)
     # `BankAccountLink.bank_account_uuid_bidx` and `BankTransaction.account_id_bidx`
     # are the same blind index of the same CapitalView account uuid. Linked
-    # accounts and CSV-imported ones alike, minus the mirrored card accounts
-    # whose rows are the current account's own.
+    # accounts and CSV-imported ones alike.
     account_bidxs = readable_account_bidxs(session, user_bidx, master_key)
     if not account_bidxs:
         return _empty(periods)
