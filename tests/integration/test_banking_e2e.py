@@ -380,6 +380,25 @@ class TestBankingEndToEnd:
         assert card_result["snapshots_written"] == 0
         assert card_result["reconciliation_status"] == "not_reconcilable"
 
+        # 8b. The observed-flow read counts a card purchase once. The link at
+        # 7b republishes 1 464 of the current account's rows, and cross-account
+        # deduplication is gone on purpose (R22) — both copies are stored, so
+        # the filter has to sit here, on the read.
+        flows_resp = client.get("/banking/flows?months=120", headers=auth_headers)
+        assert flows_resp.status_code == 200
+        observed = flows_resp.json()
+        # 120 months reach back past 2022-10, the export's first movement.
+        assert observed["account_count"] == 1
+        assert Decimal(observed["outflow"]) == Decimal("158887.78")
+        assert Decimal(observed["inflow"]) == Decimal("159294.48")
+        assert sum(m["outflow_count"] for m in observed["months"]) == 2340
+
+        # And none of these two accounts' movements pair up as a transfer
+        # between them. The 26 pairs the matching used to find here were card
+        # echoes of the current account's own refunds — same amount, opposite
+        # direction, days apart — worth 1 236,38 € of real spending erased.
+        assert observed["internal_transfers_excluded"] == 0
+
         # 9. Second sync on the same day is skipped by daily cap (R16)
         sync_again = client.post("/banking/sync", headers=auth_headers)
         assert sync_again.status_code == 200
