@@ -32,9 +32,11 @@ from sqlmodel import Session, select
 from dtos.cashflow import CashflowComparison, MatchCandidate, RecentOccurrence
 from models.banking import BankTransaction
 from models.cashflow import Cashflow
+from models.currency import BASE_CURRENCY
 from models.enums import FlowType, Frequency
 from services.banking.linking import unmirrored_account_bidxs
 from services.banking.transactions import FINAL_STATUSES
+from services.cashflow import LinkedAccount, build_bank_bidx_map
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 CREDIT = "CRDT"
@@ -103,6 +105,9 @@ class Occurrence(NamedTuple):
     day: date
     amount: Decimal
     is_credit: bool
+    # Amounts arrive unconverted, with no rate attached: comparing one to a
+    # declaration means first checking the two speak the same currency.
+    currency: str
 
 
 class SignatureGroup(NamedTuple):
@@ -159,6 +164,7 @@ def load_signature_groups(
                 day=day,
                 amount=abs(Decimal(decrypt_data(row.amount_enc, master_key))),
                 is_credit=decrypt_data(row.credit_debit_enc, master_key) == CREDIT,
+                currency=decrypt_data(row.currency_enc, master_key),
             )
         )
     return {
@@ -180,6 +186,7 @@ def rank_candidates(
     flow_type: FlowType,
     frequency: Frequency,
     window_days: int,
+    currency: str,
 ) -> list[MatchCandidate]:
     """The groups that could be this declaration, best first.
 
@@ -196,7 +203,7 @@ def rank_candidates(
 
     scored: list[tuple[float, MatchCandidate]] = []
     for signature, group in groups.items():
-        matching = [o for o in group.occurrences if o.is_credit == wants_credit]
+        matching = _same_side(group.occurrences, wants_credit, currency)
         if len(matching) < MIN_OCCURRENCES:
             continue
         median = Decimal(str(statistics.median([float(o.amount) for o in matching])))
@@ -222,6 +229,21 @@ def rank_candidates(
         ))
     scored.sort(key=lambda pair: pair[0])
     return [candidate for _, candidate in scored[:MAX_CANDIDATES]]
+
+
+def _same_side(
+    occurrences: list[Occurrence], wants_credit: bool, currency: str
+) -> list[Occurrence]:
+    """The occurrences a declaration can be measured against.
+
+    Currency is a filter, not a conversion: a 40 CHF debit and a 40 € one are
+    not the same movement, and no rate is attached to either. A declaration in
+    a currency nothing moved in simply finds nothing — it fails, it does not
+    invent.
+    """
+    return [
+        o for o in occurrences if o.is_credit == wants_credit and o.currency == currency
+    ]
 
 
 def _cadence_distance(
@@ -277,12 +299,17 @@ def compare_cashflows(
         select(Cashflow).where(Cashflow.user_uuid_bidx == user_bidx)
     ).all()
 
+    # A declaration is denominated by the account it hits, euros when it hits
+    # none (services/cashflow.py, docs/currencies.md). The same rule decides
+    # which observed movements it may be compared against.
+    accounts = build_bank_bidx_map(session, user_uuid, master_key)
+
     results = []
     for cashflow in cashflows:
         if cashflow.is_active_enc and decrypt_data(cashflow.is_active_enc, master_key) == "false":
             continue
         results.append(
-            _compare_one(cashflow, groups, master_key, anchor, (anchor - since).days)
+            _compare_one(cashflow, groups, accounts, master_key, anchor, (anchor - since).days)
         )
     return results
 
@@ -297,6 +324,7 @@ def _months_before(anchor: date, months: int) -> date:
 def _compare_one(
     cashflow: Cashflow,
     groups: dict[str, SignatureGroup],
+    accounts: dict[str, LinkedAccount],
     master_key: str,
     anchor: date,
     window_days: int,
@@ -306,6 +334,8 @@ def _compare_one(
     frequency = Frequency(decrypt_data(cashflow.frequency_enc, master_key))
     declared = Decimal(decrypt_data(cashflow.amount_enc, master_key))
     pattern = get_match_pattern(cashflow, master_key)
+    linked = accounts.get(cashflow.bank_account_uuid_bidx) if cashflow.bank_account_uuid_bidx else None
+    currency = linked.currency if linked else BASE_CURRENCY
 
     base = dict(
         cashflow_id=cashflow.uuid,
@@ -313,6 +343,7 @@ def _compare_one(
         flow_type=flow_type,
         frequency=frequency,
         declared_amount=declared,
+        currency=currency,
         category=decrypt_data(cashflow.category_enc, master_key),
         match_pattern=pattern,
     )
@@ -321,14 +352,14 @@ def _compare_one(
         return CashflowComparison(
             **base,
             status=UNMATCHED,
-            candidates=rank_candidates(groups, declared, flow_type, frequency, window_days),
+            candidates=rank_candidates(
+                groups, declared, flow_type, frequency, window_days, currency
+            ),
         )
 
     group = groups.get(pattern)
     wants_credit = flow_type == FlowType.INFLOW
-    occurrences = (
-        [o for o in group.occurrences if o.is_credit == wants_credit] if group else []
-    )
+    occurrences = _same_side(group.occurrences, wants_credit, currency) if group else []
     if not occurrences:
         return CashflowComparison(**base, status=MISSING)
 

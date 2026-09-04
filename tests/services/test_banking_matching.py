@@ -7,6 +7,7 @@ what a real sync would have written.
 import json
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from unittest.mock import patch
 
 from sqlmodel import Session, select
 
@@ -89,10 +90,11 @@ def _link_card(session: Session, master_key: str) -> None:
     session.commit()
 
 
-def _movement(day: str, amount: str, label: str, ref: str, direction: str = "DBIT") -> dict:
+def _movement(day: str, amount: str, label: str, ref: str, direction: str = "DBIT",
+              currency: str = "EUR") -> dict:
     return {
         "entry_reference": ref,
-        "transaction_amount": {"currency": "EUR", "amount": amount},
+        "transaction_amount": {"currency": currency, "amount": amount},
         "credit_debit_indicator": direction,
         "status": "BOOK",
         "booking_date": day,
@@ -103,13 +105,14 @@ def _movement(day: str, amount: str, label: str, ref: str, direction: str = "DBI
 
 
 def _declare(session, master_key, name, amount, flow_type=FlowType.OUTFLOW,
-             frequency=Frequency.MONTHLY) -> str:
+             frequency=Frequency.MONTHLY, bank_account_id: str | None = None) -> str:
     created = create_cashflow(
         session,
         CashflowCreate(
             name=name, flow_type=flow_type, category="Logement",
             amount=Decimal(amount), frequency=frequency,
             transaction_date=date(2026, 1, 5),
+            bank_account_id=bank_account_id,
         ),
         USER, master_key,
     )
@@ -403,3 +406,78 @@ class TestMirroredCardAccount:
         _declare(session, master_key, "Salle de sport", "9.99")
 
         assert _only(session, master_key).candidates == []
+
+
+class TestCurrency:
+    """A declaration is denominated by the account it hits; observed amounts
+    arrive unconverted, with no rate attached. Comparing across the two would
+    read `1000` against `1000` and call it a match."""
+
+    def _chf_account(self, session: Session, master_key: str) -> str:
+        with patch("services.bank.has_exchange_rate", return_value=True):
+            return create_bank_account(
+                session,
+                BankAccountCreate(name="Compte CHF", balance=Decimal("0"),
+                                  account_type=BankAccountType.CHECKING, currency="CHF"),
+                USER, master_key,
+            ).id
+
+    def _declare_in_chf(self, session: Session, master_key: str) -> str:
+        return _declare(session, master_key, "Loyer", "1000.00",
+                        bank_account_id=self._chf_account(session, master_key))
+
+    def test_a_euro_movement_never_answers_a_franc_declaration(
+        self, session: Session, master_key: str
+    ):
+        _link(session, master_key)
+        for i, day in enumerate(("2026-06-05", "2026-07-05", "2026-08-05")):
+            store_transactions(session, master_key, ACCOUNT,
+                               [_movement(day, "1000.00", "PRLV SEPA FONCIA", f"r{i}")])
+        cashflow_id = self._declare_in_chf(session, master_key)
+        _confirm(session, master_key, cashflow_id, "PRLV SEPA FONCIA")
+
+        result = _only(session, master_key)
+        assert result.currency == "CHF"
+        # It fails rather than inventing: nothing moved in francs.
+        assert result.status == MISSING
+
+    def test_a_euro_movement_is_not_even_suggested_for_it(
+        self, session: Session, master_key: str
+    ):
+        _link(session, master_key)
+        for i, day in enumerate(("2026-06-05", "2026-07-05", "2026-08-05")):
+            store_transactions(session, master_key, ACCOUNT,
+                               [_movement(day, "1000.00", "PRLV SEPA FONCIA", f"r{i}")])
+        self._declare_in_chf(session, master_key)
+
+        assert _only(session, master_key).candidates == []
+
+    def test_a_franc_movement_matches_a_franc_declaration(
+        self, session: Session, master_key: str
+    ):
+        _link(session, master_key)
+        for i, day in enumerate(("2026-06-05", "2026-07-05", "2026-08-05")):
+            store_transactions(session, master_key, ACCOUNT,
+                               [_movement(day, "1000.00", "PRLV SEPA FONCIA", f"r{i}",
+                                          currency="CHF")])
+        cashflow_id = self._declare_in_chf(session, master_key)
+        _confirm(session, master_key, cashflow_id, "PRLV SEPA FONCIA")
+
+        result = _only(session, master_key)
+        assert result.status == ON_TRACK
+        assert result.observed_amount == Decimal("1000.00")
+
+    def test_an_unattached_declaration_is_compared_in_euros(
+        self, session: Session, master_key: str
+    ):
+        """No account to be denominated by means euros, like every aggregate."""
+        _link(session, master_key)
+        for i, day in enumerate(("2026-06-05", "2026-07-05", "2026-08-05")):
+            store_transactions(session, master_key, ACCOUNT,
+                               [_movement(day, "1000.00", "PRLV SEPA FONCIA", f"r{i}")])
+        cashflow_id = _declare(session, master_key, "Loyer", "1000.00")
+        _confirm(session, master_key, cashflow_id, "PRLV SEPA FONCIA")
+
+        result = _only(session, master_key)
+        assert result.currency == "EUR"
+        assert result.status == ON_TRACK
