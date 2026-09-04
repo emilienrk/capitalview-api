@@ -279,6 +279,101 @@ tests, qui a perdu `user_uuid` (`3159622`). Les deux en-têtes de section orphel
 `dtos/cashflow.py` et `dtos/banking.py` ont retrouvé leur contenu. `Cashflow.match_pattern_enc`
 n'est plus un schéma mort — `matching.py` le lit et l'écrit à nouveau : **rien à supprimer**.
 
+### 2. Le filtre carte — **retiré** (décision d'Emilien, 2026-09-04)
+
+Il a d'abord été écrit, puis retiré : **le cas d'un lien carte hérité n'est pas géré.** R21 rend un
+compte carte non rattachable, personne d'autre qu'Emilien n'utilise l'application, et la base est
+repartie de zéro. Un compte carte et son compte courant ne peuvent donc plus coexister, et le
+double comptage que ce filtre neutralisait ne peut plus être créé.
+
+`readable_account_bidxs` ne filtre plus rien : elle liste les comptes de l'utilisateur qui sont
+rattachés **ou** qui portent des opérations (voir point 5). Le décor du test e2e écrit toujours un
+lien carte à la main pour vérifier R21 et le comportement de synchro — c'est du lot 1, inchangé.
+
+### 3. Les faux positifs d'appariement — sans objet
+
+Le rejeu de l'export a montré que les **26 paires / 1 236,38 €** étaient **toutes** des échos de
+carte : un remboursement publié à la fois sur le compte courant et sur le compte carte, que la règle
+« sens opposés, même montant, ≤ 3 jours, comptes différents » prend pour un virement. Sans lien
+carte possible, cette forme ne se produit plus.
+
+La tolérance de 3 jours n'a donc **pas** été resserrée : rien ne le justifie, et la seule paire de
+comptes mesurable ne contenait aucun virement interne réel.
+
+### 4. La devise dans `matching.py`
+
+Comparer des montants de même devise, ou refuser la comparaison. Petit, mais silencieusement faux
+aujourd'hui.
+
+### 5. L'import CSV transactionnel (pour le Livret A)
+
+**Non fait, contrairement à ce qu'on pourrait croire.** Sur `main`,
+`services/imports/bank_csv.py` produit **uniquement des points de solde** :
+`parse_bank_points` (`:43`) renvoie des (date, solde) et le mode `delta` **intègre** les mouvements
+pour en faire des soldes de fin de journée (`:68-74`) — le sens est détruit à l'ingestion. Seuls la
+synchro et l'import du JSON d'export écrivent des `BankTransaction`.
+
+Ajouter un chemin transactionnel : date, montant, sens, libellé → la forme attendue par
+`normalize_transaction`, puis `store_transactions`. Les niveaux 1 et 2 de déduplication viennent
+gratuitement, donc un réimport du même fichier est sans effet.
+
+⚠️ **Piège** : un CSV n'a pas d'`entry_reference`, donc le niveau 1 ne s'applique pas et le niveau 2
+(empreinte) devient seul juge. Deux opérations réellement distinctes, même jour, même montant, sans
+référence, **se confondent d'un import à l'autre**. Remède : **synthétiser une référence stable**
+depuis le contenu de la ligne et son rang dans le fichier — le réimport reste idempotent et deux
+opérations jumelles survivent.
+
+⚠️ **Second piège** : l'import de soldes existant écrit des instantanés `AccountHistory`, le
+transactionnel n'en écrit pas. Décider si la courbe d'un compte importé en transactions se
+reconstruit (il faudrait un solde de référence, que le CSV ne porte pas forcément) ou si les deux
+imports restent complémentaires. **Ne pas casser le chemin de soldes qui marche.**
+
+### 6. Brancher
+
+Les dépenses observées deviennent la source affichée, les virements internes exclus et **comptés à
+part** — ne pas les cacher, « 1 240 € déplacés entre vos comptes » est une information. La
+comparaison prévu ↔ réel revient avec `matching.py`. Ouvrir ces chiffres à l'agent IA : attention au
+refus explicite en place (`mcp_server/tools.py:94-110`), à lever délibérément, pas par accident.
+
+**Ne bougent pas** : la page Flux de trésorerie, l'épargne mensuelle et le taux d'épargne du tableau
+de bord, la mise à jour automatique des soldes manuels, la dénomination en devise des flux.
+
+---
+
+## Vérification
+
+1. `uv run pytest -q` — **exige `dangerouslyDisableSandbox: true`** (cache uv bloqué).
+   Référence au 2026-09-04 : **1 180 tests**.
+2. `pnpm type-check` et `pnpm test` dans `capitalview-web` (92 tests). Éviter `pnpm build` (run-p).
+3. **Mutation** : chaque test neuf doit être prouvé non vide en cassant volontairement le code qu'il
+   couvre. C'est la convention du dépôt, pas une option.
+4. **Rejeu réel** : `vendor-docs/spike/export-boursorama-2022-2026.json` (hors git, tests sous garde
+   de skip). L'export complet dans les deux sens doit donner 2 776 et 1 464 insertions.
+5. Après le filtre carte, **remesurer les 26 faux positifs** : ils doivent avoir quasiment disparu.
+
+## Contexte utilisateur à ne pas oublier
+
+Le « Compte plaisir » d'Emilien est **encore rattaché à son compte carte** — le déploiement du lot 1
+ne rompt aucun lien existant. Tant qu'il l'est, ses opérations existent en double dans les données et
+dans l'export, et c'est exactement le cas que le filtre du point 2 doit couvrir. Son parcours de
+réparation, à faire par lui : détacher « Compte plaisir » en cochant la suppression des opérations →
+aller sur Comptes Bancaires (ré-amorçage automatique du compte courant) → importer son JSON d'export.
+
+---
+
+## Ce que le lot 3 a livré — 2026-09-04
+
+Branche `feat/observed-flows-internal-transfers`, des deux côtés. API : 1 247 tests (1 180 avant).
+Web : 100 tests (92 avant), `pnpm type-check` vert.
+
+### 1. Résurrection
+
+`flows.py`, `matching.py`, leurs 642 lignes de tests, les six DTO et les trois routes remis par
+`git revert 77e70bf`, sans conflit. Seul ajustement : les appels à `store_transactions` dans les
+tests, qui a perdu `user_uuid` (`3159622`). Les deux en-têtes de section orphelines de
+`dtos/cashflow.py` et `dtos/banking.py` ont retrouvé leur contenu. `Cashflow.match_pattern_enc`
+n'est plus un schéma mort — `matching.py` le lit et l'écrit à nouveau : **rien à supprimer**.
+
 ### 2. Le filtre carte — `linking.readable_account_bidxs`
 
 Une seule fonction, lue par `compute_real_flows` et `load_signature_groups`. À la lecture, jamais à
@@ -339,6 +434,5 @@ Nouveau parser, à côté de `generic_bank` / `native_bank` qui ne bougent pas. 
 - Le rejeu réel ne couvre que la paire compte courant / carte Boursorama. **Aucun vrai virement
   interne n'a pu être mesuré** : Revolut, Livret A et LDDS ne sont pas dans l'export. La tolérance
   de 3 jours et l'appariement au plus proche restent donc justifiés par l'audit, pas par une mesure.
-- Le parcours de réparation d'Emilien est inchangé et toujours à faire par lui : détacher
-  « Compte plaisir » en cochant la suppression des opérations → Comptes Bancaires → réimporter le
-  JSON d'export.
+- Emilien repart de comptes neufs plutôt que de réparer les siens : le parcours de détachement
+  décrit plus haut ne s'applique plus.

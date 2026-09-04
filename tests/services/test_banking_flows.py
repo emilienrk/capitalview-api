@@ -5,7 +5,6 @@ Rows are written through `store_transactions`, never hand-built: the aggregation
 reads what the sync actually persists, and a hand-built row could disagree with
 it silently.
 """
-import json
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
@@ -15,7 +14,7 @@ from sqlmodel import Session
 from models.banking import BankAccountLink, BankSession
 from services.banking.flows import _months_back, compute_real_flows
 from services.banking.transactions import store_transactions
-from services.encryption import decrypt_data, encrypt_data, hash_index
+from services.encryption import encrypt_data, hash_index
 
 USER = "flows_user"
 ACCOUNT_A = "account-a"
@@ -36,52 +35,32 @@ def _raw(amount: str, direction: str, day: str, *, ref: str, status: str = "BOOK
     }
 
 
-def _bank_session(session: Session, master_key: str, uuid: str = "sess-flows") -> str:
-    """The link's foreign key: one consent the accounts hang off."""
-    existing = session.get(BankSession, uuid)
+def _bank_session(session: Session, master_key: str) -> str:
+    """The link's foreign key: one consent both accounts hang off."""
+    existing = session.get(BankSession, "sess-flows")
     if existing is not None:
         return existing.uuid
     row = BankSession(
-        uuid=uuid,
+        uuid="sess-flows",
         user_uuid_bidx=hash_index(USER, master_key),
         session_id_enc=encrypt_data("eb-sess", master_key),
         status="AUTHORIZED",
         consent_valid_until=datetime(2027, 1, 1, tzinfo=timezone.utc),
         authorized_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        accounts_enc=encrypt_data(json.dumps([]), master_key),
     )
     session.add(row)
     session.commit()
     return row.uuid
 
 
-def _link(
-    session: Session,
-    master_key: str,
-    account_uuid: str,
-    cash_account_type: str | None = None,
-    session_uuid: str = "sess-flows",
-) -> None:
-    """Only linked accounts feed the aggregation.
-
-    `cash_account_type` writes the account into its consent's discovered-account
-    payload, which is where `is_card_account` reads the card/current role from.
-    """
-    _bank_session(session, master_key, session_uuid)
-    if cash_account_type is not None:
-        bank_session = session.get(BankSession, session_uuid)
-        accounts = json.loads(decrypt_data(bank_session.accounts_enc, master_key))
-        accounts.append({
-            "identification_hash": f"ih-{account_uuid}",
-            "cash_account_type": cash_account_type,
-        })
-        bank_session.accounts_enc = encrypt_data(json.dumps(accounts), master_key)
-        session.add(bank_session)
+def _link(session: Session, master_key: str, account_uuid: str) -> None:
+    """Only linked accounts feed the aggregation."""
+    _bank_session(session, master_key)
     session.add(
         BankAccountLink(
             user_uuid_bidx=hash_index(USER, master_key),
             bank_account_uuid_bidx=hash_index(account_uuid, master_key),
-            session_uuid=session_uuid,
+            session_uuid="sess-flows",
             identification_hash_bidx=hash_index(f"ih-{account_uuid}", master_key),
             account_uid_enc=encrypt_data("uid", master_key),
             anchor_date=date(2026, 1, 1),
@@ -323,76 +302,6 @@ class TestAverage:
         result = compute_real_flows(session, USER, master_key, months=12, today=date(2026, 3, 20))
         assert result.covered_months == 2
         assert result.monthly_inflow == Decimal("1000.00")
-
-
-class TestMirroredCardAccount:
-    """A card account and the current account it debits carry the same rows.
-
-    Cross-account deduplication is gone (R22), so both copies are stored on
-    purpose. Everything summing them has to drop one side at read time.
-    """
-
-    CARD = "card-account"
-
-    def _pair(self, session: Session, master_key: str) -> None:
-        _link(session, master_key, ACCOUNT_A, cash_account_type="CACC")
-        _link(session, master_key, self.CARD, cash_account_type="CARD")
-
-    def _both_sides(self, session: Session, master_key: str) -> None:
-        """The same purchase, as the bank publishes it on each account."""
-        for account in (ACCOUNT_A, self.CARD):
-            _store(session, master_key, account,
-                   _raw("42.00", "DBIT", "2026-03-05", ref=f"ref-{account}"))
-
-    def test_a_card_purchase_is_counted_once_not_twice(
-        self, session: Session, master_key: str
-    ):
-        self._pair(session, master_key)
-        self._both_sides(session, master_key)
-
-        result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
-        assert result.outflow == Decimal("42.00")
-        assert result.months[0].outflow_count == 1
-        # The card account is not summed, so it is not named in the total either.
-        assert result.account_count == 1
-
-    def test_the_echo_is_not_mistaken_for_an_internal_transfer(
-        self, session: Session, master_key: str
-    ):
-        """Both copies are debits, so pairing never sees them — the filter is
-        the only thing standing between the user and a doubled total."""
-        self._pair(session, master_key)
-        self._both_sides(session, master_key)
-
-        result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
-        assert result.internal_transfers_excluded == 0
-
-    def test_a_card_account_linked_on_its_own_is_still_read(
-        self, session: Session, master_key: str
-    ):
-        """Nothing mirrors it, so dropping it would hide real spending."""
-        _link(session, master_key, self.CARD, cash_account_type="CARD")
-        _store(session, master_key, self.CARD,
-               _raw("42.00", "DBIT", "2026-03-05", ref="alone"))
-
-        result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
-        assert result.account_count == 1
-        assert result.outflow == Decimal("42.00")
-
-    def test_a_card_account_of_another_bank_is_not_dropped_by_proxy(
-        self, session: Session, master_key: str
-    ):
-        """The current account that mirrors a card account is the one sharing
-        its consent. A second bank's card account echoes nothing here."""
-        _link(session, master_key, ACCOUNT_A, cash_account_type="CACC")
-        _link(session, master_key, self.CARD, cash_account_type="CARD",
-              session_uuid="sess-other-bank")
-        _store(session, master_key, self.CARD,
-               _raw("42.00", "DBIT", "2026-03-05", ref="other-bank"))
-
-        result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
-        assert result.account_count == 2
-        assert result.outflow == Decimal("42.00")
 
 
 class TestImportedAccount:

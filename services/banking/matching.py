@@ -135,9 +135,6 @@ def load_signature_groups(
 ) -> dict[str, SignatureGroup]:
     """Every booked movement since `since`, grouped by label signature."""
     user_bidx = hash_index(user_uuid, master_key)
-    # A mirrored card account is left out: its rows repeat the current
-    # account's, and a signature seen twice for one movement would inflate the
-    # occurrence count MIN_OCCURRENCES and the `duplicated` verdict rest on.
     account_bidxs = readable_account_bidxs(session, user_bidx, master_key)
     if not account_bidxs:
         return {}
