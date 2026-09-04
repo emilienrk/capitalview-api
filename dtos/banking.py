@@ -181,6 +181,52 @@ class BankSyncResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class BankFlowMonth(BaseModel):
+    """One calendar month of observed movement, in the response's currency."""
+    period: str  # YYYY-MM
+    inflow: Decimal
+    outflow: Decimal
+    net: Decimal
+    inflow_count: int = 0
+    outflow_count: int = 0
+
+
+class BankFlowCurrencyTotal(BaseModel):
+    """Movements in a currency other than the headline one, reported apart.
+
+    Amounts arrive unconverted and with no exchange rate, so they are never
+    folded into the main total.
+    """
+    currency: str
+    inflow: Decimal
+    outflow: Decimal
+
+
+class BankFlowsResponse(BaseModel):
+    """GET /banking/flows — what actually moved on the linked accounts."""
+    currency: str
+    months: list[BankFlowMonth]
+    inflow: Decimal
+    outflow: Decimal
+    net: Decimal
+    # Averaged over the months carrying data, not over the requested window.
+    monthly_inflow: Decimal
+    monthly_outflow: Decimal
+    covered_months: int
+    account_count: int
+    # Named so a total spanning several accounts can be checked at a glance.
+    account_names: list[str] = []
+    # Movements paired as one transfer between two of the user's own accounts:
+    # counted, reported, and kept out of the totals.
+    internal_transfers_excluded: int
+    internal_transfers_amount: Decimal
+    # Not yet booked, so deliberately outside the monthly figures.
+    pending_count: int
+    pending_inflow: Decimal
+    pending_outflow: Decimal
+    other_currencies: list[BankFlowCurrencyTotal]
+
+
 class BankExportImportResult(BaseModel):
     bank_account_uuid: str
     status: str
