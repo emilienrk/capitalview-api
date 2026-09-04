@@ -94,3 +94,50 @@ class CashflowBalanceResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Declared vs observed
 # ---------------------------------------------------------------------------
+
+
+class RecentOccurrence(BaseModel):
+    """One real movement behind a declaration, for the "3 derniers" line."""
+    day: date
+    amount: Decimal
+
+
+class MatchCandidate(BaseModel):
+    """One group of real movements that could be a declaration's counterpart."""
+    pattern: str
+    observed_amount: Decimal
+    occurrences: int
+    last_seen: date
+
+
+class CashflowMatchUpdate(BaseModel):
+    """Confirm or clear the label a declaration is matched against.
+
+    `null` or an empty string unlinks it and puts the app back to suggesting.
+    """
+    match_pattern: str | None = None
+
+
+class CashflowComparison(BaseModel):
+    """What one declaration says, against what actually moved.
+
+    `status` is the verdict: `unmatched` (never confirmed, a suggestion may be
+    attached), `missing` (confirmed but nothing has moved for a couple of
+    cadences), `duplicated` (seen twice where once was declared), `drifted` (it
+    moves, for another amount) or `on_track`.
+    """
+    cashflow_id: str
+    name: str
+    flow_type: FlowType
+    frequency: Frequency
+    category: str
+    declared_amount: Decimal
+    status: str
+    match_pattern: str | None = None
+    observed_amount: Decimal | None = None
+    last_seen: date | None = None
+    occurrences: int = 0
+    recent: list[RecentOccurrence] = []
+    # Only on `unmatched`: what this declaration could be, best first. Several,
+    # because amount and spacing cannot always tell two recurrences apart.
+    candidates: list[MatchCandidate] = []

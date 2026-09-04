@@ -1094,3 +1094,24 @@ def test_a_retired_session_is_still_listed_with_its_accounts(session, master_key
     assert "Reconnectez" in summary["status_message"]
     assert [a["bank_account_uuid"] for a in summary["accounts"]] == [bank_account_uuid]
 
+
+def test_flows_is_readable_with_the_feature_switched_off(session, master_key, monkeypatch):
+    """Observed history belongs to the user whether or not the opt-in is on."""
+    client = TestClient(app)
+    _configure_credentials(client)
+    _opt_out(session, master_key)
+
+    r = client.get("/banking/flows?months=3")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["account_count"] == 0
+    assert len(body["months"]) == 3
+    assert body["inflow"] == "0"
+
+
+def test_flows_window_is_clamped_rather_than_rejected(session, master_key):
+    client = TestClient(app)
+    _configure_credentials(client)
+
+    assert len(client.get("/banking/flows?months=0").json()["months"]) == 1
+    assert len(client.get("/banking/flows?months=999").json()["months"]) == 120
