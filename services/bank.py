@@ -253,7 +253,7 @@ def delete_bank_account(
     account_uuid: str,
     master_key: str,
 ) -> bool:
-    """Delete a bank account and its account history snapshots."""
+    """Delete a bank account, its history snapshots and any banking link on it."""
     account = session.get(BankAccount, account_uuid)
     if not account:
         return False
@@ -262,7 +262,15 @@ def delete_bank_account(
     session.exec(
         sa.delete(AccountHistory).where(AccountHistory.account_id_bidx == account_id_bidx)
     )
-        
+    # A link outliving its account is invisible in the sessions list (which
+    # skips it) yet still marks the discovered account "Rattaché" in the link
+    # modal — attached to nothing, and impossible to re-attach.
+    session.exec(
+        sa.delete(BankAccountLink).where(
+            BankAccountLink.bank_account_uuid_bidx == account_id_bidx
+        )
+    )
+
     session.delete(account)
     session.commit()
     return True
