@@ -85,6 +85,11 @@ def _map_settings_to_response(
             if settings.investment_plan_enc
             else None
         ),
+        analysis_hidden_sections=(
+            json.loads(settings.analysis_hidden_sections)
+            if settings.analysis_hidden_sections
+            else []
+        ),
         created_at=settings.created_at,
         updated_at=settings.updated_at,
     )
@@ -248,6 +253,12 @@ def update_settings(
             if data.investment_plan
             else None
         )
+
+    if data.analysis_hidden_sections is not None:
+        # An empty list means "show everything" and clears the column, so the
+        # default and an explicit reset are stored the same way.
+        hidden = sorted({key.strip() for key in data.analysis_hidden_sections if key.strip()})
+        settings.analysis_hidden_sections = json.dumps(hidden) if hidden else None
 
     session.add(settings)
     session.commit()

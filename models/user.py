@@ -115,6 +115,12 @@ class UserSettings(SQLModel, table=True):
     benchmark_asset_key: str | None = Field(default=None, sa_column=Column(TEXT, nullable=True))
     # Encrypted JSON: {"monthly_target": "...", "allocation": {asset_key: pct}}
     investment_plan_enc: str | None = Field(default=None, sa_column=Column(TEXT, nullable=True))
+    # JSON array of /analyse section keys to hide. Stores what is *hidden*, not
+    # what is shown, so a section added later is on for everyone by default
+    # rather than silently missing for every existing user.
+    analysis_hidden_sections: str | None = Field(
+        default=None, sa_column=Column(TEXT, nullable=True)
+    )
 
     created_at: datetime = Field(
         default=sa.func.now(),

@@ -62,6 +62,7 @@ class UserSettingsUpdate(BaseModel):
     usd_eur_rate: float | None = Field(None, gt=0, le=10)
     benchmark_asset_key: str | None = None
     investment_plan: dict | None = None
+    analysis_hidden_sections: list[str] | None = None
 
 
 class UserSettingsResponse(BaseModel):
@@ -91,5 +92,6 @@ class UserSettingsResponse(BaseModel):
     usd_eur_rate: float | None = None
     benchmark_asset_key: str | None = None
     investment_plan: dict | None = None
+    analysis_hidden_sections: list[str] = []
     created_at: datetime
     updated_at: datetime
