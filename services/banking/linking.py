@@ -540,27 +540,28 @@ def readable_account_bidxs(session: Session, user_bidx: str, master_key: str) ->
     rows, so a manual account nobody imported anything into stays out of the
     totals it would otherwise name without contributing to.
 
-    No account is filtered out. A card account would be — it republishes the
+    No account is filtered out on its type. A card account would be — it republishes the
     movements of the current account it debits, and cross-account deduplication
     is gone (R22) — but one can no longer be attached at all (R21), so the
     duplicated shape cannot be created any more.
     """
+    # Only accounts that still exist. A link or a batch of movements left over
+    # from a deleted account would otherwise keep feeding the observed-flows
+    # totals under an account the user can no longer see, and no amount of
+    # deleting would make the figures go away.
+    existing = {
+        hash_index(account.uuid, master_key)
+        for account in session.exec(
+            select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
+        ).all()
+    }
     linked = {
         link.bank_account_uuid_bidx
         for link in session.exec(
             select(BankAccountLink).where(BankAccountLink.user_uuid_bidx == user_bidx)
         ).all()
-    }
-    candidates = [
-        bidx
-        for bidx in (
-            hash_index(account.uuid, master_key)
-            for account in session.exec(
-                select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
-            ).all()
-        )
-        if bidx not in linked
-    ]
+    } & existing
+    candidates = [bidx for bidx in existing if bidx not in linked]
     imported = set(
         session.exec(
             select(BankTransaction.account_id_bidx)
