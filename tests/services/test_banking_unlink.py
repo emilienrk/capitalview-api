@@ -14,6 +14,7 @@ import pytest
 
 from sqlmodel import select
 
+from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession, BankTransaction
 from services.banking.linking import (
     BankAccountNotLinkedError,
@@ -22,6 +23,7 @@ from services.banking.linking import (
     list_session_accounts,
     unlink_account,
 )
+from services.bank import delete_bank_account
 from services.banking.transactions import store_transactions
 from services.encryption import hash_index
 from tests.services.test_banking_sync import (
@@ -234,3 +236,37 @@ class TestCardAccountsAreNotAttachable:
 
         assert result.bank_account_uuid == target.uuid
         assert result.reconnected is False
+
+
+class TestDeletingTheCapitalViewAccount:
+    """Deleting the account a link points at must take the link with it.
+
+    An orphan link is worse than a stale row: `list_bank_sessions` skips it, so
+    the settings screen reports "aucun compte rattaché", while the link modal
+    resolved it as attached — the account showed a "Rattaché" badge with no
+    control left to attach it anywhere.
+    """
+
+    def test_deleting_an_account_drops_its_link(
+        self, session, master_key, sqlite_pg_insert  # noqa: F811
+    ):
+        current, _card, _lc, _lk = _pair(session, master_key)
+
+        assert delete_bank_account(session, current.uuid, master_key) is True
+
+        assert _links_for(session, master_key, current) is None
+
+    def test_a_link_left_over_from_a_deleted_account_is_not_reported_attached(
+        self, session, master_key, sqlite_pg_insert  # noqa: F811
+    ):
+        current, _card, _lc, _lk = _pair(session, master_key)
+        bank_session = session.exec(select(BankSession)).one()
+        # The row an older delete left behind, before the cascade above existed.
+        session.delete(session.get(BankAccount, current.uuid))
+        session.commit()
+
+        discovered = list_session_accounts(session, USER, master_key, bank_session.uuid)
+
+        cacc = next(a for a in discovered if a.identification_hash == "h-cacc")
+        assert cacc.linked is False
+        assert cacc.bank_account_uuid is None

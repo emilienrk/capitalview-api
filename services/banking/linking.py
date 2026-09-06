@@ -603,6 +603,10 @@ def list_session_accounts(
         link = _find_link_by_ident(
             session, user_bidx, hash_index(identification_hash, master_key)
         )
+        # Resolve the target before calling it linked: a link left over from a
+        # deleted CapitalView account resolves to nothing, and reporting it as
+        # attached hides the only control that could re-attach the account.
+        target_uuid = uuid_by_bidx.get(link.bank_account_uuid_bidx) if link else None
         results.append(
             BankSessionAccount(
                 identification_hash=identification_hash,
@@ -612,8 +616,8 @@ def list_session_accounts(
                 cash_account_type=account.get("cash_account_type"),
                 usage=account.get("usage"),
                 account_id=_account_id_label(account),
-                linked=link is not None,
-                bank_account_uuid=uuid_by_bidx.get(link.bank_account_uuid_bidx) if link else None,
+                linked=target_uuid is not None,
+                bank_account_uuid=target_uuid,
             )
         )
     return results
