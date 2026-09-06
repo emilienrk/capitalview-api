@@ -243,6 +243,27 @@ def test_investment_plan_is_stored_encrypted(session, master_key):
     assert "monthly_target" not in row.investment_plan_enc
 
 
+def test_every_analysis_section_shows_until_one_is_hidden(session, master_key):
+    """The preference stores what is hidden, so a section added later is on for
+    everyone by default instead of disappearing for existing users."""
+    client = TestClient(app)
+
+    assert client.get("/settings").json()["analysis_hidden_sections"] == []
+
+    client.put("/settings", json={"analysis_hidden_sections": ["fees", "method"]})
+    assert client.get("/settings").json()["analysis_hidden_sections"] == ["fees", "method"]
+
+
+def test_an_empty_hidden_list_shows_every_analysis_section_again(session, master_key):
+    client = TestClient(app)
+
+    client.put("/settings", json={"analysis_hidden_sections": ["plan"]})
+    assert client.get("/settings").json()["analysis_hidden_sections"] == ["plan"]
+
+    client.put("/settings", json={"analysis_hidden_sections": []})
+    assert client.get("/settings").json()["analysis_hidden_sections"] == []
+
+
 def test_an_empty_benchmark_resets_to_the_default(session, master_key):
     client = TestClient(app)
 
