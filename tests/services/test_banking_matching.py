@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 
 from dtos.bank import BankAccountCreate
 from dtos.cashflow import CashflowCreate
+from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession
 from models.cashflow import Cashflow
 from models.enums import BankAccountType, FlowType, Frequency
@@ -35,7 +36,29 @@ ACCOUNT = "match-account"
 TODAY = date(2026, 8, 20)
 
 
+def _bank_account(session: Session, master_key: str, account_uuid: str) -> None:
+    """The CapitalView account a link points at. Real ones always exist; a link
+    without one is the orphan shape that `readable_account_bidxs` now drops.
+
+    A no-op when the caller already made one for itself."""
+    if session.get(BankAccount, account_uuid) is not None:
+        return
+    session.add(
+        BankAccount(
+            uuid=account_uuid,
+            user_uuid_bidx=hash_index(USER, master_key),
+            name_enc=encrypt_data("Compte courant", master_key),
+            institution_name_enc=None,
+            identifier_enc=None,
+            balance_enc=encrypt_data("0", master_key),
+            account_type_enc=encrypt_data("CHECKING", master_key),
+        )
+    )
+    session.commit()
+
+
 def _link(session: Session, master_key: str) -> None:
+    _bank_account(session, master_key, ACCOUNT)
     session.add(
         BankSession(
             uuid="sess-match",

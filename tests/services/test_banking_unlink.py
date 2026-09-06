@@ -21,6 +21,7 @@ from services.banking.linking import (
     CardAccountNotLinkableError,
     link_account,
     list_session_accounts,
+    readable_account_bidxs,
     unlink_account,
 )
 from services.bank import delete_bank_account
@@ -255,6 +256,43 @@ class TestDeletingTheCapitalViewAccount:
         assert delete_bank_account(session, current.uuid, master_key) is True
 
         assert _links_for(session, master_key, current) is None
+
+    def test_deleting_an_account_drops_its_movements(
+        self, session, master_key, sqlite_pg_insert  # noqa: F811
+    ):
+        """Deleting must leave no trace: rows kept here stayed summed into
+        "Ce qui a réellement bougé" under an account nobody could see."""
+        current, _card, _lc, _lk = _pair(session, master_key)
+        store_transactions(session, master_key, current.uuid, [_raw("10.00", TODAY, ref="t-1")])
+        bidx = hash_index(current.uuid, master_key)
+        assert session.exec(
+            select(BankTransaction).where(BankTransaction.account_id_bidx == bidx)
+        ).all()
+
+        delete_bank_account(session, current.uuid, master_key)
+
+        assert not session.exec(
+            select(BankTransaction).where(BankTransaction.account_id_bidx == bidx)
+        ).all()
+
+    def test_movements_orphaned_before_the_cascade_are_no_longer_summed(
+        self, session, master_key, sqlite_pg_insert  # noqa: F811
+    ):
+        """The rows an older delete already left behind: the read path has to
+        drop them too, or the totals never come back down."""
+        current, _card, _lc, _lk = _pair(session, master_key)
+        store_transactions(session, master_key, current.uuid, [_raw("10.00", TODAY, ref="t-1")])
+        user_bidx = hash_index(USER, master_key)
+        assert hash_index(current.uuid, master_key) in readable_account_bidxs(
+            session, user_bidx, master_key
+        )
+
+        session.delete(session.get(BankAccount, current.uuid))
+        session.commit()
+
+        assert hash_index(current.uuid, master_key) not in readable_account_bidxs(
+            session, user_bidx, master_key
+        )
 
     def test_a_link_left_over_from_a_deleted_account_is_not_reported_attached(
         self, session, master_key, sqlite_pg_insert  # noqa: F811

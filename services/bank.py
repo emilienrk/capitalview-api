@@ -12,7 +12,7 @@ from sqlmodel import Session, select
 
 from models import BankAccount, BankAccountType
 from models.account_history import AccountHistory
-from models.banking import BankAccountLink, BankSession
+from models.banking import BankAccountLink, BankSession, BankTransaction
 from models.currency import BASE_CURRENCY
 from models.enums import AccountCategory, FlowType
 from dtos import BankAccountCreate, BankAccountUpdate, BankAccountResponse, BankSummaryResponse
@@ -269,6 +269,12 @@ def delete_bank_account(
         sa.delete(BankAccountLink).where(
             BankAccountLink.bank_account_uuid_bidx == account_id_bidx
         )
+    )
+    # The movements go with it. Deleting the account and keeping its
+    # transactions left them summed into "Ce qui a réellement bougé" under an
+    # account that no longer exists.
+    session.exec(
+        sa.delete(BankTransaction).where(BankTransaction.account_id_bidx == account_id_bidx)
     )
 
     session.delete(account)

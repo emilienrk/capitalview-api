@@ -11,6 +11,7 @@ from decimal import Decimal
 import pytest
 from sqlmodel import Session
 
+from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession
 from services.banking.flows import _months_back, compute_real_flows
 from services.banking.transactions import store_transactions
@@ -53,7 +54,29 @@ def _bank_session(session: Session, master_key: str) -> str:
     return row.uuid
 
 
+def _bank_account(session: Session, master_key: str, account_uuid: str) -> None:
+    """The CapitalView account a link points at. Real ones always exist; a link
+    without one is the orphan shape that `readable_account_bidxs` now drops.
+
+    A no-op when the caller already made one for itself."""
+    if session.get(BankAccount, account_uuid) is not None:
+        return
+    session.add(
+        BankAccount(
+            uuid=account_uuid,
+            user_uuid_bidx=hash_index(USER, master_key),
+            name_enc=encrypt_data("Compte courant", master_key),
+            institution_name_enc=None,
+            identifier_enc=None,
+            balance_enc=encrypt_data("0", master_key),
+            account_type_enc=encrypt_data("CHECKING", master_key),
+        )
+    )
+    session.commit()
+
+
 def _link(session: Session, master_key: str, account_uuid: str) -> None:
+    _bank_account(session, master_key, account_uuid)
     """Only linked accounts feed the aggregation."""
     _bank_session(session, master_key)
     session.add(
