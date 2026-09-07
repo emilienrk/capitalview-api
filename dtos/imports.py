@@ -87,6 +87,22 @@ class BankImportTransactionPreview(BaseModel):
     is_duplicate: bool = False
 
 
+class BankImportCurvePreview(BaseModel):
+    """The balance curve a movements file describes, once anchored.
+
+    Shown before the import so the anchor can be corrected: a wrong one shifts
+    the whole curve by a constant, which is invisible on the movements alone.
+    """
+    start_date: date
+    end_date: date
+    opening_balance: Decimal  # balance before the first movement (the anchor)
+    closing_balance: Decimal
+    days: int
+    # First day the curve goes below zero, if any: the usual sign that the
+    # anchor is too low — a real account rarely goes negative for months.
+    first_negative_date: date | None = None
+
+
 class ImportPreviewResponse(BaseModel):
     """Common envelope; exactly one category payload is set."""
     source_id: str
@@ -99,6 +115,7 @@ class ImportPreviewResponse(BaseModel):
     stock_rows: list[StockImportRowPreview] | None = None
     bank_points: list[BankImportPointPreview] | None = None
     bank_transactions: list[BankImportTransactionPreview] | None = None
+    bank_curve: BankImportCurvePreview | None = None
 
 
 class ImportConfirmRequest(BaseModel):

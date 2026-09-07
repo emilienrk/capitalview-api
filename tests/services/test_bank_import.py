@@ -9,7 +9,13 @@ from dtos.imports import ImportConfirmRequest
 from models.account_history import AccountHistory
 from models.banking import BankTransaction
 from models.enums import BankAccountType
-from services.bank import create_bank_account
+from dtos.bank import BankHistoryEntry
+from models.bank import BankAccount
+from services.bank import (
+    create_bank_account,
+    get_bank_account_history,
+    import_bank_account_history,
+)
 from services.encryption import decrypt_data, hash_index
 
 from services.imports.bank_csv import (
@@ -249,12 +255,20 @@ def _account(session, master_key: str, currency: str = "EUR") -> str:
     ).id
 
 
-def _confirm(session, master_key, account_id, rows, parser):
+def _confirm(session, master_key, account_id, rows, parser, options=None):
     return parser.execute(
         session, account_id,
-        ImportConfirmRequest(account_id=account_id, bank_transactions=rows),
+        ImportConfirmRequest(account_id=account_id, bank_transactions=rows, options=options or {}),
         master_key,
     )
+
+
+def _curve(session, master_key, account_id):
+    """The account's stored curve as {date: value}."""
+    return {
+        s.snapshot_date: s.total_value
+        for s in get_bank_account_history(session, account_id, master_key)
+    }
 
 
 def test_movements_land_in_the_same_table_the_sync_fills(session, master_key):
@@ -359,16 +373,89 @@ def test_the_preview_flags_what_is_already_stored(session, master_key):
     assert [r.is_duplicate for r in preview.bank_transactions].count(False) == 1
 
 
-def test_the_transactional_import_writes_no_balance_snapshot(session, master_key):
-    """The two bank imports are complementary: a statement does not always
-    carry the reference balance a curve would have to be rebuilt from."""
+# ─── The curve the movements describe ────────────────────────────────────
+# A statement carries no balance of its own, so the curve is anchored on the
+# balance held before its first line — zero unless the user says otherwise.
+
+
+def test_the_curve_runs_one_point_a_day_from_the_first_movement(session, master_key):
     parser = get_parser("generic_bank_transactions")
     account_id = _account(session, master_key)
-    _confirm(session, master_key, account_id, parse_bank_transactions(TRANSACTIONS_CSV, {})[0], parser)
+    rows, _ = parse_bank_transactions(TRANSACTIONS_CSV, {})
 
-    snapshots = session.exec(
-        select(AccountHistory).where(
-            AccountHistory.account_id_bidx == hash_index(account_id, master_key)
-        )
-    ).all()
-    assert snapshots == []
+    _confirm(session, master_key, account_id, rows, parser, {"initial_balance": "2000"})
+    curve = _curve(session, master_key, account_id)
+
+    # 15/01 → 03/02, every day, nothing before the first movement.
+    assert min(curve) == date(2024, 1, 15)
+    assert max(curve) == date(2024, 2, 3)
+    assert len(curve) == 20
+    assert curve[date(2024, 1, 15)] == Decimal("1957.50")   # 2000 - 42.50
+    assert curve[date(2024, 1, 20)] == Decimal("1957.50")   # no movement: carried
+    assert curve[date(2024, 1, 31)] == Decimal("3157.50")   # + 1200
+    assert curve[date(2024, 2, 3)] == Decimal("2307.50")    # - 850
+
+
+def test_the_anchor_shifts_the_whole_curve(session, master_key):
+    parser = get_parser("generic_bank_transactions")
+    rows, _ = parse_bank_transactions(TRANSACTIONS_CSV, {})
+
+    from_zero = _account(session, master_key)
+    _confirm(session, master_key, from_zero, rows, parser)
+    anchored = _account(session, master_key)
+    _confirm(session, master_key, anchored, rows, parser, {"initial_balance": "2000"})
+
+    zero_curve, shifted = _curve(session, master_key, from_zero), _curve(session, master_key, anchored)
+    assert all(shifted[d] - zero_curve[d] == Decimal("2000") for d in zero_curve)
+
+
+def test_the_balance_lands_on_what_the_movements_end_at(session, master_key):
+    parser = get_parser("generic_bank_transactions")
+    account_id = _account(session, master_key)
+    rows, _ = parse_bank_transactions(TRANSACTIONS_CSV, {})
+
+    _confirm(session, master_key, account_id, rows, parser, {"initial_balance": "2000"})
+
+    account = session.get(BankAccount, account_id)
+    assert Decimal(decrypt_data(account.balance_enc, master_key)) == Decimal("2307.50")
+    # The movements already hold what the linked cashflows would have added.
+    assert account.balance_updated_at == date.today()
+
+
+def test_a_dip_below_zero_is_reported_not_refused(session, master_key):
+    """The usual sign of an anchor left at zero on an account that had money."""
+    parser = get_parser("generic_bank_transactions")
+    account_id = _account(session, master_key)
+
+    preview = parser.preview(session, TRANSACTIONS_CSV, {}, account_id=account_id, master_key=master_key)
+
+    assert preview.bank_curve.opening_balance == Decimal("0")
+    assert preview.bank_curve.closing_balance == Decimal("307.50")
+    assert preview.bank_curve.first_negative_date == date(2024, 1, 15)
+    assert any("sous zéro" in w for w in preview.warnings)
+
+    priced = parser.preview(session, TRANSACTIONS_CSV, {"initial_balance": "2000"},
+                            account_id=account_id, master_key=master_key)
+    assert priced.bank_curve.first_negative_date is None
+    assert not priced.warnings
+
+
+def test_an_older_statement_does_not_walk_the_balance_back(session, master_key):
+    """It rebuilds its own stretch of the curve, but says nothing about today."""
+    parser = get_parser("generic_bank_transactions")
+    account_id = _account(session, master_key)
+    account = session.get(BankAccount, account_id)
+    import_bank_account_history(
+        session, account,
+        [BankHistoryEntry(snapshot_date=date(2025, 6, 1), value=Decimal("9000"))],
+        master_key,
+    )
+
+    rows, _ = parse_bank_transactions(TRANSACTIONS_CSV, {})
+    _confirm(session, master_key, account_id, rows, parser, {"initial_balance": "2000"})
+
+    session.refresh(account)
+    assert Decimal(decrypt_data(account.balance_enc, master_key)) == Decimal("0")  # untouched
+    curve = _curve(session, master_key, account_id)
+    assert curve[date(2024, 2, 3)] == Decimal("2307.50")  # its own window, rebuilt
+    assert curve[date(2025, 6, 1)] == Decimal("9000")     # and the later truth kept
