@@ -207,9 +207,11 @@ def _link(
     anchor_balance: Decimal,
     last_synced_at: date | None = None,
     user_uuid: str = USER,
+    history_seeded: bool | None = None,
 ) -> BankAccountLink:
-    """A link. `last_synced_at` defaults to the never-synced marker the
-    rattachement step writes (anchor_date - 1 day)."""
+    """A link. `last_synced_at` defaults to the marker the rattachement step
+    writes (anchor_date - 1 day), and `history_seeded` follows it unless said
+    otherwise: a link that has synced since has its history."""
     link = BankAccountLink(
         user_uuid_bidx=hash_index(user_uuid, master_key),
         bank_account_uuid_bidx=hash_index(account.uuid, master_key),
@@ -219,6 +221,11 @@ def _link(
         anchor_date=anchor_date,
         anchor_balance_enc=encrypt_data(str(anchor_balance), master_key),
         last_synced_at=last_synced_at if last_synced_at is not None else anchor_date - timedelta(days=1),
+        history_seeded=(
+            history_seeded
+            if history_seeded is not None
+            else (last_synced_at is not None and last_synced_at >= anchor_date)
+        ),
     )
     session.add(link)
     session.commit()
@@ -523,6 +530,94 @@ class TestFetchWindow:
 
         assert client.transaction_calls == [("uid-current", SEED_DATE_FROM, "longest")]
         assert SEED_DATE_FROM < date(2010, 1, 1)
+
+    def test_a_first_pass_that_comes_back_empty_stays_owed_its_history(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """The bank answered nothing; those years must still be asked for.
+
+        Spending the entitlement here is what left an account synchronising
+        happily every day over a history it had never received.
+        """
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="1000.00",
+            feed=[],  # the bank returns not a single operation
+            anchor_date=TODAY,
+            anchor_balance=Decimal("1000"),
+            last_synced_at=TODAY - timedelta(days=1),
+        )
+        _install(monkeypatch, client)
+
+        results = sync_user_accounts(session, USER, master_key)
+
+        session.refresh(link)
+        assert link.history_seeded is False
+        assert link.last_synced_at == TODAY  # the daily cap still holds
+        assert "historique reste à récupérer" in (results[0].detail or "")
+
+        # The day after, it asks for the whole history again.
+        link.last_synced_at = TODAY - timedelta(days=1)
+        session.add(link)
+        session.commit()
+        client.transaction_calls.clear()
+        client.feeds["uid-current"] = [_raw("50", TODAY - timedelta(days=200), ref="old")]
+
+        sync_user_accounts(session, USER, master_key)
+
+        session.refresh(link)
+        assert client.transaction_calls == [("uid-current", SEED_DATE_FROM, "longest")]
+        assert link.history_seeded is True
+
+    def test_the_account_payload_says_its_history_is_still_owed(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """Syncing daily over a history never received must not read as healthy."""
+        from services.bank import get_user_bank_accounts
+
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="1000.00",
+            feed=[],
+            anchor_date=TODAY,
+            anchor_balance=Decimal("1000"),
+            last_synced_at=TODAY - timedelta(days=1),
+        )
+        _install(monkeypatch, client)
+        sync_user_accounts(session, USER, master_key)
+
+        summary = get_user_bank_accounts(session, USER, master_key)
+        assert summary.accounts[0].history_pending is True
+        assert summary.accounts[0].last_synced_at == TODAY  # it did sync
+
+    def test_reseeding_puts_an_account_back_in_line_for_its_history(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """The repair for an account already stuck with an unearned flag."""
+        from services.banking.linking import reseed_account_history
+
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="1000.00",
+            feed=[_raw("50", TODAY - timedelta(days=2), ref="recent")],
+            anchor_date=TODAY - timedelta(days=4),
+            anchor_balance=Decimal("1000"),
+            last_synced_at=TODAY - timedelta(days=4),  # seeded, incremental
+        )
+        _install(monkeypatch, client)
+        sync_user_accounts(session, USER, master_key)
+        assert client.transaction_calls[-1][2] == "default"
+
+        reseed_account_history(session, USER, master_key, account.uuid)
+        client.transaction_calls.clear()
+        sync_user_accounts(session, USER, master_key)
+
+        session.refresh(link)
+        assert client.transaction_calls == [("uid-current", SEED_DATE_FROM, "longest")]
+        assert link.history_seeded is True
 
     def test_later_passes_use_default_from_the_anchor(
         self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert

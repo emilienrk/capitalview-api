@@ -196,10 +196,9 @@ def sync_account_link(
         result.status = "skipped_daily_cap"
         return result
 
-    # A link starts life with last_synced_at one day before its bootstrap
-    # anchor, and every successful sync sets both to today: the two dates being
-    # apart is what marks an account that has never been seeded.
-    seeding = link.last_synced_at < link.anchor_date
+    # Read from the flag, not from a date comparison: the long fetch has either
+    # brought history back or it has not, and only the fetch itself can say so.
+    seeding = not link.history_seeded
     # Ruling R19: a card account's movements live on the current account it
     # debits, so neither the check nor the curve can be built from what
     # deduplication leaves behind.
@@ -291,6 +290,18 @@ def sync_account_link(
         str(accounting - movements.get(today, Decimal("0"))), master_key
     )
     link.last_synced_at = today
+    # The flag is earned, never merely spent: a seeding pass that comes back
+    # empty — a bank still settling the authorization, a feed answered blank —
+    # leaves it off, so the next sync asks for those years again instead of
+    # writing them off for good.
+    if seeding:
+        if parsed:
+            link.history_seeded = True
+        else:
+            result.detail = (
+                "La banque n'a renvoyé aucune opération : l'historique reste à récupérer, "
+                "la prochaine synchronisation le redemandera."
+            )
     link.last_reconciliation_gap_enc = (
         encrypt_data(str(gap), master_key) if gap is not None else None
     )

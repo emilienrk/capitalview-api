@@ -55,6 +55,11 @@ class LinkMetadata:
         # synced" is that marker, mapped: reporting yesterday for an account the
         # bank has never been called for would read as a successful sync.
         never_synced = link.last_synced_at < link.anchor_date
+        # Distinct from the above, and the difference is the whole point: an
+        # account can sync happily every morning over a history it never
+        # received, because the first long fetch came back empty. Surfaced so
+        # the flat curve that follows has a name and a way out.
+        self.history_pending = not link.history_seeded
         self.last_synced_at = None if never_synced else link.last_synced_at
         self.reconciliation_gap = (
             Decimal(decrypt_data(link.last_reconciliation_gap_enc, master_key))
@@ -159,6 +164,7 @@ def _map_to_response(
         reconciliation_gap=link.reconciliation_gap if link else None,
         link_status=link.link_status if link else None,
         reconciliation_status=link.reconciliation_status if link else None,
+        history_pending=link.history_pending if link else False,
     )
 
 
