@@ -531,6 +531,15 @@ def is_card_account(session: Session, link: BankAccountLink, master_key: str) ->
     return find_discovered_account(session, link, master_key).get("cash_account_type") == CARD_ACCOUNT_TYPE
 
 
+def account_is_linked(session: Session, master_key: str, bank_account_uuid: str) -> bool:
+    """Whether a CapitalView account is attached to a real bank through Enable Banking."""
+    return session.exec(
+        select(BankAccountLink).where(
+            BankAccountLink.bank_account_uuid_bidx == hash_index(bank_account_uuid, master_key)
+        )
+    ).first() is not None
+
+
 def readable_account_bidxs(session: Session, user_bidx: str, master_key: str) -> list[str]:
     """The accounts whose stored movements a reader may sum.
 

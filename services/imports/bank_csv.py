@@ -5,13 +5,11 @@ The bank model stores a balance curve (daily snapshots), not transactions,
 so the CSV is converted into (date, balance) points and written through the
 existing ``import_bank_account_history`` (forward-fill included).
 
-Two modes via ``options["bank_mode"]``:
-- ``"balance"`` (default): the mapped column is the balance on that date
-  (the last row wins for a given date).
-- ``"delta"``: the mapped column is a signed movement; balances are
-  accumulated chronologically from ``options["initial_balance"]``.
+The mapped column is the balance on that date; the last row wins for a given
+date. A file of *movements* belongs to ``generic_bank_transactions`` below,
+which accumulates them into the same curve and keeps the operations too.
 
-Mapping: {"date": ..., "balance": ...} or {"date": ..., "amount": ...}.
+Mapping: {"date": ..., "balance": ...}.
 
 ``generic_bank`` owns that machinery: it reads the ``snapshot_date``/``value``
 shape the app documents without being told, and only needs a mapping when the
@@ -74,19 +72,17 @@ def opening_balance(options: dict) -> Decimal:
 
 def parse_bank_points(csv_content: str, options: dict) -> tuple[list[BankImportPointPreview], list[str]]:
     mapping = options.get("mapping") or {}
-    mode = (options.get("bank_mode") or "balance").lower()
     date_format = options.get("date_format")
     decimal_separator = options.get("decimal_separator")
 
     lines, warnings = read_rows(csv_content, options)
 
-    value_field = "balance" if mapping.get("balance") else "amount"
     parsed: list[tuple] = []
     skipped = 0
 
     for line in lines:
         snapshot_date = parse_generic_date(get_mapped(line, mapping, "date"), date_format)
-        value = parse_generic_decimal(get_mapped(line, mapping, value_field), decimal_separator)
+        value = parse_generic_decimal(get_mapped(line, mapping, "balance"), decimal_separator)
         if snapshot_date is None or value is None:
             skipped += 1
             continue
@@ -98,14 +94,8 @@ def parse_bank_points(csv_content: str, options: dict) -> tuple[list[BankImportP
     parsed.sort(key=lambda p: p[0])
 
     points: dict = {}
-    if mode == "delta":
-        balance = opening_balance(options)
-        for d, delta in parsed:
-            balance += delta
-            points[d] = balance  # one point per date: end-of-day balance
-    else:
-        for d, value in parsed:
-            points[d] = value  # last row wins for a given date
+    for d, value in parsed:
+        points[d] = value  # last row wins for a given date
 
     return (
         [BankImportPointPreview(snapshot_date=d, value=v) for d, v in sorted(points.items())],
@@ -200,9 +190,8 @@ class GenericBankParser(_BankHistoryParser):
     def effective_options(self, options: dict) -> dict:
         if options.get("mapping"):
             return options
-        # No mapping given: read the documented shape, which is a balance per
-        # date — never the `delta` accumulation.
-        return {**options, "mapping": self.default_mapping, "bank_mode": "balance"}
+        # No mapping given: read the documented shape.
+        return {**options, "mapping": self.default_mapping}
 
 
 @register
@@ -398,7 +387,7 @@ class GenericBankTransactionsParser(ImportParser):
                     row.is_duplicate = True
                     duplicates += 1
 
-        opening = opening_balance(options)
+        opening = self._opening_for(session, options, rows, account_id, master_key)
         curve = curve_preview(transactions_to_curve(rows, opening), opening)
         if curve and curve.first_negative_date:
             warnings.append(
@@ -463,7 +452,9 @@ class GenericBankTransactionsParser(ImportParser):
             replace_history_window,
         )
 
-        entries = transactions_to_curve(payload.bank_transactions or [], opening_balance(payload.options))
+        rows = payload.bank_transactions or []
+        opening = self._opening_for(session, payload.options, rows, account_id, master_key)
+        entries = transactions_to_curve(rows, opening)
         account = session.get(BankAccount, account_id)
         if not entries or account is None:
             return
@@ -487,6 +478,28 @@ class GenericBankTransactionsParser(ImportParser):
             account.balance_updated_at = date.today()
             session.add(account)
             session.commit()
+
+    def _opening_for(
+        self,
+        session: Session,
+        options: dict,
+        rows: list[BankImportTransactionPreview],
+        account_id: str | None,
+        master_key: str | None,
+    ) -> Decimal:
+        """The balance the curve starts from — asked for, or picked up where the
+        account's own history left off.
+
+        Importing month after month, the anchor is never zero after the first
+        file: it is the balance the account already stood at the day before this
+        one opens. Re-typing it every time is how a curve gets a false step.
+        """
+        if options.get("initial_balance") is not None or not rows or not (account_id and master_key):
+            return opening_balance(options)
+
+        from services.bank import last_known_balance_before
+
+        return last_known_balance_before(session, account_id, rows[0].day, master_key)
 
     def _options_for(
         self, session: Session, options: dict, account_id: str | None, master_key: str | None

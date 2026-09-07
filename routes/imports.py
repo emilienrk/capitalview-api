@@ -53,6 +53,29 @@ def _get_parser_or_404(source_id: str) -> ImportParser:
     return parser
 
 
+def _refuse_import_on_a_linked_account(
+    parser: ImportParser, session: Session, account_id: str, master_key: str
+) -> None:
+    """A bank-linked account gets its truth from the bank; an import would fight it.
+
+    Both write the same movements and the same stretch of curve, so whichever
+    ran last would win until the next sync — and the imported rows, carrying a
+    reference the bank never issued, cannot always be recognised as the same
+    movements. Detaching the account in the settings is the way in.
+    """
+    from services.banking.linking import account_is_linked
+
+    if parser.category != ImportCategory.BANK:
+        return
+    if account_is_linked(session, master_key, account_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ce compte est synchronisé avec votre banque : ses opérations et son solde "
+                   "viennent de là. Pour importer un fichier à la place, détachez-le d'abord "
+                   "dans Paramètres → Open banking.",
+        )
+
+
 def _check_account_ownership(
     parser: ImportParser,
     session: Session,
@@ -108,6 +131,7 @@ def preview_import(
 
     if data.account_id:
         _check_account_ownership(parser, session, data.account_id, current_user.uuid, master_key)
+        _refuse_import_on_a_linked_account(parser, session, data.account_id, master_key)
 
     return parser.preview(
         session,
@@ -135,6 +159,7 @@ def confirm_import(
     """
     parser = _get_parser_or_404(source_id)
     _check_account_ownership(parser, session, data.account_id, current_user.uuid, master_key)
+    _refuse_import_on_a_linked_account(parser, session, data.account_id, master_key)
 
     result = parser.execute(session, data.account_id, data, master_key)
 

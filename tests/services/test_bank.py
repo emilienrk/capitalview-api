@@ -30,17 +30,22 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 
 @pytest.fixture
 def sqlite_pg_insert(monkeypatch):
-    """Replace pg_insert (PostgreSQL-specific) with a plain SA insert for SQLite tests."""
-    import sqlalchemy as sa
+    """Replace pg_insert (PostgreSQL-specific) with its SQLite equivalent.
+
+    SQLite has `ON CONFLICT DO NOTHING` too, and it has to be kept: a plain
+    insert turns "this day is already written, leave it alone" into an
+    IntegrityError, which is the whole point of the call.
+    """
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
     def _fake(table):
         class _Stmt:
             def values(self, rows):
-                self._rows = rows
+                self._stmt = sqlite_insert(table).values(rows)
                 return self
 
             def on_conflict_do_nothing(self, **kwargs):
-                return sa.insert(table).values(self._rows)
+                return self._stmt.on_conflict_do_nothing()
 
         return _Stmt()
 
@@ -238,6 +243,52 @@ def test_import_bank_account_history_zeros_before_first_entry(session: Session, 
     assert _value_on_date(rows, date(2025, 1, 9), master_key) == Decimal("0")
     assert _value_on_date(rows, date(2025, 1, 10), master_key) == Decimal("500")
     assert _value_on_date(rows, date(2025, 1, 11), master_key) == Decimal("500")
+
+
+def test_import_bank_account_history_does_not_zero_a_gap_it_did_not_open(
+    session: Session, master_key: str, sqlite_pg_insert
+):
+    """A partial import must not draw a fall to zero over days it says nothing about.
+
+    Zero before the first entry is only the truth for an account with no history
+    at all. With a known balance behind the range, the gap carries that balance.
+    """
+    user_uuid = "user_import_gap"
+    acc = create_bank_account(
+        session,
+        BankAccountCreate(name="Gap", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        user_uuid,
+        master_key,
+    )
+    db_acc = session.get(BankAccount, acc.id)
+    db_acc.created_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    session.add(db_acc)
+    session.commit()
+    session.refresh(db_acc)
+
+    account_id_bidx = hash_index(acc.id, master_key)
+    # What a bank sync leaves behind: a closed window, and nothing after it.
+    replace_history_window(
+        session, db_acc,
+        [
+            BankHistoryEntry(snapshot_date=date(2025, 1, 4), value=Decimal("407")),
+            BankHistoryEntry(snapshot_date=date(2025, 1, 5), value=Decimal("407")),
+        ],
+        master_key, date(2025, 1, 4), date(2025, 1, 5),
+    )
+    # Then an import whose own range starts much later.
+    import_bank_account_history(
+        session, db_acc,
+        [BankHistoryEntry(snapshot_date=date(2025, 1, 20), value=Decimal("1300"))],
+        master_key,
+    )
+
+    rows = _get_history_rows(session, account_id_bidx)
+    assert _value_on_date(rows, date(2025, 1, 5), master_key) == Decimal("407")
+    # The days in between are unknown, not empty: they carry the balance in.
+    assert _value_on_date(rows, date(2025, 1, 12), master_key) == Decimal("407")
+    assert _value_on_date(rows, date(2025, 1, 19), master_key) == Decimal("407")
+    assert _value_on_date(rows, date(2025, 1, 20), master_key) == Decimal("1300")
 
 
 def test_import_bank_account_history_entries_before_account_creation(session: Session, master_key: str, sqlite_pg_insert):
