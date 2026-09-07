@@ -799,6 +799,56 @@ class TestBankAccountHistory:
         assert eur_pos.percentage == Decimal("100")
         assert snap.daily_pnl is None
 
+    def test_an_account_keeps_its_balance_on_days_it_has_no_snapshot(
+        self, session: Session, master_key: str
+    ):
+        """Accounts rarely share a snapshot calendar — one synced daily, one
+        imported over a narrower window. Summing only the rows present on each
+        date made the quiet account worth zero, so the total dropped and
+        recovered with nothing behind it."""
+        user = "user_bank_ffill"
+        daily = create_bank_account(session, BankAccountCreate(name="Compte courant", balance=Decimal("800"), account_type=BankAccountType.CHECKING), user, master_key)
+        sparse = create_bank_account(session, BankAccountCreate(name="Livret A", balance=Decimal("1000"), account_type=BankAccountType.LIVRET_A), user, master_key)
+        user_bidx = hash_index(user, master_key)
+
+        # The livret speaks on the 1st and then stays silent; the current
+        # account has a point every day.
+        _insert_history_row(session, user_bidx=user_bidx, account_id_bidx=hash_index(sparse.id, master_key),
+                            account_type=AccountCategory.BANK, snapshot_date=date(2026, 6, 1),
+                            total_value="1000.00", total_invested="1000.00", master_key=master_key)
+        for day, value in ((1, "800.00"), (2, "700.00"), (3, "900.00")):
+            _insert_history_row(session, user_bidx=user_bidx, account_id_bidx=hash_index(daily.id, master_key),
+                                account_type=AccountCategory.BANK, snapshot_date=date(2026, 6, day),
+                                total_value=value, total_invested=value, master_key=master_key)
+
+        totals = {r.snapshot_date: r.total_value for r in get_all_bank_accounts_history(session, user, master_key)}
+
+        assert totals[date(2026, 6, 1)] == Decimal("1800.00")
+        assert totals[date(2026, 6, 2)] == Decimal("1700.00")
+        assert totals[date(2026, 6, 3)] == Decimal("1900.00")
+
+    def test_an_account_contributes_nothing_before_its_first_snapshot(
+        self, session: Session, master_key: str
+    ):
+        """Carrying a balance backwards would credit the total with money the
+        account had not received yet."""
+        user = "user_bank_no_backfill"
+        early = create_bank_account(session, BankAccountCreate(name="Compte courant", balance=Decimal("500"), account_type=BankAccountType.CHECKING), user, master_key)
+        late = create_bank_account(session, BankAccountCreate(name="Livret A", balance=Decimal("2000"), account_type=BankAccountType.LIVRET_A), user, master_key)
+        user_bidx = hash_index(user, master_key)
+
+        _insert_history_row(session, user_bidx=user_bidx, account_id_bidx=hash_index(early.id, master_key),
+                            account_type=AccountCategory.BANK, snapshot_date=date(2026, 6, 1),
+                            total_value="500.00", total_invested="500.00", master_key=master_key)
+        _insert_history_row(session, user_bidx=user_bidx, account_id_bidx=hash_index(late.id, master_key),
+                            account_type=AccountCategory.BANK, snapshot_date=date(2026, 6, 5),
+                            total_value="2000.00", total_invested="2000.00", master_key=master_key)
+
+        totals = {r.snapshot_date: r.total_value for r in get_all_bank_accounts_history(session, user, master_key)}
+
+        assert totals[date(2026, 6, 1)] == Decimal("500.00")
+        assert totals[date(2026, 6, 5)] == Decimal("2500.00")
+
     def test_empty_when_no_history(self, session: Session, master_key: str):
         acc = create_bank_account(session, BankAccountCreate(name="Empty", balance=Decimal("0"), account_type=BankAccountType.CHECKING), "user_empty_bank", master_key)
         result = get_bank_account_history(session, acc.id, master_key)
