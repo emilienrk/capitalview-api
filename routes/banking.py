@@ -17,6 +17,7 @@ from sqlmodel import Session
 
 from config import get_settings
 from database import get_session
+from dtos.auth import MessageResponse
 from dtos.banking import (
     AspspSummary,
     BankAccountLinkRequest,
@@ -54,6 +55,7 @@ from services.banking.linking import (
     CardAccountNotLinkableError,
     handle_callback,
     link_account,
+    reseed_account_history,
     unlink_account,
     list_aspsps_for_country,
     TargetAccountAlreadyLinkedError,
@@ -364,6 +366,33 @@ def sync(
     return BankSyncResponse(
         synced=sum(1 for result in results if result.status == "synced"),
         results=results,
+    )
+
+
+@router.post(
+    "/accounts/{bank_account_uuid}/reseed-history",
+    response_model=MessageResponse,
+    dependencies=[Depends(require_open_banking)],
+)
+def reseed_account_history_route(
+    bank_account_uuid: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Ask the bank for this account's full history again on the next sync.
+
+    Nothing is deleted: the seeding pass rewrites the window it can reach. The
+    way out for an account whose first sync came back empty — until the flag
+    existed, that left a flat curve with no way to retry short of detaching the
+    account and authenticating at the bank all over again.
+    """
+    if reseed_account_history(session, current_user.uuid, master_key, bank_account_uuid) is None:
+        raise HTTPException(
+            status_code=404, detail="Ce compte n'est rattaché à aucun compte bancaire."
+        )
+    return MessageResponse(
+        message="L'historique complet sera redemandé à votre banque à la prochaine synchronisation."
     )
 
 

@@ -132,6 +132,15 @@ class BankAccountLink(SQLModel, table=True):
     last_synced_at: date = Field(sa_column=Column(sa.Date, nullable=False))
     # NULL = no gap found at the last reconciliation check.
     last_reconciliation_gap_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    # Whether the long history fetch has ever actually brought anything back.
+    # Explicit rather than derived from `last_synced_at < anchor_date`: that
+    # comparison was consumed by the first sync whether or not it returned a
+    # single operation, and the years the bank still held were then never asked
+    # for again — a flat curve, and nothing to retry it.
+    history_seeded: bool = Field(
+        default=False,
+        sa_column=Column(sa.Boolean, nullable=False, server_default=sa.false()),
+    )
 
     created_at: datetime = Field(
         default=sa.func.now(),

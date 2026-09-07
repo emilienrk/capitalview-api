@@ -75,6 +75,10 @@ class BankAccountResponse(BaseModel):
     # `reconciled` | `gap` | `not_reconcilable` (ruling R18), derived, never
     # stored. Distinct from link_status, which is the consent state.
     reconciliation_status: str | None = None
+    # True while the bank has never answered the long history fetch: the account
+    # syncs, but over a history it does not have. Distinct from last_synced_at,
+    # which only says when the last call happened.
+    history_pending: bool = False
 
 
 class BankSummaryResponse(BaseModel):

@@ -531,6 +531,34 @@ def is_card_account(session: Session, link: BankAccountLink, master_key: str) ->
     return find_discovered_account(session, link, master_key).get("cash_account_type") == CARD_ACCOUNT_TYPE
 
 
+def reseed_account_history(
+    session: Session, user_uuid: str, master_key: str, bank_account_uuid: str
+) -> date | None:
+    """Ask for this account's full history again on the next sync.
+
+    Clears `history_seeded`, nothing else: the curve and the operations already
+    stored stay put, and the seeding pass rewrites what it can reach. The repair
+    for an account whose first sync came back empty — before the flag existed,
+    that state was indistinguishable from a healthy one.
+
+    Returns the link's `last_synced_at`, or None when no link owns the account.
+    """
+    link = session.exec(
+        select(BankAccountLink).where(
+            BankAccountLink.user_uuid_bidx == hash_index(user_uuid, master_key),
+            BankAccountLink.bank_account_uuid_bidx == hash_index(bank_account_uuid, master_key),
+        )
+    ).first()
+    if link is None:
+        return None
+    link.history_seeded = False
+    # Otherwise the once-a-day cap swallows the very sync this asks for.
+    link.last_synced_at = min(link.last_synced_at, date.today() - timedelta(days=1))
+    session.add(link)
+    session.commit()
+    return link.last_synced_at
+
+
 def account_is_linked(session: Session, master_key: str, bank_account_uuid: str) -> bool:
     """Whether a CapitalView account is attached to a real bank through Enable Banking."""
     return session.exec(
@@ -765,7 +793,9 @@ def link_account(
             # Bootstrap anchor from the manually-entered CapitalView balance
             # (decision 8: bank data overwrites it on the account's window once
             # Task 6's sync runs). last_synced_at is set before today so the
-            # front's daily-sync trigger fires the real fetch right away.
+            # front's daily-sync trigger fires the real fetch right away, and
+            # `history_seeded` stays false until that fetch answers with
+            # something.
             anchor_date=today,
             anchor_balance_enc=encrypt_data(current_balance, master_key),
             last_synced_at=today - timedelta(days=1),
@@ -858,9 +888,8 @@ def _reseed_mirrored_links(
     The pairing rule is the one the removed deduplication used: a card account
     and a non-card one mirror each other, two accounts of the same kind never
     do. It describes the pair that may be damaged, not a live mechanism.
-    Seeding is the state `last_synced_at < anchor_date` (sync.py:204), so the
-    marker is moved rather than a flag added — the same convention the
-    rattachement step writes on a brand-new link.
+    Seeding is `history_seeded` being false (sync.py), so the flag is cleared —
+    the same state a brand-new link starts in.
     """
     leaving_is_card = is_card_account(session, leaving, master_key)
     uuid_by_bidx = _accounts_bank_account_uuid_by_bidx(session, user_bidx, master_key)
@@ -873,7 +902,7 @@ def _reseed_mirrored_links(
             continue
         if is_card_account(session, link, master_key) == leaving_is_card:
             continue
-        link.last_synced_at = link.anchor_date - timedelta(days=1)
+        link.history_seeded = False
         session.add(link)
         account_uuid = uuid_by_bidx.get(link.bank_account_uuid_bidx)
         if account_uuid is not None:

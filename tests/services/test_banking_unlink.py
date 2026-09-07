@@ -102,14 +102,16 @@ class TestUnlinkAccount:
     ):
         """Everything the card shadowed is missing from the current account, and
         an incremental sync only reaches back to the anchor — it would never be
-        fetched again. Seeding is `last_synced_at < anchor_date` (sync.py:204)."""
+        fetched again. Seeding is `history_seeded` being false (sync.py)."""
         current, card, link_current, _ = _pair(session, master_key)
-        assert link_current.last_synced_at == link_current.anchor_date  # not seeding
+        link_current.history_seeded = True
+        session.add(link_current)
+        session.commit()
 
         result = unlink_account(session, USER, master_key, card.uuid, delete_transactions=False)
 
         session.refresh(link_current)
-        assert link_current.last_synced_at < link_current.anchor_date
+        assert link_current.history_seeded is False
         assert result.reseeded_accounts == [current.uuid]
 
     def test_two_accounts_of_the_same_kind_are_not_re_seeded(
