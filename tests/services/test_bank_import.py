@@ -17,7 +17,7 @@ from services.imports.bank_csv import (
     parse_bank_points,
     parse_bank_transactions,
 )
-from services.imports.registry import get_parser
+from services.imports.registry import get_parser, list_parsers
 
 BALANCE_CSV = textwrap.dedent("""\
     Date;Solde
@@ -83,20 +83,47 @@ NATIVE_FR_CSV = textwrap.dedent("""\
 """)
 
 
-def test_native_parser_is_registered():
+def test_native_parser_is_still_resolvable_but_no_longer_offered():
+    """Old files and saved imports still name it; nothing proposes it."""
     assert get_parser("native_bank") is not None
+    assert "native_bank" not in {s.source_id for s in list_parsers()}
 
 
-def test_native_parser_detects_its_own_header():
-    parser = get_parser("native_bank")
+def test_generic_parser_detects_the_documented_header():
+    parser = get_parser("generic_bank")
     assert parser.detect(NATIVE_CSV) == 1.0
+    assert parser.detect(NATIVE_FR_CSV) == 1.0  # any delimiter
     assert parser.detect("Date;Solde\n15/01/2024;1000,00\n") == 0.0
 
 
-def test_native_parser_offers_a_template():
-    parser = get_parser("native_bank")
-    assert parser.template_csv is not None
-    assert parser.template_csv.splitlines()[0] == "snapshot_date,value"
+def test_native_parser_no_longer_competes_on_detection():
+    """Both scoring 1.0 would make the winner a coin toss."""
+    assert get_parser("native_bank").detect(NATIVE_CSV) == 0.0
+
+
+def test_generic_parser_reads_the_documented_shape_without_a_mapping():
+    parser = get_parser("generic_bank")
+    points, _ = parse_bank_points(NATIVE_CSV, parser.effective_options({}))
+    assert [p.snapshot_date for p in points] == [date(2024, 1, 31), date(2024, 2, 29)]
+    assert points[0].value == Decimal("12500.00")
+
+
+def test_generic_parser_still_honours_a_mapping():
+    parser = get_parser("generic_bank")
+    options = parser.effective_options({
+        "mapping": {"date": "Date", "balance": "Solde"},
+        "date_format": "%d/%m/%Y",
+        "decimal_separator": ",",
+    })
+    points, _ = parse_bank_points(BALANCE_CSV, options)
+    assert [p.value for p in points] == [Decimal("1050.00"), Decimal("980.50")]
+
+
+def test_balance_parsers_offer_a_template():
+    for source_id in ("generic_bank", "native_bank"):
+        parser = get_parser(source_id)
+        assert parser.template_csv is not None
+        assert parser.template_csv.splitlines()[0] == "snapshot_date,value"
 
 
 def test_native_points_parsed_without_mapping():
@@ -137,6 +164,22 @@ def test_transaction_parser_is_registered():
     parser = get_parser("generic_bank_transactions")
     assert parser is not None
     assert parser.category.value == "bank"
+
+
+def test_transaction_parser_detects_its_own_header():
+    parser = get_parser("generic_bank_transactions")
+    assert parser.detect(TRANSACTIONS_CSV) == 1.0
+    # `snapshot_date` is not a `date` column: the two shapes stay apart.
+    assert parser.detect(NATIVE_CSV) == 0.0
+
+
+def test_default_mappings_are_published():
+    """What the UI reads to know a file needs no mapping step."""
+    sources = {s.source_id: s for s in list_parsers()}
+    assert sources["generic_bank"].default_mapping == {"date": "snapshot_date", "balance": "value"}
+    assert sources["generic_bank_transactions"].default_mapping == {
+        "date": "date", "amount": "amount", "label": "label",
+    }
 
 
 def test_the_sign_carries_the_direction():

@@ -16,6 +16,9 @@ class ImportSourceInfo(BaseModel):
     category: str  # "crypto" | "stock" | "bank"
     file_hint: str
     supports_mapping: bool = False
+    # Columns the parser assumes when the user maps nothing: a file already
+    # carrying them needs no mapping step at all.
+    default_mapping: dict[str, str] | None = None
     template_csv: str | None = None
 
 

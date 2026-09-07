@@ -13,9 +13,9 @@ Two modes via ``options["bank_mode"]``:
 
 Mapping: {"date": ..., "balance": ...} or {"date": ..., "amount": ...}.
 
-Two parsers share that machinery: ``generic_bank`` takes the mapping from the
-user, ``native_bank`` hardcodes the ``snapshot_date``/``value`` shape the app
-documents and is auto-detected from its header.
+``generic_bank`` owns that machinery: it reads the ``snapshot_date``/``value``
+shape the app documents without being told, and only needs a mapping when the
+columns are someone else's. ``native_bank`` is the alias it grew out of.
 
 ``generic_bank_transactions`` is the other path entirely: it writes
 ``BankTransaction`` rows through ``store_transactions``, the same table the sync
@@ -44,7 +44,7 @@ from dtos.imports import (
 from models.currency import BASE_CURRENCY
 from services.banking.transactions import STATUS_BOOKED, canonical_amount
 from services.encryption import hash_index
-from services.imports.base import ImportCategory, ImportParser, csv_header_line
+from services.imports.base import ImportCategory, ImportParser, header_has
 from services.imports.dedup import bank_existing_dates, bank_existing_transaction_refs
 from services.imports.generic_csv import (
     get_mapped,
@@ -161,25 +161,18 @@ class _BankHistoryParser(ImportParser):
 
 @register
 class GenericBankParser(_BankHistoryParser):
-    """Any bank statement CSV, converted into a balance curve."""
+    """Any bank statement CSV, converted into a balance curve.
+
+    Falls back on the shape CapitalView documents, and recognises it, so a
+    well-formed file goes straight to the preview and the mapping is only
+    asked for when the columns are actually someone else's.
+    """
 
     source_id = "generic_bank"
-    label = "CSV générique (relevé bancaire) avec mapping de colonnes"
-    file_hint = "relevé CSV bancaire (mode solde ou mode mouvements)"
+    label = "Soldes — relevé bancaire (vos colonnes)"
+    file_hint = "Trace la courbe du compte. Un solde par date, ou des mouvements cumulés depuis un solde de départ."
     supports_mapping = True
-
-    def detect(self, csv_content: str) -> float:
-        return 0.0  # never auto-detected
-
-
-@register
-class NativeBankParser(_BankHistoryParser):
-    """The CSV shape CapitalView itself documents: one balance per date."""
-
-    source_id = "native_bank"
-    label = "Format CapitalView (snapshot_date, value)"
-    file_hint = "CSV à deux colonnes : snapshot_date, value"
-    supports_mapping = False
+    default_mapping = {"date": "snapshot_date", "balance": "value"}
     template_csv = (
         "snapshot_date,value\n"
         "2024-01-31,12500.00\n"
@@ -187,14 +180,33 @@ class NativeBankParser(_BankHistoryParser):
         "2024-03-31,11800.00\n"
     )
 
-    _MAPPING = {"date": "snapshot_date", "balance": "value"}
-
     def detect(self, csv_content: str) -> float:
-        header = csv_header_line(csv_content).lower()
-        return 1.0 if "snapshot_date" in header and "value" in header else 0.0
+        return 1.0 if header_has(csv_content, "snapshot_date", "value") else 0.0
 
     def effective_options(self, options: dict) -> dict:
-        return {**options, "mapping": self._MAPPING, "bank_mode": "balance"}
+        if options.get("mapping"):
+            return options
+        # No mapping given: read the documented shape, which is a balance per
+        # date — never the `delta` accumulation.
+        return {**options, "mapping": self.default_mapping, "bank_mode": "balance"}
+
+
+@register
+class NativeBankParser(GenericBankParser):
+    """Alias kept for the files and saved imports that still name it.
+
+    ``generic_bank`` reads this shape unaided now; nothing offers this source
+    any more.
+    """
+
+    source_id = "native_bank"
+    label = "Soldes — format CapitalView"
+    file_hint = "Trace la courbe du compte. Deux colonnes : snapshot_date, value."
+    supports_mapping = False
+    listed = False
+
+    def detect(self, csv_content: str) -> float:
+        return 0.0  # `generic_bank` owns the shape now; two 1.0 would be a coin toss
 
 
 # ---------------------------------------------------------------------------
@@ -293,9 +305,10 @@ class GenericBankTransactionsParser(ImportParser):
 
     source_id = "generic_bank_transactions"
     category = ImportCategory.BANK
-    label = "CSV de mouvements bancaires (date, montant signé, libellé)"
-    file_hint = "relevé CSV d'opérations : une ligne par mouvement, montant signé"
+    label = "Opérations — relevé bancaire"
+    file_hint = "Remplit l'historique des opérations et « Ce qui a réellement bougé ». Une ligne par mouvement, montant signé."
     supports_mapping = True
+    default_mapping = DEFAULT_TRANSACTION_MAPPING
     template_csv = (
         "date,amount,label\n"
         "2024-01-15,-42.50,CARTE FNAC\n"
@@ -304,7 +317,7 @@ class GenericBankTransactionsParser(ImportParser):
     )
 
     def detect(self, csv_content: str) -> float:
-        return 0.0  # never auto-detected: `native_bank` owns the two-column shape
+        return 1.0 if header_has(csv_content, *DEFAULT_TRANSACTION_MAPPING.values()) else 0.0
 
     def preview(
         self,
