@@ -563,6 +563,32 @@ def delete_bank_account_history(
     return result.rowcount
 
 
+def last_known_balance_before(
+    session: Session, account_id: str, day: date, master_key: str
+) -> Decimal:
+    """The account's stored balance on the last day before ``day`` (0 if none)."""
+    row = session.exec(
+        select(AccountHistory)
+        .where(AccountHistory.account_id_bidx == hash_index(account_id, master_key))
+        .where(AccountHistory.snapshot_date < day)
+        .order_by(AccountHistory.snapshot_date.desc())
+    ).first()
+    return Decimal(decrypt_data(row.total_value_enc, master_key)) if row else Decimal("0")
+
+
+def _known_values_before(
+    session: Session, account_id_bidx: str, until: date, master_key: str
+) -> dict[date, Decimal]:
+    """The account's stored balances strictly before ``until``, by date."""
+    rows = session.exec(
+        select(AccountHistory)
+        .where(AccountHistory.account_id_bidx == account_id_bidx)
+        .where(AccountHistory.snapshot_date < until)
+        .order_by(AccountHistory.snapshot_date)
+    ).all()
+    return {row.snapshot_date: Decimal(decrypt_data(row.total_value_enc, master_key)) for row in rows}
+
+
 def import_bank_account_history(
     session: Session,
     account: BankAccount,
@@ -604,6 +630,12 @@ def import_bank_account_history(
     now = datetime.now(timezone.utc)
     account_id_bidx = hash_index(account.uuid, master_key)
 
+    # The days before the imported range are not empty days — they are days this
+    # file says nothing about. Zeroing them draws a balance that fell to nothing
+    # and came back, so what is already known is carried across instead. Zero
+    # survives only where nothing has ever been recorded.
+    known_before = _known_values_before(session, account_id_bidx, first_entry_date, master_key)
+
     # Fill first, convert second. The balance stands still between two
     # statements while its euro value moves with the rate, so carrying a
     # *converted* value forward would freeze the rate along with the balance.
@@ -612,7 +644,7 @@ def import_bank_account_history(
     d = fill_start
     while d <= yesterday:
         if d < first_entry_date:
-            last_value = Decimal("0")
+            last_value = known_before.get(d, last_value)
         elif d in value_by_date:
             last_value = value_by_date[d]
         # else: carry forward last_value

@@ -155,3 +155,69 @@ def test_sources_expose_optional_template(client_with_user):
     sources = client.get("/imports/sources", headers=auth).json()["sources"]
     # Every source declares the field; only some carry a template.
     assert all("template_csv" in s for s in sources)
+
+
+def test_a_bank_import_is_refused_on_a_linked_account(session):
+    """The bank owns a linked account's movements and its curve; an import would
+    fight the next sync for them. Detaching it is the way in."""
+    from datetime import date
+
+    from models.banking import BankAccountLink, BankSession
+    from services.encryption import encrypt_data, hash_index
+
+    client = TestClient(app)
+    # The account is encrypted with the key this session actually holds, so the
+    # link has to be indexed with that one, not with a fixture's.
+    registered = client.post(
+        "/auth/register",
+        json={"username": "linked", "email": "linked@example.com", "password": "Strongpass1!"},
+        headers={"X-Return-Master-Key": "true"},
+    ).json()
+    auth = {"Authorization": f"Bearer {registered['access_token']}"}
+    key = registered["master_key"]
+
+    account_id = client.post(
+        "/bank/accounts",
+        json={"name": "Courant", "account_type": "CHECKING", "balance": "0", "currency": "EUR"},
+        headers=auth,
+    ).json()["id"]
+
+    bank_session = BankSession(
+        user_uuid_bidx=hash_index("whoever", key),
+        session_id_enc=encrypt_data("eb-session-1", key),
+        aspsp_name_enc=encrypt_data("Boursorama", key),
+        aspsp_country_enc=encrypt_data("FR", key),
+        status="AUTHORIZED",
+        consent_valid_until=date.today(),
+        authorized_at=date.today(),
+    )
+    session.add(bank_session)
+    session.commit()
+    session.add(
+        BankAccountLink(
+            user_uuid_bidx=hash_index("whoever", key),
+            bank_account_uuid_bidx=hash_index(account_id, key),
+            session_uuid=bank_session.uuid,
+            identification_hash_bidx=hash_index("ident-1", key),
+            account_uid_enc=encrypt_data("uid-1", key),
+            anchor_date=date.today(),
+            anchor_balance_enc=encrypt_data("500.00", key),
+            last_synced_at=date.today(),
+        )
+    )
+    session.commit()
+
+    preview = client.post(
+        "/imports/generic_bank_transactions/preview",
+        json={"csv_content": "date,amount,label\n2024-01-15,-42.50,CARTE\n", "account_id": account_id},
+        headers=auth,
+    )
+    assert preview.status_code == 409
+    assert "synchronisé" in preview.json()["detail"]
+
+    confirm = client.post(
+        "/imports/generic_bank_transactions/confirm",
+        json={"account_id": account_id, "bank_transactions": []},
+        headers=auth,
+    )
+    assert confirm.status_code == 409

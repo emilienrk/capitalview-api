@@ -32,14 +32,6 @@ BALANCE_CSV = textwrap.dedent("""\
     20/01/2024;980,50
 """)
 
-DELTA_CSV = textwrap.dedent("""\
-    Date;Montant
-    10/01/2024;500,00
-    12/01/2024;-100,00
-    12/01/2024;20,00
-""")
-
-
 def test_bank_balance_mode_last_wins():
     points, warnings = parse_bank_points(BALANCE_CSV, {
         "mapping": {"date": "Date", "balance": "Solde"},
@@ -50,19 +42,6 @@ def test_bank_balance_mode_last_wins():
     assert points[0].snapshot_date == date(2024, 1, 15)
     assert points[0].value == Decimal("1050.00")  # last row for the date wins
     assert points[1].value == Decimal("980.50")
-
-
-def test_bank_delta_mode_accumulates():
-    points, _ = parse_bank_points(DELTA_CSV, {
-        "mapping": {"date": "Date", "amount": "Montant"},
-        "bank_mode": "delta",
-        "initial_balance": "100",
-        "date_format": "%d/%m/%Y",
-        "decimal_separator": ",",
-    })
-    assert len(points) == 2
-    assert points[0].value == Decimal("600.00")   # 100 + 500
-    assert points[1].value == Decimal("520.00")   # 600 - 100 + 20
 
 
 def test_bank_unreadable_rows_warn():
@@ -438,6 +417,41 @@ def test_a_dip_below_zero_is_reported_not_refused(session, master_key):
                             account_id=account_id, master_key=master_key)
     assert priced.bank_curve.first_negative_date is None
     assert not priced.warnings
+
+
+def test_the_next_month_picks_up_where_the_curve_left_off(session, master_key):
+    """Importing month after month: the anchor is the balance already reached."""
+    parser = get_parser("generic_bank_transactions")
+    account_id = _account(session, master_key)
+
+    january, _ = parse_bank_transactions(TRANSACTIONS_CSV, {})
+    _confirm(session, master_key, account_id, january, parser, {"initial_balance": "2000"})
+
+    february, _ = parse_bank_transactions(
+        "date,amount,label\n2024-02-20,-100.00,CARTE\n2024-02-25,300.00,VIREMENT\n", {}
+    )
+    preview = parser.preview(
+        session, "date,amount,label\n2024-02-20,-100.00,CARTE\n2024-02-25,300.00,VIREMENT\n",
+        {}, account_id=account_id, master_key=master_key,
+    )
+    # 2307.50 is where January ended — not zero, and not asked for again.
+    assert preview.bank_curve.opening_balance == Decimal("2307.50")
+
+    _confirm(session, master_key, account_id, february, parser)
+    curve = _curve(session, master_key, account_id)
+    assert curve[date(2024, 2, 20)] == Decimal("2207.50")
+    assert curve[date(2024, 2, 25)] == Decimal("2507.50")
+
+
+def test_a_given_anchor_still_wins_over_the_stored_one(session, master_key):
+    parser = get_parser("generic_bank_transactions")
+    account_id = _account(session, master_key)
+    rows, _ = parse_bank_transactions(TRANSACTIONS_CSV, {})
+    _confirm(session, master_key, account_id, rows, parser, {"initial_balance": "2000"})
+
+    preview = parser.preview(session, TRANSACTIONS_CSV, {"initial_balance": "50"},
+                             account_id=account_id, master_key=master_key)
+    assert preview.bank_curve.opening_balance == Decimal("50")
 
 
 def test_an_older_statement_does_not_walk_the_balance_back(session, master_key):
