@@ -199,17 +199,18 @@ def test_update_ai_api_keys(session, master_key):
     assert providers4["deepseek"]["has_key"] is True
 
 
-def test_bank_auto_sync_defaults_to_true_and_can_be_disabled(session, master_key):
+def test_bank_auto_sync_defaults_to_off_and_can_be_enabled(session, master_key):
+    """Off by default: a forecast never moves a real balance unasked."""
     client = TestClient(app)
 
     initial = client.get("/settings").json()
-    assert initial["bank_auto_sync_enabled"] is True
+    assert initial["bank_auto_sync_enabled"] is False
 
-    updated = client.put("/settings", json={"bank_auto_sync_enabled": False}).json()
-    assert updated["bank_auto_sync_enabled"] is False
+    updated = client.put("/settings", json={"bank_auto_sync_enabled": True}).json()
+    assert updated["bank_auto_sync_enabled"] is True
 
     reread = client.get("/settings").json()
-    assert reread["bank_auto_sync_enabled"] is False
+    assert reread["bank_auto_sync_enabled"] is True
 
 
 def test_benchmark_and_investment_plan_round_trip(session, master_key):
