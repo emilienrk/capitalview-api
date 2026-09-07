@@ -786,32 +786,56 @@ def get_all_bank_accounts_history(
     """
     Aggregate daily snapshots across all bank accounts for a user.
     The bank position is always EUR so values are simply summed by date.
+
+    An account contributes its last known balance on every date at or after its
+    first snapshot, not only on the dates it happens to carry one. Summing the
+    raw rows made an account worth zero on every day it had no point of its own,
+    so accounts with different snapshot windows — one synced daily, one imported
+    over a narrower range — produced a total that dropped and recovered with
+    nothing behind it. Every field here is cumulative-to-date (`cumulative_pnl`
+    is read as value - deposits + withdrawals), so all four carry forward.
     """
     user_bidx = hash_index(user_uuid, master_key)
     accounts = session.exec(
         select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
     ).all()
 
-    # date -> {total_value, total_invested}
-    aggregated: dict = {}
+    per_account = [
+        get_bank_account_history(session, acc.uuid, master_key, start_date, end_date)
+        for acc in accounts
+    ]
+    all_dates = sorted({snap.snapshot_date for snaps in per_account for snap in snaps})
 
-    for acc in accounts:
-        for snap in get_bank_account_history(session, acc.uuid, master_key, start_date, end_date):
-            d = snap.snapshot_date
-            if d not in aggregated:
-                aggregated[d] = {
-                    "total_value": Decimal("0"),
-                    "total_invested": Decimal("0"),
-                    "total_deposits": Decimal("0"),
-                    "total_withdrawals": Decimal("0"),
-                }
-            aggregated[d]["total_value"] += snap.total_value
-            aggregated[d]["total_invested"] += snap.total_invested
-            aggregated[d]["total_deposits"] += snap.total_deposits
-            aggregated[d]["total_withdrawals"] += snap.total_withdrawals
+    # One cursor per account over its own snapshots, advanced as the shared
+    # timeline moves forward: each account is walked once, not re-scanned per date.
+    cursors = [0] * len(per_account)
+    carried: list[AccountHistorySnapshotResponse | None] = [None] * len(per_account)
+
+    aggregated: dict = {}
+    for d in all_dates:
+        totals = {
+            "total_value": Decimal("0"),
+            "total_invested": Decimal("0"),
+            "total_deposits": Decimal("0"),
+            "total_withdrawals": Decimal("0"),
+        }
+        for i, snaps in enumerate(per_account):
+            while cursors[i] < len(snaps) and snaps[cursors[i]].snapshot_date <= d:
+                carried[i] = snaps[cursors[i]]
+                cursors[i] += 1
+            snap = carried[i]
+            # None until the account's first snapshot: it had no balance to add
+            # yet, and carrying one backwards would invent money it never held.
+            if snap is None:
+                continue
+            totals["total_value"] += snap.total_value
+            totals["total_invested"] += snap.total_invested
+            totals["total_deposits"] += snap.total_deposits
+            totals["total_withdrawals"] += snap.total_withdrawals
+        aggregated[d] = totals
 
     result = []
-    for d in sorted(aggregated):
+    for d in all_dates:
         day = aggregated[d]
         total_value = day["total_value"]
         positions = [
