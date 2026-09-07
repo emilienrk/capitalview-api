@@ -1,5 +1,6 @@
 """Import framework: parser interface and categories."""
 
+import re
 from abc import ABC, abstractmethod
 from enum import Enum
 
@@ -30,8 +31,14 @@ class ImportParser(ABC):
     category: ImportCategory
     file_hint: str
     supports_mapping: bool = False
+    # Column mapping used when ``options["mapping"]`` is absent; None = the
+    # parser needs one. Published so the UI can skip asking for what it knows.
+    default_mapping: dict[str, str] | None = None
     # Ready-to-fill CSV skeleton offered as a download; None = no template.
     template_csv: str | None = None
+    # False for an alias kept only so old files and saved imports still resolve:
+    # importable by id, never offered as a choice.
+    listed: bool = True
 
     @abstractmethod
     def detect(self, csv_content: str) -> float:
@@ -72,3 +79,16 @@ def csv_header_line(csv_content: str) -> str:
         if line.strip():
             return line.strip()
     return ""
+
+
+def header_has(csv_content: str, *columns: str) -> bool:
+    """True when the header names every one of ``columns``, case aside.
+
+    Cells rather than a substring search: ``snapshot_date`` would otherwise
+    answer for a ``date`` column and make two shapes look like one.
+    """
+    cells = {
+        cell.strip().strip('"').lower()
+        for cell in re.split(r"[;,\t]", csv_header_line(csv_content))
+    }
+    return all(column.lower() in cells for column in columns)

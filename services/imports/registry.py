@@ -18,6 +18,7 @@ def get_parser(source_id: str) -> ImportParser | None:
 
 
 def list_parsers() -> list[ImportSourceInfo]:
+    """The sources offered as a choice; aliases stay resolvable via get_parser."""
     return [
         ImportSourceInfo(
             source_id=p.source_id,
@@ -25,9 +26,11 @@ def list_parsers() -> list[ImportSourceInfo]:
             category=p.category.value,
             file_hint=p.file_hint,
             supports_mapping=p.supports_mapping,
+            default_mapping=p.default_mapping,
             template_csv=p.template_csv,
         )
         for p in sorted(_PARSERS.values(), key=lambda p: (p.category.value, p.source_id))
+        if p.listed
     ]
 
 
