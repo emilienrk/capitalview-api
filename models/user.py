@@ -90,8 +90,10 @@ class UserSettings(SQLModel, table=True):
     crypto_mode: str = Field(default="SINGLE", nullable=False)
     crypto_show_negative_positions: bool = Field(default=False, nullable=False)
     bank_module_enabled: bool = Field(default=True, nullable=False)
-    # False = linked cashflows no longer adjust bank balances automatically
-    bank_auto_sync_enabled: bool = Field(default=True, nullable=False)
+    # False = linked cashflows no longer adjust bank balances automatically.
+    # Off by default: a forecast moving a real balance on its own surprises more
+    # than it helps, and a linked account gets its truth from the bank anyway.
+    bank_auto_sync_enabled: bool = Field(default=False, nullable=False)
     # Opt-in: linking a real bank through Enable Banking. Off by default — it
     # costs the user their own Enable Banking application and a strong
     # authentication, and every other bank feature works without it.

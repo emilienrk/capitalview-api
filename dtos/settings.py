@@ -81,7 +81,7 @@ class UserSettingsResponse(BaseModel):
     crypto_mode: str = "SINGLE"
     crypto_show_negative_positions: bool = False
     bank_module_enabled: bool = False
-    bank_auto_sync_enabled: bool = True
+    bank_auto_sync_enabled: bool = False
     open_banking_enabled: bool = False
     cashflow_module_enabled: bool = True
     wealth_module_enabled: bool = False

@@ -55,6 +55,11 @@ def _link_cashflow(session, master_key, account_id, amount, flow_type, frequency
     )
 
 
+def _enable_auto_sync(session, master_key, user_uuid="sync_user"):
+    """The global switch is off by default; these tests are about what it does when on."""
+    update_settings(session, user_uuid, master_key, UserSettingsUpdate(bank_auto_sync_enabled=True))
+
+
 # ─── First connection ─────────────────────────────────────────
 
 
@@ -106,6 +111,7 @@ class TestAutoSync:
         acc.balance_updated_at = date(2026, 2, 1)
         session.add(acc)
         session.commit()
+        _enable_auto_sync(session, master_key, user_uuid)
 
         # Outflow of 500 on the 10th of each month
         _link_cashflow(
@@ -132,6 +138,7 @@ class TestAutoSync:
         acc.balance_updated_at = date(2026, 2, 27)
         session.add(acc)
         session.commit()
+        _enable_auto_sync(session, master_key, user_uuid)
 
         _link_cashflow(
             session, master_key, acc.uuid,
@@ -157,6 +164,7 @@ class TestAutoSync:
         acc.balance_updated_at = date(2026, 2, 28)
         session.add(acc)
         session.commit()
+        _enable_auto_sync(session, master_key, user_uuid)
 
         # +3000 salary on 1st
         _link_cashflow(session, master_key, acc.uuid, Decimal("3000"), FlowType.INFLOW,
@@ -299,6 +307,7 @@ class TestInactiveCashflows:
         acc.balance_updated_at = date(2026, 2, 28)
         session.add(acc)
         session.commit()
+        _enable_auto_sync(session, master_key, user_uuid)
 
         _link_cashflow(session, master_key, acc.uuid, Decimal("3000"), FlowType.INFLOW,
                        Frequency.MONTHLY, date(2026, 1, 1), user_uuid=user_uuid)
@@ -319,6 +328,7 @@ class TestInactiveCashflows:
         acc.balance_updated_at = date(2026, 1, 1)
         session.add(acc)
         session.commit()
+        _enable_auto_sync(session, master_key, user_uuid)
 
         cf = _link_cashflow(session, master_key, acc.uuid, Decimal("100"), FlowType.OUTFLOW,
                             Frequency.MONTHLY, date(2026, 1, 15), user_uuid=user_uuid, is_active=False)
