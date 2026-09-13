@@ -70,6 +70,33 @@ def job_lock(name: str):
 
 
 @contextmanager
+def wait_for_lock(name: str, bind=None):
+    """Hold a cluster-wide lock for *name*, waiting for it rather than skipping.
+
+    `job_lock` is for work that only needs doing once: whoever finds it held
+    has nothing left to do. This is for work that must not *overlap*, where the
+    second caller still needs the first one's outcome — it queues behind it and
+    then reads a state the first has already committed.
+
+    `bind` is the caller's own session bind, so the lock is taken on the very
+    database the work writes to. Same connection discipline as `job_lock`. A
+    no-op outside Postgres: advisory locks have no SQLite equivalent, and the
+    test database is SQLite.
+    """
+    engine = getattr(bind, "engine", bind) if bind is not None else get_engine()
+    if engine.dialect.name != "postgresql":
+        yield
+        return
+    params = {"ns": _LOCK_NAMESPACE, "key": _lock_key(name)}
+    with engine.connect() as conn:
+        conn.execute(text("SELECT pg_advisory_lock(:ns, :key)"), params)
+        try:
+            yield
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:ns, :key)"), params)
+
+
+@contextmanager
 def job_run(name: str, user_uuid: str | None = None):
     """Record one execution of *name*, yielding a dict to fill with counters.
 

@@ -32,12 +32,21 @@ from services.market import (
 LINK_STATUS_CONNECTED = "connecté"
 LINK_STATUS_RECONNECT = "à reconnecter"
 
-# The three outcomes of the reconciliation check (ruling R18), kept here rather
-# than in the sync because that module already depends on this one. Distinct
-# from LINK_STATUS_*, which describes the consent, not the curve.
+# The outcomes of the reconciliation check (ruling R18), kept here rather than
+# in the sync because that module already depends on this one. Distinct from
+# LINK_STATUS_*, which describes the consent, not the curve.
 RECONCILIATION_OK = "reconciled"
 RECONCILIATION_GAP = "gap"
 RECONCILIATION_NOT_POSSIBLE = "not_reconcilable"
+# A curve anchored on an available balance (ITAV) rather than an accounting one.
+# The check still runs and its gap is still stored — it is the only measurement
+# of how far the two drift apart — but a gap here is the expected signature of a
+# blocked-then-booked card payment, not a missing movement. Presenting it as one
+# would teach the user to ignore gaps, and the alert would be worthless the day
+# one is real.
+RECONCILIATION_ESTIMATED = "estimated"
+# The balance types a curve can rest on. ITAV is the one that makes it estimated.
+AVAILABLE_BALANCE_TYPE = "ITAV"
 
 
 class LinkMetadata:
@@ -60,6 +69,13 @@ class LinkMetadata:
         # received, because the first long fetch came back empty. Surfaced so
         # the flat curve that follows has a name and a way out.
         self.history_pending = not link.history_seeded
+        # How far back the bank actually served, so the front states a fact
+        # instead of offering a retry the bank would answer the same way.
+        self.history_served_from = (
+            date.fromisoformat(decrypt_data(link.history_served_from_enc, master_key))
+            if link.history_served_from_enc
+            else None
+        )
         self.last_synced_at = None if never_synced else link.last_synced_at
         self.reconciliation_gap = (
             Decimal(decrypt_data(link.last_reconciliation_gap_enc, master_key))
@@ -71,12 +87,15 @@ class LinkMetadata:
         self.link_status = (
             LINK_STATUS_CONNECTED if is_session_active(session_status) else LINK_STATUS_RECONNECT
         )
-        # Derived, never stored (R7's precedent): three outcomes, and none yet
-        # while no check has been able to run.
+        # Derived, never stored (R7's precedent), and none yet while no check
+        # has been able to run. `estimated` outranks the gap it may carry: on an
+        # available balance the gap is a measurement, not a verdict.
         if not_reconcilable:
             self.reconciliation_status = RECONCILIATION_NOT_POSSIBLE
         elif never_synced:
             self.reconciliation_status = None
+        elif link.last_balance_type == AVAILABLE_BALANCE_TYPE:
+            self.reconciliation_status = RECONCILIATION_ESTIMATED
         else:
             self.reconciliation_status = (
                 RECONCILIATION_GAP if self.reconciliation_gap is not None else RECONCILIATION_OK
@@ -165,6 +184,7 @@ def _map_to_response(
         link_status=link.link_status if link else None,
         reconciliation_status=link.reconciliation_status if link else None,
         history_pending=link.history_pending if link else False,
+        history_served_from=link.history_served_from if link else None,
     )
 
 

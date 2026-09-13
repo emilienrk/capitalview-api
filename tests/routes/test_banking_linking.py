@@ -50,6 +50,19 @@ def _override_deps(session, master_key):
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def seeding_calls(monkeypatch):
+    """The post-link seeding runs after the response, on a session of its own
+    against the configured database — never the test one. Recorded instead:
+    what these tests own is that the route schedules it, and the sync itself
+    has its own tests."""
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        "routes.banking.seed_after_linking", lambda *args: calls.append(args)
+    )
+    return calls
+
+
 class FakeClient:
     """Records calls, returns/raises canned responses. Never touches the network."""
 
@@ -706,6 +719,44 @@ def test_list_session_accounts_reports_linked_state(session, master_key, monkeyp
     assert by_hash["hash-1"]["currency"] == "EUR"
     assert by_hash["hash-1"]["cash_account_type"] == "CACC"
     assert by_hash["hash-1"]["account_id"] == "FR7630001007941234567890185"
+
+
+def test_linking_schedules_the_first_sync_without_waiting_for_the_front(
+    session, master_key, monkeypatch, seeding_calls
+):
+    """Some banks serve the full history only for minutes after the consent —
+    Revolut, five. Left to the front's post-render call, an account picker left
+    open too long loses that window for good."""
+    client = TestClient(app)
+    _configure_credentials(client)
+    bank_account_uuid = _create_bank_account(session, master_key)
+    bank_session_uuid = _create_bank_session(session, master_key, accounts=[COURANT_ACCOUNT])
+    _forbid_client(monkeypatch)
+
+    r = client.post(
+        f"/banking/sessions/{bank_session_uuid}/link",
+        json={"identification_hash": "hash-1", "bank_account_uuid": bank_account_uuid},
+    )
+
+    assert r.status_code == 200
+    assert len(seeding_calls) == 1
+    user_uuid, key, _psu = seeding_calls[0]
+    assert (user_uuid, key) == (USER_UUID, master_key)
+
+
+def test_a_refused_link_schedules_no_sync(session, master_key, monkeypatch, seeding_calls):
+    client = TestClient(app)
+    _configure_credentials(client)
+    bank_session_uuid = _create_bank_session(session, master_key, accounts=[COURANT_ACCOUNT])
+    _forbid_client(monkeypatch)
+
+    r = client.post(
+        f"/banking/sessions/{bank_session_uuid}/link",
+        json={"identification_hash": "hash-1", "bank_account_uuid": "no-such-account"},
+    )
+
+    assert r.status_code == 404
+    assert seeding_calls == []
 
 
 def test_link_new_account_bootstraps_anchor_from_capitalview_balance(session, master_key, monkeypatch):

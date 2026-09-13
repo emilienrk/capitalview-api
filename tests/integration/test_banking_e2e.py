@@ -54,6 +54,15 @@ def _override_deps(session):
     app.dependency_overrides[get_session] = _get_session
 
 
+@pytest.fixture(autouse=True)
+def _no_post_link_seeding(monkeypatch):
+    """The post-link seeding opens its own session on the configured database,
+    which is not the test one. This scenario drives the first sync explicitly
+    through POST /banking/sync, so it is switched off rather than left to fail
+    quietly in the background."""
+    monkeypatch.setattr("routes.banking.seed_after_linking", lambda *args: None)
+
+
 @pytest.fixture
 def sqlite_pg_insert(monkeypatch):
     """Replace PostgreSQL pg_insert with plain insert for SQLite test environment."""

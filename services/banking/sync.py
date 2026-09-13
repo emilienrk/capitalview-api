@@ -32,12 +32,15 @@ from typing import Any
 
 from sqlmodel import Session, select
 
+from database import get_engine
 from dtos.bank import BankHistoryEntry
 from dtos.banking import BankAccountSyncResult
 from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession, BankTransaction
 from services.bank import (
+    AVAILABLE_BALANCE_TYPE,
     DEFAULT_CURRENCY,
+    RECONCILIATION_ESTIMATED,
     RECONCILIATION_GAP,
     account_currency,
     RECONCILIATION_NOT_POSSIBLE,
@@ -69,6 +72,7 @@ from services.banking.transactions import (
     store_transactions,
 )
 from services.encryption import decrypt_data, encrypt_data, hash_index
+from services.jobs import wait_for_lock
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +93,8 @@ PENDING_LOOKBACK = timedelta(days=90)
 # accounting balance). Never by position in the list: the real-time balance
 # XPCD comes first as often as not.
 ACCOUNTING_BALANCE_TYPE = "CLBD"
-# The one substitution allowed, and only on a card account (ruling R19): the
-# real capture publishes a single OTHR balance there and no CLBD at all.
+# The one substitution allowed on a card account (ruling R19): the real capture
+# publishes a single OTHR balance there and no CLBD at all.
 CARD_BALANCE_TYPE = "OTHR"
 
 
@@ -143,6 +147,24 @@ def sync_user_accounts(
         logger.exception("failed to notify expiring bank consents")
 
     user_bidx = hash_index(user_uuid, master_key)
+    # Two syncs of one user must not overlap: right after a rattachement the
+    # server seeds in the background while the front's post-render call arrives,
+    # and both would read `last_synced_at` as yesterday — two full paginations,
+    # two rewrites of the same curve. The second waits instead of skipping, then
+    # reads links the first has already committed and finds them capped.
+    with wait_for_lock(f"bank-sync:{user_bidx}", session.get_bind()):
+        # Whatever the notification step loaded may predate the lock.
+        session.expire_all()
+        return _sync_links(session, user_uuid, master_key, user_bidx, psu_context)
+
+
+def _sync_links(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    user_bidx: str,
+    psu_context: dict[str, str] | None,
+) -> list[BankAccountSyncResult]:
     links = session.exec(
         select(BankAccountLink).where(BankAccountLink.user_uuid_bidx == user_bidx)
     ).all()
@@ -208,9 +230,9 @@ def sync_account_link(
     window_start = _window_start(session, account, master_key, link.anchor_date, today)
 
     try:
-        # 1. The accounting balance, never the real-time one. Strict CLBD for
-        # regular accounts (§F); card accounts fall back to OTHR.
-        accounting = _accounting_balance(
+        # 1. The accounting balance, never the real-time one. CLBD first; card
+        # accounts fall back to OTHR, any account to ITAV as a last resort (§F).
+        accounting, balance_type = _accounting_balance(
             client.get_balances(uid), currency, is_card=not_reconcilable
         )
         # 2. The movements, from a window that always re-includes pending rows.
@@ -260,9 +282,33 @@ def sync_account_link(
         session, account, master_key, parsed, fetched_from, today
     )
 
+    # What the bank fills in on `balance_after_transaction`, counted and never
+    # used: filled, the last row of a day *is* that day's balance, and a curve
+    # could be read straight off the feed instead of walked back from one
+    # anchor — exact even where a balance type is missing or an operation was
+    # dropped. Measured on the real Boursorama production capture it is empty on
+    # all 3 275 rows, so nothing is built on it until a bank is seen filling it.
+    result.balance_after_rows = sum(
+        1 for raw in raws if (raw.get("balance_after_transaction") or {}).get("amount") is not None
+    )
+
     movements = _booked_movements(session, account, master_key, covered_from, today, currency)
 
-    # 4. Reconciliation (§D3), with three outcomes rather than two (ruling R18).
+    # An available balance is the accounting one minus what is currently
+    # withheld, so the withheld part is added back before anything anchors on
+    # it. Only what the bank actually reports as pending can be added back: a
+    # bank that publishes ITAV and shares no pending rows — Revolut does exactly
+    # that — leaves the net at zero and the figure uncorrected, which is the
+    # whole reason the verdict below stays `estimated`.
+    estimated = balance_type == AVAILABLE_BALANCE_TYPE
+    pending_net = (
+        _pending_net(session, account, master_key, today, currency)
+        if estimated
+        else Decimal("0")
+    )
+    accounting -= pending_net
+
+    # 4. Reconciliation (§D3), with four outcomes rather than two (ruling R18).
     # Skipped on the seeding pass: its anchor is the manually-entered balance,
     # not a bank reading, so there is no comparable quantity to check against —
     # the seeded curve is derived from today's balance and holds by construction.
@@ -277,7 +323,16 @@ def sync_account_link(
     elif not seeding:
         gap = _reconciliation_gap(link, accounting, movements, master_key)
         result.reconciliation_gap = gap
-        result.reconciliation_status = RECONCILIATION_GAP if gap else RECONCILIATION_OK
+        if estimated:
+            # Still computed and still stored: on an available balance the gap
+            # is the only measurement of how far the two readings drift apart,
+            # and the answer decides whether this account can graduate back to a
+            # verified curve. It is the verdict, not the number, that is held
+            # back — a card authorisation blocked one day and booked the next
+            # produces a gap on a perfectly healthy account.
+            result.reconciliation_status = RECONCILIATION_ESTIMATED
+        else:
+            result.reconciliation_status = RECONCILIATION_GAP if gap else RECONCILIATION_OK
 
     # 5. The new anchor. Stored at a *day boundary*, not at the instant of the
     # call: the accounting balance minus everything already booked today. A row
@@ -290,6 +345,8 @@ def sync_account_link(
         str(accounting - movements.get(today, Decimal("0"))), master_key
     )
     link.last_synced_at = today
+    link.last_balance_type = balance_type
+    result.balance_type = balance_type
     # The flag is earned, never merely spent: a seeding pass that comes back
     # empty — a bank still settling the authorization, a feed answered blank —
     # leaves it off, so the next sync asks for those years again instead of
@@ -297,11 +354,17 @@ def sync_account_link(
     if seeding:
         if parsed:
             link.history_seeded = True
+            _widen_history_served_from(link, parsed, master_key)
         else:
             result.detail = (
                 "La banque n'a renvoyé aucune opération : l'historique reste à récupérer, "
                 "la prochaine synchronisation le redemandera."
             )
+    if estimated and result.detail is None:
+        result.detail = (
+            "Votre banque ne publie pas de solde comptable : la courbe est estimée "
+            "à partir du solde disponible."
+        )
     link.last_reconciliation_gap_enc = (
         encrypt_data(str(gap), master_key) if gap is not None else None
     )
@@ -310,6 +373,21 @@ def sync_account_link(
     account.balance_updated_at = today
     session.add(account)
     session.commit()
+
+    # One line per sync, and the only place the three open questions about a
+    # bank's feed can be answered from a running instance: which balance type it
+    # actually publishes, how far an available balance drifts from the booked
+    # movements, and whether it fills `balance_after_transaction`. No amount and
+    # no identifier beyond the link's own uuid — this goes to the server log.
+    logger.info(
+        "sync %s: balance_type=%s gap=%s pending_net=%s balance_after_rows=%d/%d",
+        link.uuid,
+        balance_type,
+        "none" if gap is None else gap,
+        pending_net,
+        result.balance_after_rows,
+        len(raws),
+    )
 
     # 6. Rewrite the snapshots of the window just processed, and only those —
     # unless nothing reconcilable can be built (ruling R19). A card account
@@ -403,13 +481,22 @@ def _accounting_balance_row(
 ) -> dict[str, Any]:
     """The balance object that carries the accounting balance, in `currency`.
 
-    Strict CLBD, and the substitution is enumerated rather than open: a card
-    account publishes **no** CLBD at all — the real capture holds one single
-    `OTHR` balance — so `OTHR` is accepted for card accounts and nothing else.
-    `XPCD` in particular is never a candidate: it is the real-time balance, and
-    folding pending operations into an anchor is the exact silent substitution
-    `AccountingBalanceUnavailableError` exists to forbid (§F, constraint 9).
-    The fallback is narrow, named and logged — never a "first EUR balance wins".
+    CLBD first, always, and the substitutions are enumerated rather than open:
+
+    * `OTHR`, on a card account only — it publishes **no** CLBD at all, the real
+      capture holds one single `OTHR` balance (ruling R19).
+    * `ITAV`, as a last resort — some banks publish no accounting balance on any
+      account. Revolut's PSD2 implementation returns a single `InterimAvailable`
+      and nothing else, so the choice is an estimated curve or no sync at all.
+      An available balance has pending card authorisations already withheld from
+      it, which is why the caller re-adds what it can see of them and why the
+      reconciliation verdict downgrades to `estimated`.
+
+    `XPCD` in particular is never a candidate: it is the real-time balance, with
+    no offsetting rows to correct it with, and folding pending operations into
+    an anchor is the exact silent substitution `AccountingBalanceUnavailableError`
+    exists to forbid (§F, constraint 9). Every fallback is narrow, named and
+    logged — never a "first EUR balance wins".
     """
     balances = payload.get("balances", [])
     row = _balance_of_type(balances, ACCOUNTING_BALANCE_TYPE, currency)
@@ -426,6 +513,15 @@ def _accounting_balance_row(
             )
             return row
 
+    row = _balance_of_type(balances, AVAILABLE_BALANCE_TYPE, currency)
+    if row is not None:
+        logger.warning(
+            "no %s balance published, falling back to %s: the curve is estimated",
+            ACCOUNTING_BALANCE_TYPE,
+            AVAILABLE_BALANCE_TYPE,
+        )
+        return row
+
     raise AccountingBalanceUnavailableError(
         f"votre banque ne publie pas de solde comptable ({ACCOUNTING_BALANCE_TYPE}) "
         f"en {currency} pour ce compte. Soldes publiés : {_published_balances(balances)}."
@@ -434,14 +530,17 @@ def _accounting_balance_row(
 
 def _accounting_balance(
     payload: dict[str, Any], currency: str, is_card: bool = False
-) -> Decimal:
-    """The accounting balance, matched by balance type and read in `currency`.
+) -> tuple[Decimal, str]:
+    """The accounting balance and the type it was read from, in `currency`.
 
     Two balances coexist on checking accounts and the real-time one is published
     alongside; taking the first element of the list is wrong half the time (§F).
+    The type comes back with the amount because it decides how much the figure
+    can be trusted, and the balances payload is out of reach everywhere else.
     """
-    amount = _accounting_balance_row(payload, currency, is_card).get("balance_amount") or {}
-    return Decimal(str(amount.get("amount")))
+    row = _accounting_balance_row(payload, currency, is_card)
+    amount = row.get("balance_amount") or {}
+    return Decimal(str(amount.get("amount"))), str(row.get("balance_type") or "")
 
 
 def _fetch(
@@ -464,6 +563,25 @@ def _fetch(
         return list(
             client.iter_transactions(uid, date_from=earliest, strategy=strategy)
         ), earliest
+
+
+def _widen_history_served_from(
+    link: BankAccountLink, parsed: list[NormalizedTransaction], master_key: str
+) -> None:
+    """Record how far back this seeding pass reached, never narrowing it.
+
+    Widened rather than overwritten: a re-seed on a bank that caps later
+    requests — Revolut serves ninety days once the consent is minutes old —
+    brings back less than the first pass did, while every older operation is
+    still stored and still drawn.
+    """
+    dates = [tx.effective_date for tx in parsed if tx.effective_date]
+    if not dates:
+        return
+    oldest = min(dates)
+    if link.history_served_from_enc:
+        oldest = min(oldest, date.fromisoformat(decrypt_data(link.history_served_from_enc, master_key)))
+    link.history_served_from_enc = encrypt_data(oldest.isoformat(), master_key)
 
 
 def _mark_consent_lost(session: Session, link: BankAccountLink, exc: SessionInvalidError) -> str:
@@ -501,6 +619,34 @@ def _window_start(
     if not pending:
         return anchor_date
     return min([anchor_date] + [day for _, day in pending])
+
+
+def _pending_net(
+    session: Session, account: BankAccount, master_key: str, today: date, currency: str
+) -> Decimal:
+    """Net signed amount of everything still pending on this account.
+
+    What an available balance (ITAV) has already withheld, as far as it can be
+    seen: a card authorisation is subtracted from what the holder may spend long
+    before it is booked. Subtracting this net — negative for the usual case of a
+    blocked payment — turns the available balance back into the accounting one.
+
+    Same currency filter and same window as everywhere else (§D3, ruling R18):
+    a row in another currency arrives without a rate, and a pending row older
+    than the lookback has long since booked or vanished.
+    """
+    net = Decimal("0")
+    for row, _ in _pending_rows(
+        session, account, master_key, today - PENDING_LOOKBACK, today
+    ):
+        if decrypt_data(row.currency_enc, master_key) != currency:
+            continue
+        amount = Decimal(decrypt_data(row.amount_enc, master_key))
+        if decrypt_data(row.credit_debit_enc, master_key) == "CRDT":
+            net += amount
+        else:
+            net -= amount
+    return net
 
 
 def _pending_rows(
@@ -687,3 +833,24 @@ def _row_date(row: BankTransaction, master_key: str) -> date | None:
 
 def _capped(account: BankAccount) -> BankAccountSyncResult:
     return BankAccountSyncResult(bank_account_uuid=account.uuid, status="skipped_daily_cap")
+
+
+def seed_after_linking(user_uuid: str, master_key: str, psu_context: dict[str, str] | None) -> None:
+    """Fetch a freshly linked account's history right away, off the request.
+
+    Some banks only serve the full history for a few minutes after the consent
+    is authorised — Revolut restricts it to five, everything later being capped
+    at ninety days. The link is created with `last_synced_at` set to yesterday
+    precisely so a sync fires immediately, but that sync was the *front's* to
+    make: an account picker left open too long, or a closed tab, and the window
+    is gone for good, since only a new consent reopens it.
+
+    Runs on its own session — the request's is closed by the time a background
+    task runs — and never raises: this is a best-effort head start, and the
+    front's own sync call remains the guarantee that a link gets synchronised.
+    """
+    try:
+        with Session(get_engine()) as session:
+            sync_user_accounts(session, user_uuid, master_key, psu_context=psu_context)
+    except Exception:
+        logger.exception("post-link seeding failed for user %s", user_uuid)

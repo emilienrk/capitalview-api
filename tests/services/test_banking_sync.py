@@ -24,13 +24,14 @@ from models.account_history import AccountHistory
 from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession, BankTransaction
 from models.enums import AccountCategory, BankAccountType
-from services.bank import create_bank_account, get_user_bank_accounts
+from services.bank import LinkMetadata, create_bank_account, get_user_bank_accounts
 from services.banking.credentials import upsert_connection
 from services.banking.errors import InvalidPeriodError, SessionInvalidError
 from services.banking.sync import (
     SEED_DATE_FROM,
     AccountingBalanceUnavailableError,
     _accounting_balance,
+    seed_after_linking,
     sync_user_accounts,
 )
 from services.banking.transactions import store_transactions
@@ -427,7 +428,7 @@ class TestBalanceSelection:
                 {"balance_amount": {"currency": "EUR", "amount": "0"}, "balance_type": "OTHR"}
             ]
         }
-        assert _accounting_balance(othr_only, "EUR", is_card=True) == Decimal("0")
+        assert _accounting_balance(othr_only, "EUR", is_card=True) == (Decimal("0"), "OTHR")
 
         real_time_only = {
             "balances": [
@@ -437,7 +438,7 @@ class TestBalanceSelection:
         with pytest.raises(AccountingBalanceUnavailableError):
             _accounting_balance(real_time_only, "EUR", is_card=True)
 
-    def test_a_regular_account_never_falls_back_at_all(self):
+    def test_the_card_fallback_stays_reserved_for_card_accounts(self):
         othr_only = {
             "balances": [
                 {"balance_amount": {"currency": "EUR", "amount": "0"}, "balance_type": "OTHR"}
@@ -446,13 +447,45 @@ class TestBalanceSelection:
         with pytest.raises(AccountingBalanceUnavailableError):
             _accounting_balance(othr_only, "EUR")
 
+    def test_the_available_balance_is_taken_when_the_bank_publishes_nothing_else(self):
+        """Revolut's PSD2 implementation returns a single ITAV and no CLBD on
+        any account. Refusing it left the account permanently unsyncable; taking
+        it makes the curve estimated, which the caller marks as such."""
+        itav_only = {
+            "balances": [
+                {"balance_amount": {"currency": "EUR", "amount": "970.49"}, "balance_type": "ITAV"}
+            ]
+        }
+        assert _accounting_balance(itav_only, "EUR") == (Decimal("970.49"), "ITAV")
+
+    def test_the_accounting_balance_still_wins_when_both_are_published(self):
+        """The fallback is a last resort, never a preference: a bank publishing
+        both must be read on CLBD, or every such account would silently
+        downgrade to an estimated curve."""
+        payload = {
+            "balances": [
+                {"balance_amount": {"currency": "EUR", "amount": "920.49"}, "balance_type": "ITAV"},
+                {"balance_amount": {"currency": "EUR", "amount": "970.49"}, "balance_type": "CLBD"},
+            ]
+        }
+        assert _accounting_balance(payload, "EUR") == (Decimal("970.49"), "CLBD")
+
+    def test_the_available_balance_is_matched_on_currency_like_any_other(self):
+        payload = {
+            "balances": [
+                {"balance_amount": {"currency": "CHF", "amount": "12.63"}, "balance_type": "ITAV"}
+            ]
+        }
+        with pytest.raises(AccountingBalanceUnavailableError):
+            _accounting_balance(payload, "EUR")
+
     def test_the_refusal_names_what_the_bank_did_publish(self):
         """The message reaches the user's screen through `BankAccountSyncResult
         .detail`, and it is the only place the ASPSP's actual balance types are
         ever visible: which ones a bank publishes is in no contract."""
         payload = {
             "balances": [
-                {"balance_amount": {"currency": "EUR", "amount": "3000"}, "balance_type": "ITAV"},
+                {"balance_amount": {"currency": "EUR", "amount": "3000"}, "balance_type": "XPCD"},
                 {"balance_amount": {"currency": "CHF", "amount": "12.63"}, "balance_type": "CLBD"},
             ]
         }
@@ -460,7 +493,7 @@ class TestBalanceSelection:
             _accounting_balance(payload, "EUR")
 
         message = str(excinfo.value)
-        assert "ITAV/EUR" in message
+        assert "XPCD/EUR" in message
         assert "CLBD/CHF" in message
         # No amount: this string is displayed, and a balance is not an error detail.
         assert "3000" not in message
@@ -477,7 +510,7 @@ class TestBalanceSelection:
                 {"balance_amount": {"currency": "EUR", "amount": "406.70"}, "balance_type": "CLBD"},
             ]
         }
-        assert _accounting_balance(payload, "EUR", is_card=True) == Decimal("406.70")
+        assert _accounting_balance(payload, "EUR", is_card=True) == (Decimal("406.70"), "CLBD")
 
     def test_a_foreign_currency_balance_is_never_read_as_euros(self):
         payload = {
@@ -496,7 +529,7 @@ class TestBalanceSelection:
                 {"balance_amount": {"currency": "CHF", "amount": "406.70"}, "balance_type": "CLBD"}
             ]
         }
-        assert _accounting_balance(payload, "CHF") == Decimal("406.70")
+        assert _accounting_balance(payload, "CHF") == (Decimal("406.70"), "CLBD")
 
     def test_a_multi_currency_account_picks_its_own_currency_not_the_first_row(self):
         """One balance per currency under the same type. Reading the first would
@@ -507,8 +540,8 @@ class TestBalanceSelection:
                 {"balance_amount": {"currency": "EUR", "amount": "406.70"}, "balance_type": "CLBD"},
             ]
         }
-        assert _accounting_balance(payload, "EUR") == Decimal("406.70")
-        assert _accounting_balance(payload, "CHF") == Decimal("999.99")
+        assert _accounting_balance(payload, "EUR") == (Decimal("406.70"), "CLBD")
+        assert _accounting_balance(payload, "CHF") == (Decimal("999.99"), "CLBD")
 
 
 class TestFetchWindow:
@@ -1137,6 +1170,355 @@ class TestNotReconcilableAccounts:
             )
         ).all()
         assert len(rows) == 1
+
+
+class TestAvailableBalanceAccounts:
+    """A bank that publishes ITAV and no CLBD — Revolut's PSD2 implementation
+    returns a single InterimAvailable on every account. The curve is anchored on
+    an available balance, so it is estimated: pending card authorisations are
+    already withheld from the figure, and only those the bank also reports as
+    rows can be added back."""
+
+    def _itav_setup(self, session, master_key, available: str, feed, anchor_balance):
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="0.00",
+            feed=feed,
+            anchor_date=TODAY - timedelta(days=5),
+            anchor_balance=anchor_balance,
+        )
+        client.balances["uid-current"] = {
+            "balances": [
+                {
+                    "name": "Available balance",
+                    "balance_amount": {"currency": "EUR", "amount": available},
+                    "balance_type": "ITAV",
+                }
+            ]
+        }
+        return account, link, client
+
+    def test_the_account_syncs_instead_of_refusing(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        account, link, client = self._itav_setup(
+            session, master_key, available="1000.00", feed=[], anchor_balance=Decimal("1000")
+        )
+        _install(monkeypatch, client)
+
+        results = sync_user_accounts(session, USER, master_key)
+
+        assert results[0].status == "synced"
+        assert results[0].balance_type == "ITAV"
+        session.refresh(link)
+        session.refresh(account)
+        assert link.last_balance_type == "ITAV"
+        assert link.anchor_date == TODAY
+        assert Decimal(decrypt_data(account.balance_enc, master_key)) == Decimal("1000.00")
+
+    def test_the_curve_is_written_unlike_a_card_account(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """R19 withholds the curve because OTHR has no defined meaning. ITAV
+        does: it is the accounting balance minus what is withheld, so a curve
+        walked back from it is offset at worst, never invented."""
+        account, link, client = self._itav_setup(
+            session,
+            master_key,
+            available="900.00",
+            feed=[_raw("100", TODAY - timedelta(days=3), ref="itav-1")],
+            anchor_balance=Decimal("1000"),
+        )
+        _install(monkeypatch, client)
+
+        results = sync_user_accounts(session, USER, master_key)
+
+        assert results[0].snapshots_written > 0
+        rows = _history(session, account, master_key)
+        assert _value_on(rows, TODAY - timedelta(days=1), master_key) == Decimal("900.00")
+        assert _value_on(rows, TODAY - timedelta(days=4), master_key) == Decimal("1000.00")
+
+    def test_the_pending_rows_are_added_back_to_the_available_balance(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """The whole correction: a bank that publishes ITAV *and* shares its
+        pending rows has its accounting balance recoverable exactly. 950 with a
+        50 € card authorisation blocked is 1 000 € of booked money."""
+        account, link, client = self._itav_setup(
+            session,
+            master_key,
+            available="950.00",
+            feed=[_raw("50", TODAY - timedelta(days=1), status="PDNG", ref="pending-1")],
+            anchor_balance=Decimal("1000"),
+        )
+        _install(monkeypatch, client)
+
+        results = sync_user_accounts(session, USER, master_key)
+
+        session.refresh(account)
+        session.refresh(link)
+        assert Decimal(decrypt_data(account.balance_enc, master_key)) == Decimal("1000.00")
+        assert Decimal(decrypt_data(link.anchor_balance_enc, master_key)) == Decimal("1000.00")
+        # Nothing booked moved, so the corrected balance reconciles exactly.
+        assert results[0].reconciliation_gap is None
+
+    def test_a_gap_is_measured_but_never_reported_as_one(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """A bank that publishes ITAV and shares no pending rows — Revolut —
+        produces a gap the day a blocked payment books: the balance never moved,
+        the movement appeared. Reporting it as a missing movement would teach
+        the user to ignore gaps. It is still stored: it is the measurement that
+        says whether this account could go back to a verified curve."""
+        account, link, client = self._itav_setup(
+            session,
+            master_key,
+            available="950.00",
+            feed=[_raw("50", TODAY - timedelta(days=1), ref="booked-late")],
+            anchor_balance=Decimal("950"),
+        )
+        _install(monkeypatch, client)
+
+        results = sync_user_accounts(session, USER, master_key)
+
+        assert results[0].reconciliation_status == "estimated"
+        assert results[0].reconciliation_gap == Decimal("50")
+        session.refresh(link)
+        assert link.last_reconciliation_gap_enc is not None
+
+    def test_the_stored_type_is_what_the_displayed_verdict_rests_on(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """`LinkMetadata` derives the verdict per request, long after the
+        balances payload is gone — the column is the only thing left saying the
+        curve rests on an available balance."""
+        account, link, client = self._itav_setup(
+            session, master_key, available="1000.00", feed=[], anchor_balance=Decimal("1000")
+        )
+        _install(monkeypatch, client)
+        sync_user_accounts(session, USER, master_key)
+
+        session.refresh(link)
+        metadata = LinkMetadata(link, "AUTHORIZED", master_key)
+        assert metadata.reconciliation_status == "estimated"
+
+    def test_an_accounting_balance_is_never_downgraded(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """The account that once fell back keeps nothing of it: the type is
+        rewritten at every sync, so a bank that starts publishing CLBD gets a
+        verified curve on the next pass."""
+        account, link, client = self._itav_setup(
+            session, master_key, available="1000.00", feed=[], anchor_balance=Decimal("1000")
+        )
+        _install(monkeypatch, client)
+        sync_user_accounts(session, USER, master_key)
+
+        session.refresh(link)
+        link.last_synced_at = TODAY - timedelta(days=1)
+        session.add(link)
+        session.commit()
+        client.balances["uid-current"] = _balances("1000.00")
+
+        results = sync_user_accounts(session, USER, master_key)
+
+        assert results[0].reconciliation_status == "reconciled"
+        session.refresh(link)
+        assert link.last_balance_type == "CLBD"
+
+
+class TestFeedInstrumentation:
+    """`balance_after_transaction` is counted and nothing else: a bank that
+    fills it hands over each day's balance directly, which would retire the
+    walked-back curve altogether. Empty on all 3 275 rows of the real Boursorama
+    production capture, so it is measured on live feeds before anything rests
+    on it."""
+
+    def test_the_rows_carrying_a_balance_after_transaction_are_counted(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="900.00",
+            feed=[
+                _raw(
+                    "100",
+                    TODAY - timedelta(days=3),
+                    ref="with-balance",
+                    balance_after_transaction={"currency": "EUR", "amount": "900.00"},
+                ),
+                _raw("40", TODAY - timedelta(days=2), ref="without-balance"),
+            ],
+            anchor_date=TODAY - timedelta(days=5),
+            anchor_balance=Decimal("1040"),
+        )
+        _install(monkeypatch, client)
+
+        results = sync_user_accounts(session, USER, master_key)
+
+        assert results[0].balance_after_rows == 1
+
+    def test_a_feed_without_it_reports_zero_rather_than_nothing(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """The Boursorama case: the field exists in the contract and is null on
+        every row. Zero out of n is the measurement — it is what says the curve
+        cannot be read off the feed at this bank."""
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="960.00",
+            feed=[_raw("40", TODAY - timedelta(days=2), ref="plain")],
+            anchor_date=TODAY - timedelta(days=5),
+            anchor_balance=Decimal("1000"),
+        )
+        _install(monkeypatch, client)
+
+        results = sync_user_accounts(session, USER, master_key)
+
+        assert results[0].balance_after_rows == 0
+
+
+class TestHistoryServedFrom:
+    """How far back the bank actually served, measured on the seeding pass. It
+    is what lets the front state a limit instead of offering a retry the bank
+    would answer the same way."""
+
+    def _seeding_setup(self, session, master_key, feed):
+        return _one_account_setup(
+            session,
+            master_key,
+            accounting="1000.00",
+            feed=feed,
+            anchor_date=TODAY,
+            anchor_balance=Decimal("1000"),
+            last_synced_at=TODAY - timedelta(days=1),
+        )
+
+    def _served_from(self, link, master_key):
+        return date.fromisoformat(decrypt_data(link.history_served_from_enc, master_key))
+
+    def test_the_seeding_pass_records_the_oldest_date_it_brought_back(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        oldest = TODAY - timedelta(days=90)
+        account, link, client = self._seeding_setup(
+            session,
+            master_key,
+            feed=[
+                _raw("50", TODAY - timedelta(days=3), ref="recent"),
+                _raw("20", oldest, ref="oldest"),
+            ],
+        )
+        _install(monkeypatch, client)
+
+        sync_user_accounts(session, USER, master_key)
+
+        session.refresh(link)
+        assert self._served_from(link, master_key) == oldest
+
+    def test_an_empty_seeding_pass_measures_nothing(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """Nothing came back, so there is no limit to state: the account stays
+        owed its history, which is the only case a retry can still help."""
+        account, link, client = self._seeding_setup(session, master_key, feed=[])
+        _install(monkeypatch, client)
+
+        sync_user_accounts(session, USER, master_key)
+
+        session.refresh(link)
+        assert link.history_served_from_enc is None
+
+    def test_an_incremental_pass_never_touches_it(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """An incremental window starts at the anchor by construction: reading
+        it as the bank's reach would report yesterday as the start of history."""
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="950.00",
+            feed=[_raw("50", TODAY - timedelta(days=2), ref="recent")],
+            anchor_date=TODAY - timedelta(days=4),
+            anchor_balance=Decimal("1000"),
+            last_synced_at=TODAY - timedelta(days=4),
+        )
+        _install(monkeypatch, client)
+
+        sync_user_accounts(session, USER, master_key)
+
+        session.refresh(link)
+        assert link.history_served_from_enc is None
+
+    def test_a_shorter_reseed_never_narrows_it(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """Revolut serves the full history only minutes after the consent and
+        ninety days afterwards. A later re-seed brings back less, while every
+        older operation is still stored and still drawn."""
+        from services.banking.linking import reseed_account_history
+
+        first_oldest = TODAY - timedelta(days=700)
+        account, link, client = self._seeding_setup(
+            session, master_key, feed=[_raw("20", first_oldest, ref="old")]
+        )
+        _install(monkeypatch, client)
+        sync_user_accounts(session, USER, master_key)
+
+        reseed_account_history(session, USER, master_key, account.uuid)
+        client.feeds["uid-current"] = [_raw("50", TODAY - timedelta(days=90), ref="capped")]
+        sync_user_accounts(session, USER, master_key)
+
+        session.refresh(link)
+        assert self._served_from(link, master_key) == first_oldest
+
+    def test_the_account_payload_carries_it(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        oldest = TODAY - timedelta(days=90)
+        account, link, client = self._seeding_setup(
+            session, master_key, feed=[_raw("20", oldest, ref="oldest")]
+        )
+        _install(monkeypatch, client)
+        sync_user_accounts(session, USER, master_key)
+
+        summary = get_user_bank_accounts(session, USER, master_key)
+        assert summary.accounts[0].history_served_from == oldest
+        assert summary.accounts[0].history_pending is False
+
+
+class TestSeedAfterLinking:
+    """The post-link seeding runs after the response is sent: an exception there
+    has no request left to fail, and the front's own sync call remains the
+    guarantee that the link gets synchronised."""
+
+    def test_it_syncs_the_user_who_just_linked(self, monkeypatch, engine):
+        calls = []
+        monkeypatch.setattr("services.banking.sync.get_engine", lambda: engine)
+        monkeypatch.setattr(
+            "services.banking.sync.sync_user_accounts",
+            lambda session, user_uuid, master_key, psu_context=None: calls.append(
+                (user_uuid, master_key, psu_context)
+            ),
+        )
+
+        seed_after_linking(USER, "mk", {"Psu-Ip-Address": "1.2.3.4"})
+
+        assert calls == [(USER, "mk", {"Psu-Ip-Address": "1.2.3.4"})]
+
+    def test_a_failure_is_logged_never_raised(self, monkeypatch, engine, caplog):
+        def _boom(*args, **kwargs):
+            raise RuntimeError("bank down")
+
+        monkeypatch.setattr("services.banking.sync.get_engine", lambda: engine)
+        monkeypatch.setattr("services.banking.sync.sync_user_accounts", _boom)
+
+        seed_after_linking(USER, "mk", None)
+
+        assert "post-link seeding failed" in caplog.text
 
 
 class TestVanishedPendingOperations:

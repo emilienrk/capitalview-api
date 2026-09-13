@@ -108,6 +108,56 @@ def test_the_lock_is_released_when_the_job_raises(fake_engine):
 
 
 # ---------------------------------------------------------------------------
+# wait_for_lock — work that must not overlap, rather than run once
+# ---------------------------------------------------------------------------
+
+
+def _bind(dialect: str, conn: _FakeConnection):
+    """A bind shaped like an Engine: a dialect name and a connect()."""
+
+    @contextmanager
+    def _connect():
+        yield conn
+
+    return type(
+        "E", (), {"dialect": type("D", (), {"name": dialect}), "connect": staticmethod(_connect)}
+    )
+
+
+def test_the_second_caller_waits_for_the_lock_instead_of_skipping():
+    """Unlike `job_lock`, the blocking form: the second sync needs the first
+    one's committed state, so it queues instead of giving up."""
+    conn = _FakeConnection(obtained=True)
+
+    with jobs.wait_for_lock("bank-sync:u", _bind("postgresql", conn)):
+        pass
+
+    assert any("pg_advisory_lock(" in s for s in conn.statements)
+    assert not any("pg_try_advisory_lock" in s for s in conn.statements)
+    assert any("pg_advisory_unlock" in s for s in conn.statements)
+
+
+def test_the_waiting_lock_is_released_when_the_work_raises():
+    conn = _FakeConnection(obtained=True)
+
+    with pytest.raises(RuntimeError):
+        with jobs.wait_for_lock("bank-sync:u", _bind("postgresql", conn)):
+            raise RuntimeError("bank down")
+
+    assert any("pg_advisory_unlock" in s for s in conn.statements)
+
+
+def test_the_waiting_lock_is_a_no_op_outside_postgres():
+    """SQLite has no advisory locks; the test database is SQLite."""
+    conn = _FakeConnection(obtained=True)
+
+    with jobs.wait_for_lock("bank-sync:u", _bind("sqlite", conn)):
+        pass
+
+    assert conn.statements == []
+
+
+# ---------------------------------------------------------------------------
 # job_run — the execution record (point 6)
 # ---------------------------------------------------------------------------
 

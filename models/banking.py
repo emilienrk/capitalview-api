@@ -132,6 +132,13 @@ class BankAccountLink(SQLModel, table=True):
     last_synced_at: date = Field(sa_column=Column(sa.Date, nullable=False))
     # NULL = no gap found at the last reconciliation check.
     last_reconciliation_gap_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    # Which balance type the last sync could read (CLBD, OTHR or ITAV). Clear
+    # text, like anchor_date: it is a property of the bank's API, not of the
+    # user. Stored rather than re-derived because everything downstream — the
+    # reconciliation verdict, the wording the front shows — depends on whether
+    # the curve rests on an accounting balance or on an available one, and the
+    # balances payload is only in hand during a sync. NULL = never read.
+    last_balance_type: str | None = Field(default=None, sa_column=Column(TEXT))
     # Whether the long history fetch has ever actually brought anything back.
     # Explicit rather than derived from `last_synced_at < anchor_date`: that
     # comparison was consumed by the first sync whether or not it returned a
@@ -141,6 +148,14 @@ class BankAccountLink(SQLModel, table=True):
         default=False,
         sa_column=Column(sa.Boolean, nullable=False, server_default=sa.false()),
     )
+    # The oldest operation date a seeding pass has ever brought back: how far the
+    # bank actually serves this account's history, measured rather than assumed.
+    # Some banks cap it — Revolut at ninety days once the consent is minutes
+    # old — and without it the front could only promise a fuller history the
+    # bank will never send. Encrypted: an operation date, never in clear (§A5).
+    # Seeding passes only, and only ever widened: an incremental window says
+    # nothing about how far back the bank goes. NULL = never measured.
+    history_served_from_enc: str | None = Field(default=None, sa_column=Column(TEXT))
 
     created_at: datetime = Field(
         default=sa.func.now(),
