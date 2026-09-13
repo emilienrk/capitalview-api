@@ -72,13 +72,17 @@ class BankAccountResponse(BaseModel):
     last_synced_at: date | None = None  # null = never synced
     reconciliation_gap: Decimal | None = None  # null = no gap at the last check
     link_status: str | None = None  # consent state, displayed as-is
-    # `reconciled` | `gap` | `not_reconcilable` (ruling R18), derived, never
-    # stored. Distinct from link_status, which is the consent state.
+    # `reconciled` | `gap` | `not_reconcilable` | `estimated` (ruling R18),
+    # derived, never stored. Distinct from link_status, the consent state.
     reconciliation_status: str | None = None
     # True while the bank has never answered the long history fetch: the account
     # syncs, but over a history it does not have. Distinct from last_synced_at,
     # which only says when the last call happened.
     history_pending: bool = False
+    # Oldest operation date the bank served on its long history fetch: the
+    # measured limit of what a linked account's curve can go back to. null =
+    # never measured (a link seeded before this was recorded, or never seeded).
+    history_served_from: date | None = None
 
 
 class BankSummaryResponse(BaseModel):

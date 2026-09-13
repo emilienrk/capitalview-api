@@ -11,7 +11,7 @@ import base64
 import html
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlmodel import Session
 
@@ -63,7 +63,7 @@ from services.banking.linking import (
     list_session_accounts,
     start_authorization_flow,
 )
-from services.banking.sync import sync_user_accounts
+from services.banking.sync import seed_after_linking, sync_user_accounts
 from services.settings import get_or_create_settings
 
 router = APIRouter(prefix="/banking", tags=["Banking"])
@@ -288,15 +288,22 @@ def get_session_accounts(
 def link_session_account(
     bank_session_uuid: str,
     data: BankAccountLinkRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
     """Rattachement (Step 6): attach a discovered account to a CapitalView bank
     account. Reconnections (matching identification_hash) update the existing
-    link instead of creating a new one."""
+    link instead of creating a new one.
+
+    The first sync starts here, after the response, rather than waiting for the
+    front to ask: some banks serve the full history only for minutes after the
+    consent — see `seed_after_linking`. A reconnection gets it too, since a new
+    consent is exactly what reopens that window."""
     try:
-        return link_account(
+        result = link_account(
             session,
             current_user.uuid,
             master_key,
@@ -323,6 +330,10 @@ def link_session_account(
                    "Un compte CapitalView ne peut en porter qu'un : chacun garde son propre "
                    "solde, sa propre ancre et sa propre courbe. Créez-en un second.",
         )
+    background_tasks.add_task(
+        seed_after_linking, current_user.uuid, master_key, _psu_context(request)
+    )
+    return result
 
 
 def _psu_context(request: Request) -> dict[str, str] | None:

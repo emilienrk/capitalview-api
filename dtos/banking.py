@@ -163,9 +163,19 @@ class BankAccountSyncResult(BaseModel):
     removed: int = 0
     snapshots_written: int = 0
     reconciliation_gap: Decimal | None = None
-    # `reconciled`, `gap` or `not_reconcilable` (ruling R18); None when no check
-    # could run yet (the seeding pass has no bank anchor to compare against).
+    # `reconciled`, `gap`, `not_reconcilable` or `estimated` (ruling R18); None
+    # when no check could run yet (the seeding pass has no bank anchor to
+    # compare against).
     reconciliation_status: str | None = None
+    # The balance type this sync could read: CLBD, OTHR (card) or ITAV. Reported
+    # so a support answer does not require a database read.
+    balance_type: str | None = None
+    # How many rows of the feed carried `balance_after_transaction`. Nothing
+    # reads it yet: a bank that fills it hands over each day's balance directly,
+    # which would make the walked-back curve unnecessary. Empty on every row of
+    # the real Boursorama production capture, so it is measured before anything
+    # is built on it.
+    balance_after_rows: int = 0
     detail: str | None = None
 
 
