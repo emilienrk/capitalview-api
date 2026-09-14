@@ -2,11 +2,39 @@
 
 from datetime import datetime, date
 from decimal import Decimal
+from enum import Enum
 
 from pydantic import BaseModel, field_validator
 
 from models.currency import BASE_CURRENCY, NO_CURRENCY
 from models.enums import BankAccountType
+
+
+class LinkStatus(str, Enum):
+    """State of a linked account's consent (ruling R16).
+
+    Machine values, never wording: the front picks the label. It used to be the
+    French label itself, recognised on the other side by a regex on "reconnect",
+    so rewording the badge silently changed its colour. Anything but an
+    authorised session reads as needing a fresh connection.
+    """
+    CONNECTED = "connected"
+    RECONNECT_REQUIRED = "reconnect_required"
+
+
+class ReconciliationStatus(str, Enum):
+    """Outcome of the reconciliation check (ruling R18). Distinct from
+    LinkStatus, which describes the consent, not the curve."""
+    RECONCILED = "reconciled"
+    GAP = "gap"
+    # A card account (ruling R19): no balance a curve could be walked back from.
+    NOT_RECONCILABLE = "not_reconcilable"
+    # A curve anchored on an available balance (ITAV) rather than an accounting
+    # one (ruling R23). The check still runs and its gap is still stored — it is
+    # the only measurement of how far the two drift apart — but a gap here is the
+    # expected signature of a blocked-then-booked card payment, not a missing
+    # movement. Presenting it as one would teach the user to ignore gaps.
+    ESTIMATED = "estimated"
 
 
 def _normalise_currency(value: str | None) -> str | None:
@@ -71,10 +99,9 @@ class BankAccountResponse(BaseModel):
     is_linked: bool = False
     last_synced_at: date | None = None  # null = never synced
     reconciliation_gap: Decimal | None = None  # null = no gap at the last check
-    link_status: str | None = None  # consent state, displayed as-is
-    # `reconciled` | `gap` | `not_reconcilable` | `estimated` (ruling R18),
-    # derived, never stored. Distinct from link_status, the consent state.
-    reconciliation_status: str | None = None
+    link_status: LinkStatus | None = None
+    # Derived, never stored; null while no check has been able to run.
+    reconciliation_status: ReconciliationStatus | None = None
     # True while the bank has never answered the long history fetch: the account
     # syncs, but over a history it does not have. Distinct from last_synced_at,
     # which only says when the last call happened.
@@ -83,6 +110,12 @@ class BankAccountResponse(BaseModel):
     # measured limit of what a linked account's curve can go back to. null =
     # never measured (a link seeded before this was recorded, or never seeded).
     history_served_from: date | None = None
+    # Why the last sync failed; null once one succeeds. Kept server-side so the
+    # page can say it without calling the bank again.
+    sync_error: str | None = None
+    # The day the bank was last called for this account, whatever the outcome.
+    # The front reads it to know the daily sync is spent, failure included.
+    last_sync_attempt_at: date | None = None
 
 
 class BankSummaryResponse(BaseModel):

@@ -18,13 +18,19 @@ import pytest
 from types import SimpleNamespace
 from sqlmodel import Session, select
 
-from dtos.bank import BankAccountCreate
+from dtos.bank import BankAccountCreate, BankAccountUpdate
 from dtos.banking import BankConnectionUpdate
 from models.account_history import AccountHistory
 from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession, BankTransaction
 from models.enums import AccountCategory, BankAccountType
-from services.bank import LinkMetadata, create_bank_account, get_user_bank_accounts
+from services.bank import (
+    LinkedAccountFieldLockedError,
+    LinkMetadata,
+    create_bank_account,
+    get_user_bank_accounts,
+    update_bank_account,
+)
 from services.banking.credentials import upsert_connection
 from services.banking.errors import InvalidPeriodError, SessionInvalidError
 from services.banking.sync import (
@@ -592,6 +598,7 @@ class TestFetchWindow:
 
         # The day after, it asks for the whole history again.
         link.last_synced_at = TODAY - timedelta(days=1)
+        link.last_sync_attempt_at = TODAY - timedelta(days=1)
         session.add(link)
         session.commit()
         client.transaction_calls.clear()
@@ -1317,6 +1324,7 @@ class TestAvailableBalanceAccounts:
 
         session.refresh(link)
         link.last_synced_at = TODAY - timedelta(days=1)
+        link.last_sync_attempt_at = TODAY - timedelta(days=1)
         session.add(link)
         session.commit()
         client.balances["uid-current"] = _balances("1000.00")
@@ -1488,6 +1496,153 @@ class TestHistoryServedFrom:
         summary = get_user_bank_accounts(session, USER, master_key)
         assert summary.accounts[0].history_served_from == oldest
         assert summary.accounts[0].history_pending is False
+
+
+class TestFailedSyncSpendsTheDay:
+    """A failure used to leave the account due: the front syncs after every
+    render, so each visit to the Banque page called the bank again for an answer
+    that had not changed."""
+
+    def _failing(self, session, master_key):
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="0",
+            feed=[],
+            anchor_date=TODAY - timedelta(days=3),
+            anchor_balance=Decimal("100"),
+        )
+        client.balances["uid-current"] = {
+            "balances": [
+                {"balance_amount": {"currency": "EUR", "amount": "244.07"}, "balance_type": "XPCD"}
+            ]
+        }
+        return account, link, client
+
+    def test_a_failed_sync_does_not_call_the_bank_again_the_same_day(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        account, link, client = self._failing(session, master_key)
+        _install(monkeypatch, client)
+
+        first = sync_user_accounts(session, USER, master_key)
+        second = sync_user_accounts(session, USER, master_key)
+
+        assert [r.status for r in first] == ["error"]
+        assert [r.status for r in second] == ["skipped_daily_cap"]
+        assert client.balance_calls == ["uid-current"]
+        # The failure moved the attempt, never the success date.
+        session.refresh(link)
+        assert link.last_sync_attempt_at == TODAY
+        assert link.last_synced_at == TODAY - timedelta(days=3)
+
+    def test_the_reason_survives_a_reload(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """It used to live only in the response of the call that failed."""
+        account, link, client = self._failing(session, master_key)
+        _install(monkeypatch, client)
+        sync_user_accounts(session, USER, master_key)
+
+        payload = get_user_bank_accounts(session, USER, master_key).accounts[0]
+
+        assert "solde comptable" in (payload.sync_error or "")
+        assert payload.last_sync_attempt_at == TODAY
+
+    def test_a_retry_gives_the_attempt_back_and_a_success_clears_the_reason(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        from services.banking.linking import retry_account_sync
+
+        account, link, client = self._failing(session, master_key)
+        _install(monkeypatch, client)
+        sync_user_accounts(session, USER, master_key)
+
+        assert retry_account_sync(session, USER, master_key, account.uuid) is True
+        client.balances["uid-current"] = _balances("100.00")
+        results = sync_user_accounts(session, USER, master_key)
+
+        assert [r.status for r in results] == ["synced"]
+        assert len(client.balance_calls) == 2
+        session.refresh(link)
+        assert link.last_sync_error_enc is None
+
+    def test_a_healthy_account_keeps_its_cap(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """Retrying is a way out of a failure, not a way around the daily cap."""
+        from services.banking.linking import retry_account_sync
+
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="100.00",
+            feed=[],
+            anchor_date=TODAY - timedelta(days=3),
+            anchor_balance=Decimal("100"),
+        )
+        _install(monkeypatch, client)
+        sync_user_accounts(session, USER, master_key)
+
+        assert retry_account_sync(session, USER, master_key, account.uuid) is False
+        assert [r.status for r in sync_user_accounts(session, USER, master_key)] == [
+            "skipped_daily_cap"
+        ]
+
+
+class TestLinkedAccountEdits:
+    """Once linked, the balance is the bank's last reading and the currency is
+    what that reading is matched on. Neither is editable by hand."""
+
+    def _linked(self, session, master_key):
+        account, link, _ = _one_account_setup(
+            session,
+            master_key,
+            accounting="1000.00",
+            feed=[],
+            anchor_date=TODAY,
+            anchor_balance=Decimal("1000"),
+        )
+        return account
+
+    def test_a_typed_balance_is_refused_rather_than_silently_overwritten(
+        self, session: Session, master_key: str
+    ):
+        account = self._linked(session, master_key)
+
+        with pytest.raises(LinkedAccountFieldLockedError):
+            update_bank_account(session, account, BankAccountUpdate(balance=Decimal("5")), master_key)
+
+        session.refresh(account)
+        assert Decimal(decrypt_data(account.balance_enc, master_key)) == Decimal("1000")
+
+    def test_a_currency_change_is_refused(self, session: Session, master_key: str):
+        """The sync reads the balance *in the account's currency*: switching it
+        makes the next sync find no balance at all."""
+        account = self._linked(session, master_key)
+
+        with (
+            patch("services.bank.has_exchange_rate", return_value=True),
+            pytest.raises(LinkedAccountFieldLockedError),
+        ):
+            update_bank_account(session, account, BankAccountUpdate(currency="USD"), master_key)
+
+    def test_a_rename_sending_the_unchanged_values_back_goes_through(
+        self, session: Session, master_key: str
+    ):
+        """The edit form sends every field back; refusing on presence would make
+        a linked account impossible to rename."""
+        account = self._linked(session, master_key)
+
+        with patch("services.bank.has_exchange_rate", return_value=True):
+            response = update_bank_account(
+                session,
+                account,
+                BankAccountUpdate(name="Revolut", balance=Decimal("1000.00"), currency="EUR"),
+                master_key,
+            )
+
+        assert response.name == "Revolut"
 
 
 class TestSeedAfterLinking:
@@ -1733,7 +1888,7 @@ class TestAccountPayloadLinkMetadata:
 
         assert payload.is_linked is True
         assert payload.last_synced_at == TODAY
-        assert payload.link_status == "connecté"
+        assert payload.link_status == "connected"
         assert payload.reconciliation_gap is None
         assert payload.reconciliation_status == "reconciled"
 
@@ -1779,7 +1934,7 @@ class TestAccountPayloadLinkMetadata:
         assert payload.reconciliation_status == "not_reconcilable"
         assert payload.reconciliation_gap is None
         # Distinct from the consent state, which is unaffected.
-        assert payload.link_status == "connecté"
+        assert payload.link_status == "connected"
 
     def test_an_unlinked_account_carries_no_link_metadata(
         self, session: Session, master_key: str
@@ -1817,7 +1972,7 @@ class TestAccountPayloadLinkMetadata:
 
         assert payload.reconciliation_gap == Decimal("-100.00")
         assert payload.reconciliation_status == "gap"
-        assert payload.link_status == "à reconnecter"
+        assert payload.link_status == "reconnect_required"
 
 
 # ---------------------------------------------------------------------------

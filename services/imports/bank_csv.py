@@ -45,7 +45,7 @@ from dtos.imports import (
     ImportPreviewResponse,
 )
 from models.currency import BASE_CURRENCY
-from services.banking.transactions import STATUS_BOOKED, canonical_amount
+from services.banking.transactions import CREDIT, DEBIT, STATUS_BOOKED, canonical_amount
 from services.encryption import encrypt_data, hash_index
 from services.imports.base import ImportCategory, ImportParser, header_has
 from services.imports.dedup import bank_existing_dates, bank_existing_transaction_refs
@@ -219,8 +219,6 @@ class NativeBankParser(GenericBankParser):
 # Columns of the shape the template documents, used when the user maps nothing.
 DEFAULT_TRANSACTION_MAPPING = {"date": "date", "amount": "amount", "label": "label"}
 
-CREDIT = "CRDT"
-DEBIT = "DBIT"
 
 # Prefix of the synthesised entry reference, so a row's origin stays readable
 # once decrypted.

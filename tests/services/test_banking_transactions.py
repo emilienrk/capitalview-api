@@ -17,7 +17,7 @@ from sqlmodel import Session, select
 
 from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession, BankTransaction
-from services.banking.transactions import normalize_transaction, store_transactions
+from services.banking.transactions import normalize_transaction, row_date, store_transactions
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 SPIKE_DIR = Path(__file__).resolve().parents[3] / "vendor-docs" / "spike"
@@ -233,6 +233,28 @@ def test_normalize_never_uses_transaction_id():
 # ---------------------------------------------------------------------------
 # store_transactions — level 1: intra-account, by entry_reference
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "dates, expected",
+    [
+        ({"booking_date": "2026-08-17", "transaction_date": "2026-08-16", "value_date": "2026-08-15"}, "2026-08-17"),
+        ({"booking_date": None, "transaction_date": "2026-08-16", "value_date": "2026-08-15"}, "2026-08-16"),
+        ({"booking_date": None, "transaction_date": None, "value_date": "2026-08-15"}, "2026-08-15"),
+    ],
+)
+def test_a_stored_row_is_read_back_on_the_day_it_was_written_on(
+    session: Session, master_key: str, linked_accounts, dates, expected
+):
+    """The curve, the observed flows and cashflow matching all place a row with
+    `row_date`. It must agree with `normalize_transaction` at every fallback
+    step, or one operation lands on different days in different views."""
+    raw = _raw(status="PDNG", **dates)
+    store_transactions(session, master_key, CURRENT_ACCOUNT, [raw])
+
+    row = session.exec(select(BankTransaction)).one()
+    assert row_date(row, master_key) == normalize_transaction(raw).effective_date
+    assert row_date(row, master_key) == date.fromisoformat(expected)
 
 
 def test_store_inserts_new_transactions(session: Session, master_key: str, linked_accounts):
@@ -617,7 +639,7 @@ def test_real_payload_pending_and_dateless_booking_are_handled(
 # out of the JSON export it is `EUR -12.63 / DBIT / OTHR`. Currency, sign *and*
 # status differ by access path, and only the entry_reference is common to both.
 #
-# The sign is the dangerous half: `_booked_movements` applies `net[day] -=
+# The sign is the dangerous half: `booked_movements` applies `net[day] -=
 # amount` to anything that is not CRDT, so a negative amount carrying an
 # explicit DBIT would be *added* to the curve — a 12.63 debit booked as a 12.63
 # credit. Nothing but the `status != "BOOK"` filter stands between that row and
@@ -689,7 +711,7 @@ def test_a_negative_amount_never_becomes_a_credit_in_the_balance_curve(
     on one operation, and the `status != "BOOK"` filter is the only thing that
     hides it today.
     """
-    from services.banking.sync import _booked_movements
+    from services.banking.sync import booked_movements
 
     account = BankAccount(
         user_uuid_bidx=hash_index(USER, master_key),
@@ -703,7 +725,7 @@ def test_a_negative_amount_never_becomes_a_credit_in_the_balance_curve(
     booked = dict(DIVERGENT_EXPORT_ROW, status="BOOK", booking_date="2026-08-15")
     store_transactions(session, master_key, account.uuid, [booked])
 
-    movements = _booked_movements(
+    movements = booked_movements(
         session, account, master_key, date(2026, 8, 15), date(2026, 8, 15), "EUR"
     )
 

@@ -35,11 +35,10 @@ from models.cashflow import Cashflow
 from models.currency import BASE_CURRENCY
 from models.enums import FlowType, Frequency
 from services.banking.linking import readable_account_bidxs
-from services.banking.transactions import FINAL_STATUSES
+from services.banking.transactions import CREDIT, FINAL_STATUSES, row_date
 from services.cashflow import LinkedAccount, build_bank_bidx_map
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
-CREDIT = "CRDT"
 
 # Tokens kept in a signature. Past this, labels are padding and reference noise;
 # below it, unrelated merchants start colliding.
@@ -148,7 +147,7 @@ def load_signature_groups(
     for row in rows:
         if decrypt_data(row.status_enc, master_key) not in FINAL_STATUSES:
             continue
-        day = _row_day(row, master_key)
+        day = row_date(row, master_key)
         if day is None or day < since:
             continue
         signature = label_signature(
@@ -168,13 +167,6 @@ def load_signature_groups(
         signature: SignatureGroup(signature, sorted(items))
         for signature, items in buckets.items()
     }
-
-
-def _row_day(row: BankTransaction, master_key: str) -> date | None:
-    for column in (row.booking_date_enc, row.transaction_date_enc, row.value_date_enc):
-        if column:
-            return date.fromisoformat(decrypt_data(column, master_key))
-    return None
 
 
 def rank_candidates(

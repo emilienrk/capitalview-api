@@ -33,6 +33,7 @@ from dtos.banking import (
     BankSessionAccount,
     BankSessionSummary,
     BankSyncResponse,
+    SyncStatus,
 )
 from models import User
 from services.auth import get_current_user, get_master_key
@@ -56,6 +57,7 @@ from services.banking.linking import (
     handle_callback,
     link_account,
     reseed_account_history,
+    retry_account_sync,
     unlink_account,
     list_aspsps_for_country,
     TargetAccountAlreadyLinkedError,
@@ -375,7 +377,7 @@ def sync(
     except NotConfiguredError:
         raise HTTPException(status_code=400, detail="Configurez d'abord vos identifiants Enable Banking.")
     return BankSyncResponse(
-        synced=sum(1 for result in results if result.status == "synced"),
+        synced=sum(1 for result in results if result.status == SyncStatus.SYNCED),
         results=results,
     )
 
@@ -405,6 +407,34 @@ def reseed_account_history_route(
     return MessageResponse(
         message="L'historique complet sera redemandé à votre banque à la prochaine synchronisation."
     )
+
+
+@router.post(
+    "/accounts/{bank_account_uuid}/retry-sync",
+    response_model=MessageResponse,
+    dependencies=[Depends(require_open_banking)],
+)
+def retry_account_sync_route(
+    bank_account_uuid: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Give a failed account its daily attempt back; the front syncs right after.
+
+    The daily cap now counts failures too, so a sync that failed is not retried
+    on its own before tomorrow. This is the user's way to try again sooner.
+    """
+    retried = retry_account_sync(session, current_user.uuid, master_key, bank_account_uuid)
+    if retried is None:
+        raise HTTPException(
+            status_code=404, detail="Ce compte n'est rattaché à aucun compte bancaire."
+        )
+    if not retried:
+        raise HTTPException(
+            status_code=409, detail="La dernière synchronisation de ce compte n'a pas échoué."
+        )
+    return MessageResponse(message="La synchronisation va être relancée.")
 
 
 @router.delete(

@@ -130,6 +130,13 @@ class BankAccountLink(SQLModel, table=True):
     anchor_balance_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     # Deliberately clear text: caps sync to once a day, server-side.
     last_synced_at: date = Field(sa_column=Column(sa.Date, nullable=False))
+    # The day the bank was last called for this link, whatever the outcome. The
+    # daily cap reads it alongside last_synced_at, which only a success moves —
+    # otherwise a failing account called the bank again on every page render.
+    # Clear text for the same reason as last_synced_at. NULL = no recorded attempt.
+    last_sync_attempt_at: date | None = Field(default=None, sa_column=Column(sa.Date))
+    # Why that attempt failed, as shown to the user. NULL once a sync succeeds.
+    last_sync_error_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     # NULL = no gap found at the last reconciliation check.
     last_reconciliation_gap_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     # Which balance type the last sync could read (CLBD, OTHR or ITAV). Clear
