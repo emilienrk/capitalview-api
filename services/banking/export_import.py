@@ -19,16 +19,16 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from dtos.banking import BankExportImportResponse, BankExportImportResult
+from dtos.banking import BankExportImportResponse, BankExportImportResult, ExportImportStatus
 from models.bank import BankAccount
 from models.banking import BankAccountLink
 from services.bank import account_currency, replace_history_window
 from services.banking.linking import is_card_account
 from services.banking.sync import (
     AccountingBalanceUnavailableError,
-    _accounting_balance_row,
-    _booked_movements,
-    _curve_entries,
+    accounting_balance_row,
+    booked_movements,
+    curve_entries,
 )
 from services.banking.transactions import (
     NormalizedTransaction,
@@ -117,7 +117,7 @@ def import_enablebanking_export(
             results.append(
                 BankExportImportResult(
                     bank_account_uuid="unlinked",
-                    status="unlinked",
+                    status=ExportImportStatus.UNLINKED,
                     detail=f"Aucun compte CapitalView n'est rattaché à {account_label}.",
                 )
             )
@@ -128,7 +128,7 @@ def import_enablebanking_export(
             results.append(
                 BankExportImportResult(
                     bank_account_uuid="not_found",
-                    status="error",
+                    status=ExportImportStatus.ERROR,
                     detail="Le compte CapitalView lié est introuvable.",
                 )
             )
@@ -151,7 +151,7 @@ def import_enablebanking_export(
         # Handle balances and history curve
         raw_balances = item.get("balances") or []
         snapshots_written = 0
-        status = "imported"
+        status = ExportImportStatus.IMPORTED
         detail = None
         is_card = is_card_account(session, matched_link, master_key)
 
@@ -174,7 +174,7 @@ def import_enablebanking_export(
                 # A distinct status, never "imported" with a silent zero: that
                 # is indistinguishable from a card account doing the right thing.
                 logger.warning("export import: %s (account %s)", exc, target_account.uuid)
-                status = "balance_unavailable"
+                status = ExportImportStatus.BALANCE_UNAVAILABLE
                 detail = (
                     "Aucun solde comptable en euros dans l'export : les opérations sont "
                     "importées, la courbe rétrospective ne l'est pas."
@@ -184,7 +184,7 @@ def import_enablebanking_export(
                     "export import: balance curve build failed for account %s",
                     target_account.uuid,
                 )
-                status = "curve_error"
+                status = ExportImportStatus.CURVE_ERROR
                 detail = (
                     "Les opérations sont importées, mais la courbe rétrospective "
                     "n'a pas pu être reconstruite."
@@ -223,7 +223,7 @@ def _write_export_curve(
     # matched by type. Falling back to `balances[0]` would take the real-time
     # balance one time in two.
     currency = account_currency(account, master_key)
-    balance_row = _accounting_balance_row({"balances": raw_balances}, currency)
+    balance_row = accounting_balance_row({"balances": raw_balances}, currency)
     bal_amount = Decimal(str((balance_row.get("balance_amount") or {}).get("amount")))
     ref_date_str = balance_row.get("reference_date")
     ref_date = date.fromisoformat(ref_date_str) if ref_date_str else date.today()
@@ -233,12 +233,12 @@ def _write_export_curve(
         return 0, "Aucune opération datable dans l'export : courbe rétrospective non écrite."
     covered_from = min(valid_dates)
 
-    movements = _booked_movements(session, account, master_key, covered_from, ref_date, currency)
+    movements = booked_movements(session, account, master_key, covered_from, ref_date, currency)
     # Native currency: `replace_history_window` converts, being the writer.
     snapshots_written = replace_history_window(
         session,
         account,
-        _curve_entries(bal_amount, movements, covered_from, ref_date),
+        curve_entries(bal_amount, movements, covered_from, ref_date),
         master_key,
         covered_from,
         ref_date,

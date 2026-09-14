@@ -2,8 +2,11 @@
 
 from datetime import date, datetime
 from decimal import Decimal
+from enum import Enum
 
 from pydantic import BaseModel
+
+from dtos.bank import ReconciliationStatus
 
 
 class BankConnectionUpdate(BaseModel):
@@ -145,15 +148,21 @@ class BankAccountUnlinkResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class BankAccountSyncResult(BaseModel):
-    """What one linked account's sync did.
+class SyncStatus(str, Enum):
+    """The branch one account's sync took."""
+    SYNCED = "synced"
+    # The once-a-day cap, a no-op and never an error. A failed attempt spends
+    # the day too (ruling R25).
+    SKIPPED_DAILY_CAP = "skipped_daily_cap"
+    # The consent is gone; the link is preserved.
+    RECONNECT_REQUIRED = "reconnect_required"
+    ERROR = "error"
 
-    `status` is the branch the sequence took: `synced`, `skipped_daily_cap`
-    (the once-a-day cap, a no-op and never an error), `reconnect_required`
-    (the consent is gone; the link is preserved) or `error`.
-    """
+
+class BankAccountSyncResult(BaseModel):
+    """What one linked account's sync did."""
     bank_account_uuid: str
-    status: str
+    status: SyncStatus
     inserted: int = 0
     updated: int = 0
     skipped: int = 0
@@ -163,10 +172,9 @@ class BankAccountSyncResult(BaseModel):
     removed: int = 0
     snapshots_written: int = 0
     reconciliation_gap: Decimal | None = None
-    # `reconciled`, `gap`, `not_reconcilable` or `estimated` (ruling R18); None
-    # when no check could run yet (the seeding pass has no bank anchor to
+    # None when no check could run yet (the seeding pass has no bank anchor to
     # compare against).
-    reconciliation_status: str | None = None
+    reconciliation_status: ReconciliationStatus | None = None
     # The balance type this sync could read: CLBD, OTHR (card) or ITAV. Reported
     # so a support answer does not require a database read.
     balance_type: str | None = None
@@ -237,9 +245,20 @@ class BankFlowsResponse(BaseModel):
     other_currencies: list[BankFlowCurrencyTotal]
 
 
+class ExportImportStatus(str, Enum):
+    """The branch one account of an Enable Banking export import took."""
+    IMPORTED = "imported"
+    # No link points at this account: nothing to import it into.
+    UNLINKED = "unlinked"
+    ERROR = "error"
+    # Operations stored, curve not written: no usable balance in the export.
+    BALANCE_UNAVAILABLE = "balance_unavailable"
+    CURVE_ERROR = "curve_error"
+
+
 class BankExportImportResult(BaseModel):
     bank_account_uuid: str
-    status: str
+    status: ExportImportStatus
     inserted: int = 0
     updated: int = 0
     skipped: int = 0

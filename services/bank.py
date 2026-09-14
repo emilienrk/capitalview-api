@@ -16,7 +16,7 @@ from models.banking import BankAccountLink, BankSession, BankTransaction
 from models.currency import BASE_CURRENCY
 from models.enums import AccountCategory, FlowType
 from dtos import BankAccountCreate, BankAccountUpdate, BankAccountResponse, BankSummaryResponse
-from dtos.bank import BankHistoryEntry
+from dtos.bank import BankHistoryEntry, LinkStatus, ReconciliationStatus
 from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotResponse
 from services.banking.health import is_session_active
 from services.banking.linking import is_card_account
@@ -27,25 +27,7 @@ from services.market import (
     has_exchange_rate,
 )
 
-# Consent wording the front reads back (ruling R16): anything but an authorized
-# session is presented as needing a fresh connection.
-LINK_STATUS_CONNECTED = "connecté"
-LINK_STATUS_RECONNECT = "à reconnecter"
-
-# The outcomes of the reconciliation check (ruling R18), kept here rather than
-# in the sync because that module already depends on this one. Distinct from
-# LINK_STATUS_*, which describes the consent, not the curve.
-RECONCILIATION_OK = "reconciled"
-RECONCILIATION_GAP = "gap"
-RECONCILIATION_NOT_POSSIBLE = "not_reconcilable"
-# A curve anchored on an available balance (ITAV) rather than an accounting one.
-# The check still runs and its gap is still stored — it is the only measurement
-# of how far the two drift apart — but a gap here is the expected signature of a
-# blocked-then-booked card payment, not a missing movement. Presenting it as one
-# would teach the user to ignore gaps, and the alert would be worthless the day
-# one is real.
-RECONCILIATION_ESTIMATED = "estimated"
-# The balance types a curve can rest on. ITAV is the one that makes it estimated.
+# The balance type that makes a curve estimated (ReconciliationStatus.ESTIMATED).
 AVAILABLE_BALANCE_TYPE = "ITAV"
 
 
@@ -69,6 +51,13 @@ class LinkMetadata:
         # received, because the first long fetch came back empty. Surfaced so
         # the flat curve that follows has a name and a way out.
         self.history_pending = not link.history_seeded
+        # Persisted rather than read off the last sync response: that response
+        # is gone after a reload, and getting the reason back would mean calling
+        # the bank again.
+        self.sync_error = (
+            decrypt_data(link.last_sync_error_enc, master_key) if link.last_sync_error_enc else None
+        )
+        self.last_sync_attempt_at = link.last_sync_attempt_at
         # How far back the bank actually served, so the front states a fact
         # instead of offering a retry the bank would answer the same way.
         self.history_served_from = (
@@ -85,20 +74,24 @@ class LinkMetadata:
         # Matched by SessionStatus member name, never by the raw literal: the
         # OpenAPI enum descriptions are misaligned with their values (trap 4).
         self.link_status = (
-            LINK_STATUS_CONNECTED if is_session_active(session_status) else LINK_STATUS_RECONNECT
+            LinkStatus.CONNECTED
+            if is_session_active(session_status)
+            else LinkStatus.RECONNECT_REQUIRED
         )
         # Derived, never stored (R7's precedent), and none yet while no check
         # has been able to run. `estimated` outranks the gap it may carry: on an
         # available balance the gap is a measurement, not a verdict.
         if not_reconcilable:
-            self.reconciliation_status = RECONCILIATION_NOT_POSSIBLE
+            self.reconciliation_status = ReconciliationStatus.NOT_RECONCILABLE
         elif never_synced:
             self.reconciliation_status = None
         elif link.last_balance_type == AVAILABLE_BALANCE_TYPE:
-            self.reconciliation_status = RECONCILIATION_ESTIMATED
+            self.reconciliation_status = ReconciliationStatus.ESTIMATED
         else:
             self.reconciliation_status = (
-                RECONCILIATION_GAP if self.reconciliation_gap is not None else RECONCILIATION_OK
+                ReconciliationStatus.GAP
+                if self.reconciliation_gap is not None
+                else ReconciliationStatus.RECONCILED
             )
 
 
@@ -120,6 +113,17 @@ def _link_metadata(session: Session, user_bidx: str, master_key: str) -> dict[st
 # Every account created before currency_enc existed is in euros, and so is every
 # account whose owner never chose otherwise.
 DEFAULT_CURRENCY = BASE_CURRENCY
+
+
+class LinkedAccountFieldLockedError(ValueError):
+    """A bank-linked account's balance or currency was edited by hand.
+
+    Both belong to the bank once the account is linked: the balance is the last
+    reading the sync took, and the next sync would silently overwrite a typed
+    value; the currency is what that reading is matched on, so changing it makes
+    the next sync find no balance at all. Refused rather than ignored — a change
+    the form appeared to accept and that never landed is the worse surprise.
+    """
 
 
 class UnconvertibleCurrencyError(ValueError):
@@ -185,6 +189,8 @@ def _map_to_response(
         reconciliation_status=link.reconciliation_status if link else None,
         history_pending=link.history_pending if link else False,
         history_served_from=link.history_served_from if link else None,
+        sync_error=link.sync_error if link else None,
+        last_sync_attempt_at=link.last_sync_attempt_at if link else None,
     )
 
 
@@ -236,6 +242,9 @@ def update_bank_account(
 ) -> BankAccountResponse:
     """Update an existing bank account."""
     require_convertible(session, data.currency)
+    link = _account_link(session, account, master_key)
+    if link is not None:
+        _refuse_bank_owned_changes(account, data, master_key)
 
     if data.name is not None:
         account.name_enc = encrypt_data(data.name, master_key)
@@ -262,7 +271,30 @@ def update_bank_account(
     session.commit()
     session.refresh(account)
 
-    return _map_to_response(account, master_key, _account_link(session, account, master_key))
+    return _map_to_response(account, master_key, link)
+
+
+def _refuse_bank_owned_changes(
+    account: BankAccount, data: BankAccountUpdate, master_key: str
+) -> None:
+    """Refuse a *changed* balance or currency on a linked account.
+
+    Compared to the stored value rather than refused on presence: the edit form
+    sends every field back, so a rename would otherwise fail on a balance it
+    never touched.
+    """
+    if data.balance is not None and data.balance != Decimal(
+        decrypt_data(account.balance_enc, master_key)
+    ):
+        raise LinkedAccountFieldLockedError(
+            "Le solde d'un compte lié est lu à la banque à chaque synchronisation : "
+            "il ne se modifie pas à la main."
+        )
+    if data.currency is not None and data.currency != account_currency(account, master_key):
+        raise LinkedAccountFieldLockedError(
+            "La devise d'un compte lié est celle de la banque : la changer empêcherait "
+            "la synchronisation de retrouver son solde."
+        )
 
 
 def _account_link(

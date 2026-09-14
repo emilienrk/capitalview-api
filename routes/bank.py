@@ -16,6 +16,7 @@ from dtos import (
     BankHistoryImportRequest,
 )
 from services.bank import (
+    LinkedAccountFieldLockedError,
     UnconvertibleCurrencyError,
     create_bank_account,
     get_bank_account,
@@ -168,6 +169,8 @@ def update_account(
         return update_bank_account(session, account, account_data, master_key)
     except UnconvertibleCurrencyError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except LinkedAccountFieldLockedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.delete("/accounts/{account_id}", status_code=204)

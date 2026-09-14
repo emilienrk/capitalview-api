@@ -77,6 +77,11 @@ INVALIDATING_STATUSES = frozenset({STATUS_CANCELLED, STATUS_REJECTED})
 # or entry reference, so its row stays claimable for correction (§E).
 FINAL_STATUSES = frozenset({STATUS_BOOKED})
 
+# CreditDebitIndicator members. The indicator carries the sign; the amount is
+# always unsigned.
+CREDIT = "CRDT"
+DEBIT = "DBIT"
+
 
 @dataclass(frozen=True)
 class NormalizedTransaction:
@@ -179,7 +184,7 @@ def normalize_transaction(raw: dict[str, Any]) -> NormalizedTransaction:
     # publish a negative amount alongside an explicit DBIT, and the API
     # publishes the same operation as a positive amount with the same DBIT —
     # the sign is noise on one access path only. Kept as-is it would invert the
-    # movement, since `_booked_movements` subtracts a debit and subtracting a
+    # movement, since `booked_movements` subtracts a debit and subtracting a
     # negative credits.
     #
     # The rule is stated for both directions, deliberately wider than the
@@ -379,3 +384,18 @@ def _drop_from_indexes(
     if siblings:
         # Identity, not equality: SQLModel rows compare by field value.
         by_dedup[row.dedup_bidx] = [other for other in siblings if other is not row]
+
+
+def row_date(row: BankTransaction, master_key: str) -> date | None:
+    """The date a stored row is placed on, read back with the very fallback
+    order `normalize_transaction` applied when it was written.
+
+    One reader for every consumer — the curve, the observed flows, cashflow
+    matching. Three copies of this loop used to agree only by comment: one of
+    them drifting would file the same operation on different days in the curve
+    and in "Ce qui a réellement bougé", with nothing to say so.
+    """
+    for column in (row.booking_date_enc, row.transaction_date_enc, row.value_date_enc):
+        if column:
+            return date.fromisoformat(decrypt_data(column, master_key))
+    return None

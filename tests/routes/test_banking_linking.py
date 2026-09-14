@@ -815,6 +815,51 @@ def test_reconnection_updates_existing_link_instead_of_creating_a_new_one(sessio
     assert decrypt_data(links[0].account_uid_enc, master_key) == "uid-9"
 
 
+def test_reconnecting_gives_back_the_attempt_a_lost_consent_spent(session, master_key, monkeypatch):
+    """The failure that spent today's attempt is most often the very consent loss
+    a reconnection repairs: the sync that follows must be allowed to run."""
+    client = TestClient(app)
+    _configure_credentials(client)
+    bank_account_uuid = _create_bank_account(session, master_key)
+    first_session_uuid = _create_bank_session(session, master_key, session_id="sess-1")
+    _forbid_client(monkeypatch)
+    client.post(
+        f"/banking/sessions/{first_session_uuid}/link",
+        json={"identification_hash": "hash-1", "bank_account_uuid": bank_account_uuid},
+    )
+    link = session.exec(select(BankAccountLink)).one()
+    link.last_sync_attempt_at = date.today()
+    link.last_sync_error_enc = encrypt_data("Votre consentement a expiré.", master_key)
+    session.add(link)
+    session.commit()
+
+    second_session_uuid = _create_bank_session(session, master_key, session_id="sess-2")
+    r = client.post(
+        f"/banking/sessions/{second_session_uuid}/link",
+        json={"identification_hash": "hash-1", "bank_account_uuid": bank_account_uuid},
+    )
+
+    assert r.status_code == 200
+    session.refresh(link)
+    assert link.last_sync_attempt_at is None
+    assert link.last_sync_error_enc is None
+
+
+def test_retry_sync_is_refused_on_an_account_that_did_not_fail(session, master_key, monkeypatch):
+    client = TestClient(app)
+    _configure_credentials(client)
+    bank_account_uuid = _create_bank_account(session, master_key)
+    bank_session_uuid = _create_bank_session(session, master_key)
+    _forbid_client(monkeypatch)
+    client.post(
+        f"/banking/sessions/{bank_session_uuid}/link",
+        json={"identification_hash": "hash-1", "bank_account_uuid": bank_account_uuid},
+    )
+
+    assert client.post(f"/banking/accounts/{bank_account_uuid}/retry-sync").status_code == 409
+    assert client.post("/banking/accounts/no-such-account/retry-sync").status_code == 404
+
+
 def test_two_bank_accounts_cannot_share_one_capitalview_account(session, master_key, monkeypatch):
     """The UNIQUE index already forbids it, but it answers with an IntegrityError
     the route lets through as a 500 — on a step reached only after a strong

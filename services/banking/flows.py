@@ -33,12 +33,11 @@ from dtos.banking import (
 from models.bank import BankAccount
 from models.banking import BankTransaction
 from services.banking.linking import readable_account_bidxs
-from services.banking.transactions import FINAL_STATUSES
+from services.banking.transactions import CREDIT, FINAL_STATUSES, row_date
 from services.encryption import decrypt_data, hash_index
 
 logger = logging.getLogger(__name__)
 
-CREDIT = "CRDT"
 
 # How far apart the two legs of one internal transfer may be dated. Banks book
 # the debit and the matching credit on the same day as a rule, but a value date
@@ -69,14 +68,6 @@ def _months_back(anchor: date, months: int) -> list[str]:
         if month == 0:
             year, month = year - 1, 12
     return list(reversed(periods))
-
-
-def _row_day(row: BankTransaction, master_key: str) -> date | None:
-    """Same fallback order `normalize_transaction` applied when writing."""
-    for column in (row.booking_date_enc, row.transaction_date_enc, row.value_date_enc):
-        if column:
-            return date.fromisoformat(decrypt_data(column, master_key))
-    return None
 
 
 def _internal_transfer_legs(movements: list[_Movement]) -> set[int]:
@@ -165,7 +156,7 @@ def compute_real_flows(
         _Movement(
             account_bidx=row.account_id_bidx,
             period=period_bidx_to_period[row.period_bidx],
-            day=_row_day(row, master_key),
+            day=row_date(row, master_key),
             amount=Decimal(decrypt_data(row.amount_enc, master_key)),
             currency=decrypt_data(row.currency_enc, master_key),
             is_credit=decrypt_data(row.credit_debit_enc, master_key) == CREDIT,

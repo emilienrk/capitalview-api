@@ -33,18 +33,13 @@ from typing import Any
 from sqlmodel import Session, select
 
 from database import get_engine
-from dtos.bank import BankHistoryEntry
-from dtos.banking import BankAccountSyncResult
+from dtos.bank import BankHistoryEntry, ReconciliationStatus
+from dtos.banking import BankAccountSyncResult, SyncStatus
 from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession, BankTransaction
 from services.bank import (
     AVAILABLE_BALANCE_TYPE,
-    DEFAULT_CURRENCY,
-    RECONCILIATION_ESTIMATED,
-    RECONCILIATION_GAP,
     account_currency,
-    RECONCILIATION_NOT_POSSIBLE,
-    RECONCILIATION_OK,
     replace_history_window,
 )
 from services.banking.client import build_client
@@ -65,10 +60,12 @@ from services.banking.health import (
 )
 from services.banking.linking import NotConfiguredError, is_card_account
 from services.banking.transactions import (
+    CREDIT,
     FINAL_STATUSES,
     STATUS_BOOKED,
     NormalizedTransaction,
     normalize_transaction,
+    row_date,
     store_transactions,
 )
 from services.encryption import decrypt_data, encrypt_data, hash_index
@@ -184,7 +181,7 @@ def _sync_links(
     ]
 
     today = date.today()
-    if all(link.last_synced_at >= today for link, _ in ordered):
+    if all(_tried_today(link, today) for link, _ in ordered):
         # Nothing due: the cap is a no-op condition, so no credentials are read
         # and no client — hence no signed token — is built.
         return [_capped(account) for _, account in ordered]
@@ -212,10 +209,10 @@ def sync_account_link(
 ) -> BankAccountSyncResult:
     """The six steps of §D2, for one linked account."""
     today = date.today()
-    result = BankAccountSyncResult(bank_account_uuid=account.uuid, status="synced")
+    result = BankAccountSyncResult(bank_account_uuid=account.uuid, status=SyncStatus.SYNCED)
 
-    if link.last_synced_at >= today:
-        result.status = "skipped_daily_cap"
+    if _tried_today(link, today):
+        result.status = SyncStatus.SKIPPED_DAILY_CAP
         return result
 
     # Read from the flag, not from a date comparison: the long fetch has either
@@ -246,12 +243,14 @@ def sync_account_link(
         # The status the consent moved to decides the wording, mapped by member
         # name: the four ways a consent can be lost call for four different
         # instructions, and no raw vendor string reaches the user.
-        result.status = "reconnect_required"
+        result.status = SyncStatus.RECONNECT_REQUIRED
         result.detail = session_status_message(_mark_consent_lost(session, link, exc))
+        _record_failure(session, link, result.detail, today, master_key)
         return result
     except (BankingApiError, PaginationLimitExceededError, AccountingBalanceUnavailableError) as exc:
-        result.status = "error"
+        result.status = SyncStatus.ERROR
         result.detail = str(exc)
+        _record_failure(session, link, result.detail, today, master_key)
         return result
 
     # 3. Deduplicate and store (§E). One malformed row never aborts a sync: it
@@ -292,7 +291,7 @@ def sync_account_link(
         1 for raw in raws if (raw.get("balance_after_transaction") or {}).get("amount") is not None
     )
 
-    movements = _booked_movements(session, account, master_key, covered_from, today, currency)
+    movements = booked_movements(session, account, master_key, covered_from, today, currency)
 
     # An available balance is the accounting one minus what is currently
     # withheld, so the withheld part is added back before anything anchors on
@@ -319,7 +318,7 @@ def sync_account_link(
         # another is exactly one whose curve can only be estimated. Reporting it
         # as a gap would teach the user to ignore gaps, and the alert would be
         # worthless the day one is real.
-        result.reconciliation_status = RECONCILIATION_NOT_POSSIBLE
+        result.reconciliation_status = ReconciliationStatus.NOT_RECONCILABLE
     elif not seeding:
         gap = _reconciliation_gap(link, accounting, movements, master_key)
         result.reconciliation_gap = gap
@@ -330,9 +329,11 @@ def sync_account_link(
             # verified curve. It is the verdict, not the number, that is held
             # back — a card authorisation blocked one day and booked the next
             # produces a gap on a perfectly healthy account.
-            result.reconciliation_status = RECONCILIATION_ESTIMATED
+            result.reconciliation_status = ReconciliationStatus.ESTIMATED
         else:
-            result.reconciliation_status = RECONCILIATION_GAP if gap else RECONCILIATION_OK
+            result.reconciliation_status = (
+                ReconciliationStatus.GAP if gap else ReconciliationStatus.RECONCILED
+            )
 
     # 5. The new anchor. Stored at a *day boundary*, not at the instant of the
     # call: the accounting balance minus everything already booked today. A row
@@ -345,6 +346,8 @@ def sync_account_link(
         str(accounting - movements.get(today, Decimal("0"))), master_key
     )
     link.last_synced_at = today
+    link.last_sync_attempt_at = today
+    link.last_sync_error_enc = None
     link.last_balance_type = balance_type
     result.balance_type = balance_type
     # The flag is earned, never merely spent: a seeding pass that comes back
@@ -410,7 +413,7 @@ def sync_account_link(
     result.snapshots_written = replace_history_window(
         session,
         account,
-        _curve_entries(accounting, movements, covered_from, today),
+        curve_entries(accounting, movements, covered_from, today),
         master_key,
         covered_from,
         today,
@@ -476,7 +479,7 @@ def _published_balances(balances: list[dict[str, Any]]) -> str:
     return ", ".join(seen)
 
 
-def _accounting_balance_row(
+def accounting_balance_row(
     payload: dict[str, Any], currency: str, is_card: bool = False
 ) -> dict[str, Any]:
     """The balance object that carries the accounting balance, in `currency`.
@@ -538,7 +541,7 @@ def _accounting_balance(
     The type comes back with the amount because it decides how much the figure
     can be trusted, and the balances payload is out of reach everywhere else.
     """
-    row = _accounting_balance_row(payload, currency, is_card)
+    row = accounting_balance_row(payload, currency, is_card)
     amount = row.get("balance_amount") or {}
     return Decimal(str(amount.get("amount"))), str(row.get("balance_type") or "")
 
@@ -582,6 +585,36 @@ def _widen_history_served_from(
     if link.history_served_from_enc:
         oldest = min(oldest, date.fromisoformat(decrypt_data(link.history_served_from_enc, master_key)))
     link.history_served_from_enc = encrypt_data(oldest.isoformat(), master_key)
+
+
+def _tried_today(link: BankAccountLink, today: date) -> bool:
+    """Whether this link has already called the bank today, successfully or not.
+
+    The cap used to read `last_synced_at` alone, which only a success moves: an
+    account whose sync failed stayed due, and since the front triggers a sync
+    after every render, each visit to the Banque page called the bank again for
+    an answer that had not changed. A failure is final for the day; retrying
+    early is a user's explicit decision (`retry_account_sync`).
+    """
+    return link.last_synced_at >= today or (
+        link.last_sync_attempt_at is not None and link.last_sync_attempt_at >= today
+    )
+
+
+def _record_failure(
+    session: Session, link: BankAccountLink, detail: str | None, today: date, master_key: str
+) -> None:
+    """Spend the day's attempt and keep the reason, so the page can still say why.
+
+    The reason used to live only in the front store, from the response of the
+    call that failed: a reload lost it, and getting it back meant calling the
+    bank again. Encrypted, like every string that reaches the user from the
+    bank's side.
+    """
+    link.last_sync_attempt_at = today
+    link.last_sync_error_enc = encrypt_data(detail, master_key) if detail else None
+    session.add(link)
+    session.commit()
 
 
 def _mark_consent_lost(session: Session, link: BankAccountLink, exc: SessionInvalidError) -> str:
@@ -641,11 +674,7 @@ def _pending_net(
     ):
         if decrypt_data(row.currency_enc, master_key) != currency:
             continue
-        amount = Decimal(decrypt_data(row.amount_enc, master_key))
-        if decrypt_data(row.credit_debit_enc, master_key) == "CRDT":
-            net += amount
-        else:
-            net -= amount
+        net += _signed_amount(row, master_key)
     return net
 
 
@@ -658,7 +687,7 @@ def _pending_rows(
     for row in rows:
         if decrypt_data(row.status_enc, master_key) in FINAL_STATUSES:
             continue
-        day = _row_date(row, master_key)
+        day = row_date(row, master_key)
         if day is not None and start <= day <= end:
             pending.append((row, day))
     return pending
@@ -705,7 +734,7 @@ def _drop_vanished_pending(
 # ---------------------------------------------------------------------------
 
 
-def _booked_movements(
+def booked_movements(
     session: Session,
     account: BankAccount,
     master_key: str,
@@ -731,15 +760,18 @@ def _booked_movements(
             continue
         if decrypt_data(row.currency_enc, master_key) != currency:
             continue
-        day = _row_date(row, master_key)
+        day = row_date(row, master_key)
         if day is None or not (start <= day <= end):
             continue
-        amount = Decimal(decrypt_data(row.amount_enc, master_key))
-        if decrypt_data(row.credit_debit_enc, master_key) == "CRDT":
-            net[day] += amount
-        else:
-            net[day] -= amount
+        net[day] += _signed_amount(row, master_key)
     return net
+
+
+def _signed_amount(row: BankTransaction, master_key: str) -> Decimal:
+    """A stored row's amount with its sign: the amount is unsigned, the
+    direction indicator carries the sign."""
+    amount = Decimal(decrypt_data(row.amount_enc, master_key))
+    return amount if decrypt_data(row.credit_debit_enc, master_key) == CREDIT else -amount
 
 
 def _reconciliation_gap(
@@ -770,7 +802,7 @@ def _reconciliation_gap(
     return None if gap == 0 else gap
 
 
-def _curve_entries(
+def curve_entries(
     accounting: Decimal, movements: dict[date, Decimal], start: date, end: date
 ) -> list[BankHistoryEntry]:
     """Daily balances walked back from the accounting balance.
@@ -822,17 +854,8 @@ def _period_indexes(start: date, end: date, master_key: str) -> list[str]:
     return indexes
 
 
-def _row_date(row: BankTransaction, master_key: str) -> date | None:
-    """The date a stored row is placed on — the same fallback order
-    `normalize_transaction` applied when it was written."""
-    for column in (row.booking_date_enc, row.transaction_date_enc, row.value_date_enc):
-        if column:
-            return date.fromisoformat(decrypt_data(column, master_key))
-    return None
-
-
 def _capped(account: BankAccount) -> BankAccountSyncResult:
-    return BankAccountSyncResult(bank_account_uuid=account.uuid, status="skipped_daily_cap")
+    return BankAccountSyncResult(bank_account_uuid=account.uuid, status=SyncStatus.SKIPPED_DAILY_CAP)
 
 
 def seed_after_linking(user_uuid: str, master_key: str, psu_context: dict[str, str] | None) -> None:

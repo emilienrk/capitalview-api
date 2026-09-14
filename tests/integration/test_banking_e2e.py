@@ -403,7 +403,7 @@ class TestBankingEndToEnd:
         accs_resp = client.get("/bank/accounts", headers=auth_headers)
         assert accs_resp.status_code == 200
         for acc in accs_resp.json()["accounts"]:
-            assert acc["link_status"] == "à reconnecter"
+            assert acc["link_status"] == "reconnect_required"
             # Links and history survived!
             assert acc["is_linked"] is True
 

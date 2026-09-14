@@ -554,9 +554,39 @@ def reseed_account_history(
     link.history_seeded = False
     # Otherwise the once-a-day cap swallows the very sync this asks for.
     link.last_synced_at = min(link.last_synced_at, date.today() - timedelta(days=1))
+    link.last_sync_attempt_at = None
     session.add(link)
     session.commit()
     return link.last_synced_at
+
+
+def retry_account_sync(
+    session: Session, user_uuid: str, master_key: str, bank_account_uuid: str
+) -> bool | None:
+    """Give a failed account its daily attempt back, so the next sync calls the bank.
+
+    A failure spends the day's attempt: without that, every render of the Banque
+    page asked the bank again for an answer that had not changed. Retrying
+    earlier is therefore an explicit user action, and only on an account whose
+    last attempt did fail — a healthy one keeps its cap.
+
+    Returns whether an attempt was given back, or None when no link owns the
+    account.
+    """
+    link = session.exec(
+        select(BankAccountLink).where(
+            BankAccountLink.user_uuid_bidx == hash_index(user_uuid, master_key),
+            BankAccountLink.bank_account_uuid_bidx == hash_index(bank_account_uuid, master_key),
+        )
+    ).first()
+    if link is None:
+        return None
+    if link.last_sync_error_enc is None:
+        return False
+    link.last_sync_attempt_at = None
+    session.add(link)
+    session.commit()
+    return True
 
 
 def account_is_linked(session: Session, master_key: str, bank_account_uuid: str) -> bool:
@@ -780,6 +810,11 @@ def link_account(
         existing_link.session_uuid = bank_session.uuid
         existing_link.account_uid_enc = encrypt_data(matching_uid, master_key)
         existing_link.bank_account_uuid_bidx = bank_account_bidx
+        # A new consent is a new situation: the failure that spent today's
+        # attempt — most often the very consent loss this reconnection repairs —
+        # must not keep the sync that follows from running.
+        existing_link.last_sync_attempt_at = None
+        existing_link.last_sync_error_enc = None
         link = existing_link
     else:
         today = date.today()
