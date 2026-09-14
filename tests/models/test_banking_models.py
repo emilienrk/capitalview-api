@@ -80,7 +80,8 @@ def test_bank_authorization_sensitive_fields_are_encrypted(session: Session, mas
     ).one()
 
     assert "Boursorama" not in raw[0]
-    assert "FR" not in raw[1]
+    # Too short for a substring check: base64 ciphertext contains "FR" by chance ~1% of runs.
+    assert raw[1] != "FR"
     assert "auth-123" not in raw[2]
     assert decrypt_data(raw[0], master_key) == "Boursorama"
     assert decrypt_data(raw[1], master_key) == "FR"
