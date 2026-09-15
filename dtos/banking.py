@@ -519,3 +519,14 @@ class BankUncategorizedResponse(BaseModel):
     total_groups: int
     total_operations: int
     groups: list[BankUncategorizedGroup]
+
+
+class BankAICategorizeResult(BaseModel):
+    """POST /banking/categorize/ai — one batch of the heaviest groups left to file."""
+    processed: int
+    rules_created: int
+    categories_created: int
+    # Groups at the head of the queue this run already left unfiled: the next
+    # call passes it back as `skip`, or it would be handed the same groups again.
+    skip: int
+    remaining: int

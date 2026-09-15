@@ -28,6 +28,7 @@ from dtos.banking import (
     BankCategoryItem,
     BankCategoryRuleItem,
     BankCategoryUpdate,
+    BankAICategorizeResult,
     BankUncategorizedResponse,
     CategoryOrigin,
     CategoryScope,
@@ -52,6 +53,8 @@ from dtos.banking import (
     SyncStatus,
 )
 from models import User
+from services.ai.agents import categorize_agent
+from services.ai.manager import NoProviderAvailableError
 from services.auth import get_current_user, get_master_key
 from services.banking.credentials import (
     get_status,
@@ -776,6 +779,30 @@ def get_uncategorized(
 ):
     """The operations left to file, grouped, heaviest first. Ungated, like /transactions."""
     return uncategorized_groups(session, current_user.uuid, master_key, limit)
+
+
+@router.post("/categorize/ai", response_model=BankAICategorizeResult)
+async def post_ai_categorization(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    skip: Annotated[int, Query(ge=0)] = 0,
+    session: Session = Depends(get_session),
+):
+    """File the next batch of the heaviest groups left to file with the AI.
+
+    The front calls again, passing back `skip`, while `remaining` is positive:
+    no background job, so the Master Key never outlives a request.
+    """
+    settings = get_or_create_settings(session, current_user.uuid, master_key)
+    if not (settings.ai_feature_enabled and settings.ai_categorization_enabled):
+        raise HTTPException(
+            status_code=403, detail="La catégorisation par IA n'est pas activée dans vos paramètres.",
+        )
+    try:
+        agent = categorize_agent.build_categorize_agent(session, current_user.uuid, master_key)
+    except NoProviderAvailableError:
+        raise HTTPException(status_code=400, detail="Configurez d'abord un fournisseur d'IA.")
+    return await categorize_agent.run_ai_categorization(session, current_user.uuid, master_key, agent, skip)
 
 
 @router.post(
