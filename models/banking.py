@@ -139,6 +139,16 @@ class BankAccountLink(SQLModel, table=True):
     last_sync_error_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     # NULL = no gap found at the last reconciliation check.
     last_reconciliation_gap_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    # The balance readings previous syncs anchored on, as a JSON list of
+    # {"d": "YYYY-MM-DD", "b": "123.45"} — the same pair as (anchor_date,
+    # anchor_balance), kept for a few weeks.
+    #
+    # The check needs a reading old enough that the bank's own publication delay
+    # has resolved: a balance counts an operation up to a day or two before the
+    # transaction feed lists it, so comparing against yesterday's reading
+    # reports a gap on a healthy account, then the opposite gap once the
+    # operation lands. Encrypted: balances and dates never sit in clear (§A5).
+    balance_checkpoints_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     # Which balance type the last sync could read (CLBD, OTHR or ITAV). Clear
     # text, like anchor_date: it is a property of the bank's API, not of the
     # user. Stored rather than re-derived because everything downstream — the

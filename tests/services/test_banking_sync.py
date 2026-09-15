@@ -34,9 +34,12 @@ from services.bank import (
 from services.banking.credentials import upsert_connection
 from services.banking.errors import InvalidPeriodError, SessionInvalidError
 from services.banking.sync import (
+    CHECKPOINT_RETENTION,
+    CURVE_REDRAW,
     SEED_DATE_FROM,
     AccountingBalanceUnavailableError,
     _accounting_balance,
+    read_checkpoints,
     seed_after_linking,
     sync_user_accounts,
 )
@@ -285,6 +288,20 @@ def _one_account_setup(
         feeds={"uid-current": feed},
     )
     return account, link, client
+
+
+def _readings(session, link, master_key, *pairs: tuple[date, str]) -> None:
+    """Give the link the balance readings previous syncs would have recorded.
+
+    The check compares two of them, days apart and settled: without them it has
+    nothing to compare and returns no verdict at all.
+    """
+    link.balance_checkpoints_enc = encrypt_data(
+        json.dumps([{"d": day.isoformat(), "b": balance} for day, balance in pairs]),
+        master_key,
+    )
+    session.add(link)
+    session.commit()
 
 
 def _history(session: Session, account: BankAccount, master_key: str) -> list[AccountHistory]:
@@ -755,11 +772,16 @@ class TestReconciliation:
             anchor_date=TODAY - timedelta(days=10),
             anchor_balance=Decimal("1000"),
         )
+        # 1000 ten days ago, 900 three days ago, and the only movement in
+        # between is the 100 debit of the feed.
+        _readings(session, link, master_key,
+                  (TODAY - timedelta(days=10), "1000"), (TODAY - timedelta(days=3), "900"))
         _install(monkeypatch, client)
 
         results = sync_user_accounts(session, USER, master_key)
 
         assert results[0].reconciliation_gap is None
+        assert results[0].reconciliation_status == "reconciled"
         session.refresh(link)
         assert link.last_reconciliation_gap_enc is None
 
@@ -774,6 +796,10 @@ class TestReconciliation:
             anchor_date=TODAY - timedelta(days=10),
             anchor_balance=Decimal("1000"),
         )
+        # The bank went down by 130 between the two readings; the stored
+        # movements only account for 100 of it.
+        _readings(session, link, master_key,
+                  (TODAY - timedelta(days=10), "1000"), (TODAY - timedelta(days=3), "870"))
         _install(monkeypatch, client)
 
         results = sync_user_accounts(session, USER, master_key)
@@ -783,6 +809,79 @@ class TestReconciliation:
         assert Decimal(decrypt_data(link.last_reconciliation_gap_enc, master_key)) == Decimal("-30.00")
         # The gap is dated by the sync that found it.
         assert link.last_synced_at == TODAY
+
+    def test_an_operation_the_bank_publishes_late_is_not_a_gap(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """Measured on the real Boursorama feed: the balance counts an operation
+        a day or two before the feed publishes it, and it arrives dated *before*
+        the reading that already included it. Comparing today's balance with
+        today's operations reported 489,40 € missing one day and 289,40 € too
+        many the next, on an account where nothing was ever wrong.
+        """
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="900.00",
+            # Published today, dated the day before the later reading, which
+            # already counted it.
+            feed=[_raw("100", TODAY - timedelta(days=4), ref="published-late")],
+            anchor_date=TODAY - timedelta(days=3),
+            anchor_balance=Decimal("900"),
+        )
+        _readings(session, link, master_key,
+                  (TODAY - timedelta(days=10), "1000"), (TODAY - timedelta(days=3), "900"))
+        _install(monkeypatch, client)
+
+        results = sync_user_accounts(session, USER, master_key)
+
+        assert results[0].reconciliation_gap is None
+        assert results[0].reconciliation_status == "reconciled"
+
+    def test_readings_too_fresh_to_have_settled_produce_no_verdict(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """A link made yesterday has nothing the check can trust yet."""
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="500.00",
+            feed=[],
+            anchor_date=YESTERDAY,
+            anchor_balance=Decimal("1000"),
+        )
+        _readings(session, link, master_key, (YESTERDAY, "1000"))
+        _install(monkeypatch, client)
+
+        results = sync_user_accounts(session, USER, master_key)
+
+        assert results[0].reconciliation_gap is None
+        assert results[0].reconciliation_status is None
+
+    def test_the_sync_records_its_own_reading_for_later_checks(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="930.00",
+            feed=[_raw("70", TODAY, ref="today")],
+            anchor_date=TODAY - timedelta(days=10),
+            anchor_balance=Decimal("1000"),
+        )
+        _readings(session, link, master_key,
+                  (TODAY - timedelta(days=400), "10"), (TODAY - timedelta(days=10), "1000"))
+        _install(monkeypatch, client)
+
+        sync_user_accounts(session, USER, master_key)
+
+        session.refresh(link)
+        points = read_checkpoints(link, master_key)
+        # Today's reading is the anchor: the balance without today's movements.
+        assert points[-1].day == TODAY
+        assert points[-1].balance == Decimal("1000.00")
+        # And nothing older than the retention is kept.
+        assert all(point.day >= TODAY - CHECKPOINT_RETENTION for point in points)
 
     def test_a_gap_is_cleared_once_the_check_holds_again(
         self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
@@ -872,7 +971,9 @@ class TestReconciliation:
         results = sync_user_accounts(session, USER, master_key)
 
         assert results[0].reconciliation_gap is None
-        assert results[0].reconciliation_status == "reconciled"
+        # No verdict either: the only reading available is yesterday's, and the
+        # bank's own publication delay has not resolved on a reading that fresh.
+        assert results[0].reconciliation_status is None
 
     def test_the_stored_anchor_excludes_the_movements_of_its_own_day(
         self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
@@ -925,9 +1026,13 @@ class TestReconciliation:
 
 
 class TestCurve:
-    def test_snapshots_are_written_from_the_anchor_to_yesterday_only(
+    def test_snapshots_reach_past_the_anchor_and_stop_at_yesterday(
         self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
     ):
+        """The window is CURVE_REDRAW wide whatever the bank was asked for: an
+        operation the bank publishes late is dated before the last sync, and the
+        days it belongs to would otherwise never be drawn again. Today is still
+        left out, so pending operations have time to settle."""
         anchor = TODAY - timedelta(days=10)
         account, link, client = _one_account_setup(
             session,
@@ -946,7 +1051,7 @@ class TestCurve:
 
         rows = _history(session, account, master_key)
         assert [r.snapshot_date for r in rows] == [
-            anchor + timedelta(days=i) for i in range(10)
+            TODAY - CURVE_REDRAW + timedelta(days=i) for i in range(CURVE_REDRAW.days)
         ]
         assert rows[-1].snapshot_date == YESTERDAY
         assert all(r.snapshot_date < TODAY for r in rows)
@@ -1026,9 +1131,36 @@ class TestCurve:
         assert min(by_date) == TODAY - timedelta(days=1400)
         assert max(by_date) == YESTERDAY
 
-    def test_a_later_pass_leaves_the_seeded_window_untouched(
+    def test_an_operation_published_late_redraws_the_days_it_belongs_to(
         self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
     ):
+        """The days before the last sync are drawn again from the stored
+        operations, so one the bank published late lands on its own day instead
+        of leaving the curve flat there and stepping down at the anchor."""
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="900.00",
+            feed=[_raw("100", TODAY - timedelta(days=4), ref="published-late")],
+            anchor_date=YESTERDAY,
+            anchor_balance=Decimal("900"),
+        )
+        _install(monkeypatch, client)
+
+        sync_user_accounts(session, USER, master_key)
+
+        rows = _history(session, account, master_key)
+        assert _value_on(rows, TODAY - timedelta(days=5), master_key) == Decimal("1000.00")
+        assert _value_on(rows, TODAY - timedelta(days=4), master_key) == Decimal("900.00")
+        assert _value_on(rows, YESTERDAY, master_key) == Decimal("900.00")
+
+    def test_a_later_pass_leaves_everything_older_than_the_redraw_untouched(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """The redraw reaches CURVE_REDRAW back and not one day further: on a
+        linked account the bank owns those days, but a manual snapshot before
+        them — years of them, on an account attached late — is not the sync's
+        to rewrite."""
         anchor = TODAY - timedelta(days=3)
         account, link, client = _one_account_setup(
             session,
@@ -1038,16 +1170,17 @@ class TestCurve:
             anchor_date=anchor,
             anchor_balance=Decimal("1000"),
         )
-        older_uuid = _manual_snapshot(
-            session, account, master_key, TODAY - timedelta(days=30), "777.00"
-        ).uuid
+        older = TODAY - CURVE_REDRAW - timedelta(days=1)
+        older_uuid = _manual_snapshot(session, account, master_key, older, "777.00").uuid
         _install(monkeypatch, client)
 
         sync_user_accounts(session, USER, master_key)
 
         rows = _history(session, account, master_key)
         by_date = {r.snapshot_date: r for r in rows}
-        assert by_date[TODAY - timedelta(days=30)].uuid == older_uuid
+        assert by_date[older].uuid == older_uuid
+        assert min(by_date) == older
+        assert _value_on(rows, TODAY - CURVE_REDRAW, master_key) == Decimal("1000.00")
         assert _value_on(rows, YESTERDAY, master_key) == Decimal("1000.00")
 
 
@@ -1192,7 +1325,7 @@ class TestAvailableBalanceAccounts:
             master_key,
             accounting="0.00",
             feed=feed,
-            anchor_date=TODAY - timedelta(days=5),
+            anchor_date=TODAY - timedelta(days=10),
             anchor_balance=anchor_balance,
         )
         client.balances["uid-current"] = {
@@ -1282,9 +1415,13 @@ class TestAvailableBalanceAccounts:
             session,
             master_key,
             available="950.00",
-            feed=[_raw("50", TODAY - timedelta(days=1), ref="booked-late")],
+            feed=[_raw("50", TODAY - timedelta(days=5), ref="booked-late")],
             anchor_balance=Decimal("950"),
         )
+        # The balance never moved between the two readings, yet a movement
+        # appeared between them: the signature of a blocked payment booking.
+        _readings(session, link, master_key,
+                  (TODAY - timedelta(days=10), "1000"), (TODAY - timedelta(days=2), "1000"))
         _install(monkeypatch, client)
 
         results = sync_user_accounts(session, USER, master_key)
@@ -1331,7 +1468,7 @@ class TestAvailableBalanceAccounts:
 
         results = sync_user_accounts(session, USER, master_key)
 
-        assert results[0].reconciliation_status == "reconciled"
+        assert results[0].reconciliation_status != "estimated"
         session.refresh(link)
         assert link.last_balance_type == "CLBD"
 
@@ -1790,9 +1927,13 @@ class TestErrors:
             master_key,
             accounting="890.00",
             feed=[broken, _raw("100", TODAY - timedelta(days=3), ref="good")],
-            anchor_date=TODAY - timedelta(days=5),
+            anchor_date=TODAY - timedelta(days=10),
             anchor_balance=Decimal("1000"),
         )
+        # The dropped row is the only movement the 110 drop between the two
+        # readings is short of.
+        _readings(session, link, master_key,
+                  (TODAY - timedelta(days=10), "1000"), (TODAY - timedelta(days=2), "890"))
         _install(monkeypatch, client)
 
         results = sync_user_accounts(session, USER, master_key)
@@ -1957,9 +2098,13 @@ class TestAccountPayloadLinkMetadata:
             master_key,
             accounting="800.00",
             feed=[_raw("100", TODAY - timedelta(days=2), ref="r1")],
-            anchor_date=TODAY - timedelta(days=5),
+            anchor_date=TODAY - timedelta(days=10),
             anchor_balance=Decimal("1000"),
         )
+        # 100 short between the two readings: the debit of the feed is dated
+        # after the later one, so nothing in the period explains the drop.
+        _readings(session, link, master_key,
+                  (TODAY - timedelta(days=10), "1000"), (TODAY - timedelta(days=3), "900"))
         _install(monkeypatch, client)
         sync_user_accounts(session, USER, master_key)
 
@@ -2099,7 +2244,13 @@ class TestForeignCurrencyAccount:
         }
         monkeypatch.setattr(
             "services.bank.get_historical_exchange_rates_db",
-            lambda s, c, f, t: rates,
+            # The real one never leaves a day of its range unpriced (a closed
+            # market carries the last rate published), and the curve now reaches
+            # back further than the days this test cares about.
+            lambda s, c, f, t: {
+                f + timedelta(days=i): rates.get(f + timedelta(days=i), Decimal("1.00"))
+                for i in range((t - f).days + 1)
+            },
         )
 
         sync_user_accounts(session, USER, master_key)
