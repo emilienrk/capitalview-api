@@ -35,6 +35,7 @@ from sqlmodel import Session, select
 from dtos.banking import (
     BankCategoryAssignResult,
     BankFlowCurrencyTotal,
+    BankRuleWords,
     BankFlowMonth,
     BankFlowsResponse,
     BankTransactionItem,
@@ -1023,6 +1024,19 @@ def assign_category(
     return BankCategoryAssignResult(
         transaction=_transaction_item(session, user_uuid, master_key, accounts, row),
         filed_count=filed,
+    )
+
+
+def rule_words(session: Session, user_uuid: str, master_key: str, transaction_id: str) -> BankRuleWords:
+    accounts = _user_accounts(session, user_uuid, master_key)
+    row = session.get(BankTransaction, transaction_id)
+    if row is None or row.account_id_bidx not in accounts.readable:
+        raise TransactionNotFoundError(transaction_id)
+    label = decrypt_data(row.remittance_enc, master_key) if row.remittance_enc else None
+    frequency = transfer_patterns(session, user_uuid, master_key, accounts).word_frequency
+    return BankRuleWords(
+        words=sorted(label_words(label), key=lambda word: (frequency.of(word), word)),
+        proposed=propose_tokens(label, frequency),
     )
 
 
