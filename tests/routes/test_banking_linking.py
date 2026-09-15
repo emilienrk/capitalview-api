@@ -1211,3 +1211,28 @@ def test_flows_window_is_clamped_rather_than_rejected(session, master_key):
 
     assert len(client.get("/banking/flows?months=0").json()["months"]) == 1
     assert len(client.get("/banking/flows?months=999").json()["months"]) == 120
+
+
+def test_transactions_are_readable_with_the_feature_switched_off(session, master_key):
+    client = TestClient(app)
+    _configure_credentials(client)
+    _opt_out(session, master_key)
+
+    r = client.get("/banking/transactions?period=2026-03")
+    assert r.status_code == 200
+    assert r.json()["transactions"] == []
+
+
+def test_transactions_refuse_a_malformed_period(session, master_key):
+    client = TestClient(app)
+    _configure_credentials(client)
+
+    assert client.get("/banking/transactions?period=2026-13").status_code == 422
+
+
+@pytest.mark.parametrize("path", ["/banking/transactions", "/banking/flows"])
+def test_an_account_filter_on_someone_elses_account_is_not_found(session, master_key, path):
+    client = TestClient(app)
+    _configure_credentials(client)
+
+    assert client.get(f"{path}?account_id=not-mine").status_code == 404
