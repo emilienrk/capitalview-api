@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from dtos.bank import ReconciliationStatus
 
@@ -267,6 +267,66 @@ class BankTransferStatus(str, Enum):
     REFUND = "refund"
 
 
+# ---------------------------------------------------------------------------
+# Categories
+# ---------------------------------------------------------------------------
+
+
+class CategoryNature(str, Enum):
+    """How the operations of a category count in the real cashflow."""
+    EXPENSE = "EXPENSE"
+    INCOME = "INCOME"
+    SAVING = "SAVING"
+    INVESTMENT = "INVESTMENT"
+
+
+class CategoryOrigin(str, Enum):
+    """Where a category was created, which decides where it is offered."""
+    CASHFLOW = "cashflow"
+    BANK = "bank"
+    AI = "ai"
+
+
+class CategoryScope(str, Enum):
+    """The screen asking which categories to offer."""
+    BANK = "bank"
+    PLANNED = "planned"
+
+
+class AvailableCategory(BaseModel):
+    """A category a screen may offer. `id` is None for a category that only
+    exists as the text of a declared cashflow, until it is picked in Banque."""
+    id: str | None = None
+    name: str
+    nature: CategoryNature
+    origin: CategoryOrigin
+
+
+class RuleSource(str, Enum):
+    """Who wrote a category rule."""
+    USER = "user"
+    AI = "ai"
+
+
+class CategorySource(str, Enum):
+    """What filed an operation under its category."""
+    MANUAL = "manual"
+    USER_RULE = "user_rule"
+    AI_RULE = "ai_rule"
+
+
+class OperationNature(str, Enum):
+    """How an operation counts in the real cashflow. Only EXPENSE and INCOME
+    count as such; SAVING and INVESTMENT are totalled apart, INTERNAL and
+    NEUTRALIZED only reported."""
+    EXPENSE = "EXPENSE"
+    INCOME = "INCOME"
+    SAVING = "SAVING"
+    INVESTMENT = "INVESTMENT"
+    INTERNAL = "INTERNAL"
+    NEUTRALIZED = "NEUTRALIZED"
+
+
 class OperationType(str, Enum):
     """How an operation was made, as far as its label tells
     (services/banking/operation_types.py). Display and filtering only."""
@@ -297,6 +357,14 @@ class BankTransactionItem(BaseModel):
     # The movement on the other side, and how the pair was made.
     transfer_id: str | None = None
     transfer_status: BankTransferStatus | None = None
+    operation_type: OperationType = OperationType.UNKNOWN
+    nature: OperationNature | None = None
+    # The category the operation is filed under, and what filed it. A manual
+    # source with no category is the user saying "none".
+    category_id: str | None = None
+    category_name: str | None = None
+    category_source: CategorySource | None = None
+    rule_id: str | None = None
 
 
 class BankTransactionsResponse(BaseModel):
@@ -373,60 +441,81 @@ class BankTransferQuestionsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Categories
+# Category management
 # ---------------------------------------------------------------------------
 
 
-class CategoryNature(str, Enum):
-    """How the operations of a category count in the real cashflow."""
-    EXPENSE = "EXPENSE"
-    INCOME = "INCOME"
-    SAVING = "SAVING"
-    INVESTMENT = "INVESTMENT"
-
-
-class CategoryOrigin(str, Enum):
-    """Where a category was created, which decides where it is offered."""
-    CASHFLOW = "cashflow"
-    BANK = "bank"
-    AI = "ai"
-
-
-class CategoryScope(str, Enum):
-    """The screen asking which categories to offer."""
-    BANK = "bank"
-    PLANNED = "planned"
-
-
-class AvailableCategory(BaseModel):
-    """A category a screen may offer. `id` is None for a category that only
-    exists as the text of a declared cashflow, until it is picked in Banque."""
-    id: str | None = None
+class BankCategoryItem(BaseModel):
+    id: str
     name: str
     nature: CategoryNature
     origin: CategoryOrigin
+    rule_count: int = 0
 
 
-class RuleSource(str, Enum):
-    """Who wrote a category rule."""
-    USER = "user"
-    AI = "ai"
+class BankCategoryCreate(BaseModel):
+    """POST /banking/categories. `from_cashflow` materialises the category a
+    declared cashflow carries under that name, its nature read from them."""
+    name: str
+    nature: CategoryNature | None = None
+    from_cashflow: bool = False
+
+    @model_validator(mode="after")
+    def _nature_unless_from_cashflow(self):
+        if self.nature is None and not self.from_cashflow:
+            raise ValueError("nature is required")
+        return self
 
 
-class CategorySource(str, Enum):
-    """What filed an operation under its category."""
-    MANUAL = "manual"
-    USER_RULE = "user_rule"
-    AI_RULE = "ai_rule"
+class BankCategoryUpdate(BaseModel):
+    name: str | None = None
+    nature: CategoryNature | None = None
 
 
-class OperationNature(str, Enum):
-    """How an operation counts in the real cashflow. Only EXPENSE and INCOME
-    count as such; SAVING and INVESTMENT are totalled apart, INTERNAL and
-    NEUTRALIZED only reported."""
-    EXPENSE = "EXPENSE"
-    INCOME = "INCOME"
-    SAVING = "SAVING"
-    INVESTMENT = "INVESTMENT"
-    INTERNAL = "INTERNAL"
-    NEUTRALIZED = "NEUTRALIZED"
+class BankCategoryRuleItem(BaseModel):
+    id: str
+    tokens: list[str]
+    category_id: str
+    category_name: str | None = None
+    source: RuleSource
+    created_at: datetime
+
+
+class BankCategoryAssign(BaseModel):
+    """PUT /banking/transactions/{id}/category.
+
+    Without `apply_to_similar`, files this one operation (None = no category).
+    With it, writes the user's rule on `tokens` — the proposed words when
+    omitted — and drops this operation's own override.
+    """
+    category_id: str | None = None
+    apply_to_similar: bool = False
+    tokens: list[str] | None = None
+
+
+class BankCategoryAssignResult(BaseModel):
+    transaction: BankTransactionItem
+    # Operations the rule now files, across the whole history; 1 or 0 without a rule.
+    filed_count: int
+
+
+class BankUncategorizedGroup(BaseModel):
+    """Operations reading alike that nothing files yet."""
+    signature: str
+    # The most recent of them, to file the group from.
+    transaction_id: str
+    label: str
+    is_credit: bool
+    count: int
+    currency: str
+    # In `currency`, over the operations in it.
+    total: Decimal
+    median: Decimal
+    last_date: date | None = None
+    tokens: list[str]
+
+
+class BankUncategorizedResponse(BaseModel):
+    total_groups: int
+    total_operations: int
+    groups: list[BankUncategorizedGroup]

@@ -21,6 +21,16 @@ from database import get_session
 from dtos.auth import MessageResponse
 from dtos.banking import (
     AspspSummary,
+    AvailableCategory,
+    BankCategoryAssign,
+    BankCategoryAssignResult,
+    BankCategoryCreate,
+    BankCategoryItem,
+    BankCategoryRuleItem,
+    BankCategoryUpdate,
+    BankUncategorizedResponse,
+    CategoryOrigin,
+    CategoryScope,
     BankAccountLinkRequest,
     BankAccountLinkResult,
     BankAccountUnlinkResult,
@@ -48,12 +58,32 @@ from services.banking.credentials import (
     upsert_connection,
 )
 from services.banking.export_import import import_enablebanking_export
+from services.banking.categories import (
+    CategoryNameTakenError,
+    CategoryNotFoundError,
+    InvalidCategoryNameError,
+    RuleNotFoundError,
+    available_categories,
+    create_category,
+    delete_category,
+    delete_rule,
+    list_categories,
+    list_rules,
+    materialize_cashflow_category,
+    rename_category,
+    set_category_nature,
+)
+from services.banking.categorize import EmptyRuleError, TooGeneralRuleError
 from services.banking.flows import (
+    CategoryRequiredError,
+    RuleOutsideLabelError,
     UnknownAccountError,
+    assign_category,
     compute_real_flows,
     list_month_transactions,
     list_transfer_counterparts,
     transfer_patterns,
+    uncategorized_groups,
 )
 from services.banking.transfer_decisions import (
     DecisionError,
@@ -593,6 +623,159 @@ def post_transfer_decision(
         raise HTTPException(status_code=404, detail="Opération introuvable.")
     except DecisionError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+_CATEGORY_NOT_FOUND = "Catégorie introuvable."
+
+
+def _category_or_error(action):
+    try:
+        return action()
+    except CategoryNotFoundError:
+        raise HTTPException(status_code=404, detail=_CATEGORY_NOT_FOUND)
+    except CategoryNameTakenError:
+        raise HTTPException(status_code=409, detail="Une catégorie porte déjà ce nom.")
+    except InvalidCategoryNameError:
+        raise HTTPException(status_code=400, detail="Le nom d'une catégorie compte de 1 à 60 caractères.")
+
+
+@router.get("/categories", response_model=list[BankCategoryItem])
+def get_categories(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Every category of the user, with how many rules file into each."""
+    return list_categories(session, current_user.uuid, master_key)
+
+
+@router.get("/categories/available", response_model=list[AvailableCategory])
+def get_available_categories(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    scope: CategoryScope = CategoryScope.BANK,
+    session: Session = Depends(get_session),
+):
+    """The categories a screen offers, which depends on AI categorisation."""
+    settings = get_or_create_settings(session, current_user.uuid, master_key)
+    return available_categories(
+        session, current_user.uuid, master_key, scope, settings.ai_categorization_enabled,
+    )
+
+
+@router.post("/categories", response_model=BankCategoryItem, status_code=201)
+def post_category(
+    body: BankCategoryCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Create a category in Banque, or materialise a declared cashflow's."""
+    def create():
+        if body.from_cashflow:
+            return materialize_cashflow_category(session, current_user.uuid, master_key, body.name)
+        return create_category(
+            session, current_user.uuid, master_key, body.name, body.nature, CategoryOrigin.BANK,
+        )
+
+    category = _category_or_error(create)
+    return BankCategoryItem(id=category.uuid, name=category.name, nature=category.nature, origin=category.origin)
+
+
+@router.patch("/categories/{category_id}", response_model=BankCategoryItem)
+def patch_category(
+    category_id: str,
+    body: BankCategoryUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    def update():
+        if body.name is not None:
+            rename_category(session, current_user.uuid, master_key, category_id, body.name)
+        if body.nature is not None:
+            set_category_nature(session, current_user.uuid, master_key, category_id, body.nature)
+
+    _category_or_error(update)
+    category = next((c for c in list_categories(session, current_user.uuid, master_key) if c.id == category_id), None)
+    if category is None:
+        raise HTTPException(status_code=404, detail=_CATEGORY_NOT_FOUND)
+    return category
+
+
+@router.delete("/categories/{category_id}", status_code=204)
+def delete_category_route(
+    category_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Delete a category and its rules; operations filed by hand under it read as uncategorised."""
+    _category_or_error(lambda: delete_category(session, current_user.uuid, master_key, category_id))
+
+
+@router.put("/transactions/{transaction_id}/category", response_model=BankCategoryAssignResult)
+def put_transaction_category(
+    transaction_id: str,
+    body: BankCategoryAssign,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """File one operation, or every operation like it through a rule."""
+    try:
+        return assign_category(
+            session, current_user.uuid, master_key, transaction_id,
+            body.category_id, body.apply_to_similar, body.tokens,
+        )
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail="Opération introuvable.")
+    except CategoryNotFoundError:
+        raise HTTPException(status_code=404, detail=_CATEGORY_NOT_FOUND)
+    except CategoryRequiredError:
+        raise HTTPException(status_code=400, detail="Choisissez une catégorie à appliquer aux opérations similaires.")
+    except EmptyRuleError:
+        raise HTTPException(status_code=400, detail="Gardez au moins un mot du libellé.")
+    except TooGeneralRuleError:
+        raise HTTPException(
+            status_code=400,
+            detail="Ces mots se retrouvent dans trop d'opérations : gardez-en un plus distinctif.",
+        )
+    except RuleOutsideLabelError:
+        raise HTTPException(status_code=400, detail="Les mots d'une règle doivent venir du libellé de l'opération.")
+
+
+@router.get("/category-rules", response_model=list[BankCategoryRuleItem])
+def get_category_rules(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    return list_rules(session, current_user.uuid, master_key)
+
+
+@router.delete("/category-rules/{rule_id}", status_code=204)
+def delete_category_rule(
+    rule_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    try:
+        delete_rule(session, current_user.uuid, master_key, rule_id)
+    except RuleNotFoundError:
+        raise HTTPException(status_code=404, detail="Règle introuvable.")
+
+
+@router.get("/uncategorized", response_model=BankUncategorizedResponse)
+def get_uncategorized(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
+    session: Session = Depends(get_session),
+):
+    """The operations left to file, grouped, heaviest first. Ungated, like /transactions."""
+    return uncategorized_groups(session, current_user.uuid, master_key, limit)
 
 
 @router.post(
