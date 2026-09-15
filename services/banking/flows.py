@@ -45,6 +45,7 @@ from models.banking import BankTransaction
 from models.enums import BankAccountType
 from services.banking import transfer_patterns as stored_patterns
 from services.banking.linking import readable_account_bidxs
+from services.banking.operation_types import operation_type
 from services.banking.transactions import (
     CREDIT,
     FINAL_STATUSES,
@@ -60,7 +61,7 @@ from services.banking.transfer_decisions import (
     load_decisions,
 )
 from services.banking.transfer_patterns import TransferPatterns
-from services.encryption import decrypt_data, hash_index
+from services.encryption import decrypt_data, encrypt_data, hash_index
 
 logger = logging.getLogger(__name__)
 
@@ -511,7 +512,8 @@ def transfer_patterns(
     """The user's transfer patterns, rebuilt first when the data moved since.
 
     The rebuild reads the whole history once: it backfills the label signature
-    of rows stored before signatures existed, counts the shape of every
+    of rows stored before signatures existed and the operation type of every
+    row the lexicon now reads differently, counts the shape of every
     candidate pair, finds the words too common on each side of an account, and
     counts the pairs left for the user to settle once all of that applies.
     """
@@ -531,10 +533,20 @@ def transfer_patterns(
     }
     backfilled = False
     for i, movement in enumerate(movements):
+        row = movement.row
+        changed = False
         signature = label_signature(labels[i])
-        if movement.row.label_signature_bidx is None and signature is not None:
-            movement.row.label_signature_bidx = hash_index(signature, master_key)
-            session.add(movement.row)
+        if row.label_signature_bidx is None and signature is not None:
+            row.label_signature_bidx = hash_index(signature, master_key)
+            changed = True
+        # Every row, not only those stored before types existed: this is how a
+        # change to the lexicon reaches the history.
+        kind = operation_type(labels[i]).value
+        if row.operation_type_enc is None or decrypt_data(row.operation_type_enc, master_key) != kind:
+            row.operation_type_enc = encrypt_data(kind, master_key)
+            changed = True
+        if changed:
+            session.add(row)
             backfilled = True
     if backfilled:
         session.commit()

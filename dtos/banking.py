@@ -267,6 +267,17 @@ class BankTransferStatus(str, Enum):
     REFUND = "refund"
 
 
+class OperationType(str, Enum):
+    """How an operation was made, as far as its label tells
+    (services/banking/operation_types.py). Display and filtering only."""
+    CARD = "CARD"
+    TRANSFER = "TRANSFER"
+    DIRECT_DEBIT = "DIRECT_DEBIT"
+    WITHDRAWAL = "WITHDRAWAL"
+    INTEREST = "INTEREST"
+    UNKNOWN = "UNKNOWN"
+
+
 class BankTransactionItem(BaseModel):
     """One stored movement, as the bank reported it."""
     id: str
