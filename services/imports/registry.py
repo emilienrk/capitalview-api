@@ -28,6 +28,7 @@ def list_parsers() -> list[ImportSourceInfo]:
             supports_mapping=p.supports_mapping,
             default_mapping=p.default_mapping,
             template_csv=p.template_csv,
+            fills_before_bank_history=p.fills_before_bank_history,
         )
         for p in sorted(_PARSERS.values(), key=lambda p: (p.category.value, p.source_id))
         if p.listed

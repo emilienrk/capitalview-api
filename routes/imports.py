@@ -61,18 +61,28 @@ def _refuse_import_on_a_linked_account(
     Both write the same movements and the same stretch of curve, so whichever
     ran last would win until the next sync — and the imported rows, carrying a
     reference the bank never issued, cannot always be recognised as the same
-    movements. Detaching the account in the settings is the way in.
+    movements. The exception is a movements file, which the parser confines to
+    the days before the bank's history; that needs the bank to have served
+    something, or no day is known to be free of its rows.
     """
-    from services.banking.linking import account_is_linked
+    from services.imports.bank_csv import bank_coverage
 
     if parser.category != ImportCategory.BANK:
         return
-    if account_is_linked(session, master_key, account_id):
+    coverage = bank_coverage(session, account_id, master_key)
+    if coverage is None:
+        return
+    if not parser.fills_before_bank_history:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Ce compte est synchronisé avec votre banque : ses opérations et son solde "
-                   "viennent de là. Pour importer un fichier à la place, détachez-le d'abord "
-                   "dans Paramètres → Open banking.",
+            detail="Ce compte est synchronisé avec votre banque : sa courbe de soldes vient de là. "
+                   "Importez plutôt ses opérations, qui compléteront l'historique d'avant la banque.",
+        )
+    if coverage.starts is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ce compte est synchronisé avec votre banque, mais elle n'a encore rien envoyé : "
+                   "attendez la première synchronisation pour savoir d'où part son historique.",
         )
 
 

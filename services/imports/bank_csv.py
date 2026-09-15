@@ -30,6 +30,7 @@ between them.
 import hashlib
 from collections import Counter
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -294,8 +295,12 @@ def parse_bank_transactions(
     return rows, warnings
 
 
+def _signed(row: BankImportTransactionPreview) -> Decimal:
+    return row.amount if row.direction == CREDIT else -row.amount
+
+
 def transactions_to_curve(
-    rows: Iterable[BankImportTransactionPreview], opening: Decimal
+    rows: Iterable[BankImportTransactionPreview], opening: Decimal, until: date | None = None
 ) -> list[BankHistoryEntry]:
     """The daily balance curve the movements describe, walked forward.
 
@@ -305,17 +310,18 @@ def transactions_to_curve(
 
     Nothing is produced before the first movement — the file says nothing about
     those days, and a zero there would draw a rise the account never had.
+    `until` carries the last balance on up to that day, so a file that stops
+    short of the bank's history still meets it.
     """
     by_day: dict[date, Decimal] = {}
     for row in rows:
-        delta = row.amount if row.direction == CREDIT else -row.amount
-        by_day[row.day] = by_day.get(row.day, Decimal("0")) + delta
+        by_day[row.day] = by_day.get(row.day, Decimal("0")) + _signed(row)
     if not by_day:
         return []
 
     entries: list[BankHistoryEntry] = []
     balance = opening
-    day, last = min(by_day), max(by_day)
+    day, last = min(by_day), max(max(by_day), until or date.min)
     while day <= last:
         balance += by_day.get(day, Decimal("0"))
         entries.append(BankHistoryEntry(snapshot_date=day, value=balance))
@@ -338,6 +344,127 @@ def curve_preview(entries: list[BankHistoryEntry], opening: Decimal) -> BankImpo
     )
 
 
+# ---------------------------------------------------------------------------
+# Accounts a bank already feeds
+# ---------------------------------------------------------------------------
+
+# A card payment is booked days after it was made: a statement dates it on the
+# day it started, the bank's feed on the day it booked. Around the day the
+# bank's history opens, the same operation can fall on both sides of it.
+BOUNDARY_TOLERANCE = timedelta(days=5)
+
+
+@dataclass(frozen=True)
+class BankCoverage:
+    """How much of a linked account's history the bank already holds.
+
+    `starts` is the first day covered — None when the bank has served nothing
+    yet, and then no day is known to be free of its rows. `boundary` lists the
+    bank's own movements of the first days, as (earliest date, signed amount),
+    for the statement rows just before `starts` to be recognised against.
+    """
+    starts: date | None
+    boundary: tuple[tuple[date, Decimal], ...] = ()
+
+
+def bank_coverage(
+    session: Session, account_id: str, master_key: str, own_refs: frozenset[str] = frozenset()
+) -> BankCoverage | None:
+    """What the bank holds for the account, or None when no bank feeds it.
+
+    The start is the earliest of how far the seeding pass reached and of the
+    oldest movement stored from elsewhere — an Enable Banking export can reach
+    further back than the seeding did. `own_refs`, the blind indexes of the
+    file's own references, keeps a previous import of that same file from
+    passing for the bank's history.
+    """
+    from sqlmodel import select
+
+    from models.banking import BankAccountLink, BankTransaction
+    from services.banking.transactions import row_date
+    from services.encryption import decrypt_data
+
+    account_bidx = hash_index(account_id, master_key)
+    link = session.exec(
+        select(BankAccountLink).where(BankAccountLink.bank_account_uuid_bidx == account_bidx)
+    ).first()
+    if link is None:
+        return None
+
+    candidates = []
+    if link.history_served_from_enc:
+        candidates.append(date.fromisoformat(decrypt_data(link.history_served_from_enc, master_key)))
+
+    currency = _account_currency(session, account_id, master_key)
+    dated: list[tuple[date, BankTransaction]] = []
+    for row in session.exec(
+        select(BankTransaction).where(BankTransaction.account_id_bidx == account_bidx)
+    ).all():
+        if row.entry_ref_bidx in own_refs:
+            continue
+        day = row_date(row, master_key)
+        if day is not None:
+            dated.append((day, row))
+    if dated:
+        candidates.append(min(day for day, _ in dated))
+    if not candidates:
+        return BankCoverage(starts=None)
+
+    starts = min(candidates)
+    boundary = []
+    for day, row in dated:
+        if day > starts + BOUNDARY_TOLERANCE or decrypt_data(row.currency_enc, master_key) != currency:
+            continue
+        dates = [
+            date.fromisoformat(decrypt_data(column, master_key))
+            for column in (row.booking_date_enc, row.transaction_date_enc, row.value_date_enc)
+            if column
+        ]
+        amount = Decimal(decrypt_data(row.amount_enc, master_key))
+        signed = amount if decrypt_data(row.credit_debit_enc, master_key) == CREDIT else -amount
+        boundary.append((min(dates), signed))
+    return BankCoverage(starts=starts, boundary=tuple(boundary))
+
+
+def split_covered(
+    rows: list[tuple[BankImportTransactionPreview, str]], coverage: BankCoverage | None
+) -> tuple[list[tuple[BankImportTransactionPreview, str]], int]:
+    """The rows the bank does not hold, and how many it does.
+
+    Everything from `starts` on is the bank's. Just before it, a row is the
+    bank's when one of its first movements has the same signed amount within
+    the tolerance — each movement claiming the closest row only, so twins on
+    the statement are not both swallowed by one operation.
+    """
+    if coverage is None:
+        return rows, 0
+    if coverage.starts is None:
+        return [], len(rows)
+
+    before = [(row, reference) for row, reference in rows if row.day < coverage.starts]
+    claimed: set[int] = set()
+    for day, signed in coverage.boundary:
+        candidates = [
+            i for i, (row, _) in enumerate(before)
+            if i not in claimed and _signed(row) == signed and abs(day - row.day) <= BOUNDARY_TOLERANCE
+        ]
+        if candidates:
+            claimed.add(min(candidates, key=lambda i: abs(day - before[i][0].day)))
+    kept = [pair for i, pair in enumerate(before) if i not in claimed]
+    return kept, len(rows) - len(kept)
+
+
+def _account_currency(session: Session, account_id: str, master_key: str) -> str:
+    """A statement is denominated by the account it belongs to."""
+    from models.bank import BankAccount
+    from services.bank import account_currency
+
+    account = session.get(BankAccount, account_id)
+    return account_currency(account, master_key) if account else BASE_CURRENCY
+
+
+
+
 @register
 class GenericBankTransactionsParser(ImportParser):
     """A bank statement CSV read as movements, not as a balance curve.
@@ -348,6 +475,10 @@ class GenericBankTransactionsParser(ImportParser):
     no-op), and the balance curve they describe, anchored on the balance held
     before the first one. A statement carries no balance of its own, so that
     anchor is asked for — zero unless said otherwise.
+
+    On a bank-linked account it fills what the bank never served, and only
+    that: the rows the bank already holds are left out, and the curve is
+    anchored so that it meets the bank's on the day its history opens.
     """
 
     source_id = "generic_bank_transactions"
@@ -355,6 +486,7 @@ class GenericBankTransactionsParser(ImportParser):
     label = "Opérations — relevé bancaire"
     file_hint = "Remplit l'historique des opérations et « Ce qui a réellement bougé ». Une ligne par mouvement, montant signé."
     supports_mapping = True
+    fills_before_bank_history = True
     default_mapping = DEFAULT_TRANSACTION_MAPPING
     template_csv = (
         "date,amount,label\n"
@@ -377,16 +509,19 @@ class GenericBankTransactionsParser(ImportParser):
     ) -> ImportPreviewResponse:
         rows, warnings = parse_bank_transactions(csv_content, self._options_for(session, options, account_id, master_key))
 
-        duplicates = 0
+        coverage = None
+        covered = 0
         if account_id and master_key:
+            kept, coverage, covered = self._not_covered(session, account_id, master_key, rows)
             existing = bank_existing_transaction_refs(session, account_id, master_key)
-            for row, reference in _with_references(rows):
+            for row, reference in kept:
                 if hash_index(reference, master_key) in existing:
                     row.is_duplicate = True
-                    duplicates += 1
+            rows = [row for row, _ in kept]
+        duplicates = sum(1 for row in rows if row.is_duplicate)
 
-        opening = self._opening_for(session, options, rows, account_id, master_key)
-        curve = curve_preview(transactions_to_curve(rows, opening), opening)
+        opening = self._opening_for(session, options, rows, account_id, master_key, coverage)
+        curve = curve_preview(transactions_to_curve(rows, opening, _curve_end(coverage)), opening)
         if curve and curve.first_negative_date:
             warnings.append(
                 f"Avec ce solde de départ, le compte passe sous zéro le "
@@ -402,6 +537,8 @@ class GenericBankTransactionsParser(ImportParser):
             warnings=warnings,
             bank_transactions=rows,
             bank_curve=curve,
+            bank_history_from=coverage.starts if coverage else None,
+            covered_by_bank_count=covered,
         )
 
     def execute(
@@ -413,7 +550,12 @@ class GenericBankTransactionsParser(ImportParser):
     ) -> ImportConfirmResponse:
         from services.banking.transactions import store_transactions
 
-        currency = self._account_currency(session, account_id, master_key)
+        currency = _account_currency(session, account_id, master_key)
+        # Filtered again here, never trusted from the preview: what the bank
+        # holds may have grown since, and a client can send anything.
+        kept, coverage, covered = self._not_covered(
+            session, account_id, master_key, payload.bank_transactions or []
+        )
         raws = [
             {
                 "entry_reference": reference,
@@ -423,20 +565,40 @@ class GenericBankTransactionsParser(ImportParser):
                 "booking_date": row.day.isoformat(),
                 "remittance_information": [row.label] if row.label else [],
             }
-            # References are recomputed here, never taken from the client: they
-            # are what makes a re-import idempotent.
-            for row, reference in _with_references(payload.bank_transactions or [])
+            for row, reference in kept
         ]
         inserted, updated, skipped = store_transactions(session, master_key, account_id, raws)
-        self._write_curve(session, account_id, payload, master_key)
+        self._write_curve(session, account_id, [row for row, _ in kept], payload.options, master_key, coverage)
         return ImportConfirmResponse(
             imported_count=inserted,
             # Already there, under the same reference: the re-import case.
             skipped_duplicates=updated + skipped,
+            covered_by_bank_count=covered,
         )
 
+    def _not_covered(
+        self,
+        session: Session,
+        account_id: str,
+        master_key: str,
+        rows: list[BankImportTransactionPreview],
+    ) -> tuple[list[tuple[BankImportTransactionPreview, str]], BankCoverage | None, int]:
+        """The rows paired with their references — recomputed, since they are
+        what makes a re-import idempotent — minus what a linked bank holds."""
+        with_refs = _with_references(rows)
+        own_refs = frozenset(hash_index(reference, master_key) for _, reference in with_refs)
+        coverage = bank_coverage(session, account_id, master_key, own_refs)
+        kept, covered = split_covered(with_refs, coverage)
+        return kept, coverage, covered
+
     def _write_curve(
-        self, session: Session, account_id: str, payload: ImportConfirmRequest, master_key: str
+        self,
+        session: Session,
+        account_id: str,
+        rows: list[BankImportTransactionPreview],
+        options: dict,
+        master_key: str,
+        coverage: BankCoverage | None,
     ) -> None:
         """Write the balance curve the movements describe, and the balance they end on.
 
@@ -450,9 +612,8 @@ class GenericBankTransactionsParser(ImportParser):
             replace_history_window,
         )
 
-        rows = payload.bank_transactions or []
-        opening = self._opening_for(session, payload.options, rows, account_id, master_key)
-        entries = transactions_to_curve(rows, opening)
+        opening = self._opening_for(session, options, rows, account_id, master_key, coverage)
+        entries = transactions_to_curve(rows, opening, _curve_end(coverage))
         account = session.get(BankAccount, account_id)
         if not entries or account is None:
             return
@@ -468,8 +629,8 @@ class GenericBankTransactionsParser(ImportParser):
 
         # An old statement rebuilds its own stretch of the curve but says nothing
         # about today: overwriting the balance with it would walk the account
-        # back in time.
-        if latest_known_date is None or entries[-1].snapshot_date >= latest_known_date:
+        # back in time. On a linked account the balance is the bank's, always.
+        if coverage is None and (latest_known_date is None or entries[-1].snapshot_date >= latest_known_date):
             account.balance_enc = encrypt_data(str(entries[-1].value), master_key)
             # The movements already contain what the linked cashflows would add:
             # stamping today stops them being applied on top.
@@ -484,9 +645,10 @@ class GenericBankTransactionsParser(ImportParser):
         rows: list[BankImportTransactionPreview],
         account_id: str | None,
         master_key: str | None,
+        coverage: BankCoverage | None = None,
     ) -> Decimal:
-        """The balance the curve starts from — asked for, or picked up where the
-        account's own history left off.
+        """The balance the curve starts from — asked for, met with the bank's
+        curve, or picked up where the account's own history left off.
 
         Importing month after month, the anchor is never zero after the first
         file: it is the balance the account already stood at the day before this
@@ -494,6 +656,11 @@ class GenericBankTransactionsParser(ImportParser):
         """
         if options.get("initial_balance") is not None or not rows or not (account_id and master_key):
             return opening_balance(options)
+
+        if coverage is not None and coverage.starts is not None:
+            joined = _bank_balance_before(session, account_id, coverage.starts, master_key)
+            if joined is not None:
+                return joined - sum((_signed(row) for row in rows), Decimal("0"))
 
         from services.bank import last_known_balance_before
 
@@ -504,12 +671,34 @@ class GenericBankTransactionsParser(ImportParser):
     ) -> dict:
         if options.get("currency") or not (account_id and master_key):
             return options
-        return {**options, "currency": self._account_currency(session, account_id, master_key)}
+        return {**options, "currency": _account_currency(session, account_id, master_key)}
 
-    def _account_currency(self, session: Session, account_id: str, master_key: str) -> str:
-        """A statement is denominated by the account it belongs to."""
-        from models.bank import BankAccount
-        from services.bank import account_currency
 
-        account = session.get(BankAccount, account_id)
-        return account_currency(account, master_key) if account else BASE_CURRENCY
+def _curve_end(coverage: BankCoverage | None) -> date | None:
+    """The day the file's curve must run to: the eve of the bank's history."""
+    if coverage is None or coverage.starts is None:
+        return None
+    return coverage.starts - timedelta(days=1)
+
+
+def _bank_balance_before(session: Session, account_id: str, starts: date, master_key: str) -> Decimal | None:
+    """The balance the bank's curve implies for the eve of `starts`.
+
+    Its value on `starts` less that day's booked movements — the same walk back
+    the sync draws its curve with, one day further. None when the bank drew
+    nothing on that day, or when the stored curve is converted: it is kept in
+    the base currency, the movements in the account's own.
+    """
+    from models.bank import BankAccount
+    from services.bank import get_bank_account_history
+    from services.banking.sync import booked_movements
+
+    account = session.get(BankAccount, account_id)
+    currency = _account_currency(session, account_id, master_key)
+    if account is None or currency != BASE_CURRENCY:
+        return None
+    history = get_bank_account_history(session, account_id, master_key, starts, starts)
+    if not history:
+        return None
+    movements = booked_movements(session, account, master_key, starts, starts, currency)
+    return history[0].total_value - movements.get(starts, Decimal("0"))

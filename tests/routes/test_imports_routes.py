@@ -157,9 +157,8 @@ def test_sources_expose_optional_template(client_with_user):
     assert all("template_csv" in s for s in sources)
 
 
-def test_a_bank_import_is_refused_on_a_linked_account(session):
-    """The bank owns a linked account's movements and its curve; an import would
-    fight the next sync for them. Detaching it is the way in."""
+def _linked_bank_account(session, served_from=None):
+    """A registered user's bank account attached to a bank, and its auth header."""
     from datetime import date
 
     from models.banking import BankAccountLink, BankSession
@@ -203,9 +202,16 @@ def test_a_bank_import_is_refused_on_a_linked_account(session):
             anchor_date=date.today(),
             anchor_balance_enc=encrypt_data("500.00", key),
             last_synced_at=date.today(),
+            history_served_from_enc=encrypt_data(served_from.isoformat(), key) if served_from else None,
         )
     )
     session.commit()
+    return client, auth, account_id
+
+
+def test_a_bank_import_is_refused_on_a_linked_account_the_bank_has_not_served(session):
+    """Until the bank has sent something, no day is known to be free of its rows."""
+    client, auth, account_id = _linked_bank_account(session)
 
     preview = client.post(
         "/imports/generic_bank_transactions/preview",
@@ -221,3 +227,35 @@ def test_a_bank_import_is_refused_on_a_linked_account(session):
         headers=auth,
     )
     assert confirm.status_code == 409
+
+
+def test_movements_fill_a_linked_account_up_to_the_bank_history(session):
+    from datetime import date
+
+    client, auth, account_id = _linked_bank_account(session, served_from=date(2024, 3, 1))
+
+    preview = client.post(
+        "/imports/generic_bank_transactions/preview",
+        json={
+            "csv_content": "date,amount,label\n2024-01-15,-42.50,CARTE\n2024-03-02,-10,CARTE\n",
+            "account_id": account_id,
+        },
+        headers=auth,
+    )
+    assert preview.status_code == 200
+    assert preview.json()["bank_history_from"] == "2024-03-01"
+    assert preview.json()["covered_by_bank_count"] == 1
+
+
+def test_balances_stay_refused_on_a_linked_account(session):
+    """Points carry no identity to keep them apart from the bank's own curve."""
+    from datetime import date
+
+    client, auth, account_id = _linked_bank_account(session, served_from=date(2024, 3, 1))
+
+    preview = client.post(
+        "/imports/generic_bank/preview",
+        json={"csv_content": "snapshot_date,value\n2024-01-31,100\n", "account_id": account_id},
+        headers=auth,
+    )
+    assert preview.status_code == 409
