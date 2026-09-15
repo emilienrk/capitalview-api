@@ -238,6 +238,13 @@ class BankTransaction(SQLModel, table=True):
     # the operations that read alike without the label ever leaving its cipher.
     # NULL on rows stored before it existed, until transfer patterns backfill it.
     label_signature_bidx: str | None = Field(default=None, sa_column=Column(TEXT, index=True))
+    # An OperationType (services/banking/operation_types.py). NULL on rows
+    # stored before it existed, until transfer patterns backfill it.
+    operation_type_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    # The user's own category for this one operation, overriding every rule:
+    # a category uuid, or "none" for explicitly uncategorised. Encrypted, not a
+    # foreign key, for the same reason as BankTransferDecision's references.
+    category_ref_enc: str | None = Field(default=None, sa_column=Column(TEXT))
 
     created_at: datetime = Field(
         default=sa.func.now(),
@@ -310,6 +317,74 @@ class BankTransferDecision(SQLModel, table=True):
     debit_tokens_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     credit_tokens_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     # Set by the service, to the microsecond: decisions are replayed in order.
+    created_at: datetime = Field(
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False)
+    )
+
+
+class BankCategory(SQLModel, table=True):
+    """A category the user files operations under, whichever screen created it.
+
+    `origin` only decides where the category is offered (see
+    services/banking/categories.py); `nature` decides how its operations count.
+    """
+    __tablename__ = "bank_categories"
+    __table_args__ = (
+        UniqueConstraint("user_uuid_bidx", "name_bidx", name="uq_bank_categories_name"),
+        {"extend_existing": True},
+    )
+
+    uuid: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        sa_column=Column(TEXT, primary_key=True, nullable=False),
+    )
+    user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
+    name_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    # Blind index of the name folded for case and accents: "Épargne" and
+    # "epargne" are one category.
+    name_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    nature_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    origin_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+
+    created_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+    )
+    updated_at: datetime = Field(
+        default=sa.func.now(),
+        sa_column=Column(
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            onupdate=sa.func.now(),
+            nullable=False,
+        )
+    )
+
+
+class BankCategoryRule(SQLModel, table=True):
+    """Files every operation whose label holds all of `tokens` under a category.
+
+    Applied when operations are read, never copied onto them (see
+    services/banking/categorize.py). The category is referenced encrypted, not
+    by a clear foreign key, like BankTransferDecision's movements.
+    """
+    __tablename__ = "bank_category_rules"
+    __table_args__ = (
+        UniqueConstraint("user_uuid_bidx", "tokens_bidx", name="uq_bank_category_rules_tokens"),
+        {"extend_existing": True},
+    )
+
+    uuid: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        sa_column=Column(TEXT, primary_key=True, nullable=False),
+    )
+    user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
+    # JSON list of the words, sorted.
+    tokens_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    tokens_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    category_ref_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    source_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    # Set by the service, to the microsecond: the most recent rule wins a tie.
     created_at: datetime = Field(
         sa_column=Column(sa.DateTime(timezone=True), nullable=False)
     )
