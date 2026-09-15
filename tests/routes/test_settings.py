@@ -123,6 +123,16 @@ def test_update_display_locale(session, master_key):
     assert r3.json()["display_locale"] is None
 
 
+def test_ai_categorization_is_off_by_default_and_can_be_turned_on(session, master_key):
+    client = TestClient(app)
+    assert client.get("/settings").json()["ai_categorization_enabled"] is False
+
+    r = client.put("/settings", json={"ai_categorization_enabled": True})
+
+    assert r.status_code == 200
+    assert client.get("/settings").json()["ai_categorization_enabled"] is True
+
+
 def test_update_ai_api_keys(session, master_key):
     client = TestClient(app)
 
