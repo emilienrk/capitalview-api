@@ -180,3 +180,44 @@ def test_a_cashflow_category_is_materialised_on_demand(client, session, master_k
     assert (response.json()["name"], response.json()["nature"], response.json()["origin"]) == ("Salaire", "INCOME", "cashflow")
 
     assert client.post("/banking/categories", json={"name": "Inconnue", "from_cashflow": True}).status_code == 404
+
+
+def _enable_ai(client, feature: bool = True, categorization: bool = True) -> None:
+    response = client.put("/settings", json={"ai_feature_enabled": feature, "ai_categorization_enabled": categorization})
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("feature, categorization", [(False, True), (True, False)])
+def test_ai_categorisation_needs_both_switches(client, session, master_key, monkeypatch, feature, categorization):
+    import services.ai.agents.categorize_agent as module
+    built = []
+    monkeypatch.setattr(module, "build_categorize_agent", lambda *args: built.append(args))
+    _enable_ai(client, feature, categorization)
+
+    assert client.post("/banking/categorize/ai").status_code == 403
+    assert built == []
+
+
+def test_ai_categorisation_without_provider_is_a_400(client, session, master_key):
+    _enable_ai(client)
+    assert client.post("/banking/categorize/ai").status_code == 400
+
+
+def test_ai_categorisation_files_a_batch(client, session, master_key, monkeypatch):
+    import services.ai.agents.categorize_agent as module
+    from tests.services.test_banking_categorize_agent import FakeProvider
+
+    _seed(session, master_key)
+    _enable_ai(client)
+    provider = FakeProvider(lambda payload: {"groups": [
+        {"group_id": g["group_id"], "category_name": "Courses", "nature": "EXPENSE", "confidence": 0.9}
+        for g in payload["groups"] if "CARREFOUR" in g["label"]
+    ]})
+    monkeypatch.setattr(module, "build_categorize_agent", lambda *args: module.CategorizeAgent(provider))
+
+    response = client.post("/banking/categorize/ai?skip=0")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["rules_created"], body["categories_created"], body["skip"], body["remaining"]) == (2, 1, 1, 0)
+    assert {tx["category_source"] for label, tx in _month(client).items() if "CARREFOUR" in label} == {"ai_rule"}
