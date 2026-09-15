@@ -30,7 +30,15 @@ from datetime import datetime, timezone
 import sqlalchemy as sa
 from sqlmodel import Session, select
 
-from dtos.banking import AvailableCategory, CategoryNature, CategoryOrigin, CategoryScope, RuleSource
+from dtos.banking import (
+    AvailableCategory,
+    BankCategoryItem,
+    BankCategoryRuleItem,
+    CategoryNature,
+    CategoryOrigin,
+    CategoryScope,
+    RuleSource,
+)
 from models.banking import BankCategory, BankCategoryRule
 from models.cashflow import Cashflow
 from models.enums import FlowType
@@ -80,6 +88,32 @@ def load_categories(session: Session, user_uuid: str, master_key: str) -> dict[s
         select(BankCategory).where(BankCategory.user_uuid_bidx == hash_index(user_uuid, master_key))
     ).all()
     return {row.uuid: _read(row, master_key) for row in rows}
+
+
+def list_categories(session: Session, user_uuid: str, master_key: str) -> list[BankCategoryItem]:
+    rule_counts = Counter(rule.category_uuid for rule in load_rules(session, user_uuid, master_key))
+    return [
+        BankCategoryItem(
+            id=c.uuid, name=c.name, nature=c.nature, origin=c.origin, rule_count=rule_counts[c.uuid],
+        )
+        for c in sorted(load_categories(session, user_uuid, master_key).values(), key=lambda c: name_key(c.name))
+    ]
+
+
+def list_rules(session: Session, user_uuid: str, master_key: str) -> list[BankCategoryRuleItem]:
+    categories = load_categories(session, user_uuid, master_key)
+    rules = sorted(load_rules(session, user_uuid, master_key), key=lambda r: (sorted(r.tokens), r.uuid))
+    return [
+        BankCategoryRuleItem(
+            id=rule.uuid,
+            tokens=sorted(rule.tokens),
+            category_id=rule.category_uuid,
+            category_name=categories[rule.category_uuid].name if rule.category_uuid in categories else None,
+            source=rule.source,
+            created_at=rule.created_at,
+        )
+        for rule in rules
+    ]
 
 
 def create_category(
@@ -219,11 +253,13 @@ def materialize_cashflow_category(session: Session, user_uuid: str, master_key: 
     existing = _row_named(session, user_bidx, hash_index(key, master_key))
     if existing is not None:
         return _read(existing, master_key)
-    flows = [flow for text, flow in _cashflow_categories(session, user_bidx, master_key) if name_key(text) == key]
-    if not flows:
+    carried = [(text, flow) for text, flow in _cashflow_categories(session, user_bidx, master_key) if name_key(text) == key]
+    if not carried:
         raise CategoryNotFoundError(name)
+    # Spelled as the cashflow spells it, not as it was asked for.
     return create_category(
-        session, user_uuid, master_key, name, _nature_of_flows(flows), CategoryOrigin.CASHFLOW,
+        session, user_uuid, master_key, carried[0][0], _nature_of_flows([flow for _, flow in carried]),
+        CategoryOrigin.CASHFLOW,
     )
 
 
