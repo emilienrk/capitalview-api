@@ -14,6 +14,8 @@ from models.banking import (
     BankAuthorization,
     BankSession,
     BankTransaction,
+    BankTransferDecision,
+    BankTransferPatterns,
     UserBankConnection,
 )
 from models.card import Card
@@ -75,6 +77,8 @@ BIDX_MODELS = (
     BankAuthorization,
     BankSession,
     BankAccountLink,
+    BankTransferDecision,
+    BankTransferPatterns,
 )
 FK_MODELS = (
     (ApiToken, "user_uuid"),
@@ -548,6 +552,27 @@ def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeyp
         status_enc=encrypt_data("BOOK", master_key),
     )
     session.add(btx)
+    session.add(
+        BankTransferDecision(
+            user_uuid_bidx=user_bidx,
+            kind_enc=encrypt_data("not_transfer", master_key),
+            debit_ref_bidx=hash_index(btx.uuid, master_key),
+            credit_ref_bidx=hash_index("elsewhere", master_key),
+            debit_account_bidx=hash_index(bank_acc_uuid, master_key),
+            credit_account_bidx=hash_index(bank_acc_uuid, master_key),
+            debit_tokens_enc=encrypt_data("[]", master_key),
+            credit_tokens_enc=encrypt_data("[]", master_key),
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    session.add(
+        BankTransferPatterns(
+            user_uuid_bidx=user_bidx,
+            source_bidx="digest",
+            content_enc=encrypt_data("{}", master_key),
+            built_at=datetime.now(timezone.utc),
+        )
+    )
     session.commit()
 
     # Track that close_session was called on the mock client
@@ -569,6 +594,8 @@ def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeyp
     assert before["bank_sessions"] == 1
     assert before["user_bank_connections"] == 1
     assert before["bank_authorizations"] == 1
+    assert before["bank_transfer_decisions"] == 1
+    assert before["bank_transfer_patterns"] == 1
 
     # Purge
     response = client.request(

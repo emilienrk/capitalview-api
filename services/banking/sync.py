@@ -177,7 +177,17 @@ def sync_user_accounts(
     with wait_for_lock(f"bank-sync:{user_bidx}", session.get_bind()):
         # Whatever the notification step loaded may predate the lock.
         session.expire_all()
-        return _sync_links(session, user_uuid, master_key, user_bidx, psu_context)
+        results = _sync_links(session, user_uuid, master_key, user_bidx, psu_context)
+    # Rebuilt now rather than on the next read, which would otherwise pay for it.
+    # A reader rebuilds anyway when this fails: never fatal to the sync.
+    try:
+        from services.banking.flows import transfer_patterns
+
+        transfer_patterns(session, user_uuid, master_key)
+    except Exception:
+        session.rollback()
+        logger.exception("failed to rebuild transfer patterns after sync")
+    return results
 
 
 def _sync_links(

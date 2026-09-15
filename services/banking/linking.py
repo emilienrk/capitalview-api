@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
+import sqlalchemy as sa
 from sqlmodel import Session, select
 
 from dtos.banking import (
@@ -32,7 +33,13 @@ from dtos.banking import (
     BankSessionSummary,
 )
 from models.bank import BankAccount
-from models.banking import BankAccountLink, BankAuthorization, BankSession, BankTransaction
+from models.banking import (
+    BankAccountLink,
+    BankAuthorization,
+    BankSession,
+    BankTransaction,
+    BankTransferDecision,
+)
 from services.banking.client import build_client
 from services.banking.credentials import (
     get_decrypted_credentials,
@@ -904,6 +911,15 @@ def unlink_account(
         for row in rows:
             session.delete(row)
         transactions_deleted = len(rows)
+        session.exec(
+            sa.delete(BankTransferDecision).where(
+                BankTransferDecision.user_uuid_bidx == user_bidx,
+                sa.or_(
+                    BankTransferDecision.debit_account_bidx == account_bidx,
+                    BankTransferDecision.credit_account_bidx == account_bidx,
+                ),
+            )
+        )
 
     session.delete(link)
     session.commit()

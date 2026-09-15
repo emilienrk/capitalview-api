@@ -238,11 +238,33 @@ class BankFlowsResponse(BaseModel):
     # counted, reported, and kept out of the totals.
     internal_transfers_excluded: int
     internal_transfers_amount: Decimal
+    # An operation and its cancellation or refund on one account.
+    reversals_excluded: int = 0
+    reversals_amount: Decimal = Decimal("0")
     # Not yet booked, so deliberately outside the monthly figures.
     pending_count: int
     pending_inflow: Decimal
     pending_outflow: Decimal
     other_currencies: list[BankFlowCurrencyTotal]
+
+
+class BankTransferStatus(str, Enum):
+    """How two operations came to be paired, and whether they count."""
+    # Seen once, between two accounts nothing vouches for: offered to the user,
+    # and both operations keep counting until they settle it.
+    SUGGESTED = "suggested"
+    # Touches a regulated savings account, which only its holder's account feeds.
+    SAVINGS = "savings"
+    # The same two accounts and labels have paired often across the history.
+    RECURRING = "recurring"
+    # Both labels read like operations the user already confirmed.
+    LEARNED = "learned"
+    # Bound by the user.
+    CONFIRMED = "confirmed"
+    # An operation and its cancellation on one account, bound by the user.
+    REVERSAL = "reversal"
+    # A payment and its refund on one account, found on a shared merchant word.
+    REFUND = "refund"
 
 
 class BankTransactionItem(BaseModel):
@@ -261,6 +283,9 @@ class BankTransactionItem(BaseModel):
     # accounts: the account on the other side.
     transfer_account_id: str | None = None
     transfer_account_name: str | None = None
+    # The movement on the other side, and how the pair was made.
+    transfer_id: str | None = None
+    transfer_status: BankTransferStatus | None = None
 
 
 class BankTransactionsResponse(BaseModel):
@@ -273,6 +298,10 @@ class BankTransactionsResponse(BaseModel):
     net: Decimal
     internal_transfers_excluded: int
     internal_transfers_amount: Decimal
+    # Pairs offered to the user this month, not deducted.
+    transfer_questions: int = 0
+    reversals_excluded: int = 0
+    reversals_amount: Decimal = Decimal("0")
     pending_count: int
     pending_inflow: Decimal
     pending_outflow: Decimal
@@ -305,3 +334,28 @@ class BankExportImportResult(BaseModel):
 class BankExportImportResponse(BaseModel):
     imported_accounts: int
     results: list[BankExportImportResult]
+
+
+class BankTransferDecisionKind(str, Enum):
+    TRANSFER = "transfer"
+    NOT_TRANSFER = "not_transfer"
+    REVERSAL = "reversal"
+
+
+class BankTransferDecisionCreate(BaseModel):
+    """POST /banking/transfer-decisions — settle two movements, in either order."""
+    transaction_id: str
+    other_transaction_id: str
+    kind: BankTransferDecisionKind
+
+
+class BankTransferQuestionMonth(BaseModel):
+    period: str  # YYYY-MM
+    count: int
+
+
+class BankTransferQuestionsResponse(BaseModel):
+    """GET /banking/transfer-questions — pairs offered to the user across the
+    whole history, month by month."""
+    total: int
+    months: list[BankTransferQuestionMonth]
