@@ -44,6 +44,7 @@ from dtos.banking import (
     BankTransferStatus,
     BankUncategorizedGroup,
     BankUncategorizedResponse,
+    OperationNature,
     OperationType,
     RuleSource,
 )
@@ -826,6 +827,26 @@ def compute_real_flows(
     )
 
 
+def _filed(
+    movements: list[_Movement],
+    transfer_legs: dict[int, _TransferLeg],
+    index: int,
+    label: str | None,
+    filing: _Filing,
+) -> tuple[Resolution, OperationNature]:
+    """One operation's category and how it counts: the single reading every
+    view of the operations shares."""
+    movement = movements[index]
+    leg = transfer_legs.get(index)
+    resolution = _resolution(movement, label, filing)
+    savings_legs = (
+        (movement.account_bidx in filing.savings) + (movements[leg.other].account_bidx in filing.savings)
+        if leg else 0
+    )
+    nature = nature_of(movement.is_credit, leg.status if leg else None, savings_legs, resolution.category)
+    return resolution, nature
+
+
 def _item_builder(
     movements: list[_Movement],
     transfer_legs: dict[int, _TransferLeg],
@@ -844,11 +865,7 @@ def _item_builder(
         counterpart = movements[leg.other] if leg else None
         row = movement.row
         label = _label(movement, master_key)
-        resolution = _resolution(movement, label, filing)
-        savings_legs = (
-            (movement.account_bidx in filing.savings) + (counterpart.account_bidx in filing.savings)
-            if counterpart else 0
-        )
+        resolution, nature = _filed(movements, transfer_legs, index, label, filing)
         return BankTransactionItem(
             id=row.uuid,
             account_id=accounts.by_bidx[movement.account_bidx].uuid,
@@ -870,9 +887,7 @@ def _item_builder(
                 OperationType(decrypt_data(row.operation_type_enc, master_key))
                 if row.operation_type_enc else OperationType.UNKNOWN
             ),
-            nature=nature_of(
-                movement.is_credit, leg.status if leg else None, savings_legs, resolution.category,
-            ),
+            nature=nature,
             category_id=resolution.category.uuid if resolution.category else None,
             category_name=resolution.category.name if resolution.category else None,
             category_source=resolution.source,

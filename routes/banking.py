@@ -12,7 +12,7 @@ import html
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlmodel import Session
 
@@ -32,6 +32,8 @@ from dtos.banking import (
     BankAICategorizeResult,
     BankUncategorizedResponse,
     CategoryOrigin,
+    RealCashflowMonthDetail,
+    RealCashflowYear,
     CategoryScope,
     BankAccountLinkRequest,
     BankAccountLinkResult,
@@ -96,6 +98,7 @@ from services.banking.transfer_decisions import (
     record_decision,
 )
 from services.banking.errors import BankingApiError
+from services.banking.real_cashflow import PeriodNotCompletedError, real_cashflow_month, real_cashflow_year
 from services.banking.linking import (
     AccountNotFoundInSessionError,
     AspspNotFoundError,
@@ -819,6 +822,31 @@ async def post_ai_categorization(
     except NoProviderAvailableError:
         raise HTTPException(status_code=400, detail="Configurez d'abord un fournisseur d'IA.")
     return await categorize_agent.run_ai_categorization(session, current_user.uuid, master_key, agent, skip)
+
+
+@router.get("/real-cashflow", response_model=RealCashflowYear)
+def get_real_cashflow(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    year: Annotated[int | None, Query(ge=1970, le=9999)] = None,
+    session: Session = Depends(get_session),
+):
+    """What was earned, spent, set aside and invested over a year's completed
+    months, from the stored operations. Ungated, like /flows."""
+    return real_cashflow_year(session, current_user.uuid, master_key, year)
+
+
+@router.get("/real-cashflow/months/{period}", response_model=RealCashflowMonthDetail)
+def get_real_cashflow_month(
+    period: Annotated[str, Path(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")],
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    try:
+        return real_cashflow_month(session, current_user.uuid, master_key, period)
+    except PeriodNotCompletedError:
+        raise HTTPException(status_code=400, detail="Seul un mois terminé a un cashflow réel.")
 
 
 @router.post(
