@@ -54,6 +54,7 @@ class DeepseekProvider(AIProvider):
         tools: list[dict[str, Any]] | None = None,
         system: str | None = None,
         output_config: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
     ) -> Any:
         """
         Convert canonical Anthropic-style messages to OpenAI format and call DeepSeek.
@@ -75,7 +76,7 @@ class DeepseekProvider(AIProvider):
         openai_messages = self._convert_messages(messages, system)
         kwargs: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": self.max_tokens,
+            "max_tokens": max_tokens or self.max_tokens,
             "messages": openai_messages,
         }
 
