@@ -221,3 +221,14 @@ def test_ai_categorisation_files_a_batch(client, session, master_key, monkeypatc
     body = response.json()
     assert (body["rules_created"], body["categories_created"], body["skip"], body["remaining"]) == (2, 1, 1, 0)
     assert {tx["category_source"] for label, tx in _month(client).items() if "CARREFOUR" in label} == {"ai_rule"}
+
+
+def test_the_words_of_an_operation_come_rarest_first_with_the_proposed_ones(client, session, master_key):
+    _seed(session, master_key)
+    target = _month(client)[LABELS[3]]
+
+    response = client.get(f"/banking/transactions/{target['id']}/rule-tokens")
+
+    assert response.status_code == 200
+    assert response.json() == {"words": ["du", "lac", "pharmacie", "carte", "cb"], "proposed": ["du", "lac"]}
+    assert client.get("/banking/transactions/nope/rule-tokens").status_code == 404

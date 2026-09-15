@@ -493,6 +493,14 @@ class BankCategoryAssign(BaseModel):
     tokens: list[str] | None = None
 
 
+class BankRuleWords(BaseModel):
+    """GET /banking/transactions/{id}/rule-tokens — what a rule for this
+    operation could require: every word of its label, rarest first, and the
+    ones proposed."""
+    words: list[str]
+    proposed: list[str]
+
+
 class BankCategoryAssignResult(BaseModel):
     transaction: BankTransactionItem
     # Operations the rule now files, across the whole history; 1 or 0 without a rule.

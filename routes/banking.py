@@ -28,6 +28,7 @@ from dtos.banking import (
     BankCategoryItem,
     BankCategoryRuleItem,
     BankCategoryUpdate,
+    BankRuleWords,
     BankAICategorizeResult,
     BankUncategorizedResponse,
     CategoryOrigin,
@@ -85,6 +86,7 @@ from services.banking.flows import (
     compute_real_flows,
     list_month_transactions,
     list_transfer_counterparts,
+    rule_words,
     transfer_patterns,
     uncategorized_groups,
 )
@@ -715,6 +717,20 @@ def delete_category_route(
 ):
     """Delete a category and its rules; operations filed by hand under it read as uncategorised."""
     _category_or_error(lambda: delete_category(session, current_user.uuid, master_key, category_id))
+
+
+@router.get("/transactions/{transaction_id}/rule-tokens", response_model=BankRuleWords)
+def get_rule_tokens(
+    transaction_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """The words a rule for this operation could require, and those proposed."""
+    try:
+        return rule_words(session, current_user.uuid, master_key, transaction_id)
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail="Opération introuvable.")
 
 
 @router.put("/transactions/{transaction_id}/category", response_model=BankCategoryAssignResult)
