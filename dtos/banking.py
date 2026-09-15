@@ -245,6 +245,41 @@ class BankFlowsResponse(BaseModel):
     other_currencies: list[BankFlowCurrencyTotal]
 
 
+class BankTransactionItem(BaseModel):
+    """One stored movement, as the bank reported it."""
+    id: str
+    account_id: str
+    account_name: str
+    operation_date: date | None
+    # Unsigned: the direction is `is_credit`, as in the bank's own contract.
+    amount: Decimal
+    currency: str
+    is_credit: bool
+    is_pending: bool
+    label: str | None
+    # Set when the movement pairs as a transfer between two of the user's own
+    # accounts: the account on the other side.
+    transfer_account_id: str | None = None
+    transfer_account_name: str | None = None
+
+
+class BankTransactionsResponse(BaseModel):
+    """GET /banking/transactions — one month of operations, with that month's
+    totals computed as GET /banking/flows computes them."""
+    period: str  # YYYY-MM
+    currency: str
+    inflow: Decimal
+    outflow: Decimal
+    net: Decimal
+    internal_transfers_excluded: int
+    internal_transfers_amount: Decimal
+    pending_count: int
+    pending_inflow: Decimal
+    pending_outflow: Decimal
+    other_currencies: list[BankFlowCurrencyTotal]
+    transactions: list[BankTransactionItem]
+
+
 class ExportImportStatus(str, Enum):
     """The branch one account of an Enable Banking export import took."""
     IMPORTED = "imported"
