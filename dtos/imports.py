@@ -20,6 +20,9 @@ class ImportSourceInfo(BaseModel):
     # carrying them needs no mapping step at all.
     default_mapping: dict[str, str] | None = None
     template_csv: str | None = None
+    # Bank sources: whether the file may land on a bank-linked account, before
+    # the bank's own history.
+    fills_before_bank_history: bool = False
 
 
 class ImportSourcesResponse(BaseModel):
@@ -116,6 +119,11 @@ class ImportPreviewResponse(BaseModel):
     bank_points: list[BankImportPointPreview] | None = None
     bank_transactions: list[BankImportTransactionPreview] | None = None
     bank_curve: BankImportCurvePreview | None = None
+    # Bank-linked account only: the first day the bank's own history covers.
+    # The file is imported up to the day before; what the bank already holds is
+    # counted in `covered_by_bank_count` and left out of `bank_transactions`.
+    bank_history_from: date | None = None
+    covered_by_bank_count: int = 0
 
 
 class ImportConfirmRequest(BaseModel):
@@ -138,3 +146,4 @@ class ImportConfirmResponse(BaseModel):
     imported_count: int
     skipped_duplicates: int = 0
     groups_count: int | None = None
+    covered_by_bank_count: int = 0

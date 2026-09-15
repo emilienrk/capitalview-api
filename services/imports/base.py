@@ -39,6 +39,10 @@ class ImportParser(ABC):
     # False for an alias kept only so old files and saved imports still resolve:
     # importable by id, never offered as a choice.
     listed: bool = True
+    # Bank parsers only: whether the file may still land on a bank-linked
+    # account, on the days before the bank's own history. A balance file cannot:
+    # it writes points, which carry no identity to keep them apart from the bank's.
+    fills_before_bank_history: bool = False
 
     @abstractmethod
     def detect(self, csv_content: str) -> float:

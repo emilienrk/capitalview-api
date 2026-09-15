@@ -473,3 +473,171 @@ def test_an_older_statement_does_not_walk_the_balance_back(session, master_key):
     curve = _curve(session, master_key, account_id)
     assert curve[date(2024, 2, 3)] == Decimal("2307.50")  # its own window, rebuilt
     assert curve[date(2025, 6, 1)] == Decimal("9000")     # and the later truth kept
+
+
+# ─── On an account the bank already feeds ────────────────────────────────
+
+BANK_HISTORY_FROM = date(2024, 3, 1)
+
+# Opens a month before the bank's history and runs into it.
+STATEMENT_INTO_THE_BANK_CSV = textwrap.dedent("""\
+    date,amount,label
+    2024-02-10,500.00,VIREMENT
+    2024-02-20,-30.00,CARTE SPAR
+    2024-03-05,-40.00,CARTE FNAC
+""")
+
+
+def _link(session, master_key, account_id, served_from=BANK_HISTORY_FROM):
+    from models.banking import BankAccountLink, BankSession
+    from services.encryption import encrypt_data
+
+    bank_session = BankSession(
+        user_uuid_bidx=hash_index("import_user", master_key),
+        session_id_enc=encrypt_data("eb-session", master_key),
+        status="AUTHORIZED",
+        consent_valid_until=date.today(),
+        authorized_at=date.today(),
+    )
+    session.add(bank_session)
+    session.commit()
+    session.add(BankAccountLink(
+        user_uuid_bidx=hash_index("import_user", master_key),
+        bank_account_uuid_bidx=hash_index(account_id, master_key),
+        session_uuid=bank_session.uuid,
+        identification_hash_bidx=hash_index("ident", master_key),
+        account_uid_enc=encrypt_data("uid", master_key),
+        anchor_date=date.today(),
+        anchor_balance_enc=encrypt_data("0", master_key),
+        last_synced_at=date.today(),
+        history_seeded=served_from is not None,
+        history_served_from_enc=encrypt_data(served_from.isoformat(), master_key) if served_from else None,
+    ))
+    session.commit()
+
+
+def _bank_row(reference, booked, amount, transaction_date=None):
+    from services.banking.transactions import STATUS_BOOKED
+
+    return {
+        "entry_reference": reference,
+        "transaction_amount": {"currency": "EUR", "amount": str(abs(Decimal(amount)))},
+        "credit_debit_indicator": "CRDT" if Decimal(amount) > 0 else "DBIT",
+        "status": STATUS_BOOKED,
+        "booking_date": booked.isoformat(),
+        "transaction_date": (transaction_date or booked).isoformat(),
+    }
+
+
+def _synced_account(session, master_key, bank_rows=None):
+    """A linked account whose history opens on BANK_HISTORY_FROM at 480 €, after
+    a 20 € card payment that day: the eve of it stood at 500 €."""
+    from services.bank import replace_history_window
+    from services.banking.transactions import store_transactions
+
+    account_id = _account(session, master_key)
+    _link(session, master_key, account_id)
+    store_transactions(session, master_key, account_id, bank_rows or [
+        _bank_row("bank-1", BANK_HISTORY_FROM, "-20"),
+        _bank_row("bank-2", date(2024, 3, 5), "-40", transaction_date=date(2024, 3, 5)),
+    ])
+    replace_history_window(
+        session, session.get(BankAccount, account_id),
+        [BankHistoryEntry(snapshot_date=BANK_HISTORY_FROM, value=Decimal("480"))],
+        master_key, BANK_HISTORY_FROM, BANK_HISTORY_FROM,
+    )
+    return account_id
+
+
+def _stored_count(session, master_key, account_id):
+    return len(session.exec(
+        select(BankTransaction).where(BankTransaction.account_id_bidx == hash_index(account_id, master_key))
+    ).all())
+
+
+def test_a_linked_account_takes_only_the_days_before_the_bank(session, master_key):
+    parser = get_parser("generic_bank_transactions")
+    account_id = _synced_account(session, master_key)
+
+    preview = parser.preview(session, STATEMENT_INTO_THE_BANK_CSV, {},
+                             account_id=account_id, master_key=master_key)
+    assert preview.bank_history_from == BANK_HISTORY_FROM
+    assert preview.covered_by_bank_count == 1
+    assert [r.day for r in preview.bank_transactions] == [date(2024, 2, 10), date(2024, 2, 20)]
+
+    result = _confirm(session, master_key, account_id, preview.bank_transactions
+                      + parse_bank_transactions(STATEMENT_INTO_THE_BANK_CSV, {})[0][2:], parser)
+    assert result.imported_count == 2
+    assert result.covered_by_bank_count == 1  # re-filtered, whatever the client sent
+    assert _stored_count(session, master_key, account_id) == 4
+
+
+def test_the_curve_meets_the_bank_on_the_eve_of_its_history(session, master_key):
+    parser = get_parser("generic_bank_transactions")
+    account_id = _synced_account(session, master_key)
+    account = session.get(BankAccount, account_id)
+    balance_before = decrypt_data(account.balance_enc, master_key)
+
+    preview = parser.preview(session, STATEMENT_INTO_THE_BANK_CSV, {},
+                             account_id=account_id, master_key=master_key)
+    # 500 € on the eve, reached through +500 then −30: the account opened at 30 €.
+    assert preview.bank_curve.opening_balance == Decimal("30")
+    assert preview.bank_curve.end_date == date(2024, 2, 29)
+    assert preview.bank_curve.closing_balance == Decimal("500")
+
+    _confirm(session, master_key, account_id, preview.bank_transactions, parser)
+    curve = _curve(session, master_key, account_id)
+    assert curve[date(2024, 2, 10)] == Decimal("530")
+    assert curve[date(2024, 2, 29)] == Decimal("500")
+    assert curve[BANK_HISTORY_FROM] == Decimal("480")  # the bank's own, untouched
+
+    session.refresh(account)
+    assert decrypt_data(account.balance_enc, master_key) == balance_before
+
+
+def test_a_payment_the_bank_booked_after_its_history_opened_is_not_imported_twice(session, master_key):
+    """Made on the 28th, booked on the 1st: the statement dates it before the
+    bank's history, the bank inside it. One bank movement claims one row only."""
+    parser = get_parser("generic_bank_transactions")
+    account_id = _synced_account(session, master_key, bank_rows=[
+        _bank_row("bank-1", BANK_HISTORY_FROM, "-1.70", transaction_date=date(2024, 2, 28)),
+    ])
+    csv = textwrap.dedent("""\
+        date,amount,label
+        2024-02-27,-1.70,Burger King
+        2024-02-28,-1.70,Burger King
+        2024-02-28,-3.01,SPAR
+    """)
+
+    preview = parser.preview(session, csv, {}, account_id=account_id, master_key=master_key)
+    assert preview.covered_by_bank_count == 1
+    assert sorted((r.day, r.amount) for r in preview.bank_transactions) == [
+        (date(2024, 2, 27), Decimal("1.70")),
+        (date(2024, 2, 28), Decimal("3.01")),
+    ]
+
+
+def test_re_importing_on_a_linked_account_keeps_the_same_cut(session, master_key):
+    """The file's own rows, once stored, must not pass for the bank's history."""
+    parser = get_parser("generic_bank_transactions")
+    account_id = _synced_account(session, master_key)
+    rows, _ = parse_bank_transactions(STATEMENT_INTO_THE_BANK_CSV, {})
+    _confirm(session, master_key, account_id, rows, parser)
+
+    preview = parser.preview(session, STATEMENT_INTO_THE_BANK_CSV, {},
+                             account_id=account_id, master_key=master_key)
+    assert preview.bank_history_from == BANK_HISTORY_FROM
+    assert preview.duplicates_count == 2
+    assert _confirm(session, master_key, account_id, rows, parser).imported_count == 0
+
+
+def test_movements_from_an_export_older_than_the_seeding_move_the_cut_back(session, master_key):
+    parser = get_parser("generic_bank_transactions")
+    account_id = _synced_account(session, master_key, bank_rows=[
+        _bank_row("export-1", date(2024, 2, 15), "-30"),
+    ])
+
+    preview = parser.preview(session, STATEMENT_INTO_THE_BANK_CSV, {},
+                             account_id=account_id, master_key=master_key)
+    assert preview.bank_history_from == date(2024, 2, 15)
+    assert [r.day for r in preview.bank_transactions] == [date(2024, 2, 10)]
