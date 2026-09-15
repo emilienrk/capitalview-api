@@ -24,11 +24,12 @@ Three things this module is deliberate about:
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlmodel import Session, select
 
@@ -85,6 +86,30 @@ INCREMENTAL_STRATEGY = "default"
 # How far back pending rows are looked for when sizing the fetch window. A
 # pending operation older than this has long since booked or vanished.
 PENDING_LOOKBACK = timedelta(days=90)
+
+# How far back the curve is redrawn on every sync, whatever window the bank was
+# asked for. A bank publishes an operation in its feed a day or two after its
+# balance already counts it, and it arrives dated *before* the last sync: the
+# days it belongs to were drawn without it and nothing would ever redraw them.
+# Walking back is done from stored rows, so widening the window costs one query.
+CURVE_REDRAW = timedelta(days=30)
+
+# How long a balance reading must age before the check trusts it. A balance
+# counts an operation up to a day or two before the transaction feed publishes
+# it, so today's reading always disagrees with today's operations — and again,
+# the other way round, the day the operation lands. The check therefore never
+# looks at today's balance at all: it compares two readings this old against the
+# movements stored between them. A missing operation is found two days late,
+# which is the price of never crying wolf.
+SETTLE_LAG = timedelta(days=2)
+
+# How far apart the two readings must be. Wide enough that one day's noise
+# cannot hide in it, narrow enough to date a gap to a single week.
+CHECK_SPAN = timedelta(days=7)
+
+# How long balance readings are kept. Comfortably past CHECK_LAG, so a fortnight
+# without a sync still leaves something to check against.
+CHECKPOINT_RETENTION = timedelta(days=60)
 
 # BalanceStatus member, referenced by NAME (CLBD = ISO20022 ClosingBooked, the
 # accounting balance). Never by position in the list: the real-time balance
@@ -291,7 +316,25 @@ def sync_account_link(
         1 for raw in raws if (raw.get("balance_after_transaction") or {}).get("amount") is not None
     )
 
-    movements = booked_movements(session, account, master_key, covered_from, today, currency)
+    # The curve is redrawn further back than the fetch reached, and the check
+    # compares against a reading older still: both need the movements of that
+    # whole stretch, not only of the window the bank was asked for. Never before
+    # the oldest operation the bank ever served, which is where this account's
+    # own history starts — beyond it a redraw would flatten manual snapshots
+    # over days the bank says nothing about.
+    check_window = _check_window(read_checkpoints(link, master_key), today)
+    served_from = (
+        date.fromisoformat(decrypt_data(link.history_served_from_enc, master_key))
+        if link.history_served_from_enc
+        else None
+    )
+    curve_from = min(covered_from, today - CURVE_REDRAW)
+    if check_window is not None:
+        curve_from = min(curve_from, check_window[0].day)
+    if served_from is not None:
+        curve_from = max(curve_from, served_from)
+    curve_from = min(curve_from, covered_from)
+    movements = booked_movements(session, account, master_key, curve_from, today, currency)
 
     # An available balance is the accounting one minus what is currently
     # withheld, so the withheld part is added back before anything anchors on
@@ -320,17 +363,19 @@ def sync_account_link(
         # worthless the day one is real.
         result.reconciliation_status = ReconciliationStatus.NOT_RECONCILABLE
     elif not seeding:
-        gap = _reconciliation_gap(link, accounting, movements, master_key)
-        result.reconciliation_gap = gap
+        # Two settled readings or no verdict at all (see _check_window).
+        if check_window is not None:
+            gap = _reconciliation_gap(*check_window, movements)
+            result.reconciliation_gap = gap
         if estimated:
-            # Still computed and still stored: on an available balance the gap
-            # is the only measurement of how far the two readings drift apart,
-            # and the answer decides whether this account can graduate back to a
-            # verified curve. It is the verdict, not the number, that is held
-            # back — a card authorisation blocked one day and booked the next
-            # produces a gap on a perfectly healthy account.
+            # The gap is still computed and still stored: on an available
+            # balance it is the only measurement of how far the two readings
+            # drift apart, and the answer decides whether this account can
+            # graduate back to a verified curve. It is the verdict, not the
+            # number, that is held back — a card authorisation blocked one day
+            # and booked the next produces a gap on a perfectly healthy account.
             result.reconciliation_status = ReconciliationStatus.ESTIMATED
-        else:
+        elif check_window is not None:
             result.reconciliation_status = (
                 ReconciliationStatus.GAP if gap else ReconciliationStatus.RECONCILED
             )
@@ -342,9 +387,11 @@ def sync_account_link(
     # movements out of the anchor and back into the next period is what keeps
     # the check from reporting a gap on entirely normal behaviour.
     link.anchor_date = today
-    link.anchor_balance_enc = encrypt_data(
-        str(accounting - movements.get(today, Decimal("0"))), master_key
-    )
+    anchor_balance = accounting - movements.get(today, Decimal("0"))
+    link.anchor_balance_enc = encrypt_data(str(anchor_balance), master_key)
+    # The same reading, kept: it is what a later sync compares against, once the
+    # bank's publication delay has had time to resolve.
+    _record_checkpoint(link, _Checkpoint(today, anchor_balance), master_key, today)
     link.last_synced_at = today
     link.last_sync_attempt_at = today
     link.last_sync_error_enc = None
@@ -413,9 +460,9 @@ def sync_account_link(
     result.snapshots_written = replace_history_window(
         session,
         account,
-        curve_entries(accounting, movements, covered_from, today),
+        curve_entries(accounting, movements, curve_from, today),
         master_key,
-        covered_from,
+        curve_from,
         today,
     )
     return result
@@ -774,31 +821,90 @@ def _signed_amount(row: BankTransaction, master_key: str) -> Decimal:
     return amount if decrypt_data(row.credit_debit_enc, master_key) == CREDIT else -amount
 
 
-def _reconciliation_gap(
-    link: BankAccountLink,
-    accounting: Decimal,
-    movements: dict[date, Decimal],
-    master_key: str,
-) -> Decimal | None:
-    """`previous anchor + booked movements of the period = current anchor`.
+class _Checkpoint(NamedTuple):
+    """A balance reading and the day it opens: `day`'s own movements are not in
+    `balance` yet, exactly like (anchor_date, anchor_balance)."""
+    day: date
+    balance: Decimal
 
-    When it holds the period's curve is exact and can be presented as such.
-    Otherwise the gap is returned, to be stored and dated by the sync that found
-    it: it means a movement is missing or counted twice — the detector for the
-    card / current-account double count, and for the deduplication fallback when
-    a reference is absent.
 
-    The period opens **on** the anchor day, not after it: the stored anchor is
-    the closing balance of the day before, so the anchor day's own movements
-    have never been counted — including the ones the bank booked after the
-    previous sync had already read the balance.
+def read_checkpoints(link: BankAccountLink, master_key: str) -> list[_Checkpoint]:
+    """The readings previous syncs recorded, oldest first.
+
+    A link that predates the column — or that has only ever synced once — falls
+    back to its own anchor, which is the reading the check used to compare
+    against on its own.
     """
-    previous = Decimal(decrypt_data(link.anchor_balance_enc, master_key))
+    if not link.balance_checkpoints_enc:
+        return [_Checkpoint(link.anchor_date, Decimal(decrypt_data(link.anchor_balance_enc, master_key)))]
+    stored = json.loads(decrypt_data(link.balance_checkpoints_enc, master_key))
+    points = [_Checkpoint(date.fromisoformat(item["d"]), Decimal(item["b"])) for item in stored]
+    return sorted(points, key=lambda point: point.day)
+
+
+def _record_checkpoint(
+    link: BankAccountLink, point: _Checkpoint, master_key: str, today: date
+) -> None:
+    """Add today's reading, drop what is too old to serve, and keep one per day:
+    a second sync on the same day would otherwise push the older readings out.
+    """
+    kept = {
+        existing.day: existing
+        for existing in read_checkpoints(link, master_key)
+        if existing.day >= today - CHECKPOINT_RETENTION
+    }
+    kept[point.day] = point
+    link.balance_checkpoints_enc = encrypt_data(
+        json.dumps([
+            {"d": item.day.isoformat(), "b": str(item.balance)}
+            for item in sorted(kept.values(), key=lambda item: item.day)
+        ]),
+        master_key,
+    )
+
+
+def _check_window(
+    points: list[_Checkpoint], today: date
+) -> tuple[_Checkpoint, _Checkpoint] | None:
+    """The two readings the check compares, or None while there are not two old
+    enough — a freshly linked account, or one whose readings the migration has
+    yet to fill. No verdict at all beats a verdict measured against a balance
+    the bank had not finished publishing.
+    """
+    settled = [point for point in points if point.day <= today - SETTLE_LAG]
+    if not settled:
+        return None
+    late = settled[-1]
+    early = next(
+        (point for point in reversed(settled[:-1]) if point.day <= late.day - CHECK_SPAN),
+        None,
+    )
+    return None if early is None else (early, late)
+
+
+def _reconciliation_gap(
+    early: _Checkpoint,
+    late: _Checkpoint,
+    movements: dict[date, Decimal],
+) -> Decimal | None:
+    """`earlier reading + booked movements between = later reading`.
+
+    Both readings come from the bank itself, days apart and old enough to have
+    settled; what is on trial is the stored operations between them. When it
+    holds, that stretch of the curve is exact. Otherwise the gap is returned, to
+    be stored and dated by the sync that found it: a movement is missing or
+    counted twice — the detector for the card / current-account double count,
+    and for the deduplication fallback when a reference is absent.
+
+    The period opens **on** the earlier reading's day and stops before the later
+    one's: a reading is the closing balance of the day before it, so its own
+    day's movements belong to the period that follows it.
+    """
     period = sum(
-        (value for day, value in movements.items() if day >= link.anchor_date),
+        (value for day, value in movements.items() if early.day <= day < late.day),
         Decimal("0"),
     )
-    gap = accounting - (previous + period)
+    gap = late.balance - (early.balance + period)
     return None if gap == 0 else gap
 
 
