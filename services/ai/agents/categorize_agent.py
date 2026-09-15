@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 BATCH_SIZE = 25
 # Far above the providers' defaults: a reasoning model spends its budget
 # thinking before it writes a word, and a cut answer is no answer.
-MAX_OUTPUT_TOKENS = 8000
+MAX_OUTPUT_TOKENS = 16000
 MIN_CONFIDENCE = 0.6
 # A model inventing a category per merchant would bury the user's own.
 MAX_NEW_CATEGORIES = 15
@@ -130,8 +130,16 @@ class CategorizeAgent:
             output_config=self.output_config(),
             max_tokens=MAX_OUTPUT_TOKENS,
         )
+        raw = self._provider.extract_text(response).strip()
+        if raw.startswith("```"):
+            lines = raw.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            raw = "\n".join(lines).strip()
         try:
-            answer = json.loads(self._provider.extract_text(response))
+            answer = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             logger.warning("categorisation: the model's answer is not JSON")
             raise UnreadableAnswerError()
