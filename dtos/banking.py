@@ -405,3 +405,28 @@ class AvailableCategory(BaseModel):
     name: str
     nature: CategoryNature
     origin: CategoryOrigin
+
+
+class RuleSource(str, Enum):
+    """Who wrote a category rule."""
+    USER = "user"
+    AI = "ai"
+
+
+class CategorySource(str, Enum):
+    """What filed an operation under its category."""
+    MANUAL = "manual"
+    USER_RULE = "user_rule"
+    AI_RULE = "ai_rule"
+
+
+class OperationNature(str, Enum):
+    """How an operation counts in the real cashflow. Only EXPENSE and INCOME
+    count as such; SAVING and INVESTMENT are totalled apart, INTERNAL and
+    NEUTRALIZED only reported."""
+    EXPENSE = "EXPENSE"
+    INCOME = "INCOME"
+    SAVING = "SAVING"
+    INVESTMENT = "INVESTMENT"
+    INTERNAL = "INTERNAL"
+    NEUTRALIZED = "NEUTRALIZED"

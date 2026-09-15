@@ -44,6 +44,7 @@ from models.bank import BankAccount
 from models.banking import BankTransaction
 from models.enums import BankAccountType
 from services.banking import transfer_patterns as stored_patterns
+from services.banking.categorize import WordFrequency
 from services.banking.linking import readable_account_bidxs
 from services.banking.operation_types import operation_type
 from services.banking.transactions import (
@@ -90,6 +91,10 @@ REGULATED_SAVINGS = frozenset({
     BankAccountType.LIVRET_A, BankAccountType.LIVRET_DEVE, BankAccountType.LEP,
     BankAccountType.LDD, BankAccountType.PEL, BankAccountType.CEL,
 })
+
+# Every account holding money set aside, regulated or not: a transfer with one
+# of these on exactly one side is saving, not spending.
+SAVINGS_ACCOUNTS = REGULATED_SAVINGS | {BankAccountType.SAVINGS}
 
 # The pairs kept out of the totals. A suggested pair is only offered: until the
 # user settles it, both legs count — measured, most pairs seen once were a third
@@ -473,9 +478,17 @@ def _pairing(session: Session, user_uuid: str, master_key: str, accounts: _Accou
 
 
 def _regulated_savings(accounts: _Accounts, master_key: str) -> frozenset[str]:
+    return _accounts_of_types(accounts, REGULATED_SAVINGS, master_key)
+
+
+def _savings_accounts(accounts: _Accounts, master_key: str) -> frozenset[str]:
+    return _accounts_of_types(accounts, SAVINGS_ACCOUNTS, master_key)
+
+
+def _accounts_of_types(accounts: _Accounts, types: frozenset[BankAccountType], master_key: str) -> frozenset[str]:
     return frozenset(
         bidx for bidx, account in accounts.by_bidx.items()
-        if decrypt_data(account.account_type_enc, master_key) in REGULATED_SAVINGS
+        if decrypt_data(account.account_type_enc, master_key) in types
     )
 
 
@@ -569,6 +582,16 @@ def transfer_patterns(
         side_rows[side] += 1
         for word in label_words(labels[i]):
             side_words[side][word] += 1
+    signatures = {signature for signature in map(label_signature, labels.values()) if signature}
+    word_counts: dict[str, int] = defaultdict(int)
+    for signature in signatures:
+        for word in signature.split():
+            word_counts[word] += 1
+    patterns.word_frequency = WordFrequency(
+        counts=dict(word_counts),
+        common_above=max(COMMON_WORD_MIN_COUNT - 1, COMMON_WORD_SHARE * len(signatures)),
+    )
+
     patterns.common_words = {
         side: frozenset(
             w for w, n in counts.items()

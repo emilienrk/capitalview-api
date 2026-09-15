@@ -20,17 +20,21 @@ a cashflow is simply written as its name.
 
 from __future__ import annotations
 
+import json
 import unicodedata
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import sqlalchemy as sa
 from sqlmodel import Session, select
 
-from dtos.banking import AvailableCategory, CategoryNature, CategoryOrigin, CategoryScope
+from dtos.banking import AvailableCategory, CategoryNature, CategoryOrigin, CategoryScope, RuleSource
 from models.banking import BankCategory, BankCategoryRule
 from models.cashflow import Cashflow
 from models.enums import FlowType
+from services.banking.categorize import Rule, WordFrequency, check_rule, rule_tokens
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 MAX_NAME_LENGTH = 60
@@ -51,6 +55,10 @@ class CategoryNameTakenError(ValueError):
 
 class InvalidCategoryNameError(ValueError):
     """The name is empty or too long."""
+
+
+class RuleNotFoundError(LookupError):
+    """No rule of this user has this id."""
 
 
 @dataclass(frozen=True)
@@ -143,6 +151,63 @@ def delete_category(session: Session, user_uuid: str, master_key: str, category_
     session.commit()
 
 
+def load_rules(session: Session, user_uuid: str, master_key: str) -> list[Rule]:
+    rows = session.exec(
+        select(BankCategoryRule).where(BankCategoryRule.user_uuid_bidx == hash_index(user_uuid, master_key))
+    ).all()
+    return [_read_rule(row, master_key) for row in rows]
+
+
+def save_rule(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    words: Iterable[str],
+    category_id: str,
+    source: RuleSource,
+    frequency: WordFrequency,
+) -> Rule | None:
+    """File every operation holding all of `words` under a category.
+
+    A rule on the same words is replaced — except a user's rule, which the AI
+    never overwrites: it gets None back.
+    """
+    tokens = rule_tokens(words)
+    check_rule(tokens, frequency)
+    category = _owned_row(session, user_uuid, master_key, category_id)
+    tokens_bidx = hash_index(" ".join(sorted(tokens)), master_key)
+    row = session.exec(
+        select(BankCategoryRule).where(
+            sa.and_(
+                BankCategoryRule.user_uuid_bidx == category.user_uuid_bidx,
+                BankCategoryRule.tokens_bidx == tokens_bidx,
+            )
+        )
+    ).first()
+    if row is None:
+        row = BankCategoryRule(
+            user_uuid_bidx=category.user_uuid_bidx,
+            tokens_enc=encrypt_data(json.dumps(sorted(tokens)), master_key),
+            tokens_bidx=tokens_bidx,
+        )
+    elif source is RuleSource.AI and RuleSource(decrypt_data(row.source_enc, master_key)) is RuleSource.USER:
+        return None
+    row.category_ref_enc = encrypt_data(category.uuid, master_key)
+    row.source_enc = encrypt_data(source.value, master_key)
+    row.created_at = datetime.now(timezone.utc)
+    session.add(row)
+    session.commit()
+    return _read_rule(row, master_key)
+
+
+def delete_rule(session: Session, user_uuid: str, master_key: str, rule_id: str) -> None:
+    row = session.get(BankCategoryRule, rule_id)
+    if row is None or row.user_uuid_bidx != hash_index(user_uuid, master_key):
+        raise RuleNotFoundError(rule_id)
+    session.delete(row)
+    session.commit()
+
+
 def materialize_cashflow_category(session: Session, user_uuid: str, master_key: str, name: str) -> Category:
     """The category row for a declared cashflow's category, created on first use.
 
@@ -224,6 +289,16 @@ def _owned_row(session: Session, user_uuid: str, master_key: str, category_id: s
     if row is None or row.user_uuid_bidx != hash_index(user_uuid, master_key):
         raise CategoryNotFoundError(category_id)
     return row
+
+
+def _read_rule(row: BankCategoryRule, master_key: str) -> Rule:
+    return Rule(
+        uuid=row.uuid,
+        tokens=frozenset(json.loads(decrypt_data(row.tokens_enc, master_key))),
+        category_uuid=decrypt_data(row.category_ref_enc, master_key),
+        source=RuleSource(decrypt_data(row.source_enc, master_key)),
+        created_at=row.created_at,
+    )
 
 
 def _read(row: BankCategory, master_key: str) -> Category:
