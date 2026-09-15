@@ -36,10 +36,21 @@ from services.banking.flows import transfer_patterns, uncategorized_groups
 
 logger = logging.getLogger(__name__)
 
-BATCH_SIZE = 100
+# Small enough that the answer fits the output budget, and that a failed call
+# loses little.
+BATCH_SIZE = 25
+# Far above the providers' defaults: a reasoning model spends its budget
+# thinking before it writes a word, and a cut answer is no answer.
+MAX_OUTPUT_TOKENS = 8000
 MIN_CONFIDENCE = 0.6
 # A model inventing a category per merchant would bury the user's own.
 MAX_NEW_CATEGORIES = 15
+
+
+class UnreadableAnswerError(Exception):
+    """The model answered something that is not the expected JSON: cut short,
+    empty, or shaped otherwise. The batch must fail rather than read as
+    "nothing to file", or the run would skip every group it sends."""
 
 
 @dataclass(frozen=True)
@@ -99,7 +110,7 @@ class CategorizeAgent:
     async def suggest(
         self, groups: dict[str, BankUncategorizedGroup], categories: list[tuple[str, CategoryNature]]
     ) -> list[dict[str, Any]]:
-        """The model's raw answer per group; malformed output reads as no answer."""
+        """The model's raw answer per group."""
         payload = {
             "categories": [{"name": name, "nature": nature.value} for name, nature in categories],
             "groups": [
@@ -117,14 +128,18 @@ class CategorizeAgent:
             messages=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
             system=self.system_prompt(),
             output_config=self.output_config(),
+            max_tokens=MAX_OUTPUT_TOKENS,
         )
         try:
             answer = json.loads(self._provider.extract_text(response))
         except (json.JSONDecodeError, TypeError):
             logger.warning("categorisation: the model's answer is not JSON")
-            return []
+            raise UnreadableAnswerError()
         items = answer.get("groups") if isinstance(answer, dict) else None
-        return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+        if not isinstance(items, list):
+            logger.warning("categorisation: the model's answer has no list of groups")
+            raise UnreadableAnswerError()
+        return [item for item in items if isinstance(item, dict)]
 
 
 def build_categorize_agent(session: Session, user_uuid: str, master_key: str) -> CategorizeAgent:

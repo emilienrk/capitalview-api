@@ -103,6 +103,7 @@ class GoogleProvider(AIProvider):
         tools: list[dict[str, Any]] | None = None,
         system: str | None = None,
         output_config: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
     ) -> Any:
         """
         Convert the canonical message format to Gemini's Content format and call the API.
@@ -111,7 +112,7 @@ class GoogleProvider(AIProvider):
             {"role": "user"|"assistant", "content": str | list[block]}
         """
         gemini_contents = self._convert_messages(messages)
-        config_kwargs: dict[str, Any] = {"max_output_tokens": self.max_tokens}
+        config_kwargs: dict[str, Any] = {"max_output_tokens": max_tokens or self.max_tokens}
 
         if system:
             config_kwargs["system_instruction"] = system

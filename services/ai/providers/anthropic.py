@@ -44,10 +44,11 @@ class AnthropicProvider(AIProvider):
         tools: list[dict[str, Any]] | None = None,
         system: str | None = None,
         output_config: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
     ) -> Any:
         args: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": self.max_tokens,
+            "max_tokens": max_tokens or self.max_tokens,
             "messages": messages,
         }
         if tools:

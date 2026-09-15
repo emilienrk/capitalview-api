@@ -821,7 +821,13 @@ async def post_ai_categorization(
         agent = categorize_agent.build_categorize_agent(session, current_user.uuid, master_key)
     except NoProviderAvailableError:
         raise HTTPException(status_code=400, detail="Configurez d'abord un fournisseur d'IA.")
-    return await categorize_agent.run_ai_categorization(session, current_user.uuid, master_key, agent, skip)
+    try:
+        return await categorize_agent.run_ai_categorization(session, current_user.uuid, master_key, agent, skip)
+    except categorize_agent.UnreadableAnswerError:
+        raise HTTPException(
+            status_code=502,
+            detail="Le fournisseur d'IA a renvoyé une réponse illisible. Réessayez, ou changez de modèle.",
+        )
 
 
 @router.get("/real-cashflow", response_model=RealCashflowYear)

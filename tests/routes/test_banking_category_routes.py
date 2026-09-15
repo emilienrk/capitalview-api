@@ -223,6 +223,17 @@ def test_ai_categorisation_files_a_batch(client, session, master_key, monkeypatc
     assert {tx["category_source"] for label, tx in _month(client).items() if "CARREFOUR" in label} == {"ai_rule"}
 
 
+def test_an_unreadable_ai_answer_is_a_502(client, session, master_key, monkeypatch):
+    import services.ai.agents.categorize_agent as module
+    from tests.services.test_banking_categorize_agent import FakeProvider
+
+    _seed(session, master_key)
+    _enable_ai(client)
+    monkeypatch.setattr(module, "build_categorize_agent", lambda *args: module.CategorizeAgent(FakeProvider(lambda payload: "")))
+
+    assert client.post("/banking/categorize/ai?skip=0").status_code == 502
+
+
 def test_the_words_of_an_operation_come_rarest_first_with_the_proposed_ones(client, session, master_key):
     _seed(session, master_key)
     target = _month(client)[LABELS[3]]

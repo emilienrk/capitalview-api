@@ -10,7 +10,12 @@ import pytest
 from sqlmodel import Session
 
 from dtos.banking import CategoryNature, CategoryOrigin, RuleSource
-from services.ai.agents.categorize_agent import CategorizeAgent, run_ai_categorization
+from services.ai.agents.categorize_agent import (
+    MAX_OUTPUT_TOKENS,
+    CategorizeAgent,
+    UnreadableAnswerError,
+    run_ai_categorization,
+)
 from services.ai.providers.base import AIProvider, ModelCapability
 from services.banking.categories import create_category, load_categories, load_rules
 from services.banking.flows import assign_category, uncategorized_groups
@@ -31,9 +36,11 @@ class FakeProvider(AIProvider):
     def capabilities(self) -> ModelCapability:
         return ModelCapability.TEXT
 
-    async def _send_message(self, messages, tools=None, system=None, output_config=None):
+    async def _send_message(self, messages, tools=None, system=None, output_config=None, max_tokens=None):
         payload = json.loads(messages[0]["content"])
-        self.calls.append({"payload": payload, "system": system, "output_config": output_config})
+        self.calls.append({
+            "payload": payload, "system": system, "output_config": output_config, "max_tokens": max_tokens,
+        })
         answer = self.answer(payload)
         return answer if isinstance(answer, str) else json.dumps(answer)
 
@@ -116,6 +123,8 @@ def test_the_model_sees_each_group_and_the_user_s_categories(session: Session, m
         }],
     }
     assert call["output_config"]["format"]["type"] == "json_schema"
+    # A reasoning model spends a provider's default budget thinking, and answers nothing.
+    assert call["max_tokens"] == MAX_OUTPUT_TOKENS
 
 
 def test_hallucinated_answers_are_ignored(session: Session, master_key: str):
@@ -135,11 +144,19 @@ def test_hallucinated_answers_are_ignored(session: Session, master_key: str):
     assert (result.skip, result.remaining) == (5, 0)
 
 
-@pytest.mark.parametrize("answer", ["", "not json", "[]", json.dumps({"groups": "nope"})])
-def test_an_empty_or_malformed_answer_files_nothing(session: Session, master_key: str, answer: str):
+def test_an_answer_filing_no_group_leaves_them_all(session: Session, master_key: str):
     _history(session, master_key)
-    result = _run(session, master_key, FakeProvider(lambda payload: answer))
+    result = _run(session, master_key, FakeProvider(lambda payload: {"groups": []}))
     assert (result.processed, result.rules_created, result.skip) == (5, 0, 5)
+
+
+@pytest.mark.parametrize("answer", ["", '{"groups": [{"group_id": "g1"', "[]", json.dumps({"groups": "nope"})])
+def test_an_unreadable_answer_fails_the_batch_instead_of_skipping_it(session: Session, master_key: str, answer: str):
+    _history(session, master_key)
+    with pytest.raises(UnreadableAnswerError):
+        _run(session, master_key, FakeProvider(lambda payload: answer))
+    assert load_categories(session, USER, master_key) == {}
+    assert len(uncategorized_groups(session, USER, master_key).groups) == 5
 
 
 def test_a_name_close_to_an_existing_category_reuses_it(session: Session, master_key: str):
