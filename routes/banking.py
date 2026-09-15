@@ -34,7 +34,11 @@ from dtos.banking import (
     BankSessionAccount,
     BankSessionSummary,
     BankSyncResponse,
+    BankTransactionItem,
     BankTransactionsResponse,
+    BankTransferDecisionCreate,
+    BankTransferQuestionMonth,
+    BankTransferQuestionsResponse,
     SyncStatus,
 )
 from models import User
@@ -48,6 +52,13 @@ from services.banking.flows import (
     UnknownAccountError,
     compute_real_flows,
     list_month_transactions,
+    list_transfer_counterparts,
+    transfer_patterns,
+)
+from services.banking.transfer_decisions import (
+    DecisionError,
+    TransactionNotFoundError,
+    record_decision,
 )
 from services.banking.errors import BankingApiError
 from services.banking.linking import (
@@ -533,6 +544,55 @@ def get_transactions(
         )
     except UnknownAccountError:
         raise HTTPException(status_code=404, detail="Compte bancaire introuvable.")
+
+
+@router.get("/transactions/{transaction_id}/counterparts", response_model=list[BankTransactionItem])
+def get_transfer_counterparts(
+    transaction_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """The operations that could be bound to this one, as a transfer or as its
+    cancellation. Ungated, like /transactions."""
+    try:
+        return list_transfer_counterparts(session, current_user.uuid, master_key, transaction_id)
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail="Opération introuvable.")
+
+
+@router.get("/transfer-questions", response_model=BankTransferQuestionsResponse)
+def get_transfer_questions(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """How many pairs wait for the user, and in which months. Ungated, like /transactions."""
+    questions = transfer_patterns(session, current_user.uuid, master_key).questions
+    return BankTransferQuestionsResponse(
+        total=sum(questions.values()),
+        months=[BankTransferQuestionMonth(period=p, count=n) for p, n in questions.items()],
+    )
+
+
+@router.post("/transfer-decisions", status_code=204)
+def post_transfer_decision(
+    body: BankTransferDecisionCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Settle two operations: one internal transfer, not one, or an operation
+    and its cancellation. Replaces what was decided about them before."""
+    try:
+        record_decision(
+            session, current_user.uuid, master_key,
+            body.transaction_id, body.other_transaction_id, body.kind,
+        )
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail="Opération introuvable.")
+    except DecisionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post(

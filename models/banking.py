@@ -234,6 +234,10 @@ class BankTransaction(SQLModel, table=True):
     value_date_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     transaction_date_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     remittance_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    # Blind index of the label's words (transactions.label_signature): groups
+    # the operations that read alike without the label ever leaving its cipher.
+    # NULL on rows stored before it existed, until transfer patterns backfill it.
+    label_signature_bidx: str | None = Field(default=None, sa_column=Column(TEXT, index=True))
 
     created_at: datetime = Field(
         default=sa.func.now(),
@@ -247,4 +251,65 @@ class BankTransaction(SQLModel, table=True):
             onupdate=sa.func.now(),
             nullable=False,
         )
+    )
+
+
+class BankTransferPatterns(SQLModel, table=True):
+    """What the whole history of a user's movements says about transfers,
+    derived and rebuilt from scratch, never updated in place.
+
+    Pairing a month only loads that month and its neighbours; whether a pair's
+    shape recurs is a question about every month at once. Reading the whole
+    history on every request would cost a full decryption of every row, so the
+    answer is kept here, with a digest of what it was built from: a reader
+    finding the digest outdated rebuilds before reading, so no write path can
+    leave it stale (see services/banking/transfer_patterns.py).
+    """
+    __tablename__ = "bank_transfer_patterns"
+    __table_args__ = {"extend_existing": True}
+
+    user_uuid_bidx: str = Field(sa_column=Column(TEXT, primary_key=True, nullable=False))
+    source_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    # JSON: pair shapes and how often each occurred, the words too common on
+    # each account side to tell a refund apart, and the open questions per month.
+    content_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    built_at: datetime = Field(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+
+
+class BankTransferDecision(SQLModel, table=True):
+    """What the user settled about two stored movements: one transfer between
+    their own accounts, not one, or a movement and its cancellation on a single
+    account.
+
+    The movements are referenced by a blind index of their uuid, never the uuid
+    itself: `bank_transactions` carries no user column, and a clear reference
+    here would tie its rows back to a user. Each leg keeps the tokens of its
+    label at the time of the decision, so what the decision teaches outlives
+    the rows themselves (see services/banking/transfer_decisions.py).
+    """
+    __tablename__ = "bank_transfer_decisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_uuid_bidx", "debit_ref_bidx", "credit_ref_bidx",
+            name="uq_bank_transfer_decisions_pair",
+        ),
+        {"extend_existing": True},
+    )
+
+    uuid: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        sa_column=Column(TEXT, primary_key=True, nullable=False),
+    )
+    user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
+    kind_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    debit_ref_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    credit_ref_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    # The same blind index as `BankTransaction.account_id_bidx`.
+    debit_account_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    credit_account_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    debit_tokens_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    credit_tokens_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    # Set by the service, to the microsecond: decisions are replayed in order.
+    created_at: datetime = Field(
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False)
     )

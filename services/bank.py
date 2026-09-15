@@ -12,7 +12,7 @@ from sqlmodel import Session, select
 
 from models import BankAccount, BankAccountType
 from models.account_history import AccountHistory
-from models.banking import BankAccountLink, BankSession, BankTransaction
+from models.banking import BankAccountLink, BankSession, BankTransaction, BankTransferDecision
 from models.currency import BASE_CURRENCY
 from models.enums import AccountCategory, FlowType
 from dtos import BankAccountCreate, BankAccountUpdate, BankAccountResponse, BankSummaryResponse
@@ -333,6 +333,15 @@ def delete_bank_account(
     # account that no longer exists.
     session.exec(
         sa.delete(BankTransaction).where(BankTransaction.account_id_bidx == account_id_bidx)
+    )
+    # And what the user decided about them, label words included.
+    session.exec(
+        sa.delete(BankTransferDecision).where(
+            sa.or_(
+                BankTransferDecision.debit_account_bidx == account_id_bidx,
+                BankTransferDecision.credit_account_bidx == account_id_bidx,
+            )
+        )
     )
 
     session.delete(account)

@@ -24,6 +24,8 @@ from models.banking import (
     BankAuthorization,
     BankSession,
     BankTransaction,
+    BankTransferDecision,
+    BankTransferPatterns,
     UserBankConnection,
 )
 from models.card import Card
@@ -314,6 +316,8 @@ def purge_account(session: Session, user: User, master_key: str) -> dict[str, in
     wipe(BankSession, BankSession.user_uuid_bidx == user_bidx)
     wipe(BankAuthorization, BankAuthorization.user_uuid_bidx == user_bidx)
     wipe(UserBankConnection, UserBankConnection.user_uuid_bidx == user_bidx)
+    wipe(BankTransferDecision, BankTransferDecision.user_uuid_bidx == user_bidx)
+    wipe(BankTransferPatterns, BankTransferPatterns.user_uuid_bidx == user_bidx)
 
     # 2. Asset valuations cascade from assets in Postgres, but assets themselves
     #    never cascade from the user, so the chain has to be walked by hand.

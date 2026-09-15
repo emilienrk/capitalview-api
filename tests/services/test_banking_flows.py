@@ -26,9 +26,14 @@ USER = "flows_user"
 ACCOUNT_A = "account-a"
 ACCOUNT_B = "account-b"
 
+# A transfer between two current accounts seen once is only suggested, never
+# deducted (flows._internal_transfer_legs). These tests are about pairing, so
+# the other side is a regulated savings account, which settles a pair by law.
+ACCOUNT_TYPES = {ACCOUNT_B: "LIVRET_A", "savings": "LIVRET_A"}
+
 
 def _raw(amount: str, direction: str, day: str, *, ref: str, status: str = "BOOK",
-         currency: str = "EUR") -> dict:
+         currency: str = "EUR", label: str = "peu importe") -> dict:
     return {
         "entry_reference": ref,
         "transaction_amount": {"currency": currency, "amount": amount},
@@ -37,7 +42,7 @@ def _raw(amount: str, direction: str, day: str, *, ref: str, status: str = "BOOK
         "booking_date": day,
         "value_date": day,
         "transaction_date": day,
-        "remittance_information": ["peu importe"],
+        "remittance_information": [label],
     }
 
 
@@ -74,7 +79,7 @@ def _bank_account(session: Session, master_key: str, account_uuid: str) -> None:
             institution_name_enc=None,
             identifier_enc=None,
             balance_enc=encrypt_data("0", master_key),
-            account_type_enc=encrypt_data("CHECKING", master_key),
+            account_type_enc=encrypt_data(ACCOUNT_TYPES.get(account_uuid, "CHECKING"), master_key),
         )
     )
     session.commit()
@@ -215,12 +220,13 @@ class TestInternalTransfers:
         assert result.outflow == Decimal("40.00")
 
     def test_a_same_account_pair_is_not_a_transfer(self, session: Session, master_key: str):
-        """A refund landing on the account it was spent from is real, both ways."""
+        """A credit of a payment's amount on the account it was spent from is real,
+        both ways, unless it names what was paid (test_banking_transfer_patterns)."""
         _link(session, master_key, ACCOUNT_A)
         _store(
             session, master_key, ACCOUNT_A,
-            _raw("60.00", "DBIT", "2026-03-05", ref="purchase"),
-            _raw("60.00", "CRDT", "2026-03-06", ref="refund"),
+            _raw("60.00", "DBIT", "2026-03-05", ref="purchase", label="CARTE LIBRAIRIE"),
+            _raw("60.00", "CRDT", "2026-03-06", ref="refund", label="VIR JEAN TIERS"),
         )
         result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 10))
         assert result.internal_transfers_excluded == 0
