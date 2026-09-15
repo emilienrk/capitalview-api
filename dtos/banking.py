@@ -538,3 +538,85 @@ class BankAICategorizeResult(BaseModel):
     # call passes it back as `skip`, or it would be handed the same groups again.
     skip: int
     remaining: int
+
+
+# ---------------------------------------------------------------------------
+# Real cashflow
+# ---------------------------------------------------------------------------
+
+
+class RealCashflowTotals(BaseModel):
+    """What moved, by nature, in the response's currency.
+
+    `income` and `expenses` are net of their own reversals (a refund filed under
+    an expense category lowers the expenses). `saving` and `investment` are net
+    too: money taken back from a savings account lowers `saving`. `internal`
+    and `neutralized` are only informative, and never part of any other figure.
+    """
+    income: Decimal = Decimal("0")
+    expenses: Decimal = Decimal("0")
+    saving: Decimal = Decimal("0")
+    investment: Decimal = Decimal("0")
+    internal: Decimal = Decimal("0")
+    neutralized: Decimal = Decimal("0")
+
+
+class RealCashflowMonth(RealCashflowTotals):
+    period: str  # YYYY-MM
+    operation_count: int = 0
+
+
+class RealCashflowCategoryShare(BaseModel):
+    # None for the operations nothing files.
+    category_id: str | None = None
+    name: str
+    amount: Decimal
+    count: int
+
+
+class RealCashflowBreakdown(BaseModel):
+    income: list[RealCashflowCategoryShare] = []
+    expenses: list[RealCashflowCategoryShare] = []
+    saving: list[RealCashflowCategoryShare] = []
+    investment: list[RealCashflowCategoryShare] = []
+
+
+class RealCashflowExpense(BaseModel):
+    id: str
+    operation_date: date | None
+    label: str | None
+    amount: Decimal
+    account_name: str
+    category_name: str | None = None
+
+
+class RealCashflowYear(BaseModel):
+    """GET /banking/real-cashflow — one year of completed months."""
+    year: int
+    currency: str
+    # From the year of the first stored operation to the current one.
+    years_available: list[int]
+    # Only completed months: the current one and later ones are left out.
+    months: list[RealCashflowMonth]
+    totals: RealCashflowTotals
+    # Over the months carrying data, not the months elapsed.
+    covered_months: int
+    monthly_mean: RealCashflowTotals
+    monthly_median: RealCashflowTotals
+    by_category: RealCashflowBreakdown
+    # Shown, never removed from the totals.
+    top_expenses: list[RealCashflowExpense]
+    other_currencies: list[BankFlowCurrencyTotal]
+
+
+class RealCashflowMonthDetail(BaseModel):
+    """GET /banking/real-cashflow/months/{period} — one completed month."""
+    period: str
+    currency: str
+    totals: RealCashflowTotals
+    operation_count: int
+    by_category: RealCashflowBreakdown
+    # The nearest completed months carrying data either side, if any.
+    previous_period: str | None = None
+    next_period: str | None = None
+    other_currencies: list[BankFlowCurrencyTotal]
