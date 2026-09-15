@@ -13,7 +13,12 @@ from sqlmodel import Session
 
 from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession
-from services.banking.flows import _months_back, compute_real_flows
+from services.banking.flows import (
+    UnknownAccountError,
+    _months_back,
+    compute_real_flows,
+    list_month_transactions,
+)
 from services.banking.transactions import store_transactions
 from services.encryption import encrypt_data, hash_index
 
@@ -380,3 +385,133 @@ class TestImportedAccount:
 
         result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
         assert result.account_count == 1
+
+
+class TestWindowEdge:
+    def test_a_transfer_straddling_the_window_start_still_pairs(
+        self, session: Session, master_key: str
+    ):
+        """Booked on the last day of the month before the window, landed on the
+        first day of it: without the month past the edge, the credit would read
+        as income only because it sits on the edge."""
+        _link(session, master_key, ACCOUNT_A)
+        _link(session, master_key, ACCOUNT_B)
+        _store(session, master_key, ACCOUNT_A, _raw("300.00", "DBIT", "2026-01-31", ref="out"))
+        _store(session, master_key, ACCOUNT_B, _raw("300.00", "CRDT", "2026-02-02", ref="in"))
+
+        result = compute_real_flows(session, USER, master_key, months=2, today=date(2026, 3, 10))
+        assert result.inflow == Decimal("0")
+        assert result.internal_transfers_excluded == 1
+
+
+class TestAccountFilter:
+    def test_the_totals_narrow_to_one_account(self, session: Session, master_key: str):
+        _link(session, master_key, ACCOUNT_A)
+        _link(session, master_key, ACCOUNT_B)
+        _store(session, master_key, ACCOUNT_A, _raw("1000.00", "CRDT", "2026-03-01", ref="pay"))
+        _store(session, master_key, ACCOUNT_B, _raw("30.00", "DBIT", "2026-03-02", ref="shop"))
+
+        result = compute_real_flows(
+            session, USER, master_key, months=1, today=date(2026, 3, 31), account_id=ACCOUNT_B,
+        )
+        assert result.account_count == 1
+        assert result.inflow == Decimal("0")
+        assert result.outflow == Decimal("30.00")
+
+    def test_a_transfer_still_pairs_with_the_account_filtered_out(
+        self, session: Session, master_key: str
+    ):
+        """The other leg is on another account by definition: pairing only
+        within the filter would turn every move to savings back into spending."""
+        _link(session, master_key, ACCOUNT_A)
+        _link(session, master_key, ACCOUNT_B)
+        _store(session, master_key, ACCOUNT_A, _raw("400.00", "DBIT", "2026-03-10", ref="out"))
+        _store(session, master_key, ACCOUNT_B, _raw("400.00", "CRDT", "2026-03-10", ref="in"))
+
+        result = compute_real_flows(
+            session, USER, master_key, months=1, today=date(2026, 3, 31), account_id=ACCOUNT_A,
+        )
+        assert result.outflow == Decimal("0")
+        assert result.internal_transfers_excluded == 1
+        assert result.internal_transfers_amount == Decimal("400.00")
+
+    def test_an_account_of_someone_else_is_refused(self, session: Session, master_key: str):
+        _link(session, master_key, ACCOUNT_A)
+        with pytest.raises(UnknownAccountError):
+            compute_real_flows(session, USER, master_key, account_id="not-mine")
+
+
+class TestMonthTransactions:
+    def test_the_month_is_listed_newest_first_with_its_label(
+        self, session: Session, master_key: str
+    ):
+        _link(session, master_key, ACCOUNT_A)
+        _store(
+            session, master_key, ACCOUNT_A,
+            {**_raw("850.00", "DBIT", "2026-03-03", ref="rent"), "remittance_information": ["LOYER MARS"]},
+            _raw("2000.00", "CRDT", "2026-03-01", ref="salary"),
+            _raw("12.00", "DBIT", "2026-02-27", ref="february"),
+        )
+        result = list_month_transactions(session, USER, master_key, period="2026-03")
+
+        assert [t.operation_date for t in result.transactions] == [date(2026, 3, 3), date(2026, 3, 1)]
+        rent = result.transactions[0]
+        assert (rent.label, rent.amount, rent.is_credit) == ("LOYER MARS", Decimal("850.00"), False)
+        assert rent.account_id == ACCOUNT_A
+        assert rent.account_name == "Compte courant"
+
+    def test_the_totals_match_the_flows_for_that_month(self, session: Session, master_key: str):
+        _link(session, master_key, ACCOUNT_A)
+        _link(session, master_key, ACCOUNT_B)
+        _store(
+            session, master_key, ACCOUNT_A,
+            _raw("2000.00", "CRDT", "2026-03-01", ref="salary"),
+            _raw("400.00", "DBIT", "2026-03-10", ref="to-b"),
+            _raw("30.00", "DBIT", "2026-03-12", ref="pending", status="PDNG"),
+        )
+        _store(session, master_key, ACCOUNT_B, _raw("400.00", "CRDT", "2026-03-10", ref="from-a"))
+
+        listed = list_month_transactions(session, USER, master_key, period="2026-03")
+        [month] = compute_real_flows(
+            session, USER, master_key, months=1, today=date(2026, 3, 31)
+        ).months
+        assert (listed.inflow, listed.outflow, listed.net) == (month.inflow, month.outflow, month.net)
+        assert listed.pending_count == 1
+        assert listed.internal_transfers_excluded == 1
+
+    def test_a_transfer_is_flagged_with_the_other_account_not_dropped(
+        self, session: Session, master_key: str
+    ):
+        _link(session, master_key, ACCOUNT_A)
+        _link(session, master_key, ACCOUNT_B)
+        _store(session, master_key, ACCOUNT_A, _raw("400.00", "DBIT", "2026-03-10", ref="out"))
+        _store(session, master_key, ACCOUNT_B, _raw("400.00", "CRDT", "2026-03-10", ref="in"))
+
+        result = list_month_transactions(
+            session, USER, master_key, period="2026-03", account_id=ACCOUNT_A,
+        )
+        [transfer] = result.transactions
+        assert transfer.transfer_account_id == ACCOUNT_B
+        assert result.outflow == Decimal("0")
+
+    def test_a_pending_operation_is_listed_and_flagged(self, session: Session, master_key: str):
+        _link(session, master_key, ACCOUNT_A)
+        _store(session, master_key, ACCOUNT_A, _raw("30.00", "DBIT", "2026-03-02", ref="p", status="PDNG"))
+
+        [pending] = list_month_transactions(session, USER, master_key, period="2026-03").transactions
+        assert pending.is_pending is True
+
+    def test_an_account_without_movements_lists_nothing(self, session: Session, master_key: str):
+        from dtos.bank import BankAccountCreate
+        from models.enums import BankAccountType
+        from services.bank import create_bank_account
+
+        empty = create_bank_account(
+            session,
+            BankAccountCreate(name="PEL", balance="0", account_type=BankAccountType.PEL),
+            USER, master_key,
+        )
+        result = list_month_transactions(
+            session, USER, master_key, period="2026-03", account_id=empty.id,
+        )
+        assert result.transactions == []

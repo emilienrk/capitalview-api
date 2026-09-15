@@ -9,9 +9,10 @@ whatever cookies ride along under SameSite=Lax. It authenticates itself via
 
 import base64
 import html
+from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlmodel import Session
 
@@ -33,6 +34,7 @@ from dtos.banking import (
     BankSessionAccount,
     BankSessionSummary,
     BankSyncResponse,
+    BankTransactionsResponse,
     SyncStatus,
 )
 from models import User
@@ -42,7 +44,11 @@ from services.banking.credentials import (
     upsert_connection,
 )
 from services.banking.export_import import import_enablebanking_export
-from services.banking.flows import compute_real_flows
+from services.banking.flows import (
+    UnknownAccountError,
+    compute_real_flows,
+    list_month_transactions,
+)
 from services.banking.errors import BankingApiError
 from services.banking.linking import (
     AccountNotFoundInSessionError,
@@ -483,6 +489,7 @@ def get_flows(
     master_key: Annotated[str, Depends(get_master_key)],
     months: int = 12,
     exclude_internal_transfers: bool = True,
+    account_id: str | None = None,
     session: Session = Depends(get_session),
 ):
     """Observed inflow and outflow per month, from the stored transactions.
@@ -490,13 +497,42 @@ def get_flows(
     Read-only and ungated like the other reads: it touches no credentials and
     reaches no bank, and someone who opted back out still owns this history.
     """
-    return compute_real_flows(
-        session,
-        current_user.uuid,
-        master_key,
-        months=months,
-        exclude_internal_transfers=exclude_internal_transfers,
-    )
+    try:
+        return compute_real_flows(
+            session,
+            current_user.uuid,
+            master_key,
+            months=months,
+            exclude_internal_transfers=exclude_internal_transfers,
+            account_id=account_id,
+        )
+    except UnknownAccountError:
+        raise HTTPException(status_code=404, detail="Compte bancaire introuvable.")
+
+
+@router.get("/transactions", response_model=BankTransactionsResponse)
+def get_transactions(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    period: Annotated[str | None, Query(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")] = None,
+    account_id: str | None = None,
+    session: Session = Depends(get_session),
+):
+    """One month of stored operations, newest first. Ungated, like /flows.
+
+    A month rather than a page: dates are stored encrypted, and the month's
+    blind index is the only date a query can filter on.
+    """
+    try:
+        return list_month_transactions(
+            session,
+            current_user.uuid,
+            master_key,
+            period=period or date.today().strftime("%Y-%m"),
+            account_id=account_id,
+        )
+    except UnknownAccountError:
+        raise HTTPException(status_code=404, detail="Compte bancaire introuvable.")
 
 
 @router.post(
