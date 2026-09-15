@@ -370,3 +370,38 @@ class BankTransferQuestionsResponse(BaseModel):
     whole history, month by month."""
     total: int
     months: list[BankTransferQuestionMonth]
+
+
+# ---------------------------------------------------------------------------
+# Categories
+# ---------------------------------------------------------------------------
+
+
+class CategoryNature(str, Enum):
+    """How the operations of a category count in the real cashflow."""
+    EXPENSE = "EXPENSE"
+    INCOME = "INCOME"
+    SAVING = "SAVING"
+    INVESTMENT = "INVESTMENT"
+
+
+class CategoryOrigin(str, Enum):
+    """Where a category was created, which decides where it is offered."""
+    CASHFLOW = "cashflow"
+    BANK = "bank"
+    AI = "ai"
+
+
+class CategoryScope(str, Enum):
+    """The screen asking which categories to offer."""
+    BANK = "bank"
+    PLANNED = "planned"
+
+
+class AvailableCategory(BaseModel):
+    """A category a screen may offer. `id` is None for a category that only
+    exists as the text of a declared cashflow, until it is picked in Banque."""
+    id: str | None = None
+    name: str
+    nature: CategoryNature
+    origin: CategoryOrigin
