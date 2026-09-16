@@ -8,11 +8,13 @@ from decimal import Decimal
 import pytest
 from sqlmodel import Session
 
+from dtos.banking import CashflowType, TypeScope
 from models.bank import BankAccount
-from services.banking.flows import list_month_transactions
+from services.banking.flows import list_month_transactions, set_transaction_type
 from services.banking.real_cashflow import PeriodNotCompletedError, real_cashflow_month, real_cashflow_year
 from services.encryption import encrypt_data
 from tests.services.test_banking_flows import USER, _link, _raw, _store
+from tests.services.test_banking_transfer_patterns import _top_up
 
 CURRENT, LIVRET, LDDS = "current", "savings", "ldds"  # "savings" is a Livret A
 
@@ -160,3 +162,85 @@ def test_a_month_offers_its_neighbours_among_completed_months_with_data(session:
 def test_nothing_stored_is_an_empty_year(session: Session, master_key: str):
     year = _year(session, master_key)
     assert (year.years_available, year.covered_months, [m.period for m in year.months]) == ([], 0, ["2026-01", "2026-02", "2026-03"])
+
+
+def _answer(session: Session, master_key: str, label: str, kind, period: str = "2026-03") -> None:
+    [target] = [tx for tx in list_month_transactions(session, USER, master_key, period).transactions if tx.label == label][-1:]
+    set_transaction_type(session, USER, master_key, target.id, kind, TypeScope.LABEL)
+
+
+def test_net_saving_adds_a_livret_of_the_app_and_an_answer_for_an_account_outside_it(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        (CURRENT, "2026-03-05", "300.00", "DBIT", "VIR Virement depuis Compte courant"),
+        (LIVRET, "2026-03-05", "300.00", "CRDT", "VIR Virement depuis Compte courant"),
+        (LIVRET, "2026-03-20", "50.00", "DBIT", "VIR Virement depuis Compte epargne"),
+        (CURRENT, "2026-03-20", "50.00", "CRDT", "VIR Virement depuis Compte epargne"),
+        (CURRENT, "2026-03-25", "200.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
+    )
+    assert _figures(_year(session, master_key).totals) == {"saving": Decimal("250.00"), "expenses": Decimal("200.00")}
+
+    _answer(session, master_key, "VIR INST ROUKINE EMILIEN", CashflowType.SAVING)
+
+    assert _figures(_year(session, master_key).totals) == {"saving": Decimal("450.00")}
+
+
+def test_a_transfer_from_a_livret_to_an_ldds_is_not_saving(session: Session, master_key: str):
+    _link(session, master_key, LDDS)
+    _as_ldds(session, master_key)
+    _ops(
+        session, master_key,
+        (LIVRET, "2026-03-05", "300.00", "DBIT", "VIR Virement interne depuis LIVRET A"),
+        (LDDS, "2026-03-05", "300.00", "CRDT", "VIR Virement interne depuis LIVRET A"),
+    )
+    assert _figures(_year(session, master_key).totals) == {"neutral": Decimal("300.00")}
+
+
+def test_livret_interest_is_income(session: Session, master_key: str):
+    _ops(session, master_key, (LIVRET, "2026-03-31", "64.00", "CRDT", "*INTER.BRUTS 2025"))
+    assert _figures(_year(session, master_key).totals) == {"income": Decimal("64.00")}
+
+
+def test_a_refund_lowers_the_expenses_and_the_net_follows(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        (CURRENT, "2026-03-01", "2000.00", "CRDT", "VIR SEPA EMPLOYEUR SALAIRE"),
+        (CURRENT, "2026-03-02", "120.00", "DBIT", "CARTE 01/03/26 RESTAURANT DU LAC CB*08"),
+        (CURRENT, "2026-03-04", "40.00", "CRDT", "Virement de : TITOUAN TIERS"),
+        (CURRENT, "2026-03-06", "500.00", "DBIT", "VIR SEPA COURTIER EN LIGNE"),
+    )
+    _answer(session, master_key, "Virement de : TITOUAN TIERS", CashflowType.EXPENSE)
+    _answer(session, master_key, "VIR SEPA COURTIER EN LIGNE", CashflowType.INVESTMENT)
+
+    totals = _year(session, master_key).totals
+
+    assert _figures(totals) == {"income": Decimal("2000.00"), "expenses": Decimal("80.00"), "investment": Decimal("500.00")}
+    assert totals.net == Decimal("1420.00")
+
+
+def test_a_recurring_top_up_between_current_accounts_is_left_out(session: Session, master_key: str):
+    _ops(session, master_key, *_top_up("01", "05", "20.00"), *_top_up("02", "10", "35.50"), *_top_up("03", "14", "12.00"))
+    year = real_cashflow_year(session, USER, master_key, 2025, today=TODAY)
+    assert _figures(year.totals) == {"neutral": Decimal("67.50")}
+
+
+def test_a_suggested_pair_counts_by_default_and_is_flagged(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        ("neobank", "2026-03-16", "50.00", "DBIT", "out"),
+        (CURRENT, "2026-03-17", "50.00", "CRDT", "in"),
+    )
+    year = _year(session, master_key)
+    assert _figures(year.totals) == {"income": Decimal("50.00"), "expenses": Decimal("50.00")}
+    assert (year.open_questions, year.months[2].open_questions) == (1, 1)
+
+
+def test_a_question_asked_in_a_later_year_is_open_on_the_earlier_one(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        (CURRENT, "2025-12-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-03-05", "90.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
+    )
+    earlier = real_cashflow_year(session, USER, master_key, 2025, today=TODAY)
+    assert (earlier.open_questions, earlier.months[11].open_questions) == (1, 1)
+    assert real_cashflow_month(session, USER, master_key, "2026-03", today=TODAY).open_questions == 1

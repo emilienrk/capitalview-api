@@ -447,22 +447,28 @@ class BankTypeRuleItem(BaseModel):
 
 
 class RealCashflowTotals(BaseModel):
-    """What moved, by nature, in the response's currency.
+    """What moved, by cashflow type, in the response's currency.
 
-    `income` and `expenses` are net of their own reversals. `saving` and `investment` are net
-    too: money taken back from a savings account lowers `saving`. `neutral` is
-    only informative, and never part of any other figure.
+    `income` and `expenses` are net of their own reversals: a refund lowers the
+    expenses. `saving` and `investment` are net too: money taken back from a
+    savings account lowers `saving`. `neutral` is only informative, and never
+    part of any other figure. `net` is what is left once spent, set aside and
+    invested.
     """
     income: Decimal = Decimal("0")
     expenses: Decimal = Decimal("0")
     saving: Decimal = Decimal("0")
     investment: Decimal = Decimal("0")
     neutral: Decimal = Decimal("0")
+    net: Decimal = Decimal("0")
 
 
 class RealCashflowMonth(RealCashflowTotals):
     period: str  # YYYY-MM
     operation_count: int = 0
+    # Suggested pairs and operations waiting on a flow question: what can
+    # still move this month's figures.
+    open_questions: int = 0
 
 
 class RealCashflowExpense(BaseModel):
@@ -484,6 +490,7 @@ class RealCashflowYear(BaseModel):
     totals: RealCashflowTotals
     # Over the months carrying data, not the months elapsed.
     covered_months: int
+    open_questions: int = 0
     monthly_mean: RealCashflowTotals
     monthly_median: RealCashflowTotals
     # Shown, never removed from the totals.
@@ -497,6 +504,7 @@ class RealCashflowMonthDetail(BaseModel):
     currency: str
     totals: RealCashflowTotals
     operation_count: int
+    open_questions: int = 0
     # The nearest completed months carrying data either side, if any.
     previous_period: str | None = None
     next_period: str | None = None
