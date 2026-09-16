@@ -36,6 +36,13 @@
 - Le **moyen de paiement** (`operation_type` : carte, virement, prélèvement…) est conservé : affichage, filtre, et **seulement** pour décider si un débit pose une question de flux (R4b). Jamais lu par un total ni par la détection d'abonnements.
 - **Rien n'est en production** ni poussé. La migration `b1c2d3e4f5a6` de l'ancien plan a été supprimée et la base de dev redescendue à `28fdf21d9e17` (tête de `main`) le 2026-09-16 : une seule migration neuve sera créée.
 
+## Amendements après revue (2026-09-16)
+
+- **Deux lots.** Lot 1 : R0, R1 (sans `bank_subscriptions`), R2, R3, R4, R4b, R6, W0, W1, W2, W4 — types, questions de flux, Réel. Lot 2 : R5, W3 et la table `bank_subscriptions` — abonnements, plus heuristiques, livrés ensuite. En lot 1, `subscriptions`, `is_subscription`, `subscription_*` et le badge « Abonnement » sont absents, pas stubés.
+- **Fraîcheur.** `transfer_patterns.source_digest` inclut `bank_type_rules` (nombre, `max(created_at)` ; remplacer une règle = supprimer puis insérer) et, en lot 2, `bank_subscriptions` (nombre, `max(updated_at)`). Test (mutation) : répondre à une question fait tomber le total de `/banking/transfer-questions` sans qu'aucune opération ne change.
+- **Questions de flux calculées sur l'historique.** La reconstruction des patterns calcule, par groupe (compte, sens, signature) sans règle exacte ni proche : l'opération porteuse (la dernière finale) et le nombre d'opérations du groupe par mois. Stocké dans les patterns (chiffrés). La liste du mois pose `flow_question` sur la porteuse ; les puces et le badge comptent la question au mois de la porteuse ; `open_questions` d'une période du Réel compte les opérations de la période dont le groupe a une question ouverte, plus les paires `suggested` de la période.
+- **Libellé proche, définition exacte.** Mots = `label_words` ; mots informatifs = mots − `patterns.common(compte, sens)` (> `COMMON_WORD_SHARE` des opérations du côté, ≥ `COMMON_WORD_MIN_COUNT`) ; score = Jaccard (∩ / ∪) des mots informatifs de la ligne et de la règle ; proche si score ≥ `transfer_decisions.SIMILARITY_THRESHOLD`. Plusieurs règles proches : meilleur score, puis la plus récente. Aucun mot informatif → jamais proche.
+
 ## Mesures qui fondent le plan (dump réel du 2026-09-16)
 
 4 263 mouvements, 4 comptes (Bourso courant, Revolut, Livret A, LDDS), tous en EUR. 3 624 opérations finales non appariées (hors `recurring`, `savings`, `refund`) ; 52 paires encore `suggested`.
