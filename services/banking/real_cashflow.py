@@ -4,8 +4,8 @@ and invested, by completed month and by year.
 
 The counterpart of the declared cashflow (`services/cashflow.py`). No figure
 here has a rule of its own: movements are loaded and paired by `flows.py`, and
-each one's category and nature come from the very reading the Opérations list
-shows (`flows._filed`).
+how each one counts comes from the very reading the Opérations list shows
+(`flows._filed`).
 
 Only completed months count. A month in progress reads as a drop in every
 figure, and an average taken over it would carry that drop into the year.
@@ -25,8 +25,6 @@ from sqlmodel import Session, select
 from dtos.banking import (
     BankFlowCurrencyTotal,
     OperationNature,
-    RealCashflowBreakdown,
-    RealCashflowCategoryShare,
     RealCashflowExpense,
     RealCashflowMonth,
     RealCashflowMonthDetail,
@@ -49,7 +47,6 @@ from services.banking.flows import (
 from services.encryption import decrypt_data, hash_index
 
 TOP_EXPENSES = 5
-UNCATEGORIZED = "Sans catégorie"
 # How far back a stored period is looked for. Each candidate is one HMAC, not a
 # decryption: the periods are found without reading a single row.
 _HISTORY_YEARS = 40
@@ -62,7 +59,6 @@ _FIELD_OF = {
     OperationNature.INTERNAL: "internal",
     OperationNature.NEUTRALIZED: "neutralized",
 }
-_BREAKDOWN_NATURES = (OperationNature.INCOME, OperationNature.EXPENSE, OperationNature.SAVING, OperationNature.INVESTMENT)
 
 
 class PeriodNotCompletedError(ValueError):
@@ -109,7 +105,6 @@ def real_cashflow_year(
         covered_months=len(covered),
         monthly_mean=_per_month(covered, lambda values: sum(values, Decimal("0")) / len(values)),
         monthly_median=_per_month(covered, median),
-        by_category=reading.breakdown(),
         top_expenses=reading.top_expenses(),
         other_currencies=reading.other_currencies(),
     )
@@ -127,8 +122,7 @@ def real_cashflow_month(
     later = [p for p in stored if p > period]
     if not stored:
         return RealCashflowMonthDetail(
-            period=period, currency="EUR", totals=RealCashflowTotals(), operation_count=0,
-            by_category=RealCashflowBreakdown(), other_currencies=[],
+            period=period, currency="EUR", totals=RealCashflowTotals(), operation_count=0, other_currencies=[],
         )
 
     reading = _read(session, user_uuid, master_key, accounts, [period])
@@ -138,7 +132,6 @@ def real_cashflow_month(
         currency=reading.currency,
         totals=_totals(tally),
         operation_count=tally.count,
-        by_category=reading.breakdown(),
         previous_period=earlier[-1] if earlier else None,
         next_period=later[0] if later else None,
         other_currencies=reading.other_currencies(),
@@ -154,19 +147,8 @@ def real_cashflow_month(
 class _Reading:
     currency: str
     months: dict[str, _Tally]
-    categories: dict[OperationNature, dict[str | None, list]]
     expenses: list[tuple[Decimal, RealCashflowExpense]]
     others: dict[str, dict[str, Decimal]]
-
-    def breakdown(self) -> RealCashflowBreakdown:
-        shares = {}
-        for nature in _BREAKDOWN_NATURES:
-            entries = [
-                RealCashflowCategoryShare(category_id=key, name=name, amount=amount, count=count)
-                for key, (name, amount, count) in self.categories[nature].items()
-            ]
-            shares[_FIELD_OF[nature]] = sorted(entries, key=lambda e: (-e.amount, e.name))
-        return RealCashflowBreakdown(**shares)
 
     def top_expenses(self) -> list[RealCashflowExpense]:
         ranked = sorted(self.expenses, key=lambda e: (-e[0], e[1].operation_date or date.min, e[1].id))
@@ -196,7 +178,6 @@ def _read(session: Session, user_uuid: str, master_key: str, accounts: _Accounts
     reading = _Reading(
         currency=currency,
         months={p: _Tally() for p in periods},
-        categories={nature: {} for nature in _BREAKDOWN_NATURES},
         expenses=[],
         others=defaultdict(lambda: {"in": Decimal("0"), "out": Decimal("0")}),
     )
@@ -205,27 +186,20 @@ def _read(session: Session, user_uuid: str, master_key: str, accounts: _Accounts
         if movement.currency != currency:
             reading.others[movement.currency]["in" if movement.is_credit else "out"] += movement.amount
             continue
-        label = _label(movement, master_key)
-        resolution, nature = _filed(movements, transfer_legs, index, label, filing)
+        nature = _filed(movements, transfer_legs, index, filing)
         if not _counted(movements, transfer_legs, index, nature, filing.savings):
             continue
         amount = _signed(movement, nature)
         tally = reading.months[movement.period]
         tally.totals[_FIELD_OF[nature]] += amount
         tally.count += 1
-        if nature in reading.categories:
-            category = resolution.category
-            key = category.uuid if category else None
-            name, total, count = reading.categories[nature].get(key, (category.name if category else UNCATEGORIZED, Decimal("0"), 0))
-            reading.categories[nature][key] = (name, total + amount, count + 1)
         if nature is OperationNature.EXPENSE and not movement.is_credit:
             reading.expenses.append((movement.amount, RealCashflowExpense(
                 id=movement.row.uuid,
                 operation_date=movement.day,
-                label=label,
+                label=_label(movement, master_key),
                 amount=movement.amount,
                 account_name=names[movement.account_bidx],
-                category_name=resolution.category.name if resolution.category else None,
             )))
     return reading
 
@@ -308,7 +282,6 @@ def _empty_year(year: int, years_available: list[int], periods: list[str]) -> Re
         covered_months=0,
         monthly_mean=RealCashflowTotals(),
         monthly_median=RealCashflowTotals(),
-        by_category=RealCashflowBreakdown(),
         top_expenses=[],
         other_currencies=[],
     )

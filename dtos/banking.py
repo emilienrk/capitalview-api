@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 
 from dtos.bank import ReconciliationStatus
 
@@ -267,54 +267,6 @@ class BankTransferStatus(str, Enum):
     REFUND = "refund"
 
 
-# ---------------------------------------------------------------------------
-# Categories
-# ---------------------------------------------------------------------------
-
-
-class CategoryNature(str, Enum):
-    """How the operations of a category count in the real cashflow."""
-    EXPENSE = "EXPENSE"
-    INCOME = "INCOME"
-    SAVING = "SAVING"
-    INVESTMENT = "INVESTMENT"
-
-
-class CategoryOrigin(str, Enum):
-    """Where a category was created, which decides where it is offered."""
-    CASHFLOW = "cashflow"
-    BANK = "bank"
-    AI = "ai"
-
-
-class CategoryScope(str, Enum):
-    """The screen asking which categories to offer."""
-    BANK = "bank"
-    PLANNED = "planned"
-
-
-class AvailableCategory(BaseModel):
-    """A category a screen may offer. `id` is None for a category that only
-    exists as the text of a declared cashflow, until it is picked in Banque."""
-    id: str | None = None
-    name: str
-    nature: CategoryNature
-    origin: CategoryOrigin
-
-
-class RuleSource(str, Enum):
-    """Who wrote a category rule."""
-    USER = "user"
-    AI = "ai"
-
-
-class CategorySource(str, Enum):
-    """What filed an operation under its category."""
-    MANUAL = "manual"
-    USER_RULE = "user_rule"
-    AI_RULE = "ai_rule"
-
-
 class OperationNature(str, Enum):
     """How an operation counts in the real cashflow. Only EXPENSE and INCOME
     count as such; SAVING and INVESTMENT are totalled apart, INTERNAL and
@@ -359,12 +311,6 @@ class BankTransactionItem(BaseModel):
     transfer_status: BankTransferStatus | None = None
     operation_type: OperationType = OperationType.UNKNOWN
     nature: OperationNature | None = None
-    # The category the operation is filed under, and what filed it. A manual
-    # source with no category is the user saying "none".
-    category_id: str | None = None
-    category_name: str | None = None
-    category_source: CategorySource | None = None
-    rule_id: str | None = None
 
 
 class BankTransactionsResponse(BaseModel):
@@ -441,106 +387,6 @@ class BankTransferQuestionsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Category management
-# ---------------------------------------------------------------------------
-
-
-class BankCategoryItem(BaseModel):
-    id: str
-    name: str
-    nature: CategoryNature
-    origin: CategoryOrigin
-    rule_count: int = 0
-
-
-class BankCategoryCreate(BaseModel):
-    """POST /banking/categories. `from_cashflow` materialises the category a
-    declared cashflow carries under that name, its nature read from them."""
-    name: str
-    nature: CategoryNature | None = None
-    from_cashflow: bool = False
-
-    @model_validator(mode="after")
-    def _nature_unless_from_cashflow(self):
-        if self.nature is None and not self.from_cashflow:
-            raise ValueError("nature is required")
-        return self
-
-
-class BankCategoryUpdate(BaseModel):
-    name: str | None = None
-    nature: CategoryNature | None = None
-
-
-class BankCategoryRuleItem(BaseModel):
-    id: str
-    tokens: list[str]
-    category_id: str
-    category_name: str | None = None
-    source: RuleSource
-    created_at: datetime
-
-
-class BankCategoryAssign(BaseModel):
-    """PUT /banking/transactions/{id}/category.
-
-    Without `apply_to_similar`, files this one operation (None = no category).
-    With it, writes the user's rule on `tokens` — the proposed words when
-    omitted — and drops this operation's own override.
-    """
-    category_id: str | None = None
-    apply_to_similar: bool = False
-    tokens: list[str] | None = None
-
-
-class BankRuleWords(BaseModel):
-    """GET /banking/transactions/{id}/rule-tokens — what a rule for this
-    operation could require: every word of its label, rarest first, and the
-    ones proposed."""
-    words: list[str]
-    proposed: list[str]
-
-
-class BankCategoryAssignResult(BaseModel):
-    transaction: BankTransactionItem
-    # Operations the rule now files, across the whole history; 1 or 0 without a rule.
-    filed_count: int
-
-
-class BankUncategorizedGroup(BaseModel):
-    """Operations reading alike that nothing files yet."""
-    signature: str
-    # The most recent of them, to file the group from.
-    transaction_id: str
-    label: str
-    is_credit: bool
-    count: int
-    currency: str
-    # In `currency`, over the operations in it.
-    total: Decimal
-    median: Decimal
-    last_date: date | None = None
-    tokens: list[str]
-
-
-class BankUncategorizedResponse(BaseModel):
-    total_groups: int
-    total_operations: int
-    groups: list[BankUncategorizedGroup]
-
-
-class BankAICategorizeResult(BaseModel):
-    """POST /banking/categorize/ai — one batch of the heaviest groups left to file."""
-    processed: int
-    rules_created: int
-    categories_created: int
-    # Groups at the head of the queue this run already left unfiled: the next
-    # call passes it back as `skip`, or it would be handed the same groups again.
-    skip: int
-    remaining: int
-
-
-# ---------------------------------------------------------------------------
 # Real cashflow
 # ---------------------------------------------------------------------------
 
@@ -548,8 +394,7 @@ class BankAICategorizeResult(BaseModel):
 class RealCashflowTotals(BaseModel):
     """What moved, by nature, in the response's currency.
 
-    `income` and `expenses` are net of their own reversals (a refund filed under
-    an expense category lowers the expenses). `saving` and `investment` are net
+    `income` and `expenses` are net of their own reversals. `saving` and `investment` are net
     too: money taken back from a savings account lowers `saving`. `internal`
     and `neutralized` are only informative, and never part of any other figure.
     """
@@ -566,28 +411,12 @@ class RealCashflowMonth(RealCashflowTotals):
     operation_count: int = 0
 
 
-class RealCashflowCategoryShare(BaseModel):
-    # None for the operations nothing files.
-    category_id: str | None = None
-    name: str
-    amount: Decimal
-    count: int
-
-
-class RealCashflowBreakdown(BaseModel):
-    income: list[RealCashflowCategoryShare] = []
-    expenses: list[RealCashflowCategoryShare] = []
-    saving: list[RealCashflowCategoryShare] = []
-    investment: list[RealCashflowCategoryShare] = []
-
-
 class RealCashflowExpense(BaseModel):
     id: str
     operation_date: date | None
     label: str | None
     amount: Decimal
     account_name: str
-    category_name: str | None = None
 
 
 class RealCashflowYear(BaseModel):
@@ -603,7 +432,6 @@ class RealCashflowYear(BaseModel):
     covered_months: int
     monthly_mean: RealCashflowTotals
     monthly_median: RealCashflowTotals
-    by_category: RealCashflowBreakdown
     # Shown, never removed from the totals.
     top_expenses: list[RealCashflowExpense]
     other_currencies: list[BankFlowCurrencyTotal]
@@ -615,7 +443,6 @@ class RealCashflowMonthDetail(BaseModel):
     currency: str
     totals: RealCashflowTotals
     operation_count: int
-    by_category: RealCashflowBreakdown
     # The nearest completed months carrying data either side, if any.
     previous_period: str | None = None
     next_period: str | None = None

@@ -22,8 +22,6 @@ from models.bank import BankAccount
 from models.banking import (
     BankAccountLink,
     BankAuthorization,
-    BankCategory,
-    BankCategoryRule,
     BankSession,
     BankTransaction,
     BankTransferDecision,
@@ -138,45 +136,6 @@ def _export_account_history(
     return snapshots
 
 
-def _export_bank_categories(session: Session, user_bidx: str, master_key: str) -> list[dict]:
-    rows = session.exec(
-        select(BankCategory)
-        .where(BankCategory.user_uuid_bidx == user_bidx)
-        .order_by(BankCategory.created_at)
-    ).all()
-    return [
-        {
-            "uuid": row.uuid,
-            "name": _safe_decrypt(row.name_enc, master_key),
-            "nature": _safe_decrypt(row.nature_enc, master_key),
-            "origin": _safe_decrypt(row.origin_enc, master_key),
-            "created_at": row.created_at,
-        }
-        for row in rows
-    ]
-
-
-def _export_bank_category_rules(session: Session, user_bidx: str, master_key: str) -> list[dict]:
-    rows = session.exec(
-        select(BankCategoryRule)
-        .where(BankCategoryRule.user_uuid_bidx == user_bidx)
-        .order_by(BankCategoryRule.created_at)
-    ).all()
-    rules = []
-    for row in rows:
-        tokens = _safe_decrypt(row.tokens_enc, master_key)
-        rules.append(
-            {
-                "uuid": row.uuid,
-                "tokens": json.loads(tokens) if tokens else None,
-                "category_id": _safe_decrypt(row.category_ref_enc, master_key),
-                "source": _safe_decrypt(row.source_enc, master_key),
-                "created_at": row.created_at,
-            }
-        )
-    return rules
-
-
 def export_account_data(session: Session, user: User, master_key: str) -> dict:
     """Build the full, decrypted picture of an account.
 
@@ -254,7 +213,6 @@ def export_account_data(session: Session, user: User, master_key: str) -> dict:
                         "transaction_date": _safe_decrypt(tx.transaction_date_enc, master_key),
                         "remittance": _safe_decrypt(tx.remittance_enc, master_key),
                         "operation_type": _safe_decrypt(tx.operation_type_enc, master_key),
-                        "category_id": _safe_decrypt(tx.category_ref_enc, master_key),
                     }
                     for tx in tx_rows
                 ],
@@ -276,8 +234,6 @@ def export_account_data(session: Session, user: User, master_key: str) -> dict:
         },
         "settings": get_settings(session, user.uuid, master_key),
         "bank_accounts": bank_accounts,
-        "bank_categories": _export_bank_categories(session, user_bidx, master_key),
-        "bank_category_rules": _export_bank_category_rules(session, user_bidx, master_key),
         "stock_accounts": stock_accounts,
         "crypto_accounts": crypto_accounts,
         "cashflows": get_all_user_cashflows(session, user.uuid, master_key),
@@ -363,8 +319,6 @@ def purge_account(session: Session, user: User, master_key: str) -> dict[str, in
     wipe(UserBankConnection, UserBankConnection.user_uuid_bidx == user_bidx)
     wipe(BankTransferDecision, BankTransferDecision.user_uuid_bidx == user_bidx)
     wipe(BankTransferPatterns, BankTransferPatterns.user_uuid_bidx == user_bidx)
-    wipe(BankCategoryRule, BankCategoryRule.user_uuid_bidx == user_bidx)
-    wipe(BankCategory, BankCategory.user_uuid_bidx == user_bidx)
 
     # 2. Asset valuations cascade from assets in Postgres, but assets themselves
     #    never cascade from the user, so the chain has to be walked by hand.

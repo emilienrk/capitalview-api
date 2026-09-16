@@ -50,12 +50,8 @@ class AIProvider(ABC):
         tools: list[dict[str, Any]] | None = None,
         system: str | None = None,
         output_config: dict[str, Any] | None = None,
-        max_tokens: int | None = None,
     ) -> Any:
-        """Send a message to the underlying API and return the raw response.
-
-        `max_tokens` overrides the provider's default output budget for this call.
-        """
+        """Send a message to the underlying API and return the raw response."""
 
     # ------------------------------------------------------------------
     # Response parsing helpers — must be implemented by each provider

@@ -8,14 +8,35 @@ from decimal import Decimal
 import pytest
 from sqlmodel import Session
 
-from dtos.banking import CategoryNature, CategoryOrigin
-from services.banking.categories import create_category, delete_category
-from services.banking.flows import assign_category
+from models.bank import BankAccount
+from services.banking.flows import list_month_transactions
 from services.banking.real_cashflow import PeriodNotCompletedError, real_cashflow_month, real_cashflow_year
-from tests.services.test_banking_category_filing import CURRENT, LIVRET, _month, _ops
-from tests.services.test_banking_flows import USER, _raw, _store
+from services.encryption import encrypt_data
+from tests.services.test_banking_flows import USER, _link, _raw, _store
+
+CURRENT, LIVRET, LDDS = "current", "savings", "ldds"  # "savings" is a Livret A
 
 TODAY = date(2026, 4, 10)  # March 2026 is the last completed month
+
+
+def _ops(session: Session, master_key: str, *operations: tuple[str, str, str, str, str]) -> None:
+    """(account, day, amount, direction, label)"""
+    for account in sorted({op[0] for op in operations}):
+        if session.get(BankAccount, account) is None:
+            _link(session, master_key, account)
+    for n, (account, day, amount, direction, label) in enumerate(operations):
+        _store(session, master_key, account, _raw(amount, direction, day, ref=f"{account}-{day}-{n}", label=label))
+
+
+def _as_ldds(session: Session, master_key: str) -> None:
+    account = session.get(BankAccount, LDDS)
+    account.account_type_enc = encrypt_data("LDD", master_key)
+    session.add(account)
+    session.commit()
+
+
+def _month(session: Session, master_key: str, period: str = "2026-03"):
+    return {tx.label: tx for tx in list_month_transactions(session, USER, master_key, period).transactions}
 
 
 def _year(session: Session, master_key: str, year: int = 2026, today: date = TODAY):
@@ -61,18 +82,6 @@ def test_a_refund_is_neutralised(session: Session, master_key: str):
     assert _figures(_year(session, master_key).totals) == {"neutralized": Decimal("59.45")}
 
 
-def test_an_investment_category_is_invested_not_spent(session: Session, master_key: str):
-    _ops(session, master_key, (CURRENT, "2026-03-05", "500.00", "DBIT", "VIR SEPA COURTIER EN LIGNE"))
-    placements = create_category(session, USER, master_key, "Placements", CategoryNature.INVESTMENT, CategoryOrigin.BANK)
-    target = _month(session, master_key)["VIR SEPA COURTIER EN LIGNE"]
-    assign_category(session, USER, master_key, target.id, placements.uuid, apply_to_similar=False)
-
-    year = _year(session, master_key)
-
-    assert _figures(year.totals) == {"investment": Decimal("500.00")}
-    assert [(s.name, s.amount) for s in year.by_category.investment] == [("Placements", Decimal("500.00"))]
-
-
 def test_the_monthly_median_and_mean_are_over_the_months_with_data(session: Session, master_key: str):
     _ops(
         session, master_key,
@@ -85,19 +94,6 @@ def test_the_monthly_median_and_mean_are_over_the_months_with_data(session: Sess
     assert len(year.months) == 6
     assert year.covered_months == 3
     assert (year.monthly_mean.expenses, year.monthly_median.expenses) == (Decimal("200"), Decimal("100.00"))
-
-
-def test_a_deleted_category_reads_as_uncategorised(session: Session, master_key: str):
-    _ops(session, master_key, (CURRENT, "2026-03-05", "40.00", "DBIT", "CARTE 04/03/26 BOULANGERIE CB*08"))
-    courses = create_category(session, USER, master_key, "Courses", CategoryNature.EXPENSE, CategoryOrigin.BANK)
-    target = _month(session, master_key)["CARTE 04/03/26 BOULANGERIE CB*08"]
-    assign_category(session, USER, master_key, target.id, courses.uuid, apply_to_similar=False)
-    assert [s.name for s in _year(session, master_key).by_category.expenses] == ["Courses"]
-
-    delete_category(session, USER, master_key, courses.uuid)
-
-    shares = _year(session, master_key).by_category.expenses
-    assert [(s.category_id, s.name, s.amount, s.count) for s in shares] == [(None, "Sans catégorie", Decimal("40.00"), 1)]
 
 
 def test_a_foreign_currency_is_reported_apart(session: Session, master_key: str):
@@ -158,48 +154,9 @@ def test_a_month_offers_its_neighbours_among_completed_months_with_data(session:
 
     assert (month.previous_period, month.next_period) == ("2025-12", None)
     assert _figures(month.totals) == {"expenses": Decimal("70.00"), "income": Decimal("1500.00")}
-    assert [s.name for s in month.by_category.income] == ["Sans catégorie"]
     assert month.operation_count == 2
 
 
 def test_nothing_stored_is_an_empty_year(session: Session, master_key: str):
     year = _year(session, master_key)
     assert (year.years_available, year.covered_months, [m.period for m in year.months]) == ([], 0, ["2026-01", "2026-02", "2026-03"])
-
-
-def test_an_income_taken_back_lowers_the_income(session: Session, master_key: str):
-    _ops(
-        session, master_key,
-        (CURRENT, "2026-03-01", "2000.00", "CRDT", "VIR SEPA EMPLOYEUR SALAIRE"),
-        (CURRENT, "2026-03-15", "150.00", "DBIT", "VIR SEPA EMPLOYEUR TROP PERCU"),
-    )
-    salaire = create_category(session, USER, master_key, "Salaire", CategoryNature.INCOME, CategoryOrigin.BANK)
-    month = _month(session, master_key)
-    for label in ("VIR SEPA EMPLOYEUR SALAIRE", "VIR SEPA EMPLOYEUR TROP PERCU"):
-        assign_category(session, USER, master_key, month[label].id, salaire.uuid, apply_to_similar=False)
-
-    year = _year(session, master_key)
-
-    assert _figures(year.totals) == {"income": Decimal("1850.00")}
-    assert [(s.name, s.amount, s.count) for s in year.by_category.income] == [("Salaire", Decimal("1850.00"), 2)]
-
-
-def test_each_category_has_its_own_share(session: Session, master_key: str):
-    _ops(
-        session, master_key,
-        (CURRENT, "2026-03-05", "40.00", "DBIT", "CARTE 04/03/26 BOULANGERIE CB*08"),
-        (CURRENT, "2026-03-06", "25.00", "DBIT", "CARTE 05/03/26 LIBRAIRIE CB*08"),
-        (CURRENT, "2026-03-07", "60.00", "DBIT", "CARTE 06/03/26 CARREFOUR CB*08"),
-    )
-    courses = create_category(session, USER, master_key, "Courses", CategoryNature.EXPENSE, CategoryOrigin.BANK)
-    loisirs = create_category(session, USER, master_key, "Loisirs", CategoryNature.EXPENSE, CategoryOrigin.BANK)
-    month = _month(session, master_key)
-    assign_category(session, USER, master_key, month["CARTE 04/03/26 BOULANGERIE CB*08"].id, courses.uuid, False)
-    assign_category(session, USER, master_key, month["CARTE 06/03/26 CARREFOUR CB*08"].id, courses.uuid, False)
-    assign_category(session, USER, master_key, month["CARTE 05/03/26 LIBRAIRIE CB*08"].id, loisirs.uuid, False)
-
-    shares = _year(session, master_key).by_category.expenses
-
-    assert [(s.category_id, s.name, s.amount) for s in shares] == [
-        (courses.uuid, "Courses", Decimal("100.00")), (loisirs.uuid, "Loisirs", Decimal("25.00")),
-    ]

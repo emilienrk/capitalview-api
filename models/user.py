@@ -101,9 +101,6 @@ class UserSettings(SQLModel, table=True):
     cashflow_module_enabled: bool = Field(default=True, nullable=False)
     wealth_module_enabled: bool = Field(default=True, nullable=False)
     ai_feature_enabled: bool = Field(default=False, nullable=False)
-    # Opt-in on top of ai_feature_enabled: sends operation labels and amounts
-    # to the user's AI provider. Also decides which categories each screen offers.
-    ai_categorization_enabled: bool = Field(default=False, nullable=False)
     # Preferred provider per capability (None = auto-select from priority list)
     ai_vision_provider: str | None = Field(default=None, nullable=True)
     ai_chat_provider: str | None = Field(default=None, nullable=True)

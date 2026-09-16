@@ -57,7 +57,6 @@ class UserSettingsUpdate(BaseModel):
     cashflow_module_enabled: bool | None = None
     wealth_module_enabled: bool | None = None
     ai_feature_enabled: bool | None = None
-    ai_categorization_enabled: bool | None = None
     ai_vision_provider: str | None = None
     ai_chat_provider: str | None = None
     usd_eur_rate: float | None = Field(None, gt=0, le=10)
@@ -87,7 +86,6 @@ class UserSettingsResponse(BaseModel):
     cashflow_module_enabled: bool = True
     wealth_module_enabled: bool = False
     ai_feature_enabled: bool = False
-    ai_categorization_enabled: bool = False
     ai_vision_provider: str | None = None
     ai_chat_provider: str | None = None
     ai_providers: list[AIProviderConfig] = []  # configured providers with key state

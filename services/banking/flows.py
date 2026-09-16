@@ -22,53 +22,30 @@ so far. The label is only ever handed back as-is, for the user to read.
 from __future__ import annotations
 
 import logging
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
 from datetime import date, timedelta
 from decimal import Decimal
-from statistics import median
 from typing import NamedTuple
 
 from sqlmodel import Session, select
 
 from dtos.banking import (
-    BankCategoryAssignResult,
     BankFlowCurrencyTotal,
-    BankRuleWords,
     BankFlowMonth,
     BankFlowsResponse,
     BankTransactionItem,
     BankTransactionsResponse,
     BankTransferDecisionKind,
     BankTransferStatus,
-    BankUncategorizedGroup,
-    BankUncategorizedResponse,
     OperationNature,
     OperationType,
-    RuleSource,
 )
 from models.bank import BankAccount
 from models.banking import BankTransaction
 from models.enums import BankAccountType
 from services.banking import transfer_patterns as stored_patterns
-from services.banking.categories import (
-    Category,
-    CategoryNotFoundError,
-    load_categories,
-    load_rules,
-    save_rule,
-)
-from services.banking.categorize import (
-    NO_CATEGORY,
-    Resolution,
-    Rule,
-    WordFrequency,
-    nature_of,
-    propose_tokens,
-    resolve,
-    rule_tokens,
-)
 from services.banking.linking import readable_account_bidxs
 from services.banking.operation_types import operation_type
 from services.banking.transactions import (
@@ -137,14 +114,6 @@ class UnknownAccountError(LookupError):
     """The account filter names no bank account of this user."""
 
 
-class CategoryRequiredError(ValueError):
-    """A rule must file operations under a category."""
-
-
-class RuleOutsideLabelError(ValueError):
-    """A rule for an operation must only require words of its label."""
-
-
 class _Movement(NamedTuple):
     row: BankTransaction
     account_bidx: str
@@ -177,10 +146,8 @@ class _Pairing(NamedTuple):
 
 
 class _Filing(NamedTuple):
-    """What resolving categories needs, loaded once per request."""
+    """What reading how each operation counts needs, loaded once per request."""
     master_key: str
-    rules: list[Rule]
-    categories: dict[str, Category]
     savings: frozenset[str]
 
 
@@ -535,24 +502,12 @@ def _accounts_of_types(accounts: _Accounts, types: frozenset[BankAccountType], m
 def _filing(session: Session, user_uuid: str, master_key: str, accounts: _Accounts) -> _Filing:
     return _Filing(
         master_key=master_key,
-        rules=load_rules(session, user_uuid, master_key),
-        categories=load_categories(session, user_uuid, master_key),
         savings=_savings_accounts(accounts, master_key),
     )
 
 
 def _label(movement: _Movement, master_key: str) -> str | None:
     return decrypt_data(movement.row.remittance_enc, master_key) if movement.row.remittance_enc else None
-
-
-def _resolution(movement: _Movement, label: str | None, filing: _Filing) -> Resolution:
-    override = movement.row.category_ref_enc
-    return resolve(
-        label_words(label),
-        decrypt_data(override, filing.master_key) if override else None,
-        filing.rules,
-        filing.categories,
-    )
 
 
 def _paired_movements(
@@ -645,16 +600,6 @@ def transfer_patterns(
         side_rows[side] += 1
         for word in label_words(labels[i]):
             side_words[side][word] += 1
-    signatures = {signature for signature in map(label_signature, labels.values()) if signature}
-    word_counts: dict[str, int] = defaultdict(int)
-    for signature in signatures:
-        for word in signature.split():
-            word_counts[word] += 1
-    patterns.word_frequency = WordFrequency(
-        counts=dict(word_counts),
-        common_above=max(COMMON_WORD_MIN_COUNT - 1, COMMON_WORD_SHARE * len(signatures)),
-    )
-
     patterns.common_words = {
         side: frozenset(
             w for w, n in counts.items()
@@ -831,20 +776,23 @@ def _filed(
     movements: list[_Movement],
     transfer_legs: dict[int, _TransferLeg],
     index: int,
-    label: str | None,
     filing: _Filing,
-) -> tuple[Resolution, OperationNature]:
-    """One operation's category and how it counts: the single reading every
-    view of the operations shares."""
+) -> OperationNature:
+    """How one operation counts: the single reading every view of the
+    operations shares.
+
+    A transfer with exactly one savings leg puts money aside or takes it back;
+    between two savings accounts, or two current ones, money only moved. A pair
+    only offered to the user is not a pair yet.
+    """
     movement = movements[index]
     leg = transfer_legs.get(index)
-    resolution = _resolution(movement, label, filing)
-    savings_legs = (
-        (movement.account_bidx in filing.savings) + (movements[leg.other].account_bidx in filing.savings)
-        if leg else 0
-    )
-    nature = nature_of(movement.is_credit, leg.status if leg else None, savings_legs, resolution.category)
-    return resolution, nature
+    if leg is not None and leg.status in _CANCELLATIONS:
+        return OperationNature.NEUTRALIZED
+    if leg is not None and leg.status in DEDUCTED:
+        savings_legs = (movement.account_bidx in filing.savings) + (movements[leg.other].account_bidx in filing.savings)
+        return OperationNature.SAVING if savings_legs == 1 else OperationNature.INTERNAL
+    return OperationNature.INCOME if movement.is_credit else OperationNature.EXPENSE
 
 
 def _item_builder(
@@ -864,8 +812,6 @@ def _item_builder(
         leg = transfer_legs.get(index)
         counterpart = movements[leg.other] if leg else None
         row = movement.row
-        label = _label(movement, master_key)
-        resolution, nature = _filed(movements, transfer_legs, index, label, filing)
         return BankTransactionItem(
             id=row.uuid,
             account_id=accounts.by_bidx[movement.account_bidx].uuid,
@@ -875,7 +821,7 @@ def _item_builder(
             currency=movement.currency,
             is_credit=movement.is_credit,
             is_pending=not movement.is_final,
-            label=label,
+            label=_label(movement, master_key),
             transfer_account_id=(
                 accounts.by_bidx[counterpart.account_bidx].uuid if counterpart else None
             ),
@@ -887,11 +833,7 @@ def _item_builder(
                 OperationType(decrypt_data(row.operation_type_enc, master_key))
                 if row.operation_type_enc else OperationType.UNKNOWN
             ),
-            nature=nature,
-            category_id=resolution.category.uuid if resolution.category else None,
-            category_name=resolution.category.name if resolution.category else None,
-            category_source=resolution.source,
-            rule_id=resolution.rule_uuid,
+            nature=_filed(movements, transfer_legs, index, filing),
         )
 
     return item
@@ -989,72 +931,6 @@ def list_transfer_counterparts(
     return [item(i) for _, i in matches]
 
 
-def assign_category(
-    session: Session,
-    user_uuid: str,
-    master_key: str,
-    transaction_id: str,
-    category_id: str | None,
-    apply_to_similar: bool,
-    tokens: list[str] | None = None,
-) -> BankCategoryAssignResult:
-    """File one operation, or write the user's rule for every operation like it.
-
-    A rule drops the operation's own override, so the rule is what files it
-    from then on — correcting the rule later corrects it too.
-    """
-    accounts = _user_accounts(session, user_uuid, master_key)
-    row = session.get(BankTransaction, transaction_id)
-    if row is None or row.account_id_bidx not in accounts.readable:
-        raise TransactionNotFoundError(transaction_id)
-    if category_id is not None and category_id not in load_categories(session, user_uuid, master_key):
-        raise CategoryNotFoundError(category_id)
-
-    if not apply_to_similar:
-        row.category_ref_enc = encrypt_data(category_id or NO_CATEGORY, master_key)
-        session.add(row)
-        session.commit()
-        return BankCategoryAssignResult(
-            transaction=_transaction_item(session, user_uuid, master_key, accounts, row),
-            filed_count=1 if category_id else 0,
-        )
-
-    if category_id is None:
-        raise CategoryRequiredError()
-    label = decrypt_data(row.remittance_enc, master_key) if row.remittance_enc else None
-    frequency = transfer_patterns(session, user_uuid, master_key, accounts).word_frequency
-    words = tokens if tokens is not None else propose_tokens(label, frequency)
-    if not rule_tokens(words) <= label_words(label):
-        raise RuleOutsideLabelError()
-    rule = save_rule(session, user_uuid, master_key, words, category_id, RuleSource.USER, frequency)
-    row.category_ref_enc = None
-    session.add(row)
-    session.commit()
-
-    filing = _filing(session, user_uuid, master_key, accounts)
-    filed = sum(
-        1 for movement in _load_movements(session, master_key, accounts.readable, None)
-        if _resolution(movement, _label(movement, master_key), filing).rule_uuid == rule.uuid
-    )
-    return BankCategoryAssignResult(
-        transaction=_transaction_item(session, user_uuid, master_key, accounts, row),
-        filed_count=filed,
-    )
-
-
-def rule_words(session: Session, user_uuid: str, master_key: str, transaction_id: str) -> BankRuleWords:
-    accounts = _user_accounts(session, user_uuid, master_key)
-    row = session.get(BankTransaction, transaction_id)
-    if row is None or row.account_id_bidx not in accounts.readable:
-        raise TransactionNotFoundError(transaction_id)
-    label = decrypt_data(row.remittance_enc, master_key) if row.remittance_enc else None
-    frequency = transfer_patterns(session, user_uuid, master_key, accounts).word_frequency
-    return BankRuleWords(
-        words=sorted(label_words(label), key=lambda word: (frequency.of(word), word)),
-        proposed=propose_tokens(label, frequency),
-    )
-
-
 def _transaction_item(
     session: Session, user_uuid: str, master_key: str, accounts: _Accounts, row: BankTransaction
 ) -> BankTransactionItem:
@@ -1070,61 +946,6 @@ def _transaction_item(
         )
     [index] = [i for i, m in enumerate(movements) if m.row.uuid == row.uuid]
     return _item_builder(movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts))(index)
-
-
-def uncategorized_groups(
-    session: Session, user_uuid: str, master_key: str, limit: int | None = None
-) -> BankUncategorizedResponse:
-    """The operations nothing files yet, grouped by label signature and
-    direction, heaviest first.
-
-    An operation paired as a transfer or a cancellation is left out: its
-    nature does not depend on a category. So is one the user filed as "none".
-    """
-    accounts = _user_accounts(session, user_uuid, master_key)
-    if not accounts.readable:
-        return BankUncategorizedResponse(total_groups=0, total_operations=0, groups=[])
-    pairing = _pairing(session, user_uuid, master_key, accounts)
-    movements = _load_movements(session, master_key, accounts.readable, None)
-    transfer_legs = _internal_transfer_legs(movements, pairing)
-    filing = _filing(session, user_uuid, master_key, accounts)
-
-    grouped: dict[tuple[str, bool], list[tuple[_Movement, str]]] = defaultdict(list)
-    for index, movement in enumerate(movements):
-        leg = transfer_legs.get(index)
-        if leg is not None and leg.status in DEDUCTED:
-            continue
-        label = _label(movement, master_key)
-        signature = label_signature(label)
-        if signature is None or _resolution(movement, label, filing).source is not None:
-            continue
-        grouped[(signature, movement.is_credit)].append((movement, label))
-
-    groups = []
-    for (signature, is_credit), members in grouped.items():
-        # Movements come sorted by day: the last one is the most recent.
-        latest, latest_label = members[-1]
-        currencies = Counter(movement.currency for movement, _ in members)
-        currency = max(currencies, key=lambda c: (currencies[c], c == latest.currency))
-        amounts = [movement.amount for movement, _ in members if movement.currency == currency]
-        groups.append(BankUncategorizedGroup(
-            signature=signature,
-            transaction_id=latest.row.uuid,
-            label=latest_label,
-            is_credit=is_credit,
-            count=len(members),
-            currency=currency,
-            total=sum(amounts, Decimal("0")),
-            median=median(amounts),
-            last_date=latest.day,
-            tokens=propose_tokens(latest_label, pairing.patterns.word_frequency),
-        ))
-    groups.sort(key=lambda g: (-g.total, -g.count, g.signature, g.is_credit))
-    return BankUncategorizedResponse(
-        total_groups=len(groups),
-        total_operations=sum(g.count for g in groups),
-        groups=groups[:limit] if limit is not None else groups,
-    )
 
 
 def _empty(periods: list[str]) -> BankFlowsResponse:
