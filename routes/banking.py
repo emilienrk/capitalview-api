@@ -35,10 +35,13 @@ from dtos.banking import (
     BankSessionSummary,
     BankSyncResponse,
     BankTransactionItem,
+    BankTransactionTypeResult,
+    BankTransactionTypeUpdate,
     BankTransactionsResponse,
     BankTransferDecisionCreate,
     BankTransferQuestionMonth,
     BankTransferQuestionsResponse,
+    BankTypeRuleItem,
     RealCashflowMonthDetail,
     RealCashflowYear,
     SyncStatus,
@@ -51,10 +54,15 @@ from services.banking.credentials import (
 )
 from services.banking.export_import import import_enablebanking_export
 from services.banking.flows import (
+    LabelRequiredError,
+    PairedOperationError,
     UnknownAccountError,
+    clear_transaction_type,
     compute_real_flows,
     list_month_transactions,
     list_transfer_counterparts,
+    list_type_rules,
+    set_transaction_type,
     transfer_patterns,
 )
 from services.banking.transfer_decisions import (
@@ -63,6 +71,7 @@ from services.banking.transfer_decisions import (
     record_decision,
 )
 from services.banking.errors import BankingApiError
+from services.banking.type_rules import RuleNotFoundError, delete_rule
 from services.banking.real_cashflow import PeriodNotCompletedError, real_cashflow_month, real_cashflow_year
 from services.banking.linking import (
     AccountNotFoundInSessionError,
@@ -562,6 +571,67 @@ def get_transfer_counterparts(
         return list_transfer_counterparts(session, current_user.uuid, master_key, transaction_id)
     except TransactionNotFoundError:
         raise HTTPException(status_code=404, detail="Opération introuvable.")
+
+
+@router.put("/transactions/{transaction_id}/type", response_model=BankTransactionTypeResult)
+def put_transaction_type(
+    transaction_id: str,
+    body: BankTransactionTypeUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Type this operation, or every operation reading like it on its account
+    and direction. Ungated, like /transactions."""
+    try:
+        return set_transaction_type(
+            session, current_user.uuid, master_key, transaction_id, body.type, body.scope,
+        )
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail="Opération introuvable.")
+    except PairedOperationError:
+        raise HTTPException(
+            status_code=409,
+            detail="Cette opération est appariée à une autre : défaites d'abord le virement ou l'annulation.",
+        )
+    except LabelRequiredError:
+        raise HTTPException(status_code=400, detail="Une opération sans libellé ne se corrige qu'à l'unité.")
+
+
+@router.delete("/transactions/{transaction_id}/type", response_model=BankTransactionItem)
+def delete_transaction_type(
+    transaction_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Drop the type forced on this one operation."""
+    try:
+        return clear_transaction_type(session, current_user.uuid, master_key, transaction_id)
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail="Opération introuvable.")
+
+
+@router.get("/type-rules", response_model=list[BankTypeRuleItem])
+def get_type_rules(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    return list_type_rules(session, current_user.uuid, master_key)
+
+
+@router.delete("/type-rules/{rule_id}", status_code=204)
+def delete_type_rule(
+    rule_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    try:
+        delete_rule(session, current_user.uuid, master_key, rule_id)
+    except RuleNotFoundError:
+        raise HTTPException(status_code=404, detail="Règle introuvable.")
 
 
 @router.get("/transfer-questions", response_model=BankTransferQuestionsResponse)
