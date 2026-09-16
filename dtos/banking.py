@@ -396,6 +396,41 @@ class BankTransferQuestionsResponse(BaseModel):
     months: list[BankTransferQuestionMonth]
 
 
+class TypeScope(str, Enum):
+    """What a type correction reaches: every operation reading like this one
+    on its account and direction, past and future, or this one alone."""
+    LABEL = "label"
+    OPERATION = "operation"
+
+
+class BankTransactionTypeUpdate(BaseModel):
+    """PUT /banking/transactions/{id}/type."""
+    type: CashflowType
+    scope: TypeScope = TypeScope.LABEL
+
+
+class BankTransactionTypeResult(BaseModel):
+    transaction: BankTransactionItem
+    # Operations the label's rule now types across the whole history, pairs
+    # left out; 1 for a correction of this operation alone.
+    covered_count: int
+
+
+class BankTypeRuleItem(BaseModel):
+    """GET /banking/type-rules."""
+    id: str
+    account_id: str
+    account_name: str
+    is_credit: bool
+    signature: str
+    # The most recent operation it types, to read the rule by; None when it
+    # types nothing any more.
+    label: str | None = None
+    type: CashflowType
+    operation_count: int
+    created_at: datetime
+
+
 # ---------------------------------------------------------------------------
 # Real cashflow
 # ---------------------------------------------------------------------------

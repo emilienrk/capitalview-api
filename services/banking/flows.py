@@ -38,9 +38,12 @@ from dtos.banking import (
     BankTransactionItem,
     BankTransactionsResponse,
     BankTransferDecisionKind,
+    BankTransactionTypeResult,
     BankTransferStatus,
+    BankTypeRuleItem,
     CashflowType,
     OperationType,
+    TypeScope,
 )
 from models.bank import BankAccount
 from models.banking import BankTransaction
@@ -64,7 +67,7 @@ from services.banking.transfer_decisions import (
     load_decisions,
 )
 from services.banking.transfer_patterns import TransferPatterns
-from services.banking.type_rules import TypeRules, load_rules
+from services.banking.type_rules import TypeRules, load_rules, save_rule
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 logger = logging.getLogger(__name__)
@@ -114,6 +117,14 @@ MAX_MONTHS = 120
 
 class UnknownAccountError(LookupError):
     """The account filter names no bank account of this user."""
+
+
+class PairedOperationError(ValueError):
+    """A paired operation takes its type from its pair, undone by a transfer decision."""
+
+
+class LabelRequiredError(ValueError):
+    """Only an operation with a label can type the operations reading like it."""
 
 
 class _Movement(NamedTuple):
@@ -949,6 +960,110 @@ def list_transfer_counterparts(
         movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts, pairing.patterns),
     )
     return [item(i) for _, i in matches]
+
+
+def set_transaction_type(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    transaction_id: str,
+    kind: CashflowType,
+    scope: TypeScope,
+) -> BankTransactionTypeResult:
+    """Type one operation, or write the rule of its label for every operation
+    reading like it on its account and direction.
+
+    A rule drops the operation's own override, so the rule is what types it
+    from then on — correcting the rule later corrects it too.
+    """
+    accounts = _user_accounts(session, user_uuid, master_key)
+    row = _readable_row(session, accounts, transaction_id)
+    current = _transaction_item(session, user_uuid, master_key, accounts, row)
+    if current.transfer_status not in (None, BankTransferStatus.SUGGESTED):
+        raise PairedOperationError(transaction_id)
+
+    if scope is TypeScope.OPERATION:
+        row.type_override_enc = encrypt_data(kind.value, master_key)
+        session.add(row)
+        session.commit()
+        return BankTransactionTypeResult(
+            transaction=_transaction_item(session, user_uuid, master_key, accounts, row), covered_count=1,
+        )
+
+    signature = label_signature(current.label)
+    if signature is None:
+        raise LabelRequiredError(transaction_id)
+    row.type_override_enc = None
+    session.add(row)
+    rule = save_rule(
+        session, user_uuid, master_key, accounts.by_bidx[row.account_id_bidx].uuid, current.is_credit, signature, kind,
+    )
+    covered = sum(
+        1 for _, _, resolution in _typed_history(session, user_uuid, master_key, accounts)
+        if resolution.rule_id == rule.uuid
+    )
+    return BankTransactionTypeResult(
+        transaction=_transaction_item(session, user_uuid, master_key, accounts, row), covered_count=covered,
+    )
+
+
+def clear_transaction_type(
+    session: Session, user_uuid: str, master_key: str, transaction_id: str
+) -> BankTransactionItem:
+    """Drop what the user forced on this one operation."""
+    accounts = _user_accounts(session, user_uuid, master_key)
+    row = _readable_row(session, accounts, transaction_id)
+    row.type_override_enc = None
+    session.add(row)
+    session.commit()
+    return _transaction_item(session, user_uuid, master_key, accounts, row)
+
+
+def list_type_rules(session: Session, user_uuid: str, master_key: str) -> list[BankTypeRuleItem]:
+    """Every rule of the user, with the operations it types across the history."""
+    accounts = _user_accounts(session, user_uuid, master_key)
+    rules = load_rules(session, user_uuid, master_key)
+    counts: dict[str, int] = defaultdict(int)
+    labels: dict[str, str | None] = {}
+    for _, label, resolution in _typed_history(session, user_uuid, master_key, accounts):
+        if resolution.rule_id is not None:
+            counts[resolution.rule_id] += 1
+            labels[resolution.rule_id] = label
+    items = [
+        BankTypeRuleItem(
+            id=rule.uuid,
+            account_id=accounts.by_bidx[rule.account_bidx].uuid,
+            account_name=decrypt_data(accounts.by_bidx[rule.account_bidx].name_enc, master_key),
+            is_credit=rule.is_credit,
+            signature=rule.signature,
+            label=labels.get(rule.uuid),
+            type=rule.type,
+            operation_count=counts[rule.uuid],
+            created_at=rule.created_at,
+        )
+        # A rule of a deleted account types nothing and names no account.
+        for rule in rules.exact.values() if rule.account_bidx in accounts.by_bidx
+    ]
+    return sorted(items, key=lambda item: (-item.operation_count, item.signature))
+
+
+def _readable_row(session: Session, accounts: _Accounts, transaction_id: str) -> BankTransaction:
+    row = session.get(BankTransaction, transaction_id)
+    if row is None or row.account_id_bidx not in accounts.readable:
+        raise TransactionNotFoundError(transaction_id)
+    return row
+
+
+def _typed_history(session: Session, user_uuid: str, master_key: str, accounts: _Accounts):
+    """Every stored operation with its label and type, paired across the
+    whole history."""
+    pairing = _pairing(session, user_uuid, master_key, accounts)
+    movements = _load_movements(session, master_key, accounts.readable, None)
+    transfer_legs = _internal_transfer_legs(movements, pairing)
+    filing = _filing(session, user_uuid, master_key, accounts, pairing.patterns)
+    for index, movement in enumerate(movements):
+        label = _label(movement, master_key)
+        yield movement, label, _filed(movements, transfer_legs, index, label, filing)
 
 
 def _transaction_item(
