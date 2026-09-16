@@ -812,6 +812,7 @@ def _item_builder(
         leg = transfer_legs.get(index)
         counterpart = movements[leg.other] if leg else None
         row = movement.row
+        label = _label(movement, master_key)
         return BankTransactionItem(
             id=row.uuid,
             account_id=accounts.by_bidx[movement.account_bidx].uuid,
@@ -821,17 +822,17 @@ def _item_builder(
             currency=movement.currency,
             is_credit=movement.is_credit,
             is_pending=not movement.is_final,
-            label=_label(movement, master_key),
+            label=label,
             transfer_account_id=(
                 accounts.by_bidx[counterpart.account_bidx].uuid if counterpart else None
             ),
             transfer_account_name=names[counterpart.account_bidx] if counterpart else None,
             transfer_id=counterpart.row.uuid if counterpart else None,
             transfer_status=leg.status if leg else None,
-            # Every reader pairs first, and pairing backfills a missing type.
+            # Read from the label when the rebuild has not reached the row yet.
             operation_type=(
                 OperationType(decrypt_data(row.operation_type_enc, master_key))
-                if row.operation_type_enc else OperationType.UNKNOWN
+                if row.operation_type_enc else operation_type(label)
             ),
             nature=_filed(movements, transfer_legs, index, filing),
         )
