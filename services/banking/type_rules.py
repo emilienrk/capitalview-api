@@ -7,8 +7,9 @@ reaches the operations of that exact label, and those of a nearby one — a
 salary whose reference changes every month would otherwise ask again each
 month. Nearby is measured the way transfer decisions measure it
 (`transfer_decisions.SIMILARITY_THRESHOLD`): the words both labels share over
-the words either holds, once the words too common on that side of the account
-("CARTE", "VIR") are set aside, since they tell nothing apart.
+the words either holds, once the words found in too many distinct labels on
+that side of the account ("CARTE", "VIR") are set aside, since they tell
+nothing apart.
 
 Rules are applied as operations are read, never written onto them, so a rule
 also types the operations imported after it.

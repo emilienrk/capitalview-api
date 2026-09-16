@@ -34,6 +34,7 @@ from sqlmodel import Session, select
 from dtos.banking import (
     BankFlowCurrencyTotal,
     BankFlowMonth,
+    BankFlowQuestion,
     BankFlowsResponse,
     BankTransactionItem,
     BankTransactionsResponse,
@@ -44,6 +45,7 @@ from dtos.banking import (
     CashflowType,
     OperationType,
     TypeScope,
+    TypeSource,
 )
 from models.bank import BankAccount
 from models.banking import BankTransaction
@@ -110,6 +112,14 @@ DEDUCTED = frozenset({
     BankTransferStatus.CONFIRMED, BankTransferStatus.REVERSAL, BankTransferStatus.REFUND,
 })
 _CANCELLATIONS = frozenset({BankTransferStatus.REVERSAL, BankTransferStatus.REFUND})
+
+# What a flow question offers. A credit may be income, a refund (typed as an
+# expense taken back), money taken back from savings or an investment, or
+# nothing at all; a transfer sent, anything but income.
+CREDIT_CHOICES = [
+    CashflowType.INCOME, CashflowType.EXPENSE, CashflowType.SAVING, CashflowType.INVESTMENT, CashflowType.NEUTRAL,
+]
+DEBIT_CHOICES = [CashflowType.EXPENSE, CashflowType.SAVING, CashflowType.INVESTMENT, CashflowType.NEUTRAL]
 
 DEFAULT_MONTHS = 12
 MAX_MONTHS = 120
@@ -614,11 +624,15 @@ def transfer_patterns(
 
     side_rows: dict[str, int] = defaultdict(int)
     side_words: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    side_signatures: dict[str, set[str]] = defaultdict(set)
     for i, movement in enumerate(movements):
         side = stored_patterns.side_key(movement.account_bidx, movement.is_credit)
         side_rows[side] += 1
         for word in label_words(labels[i]):
             side_words[side][word] += 1
+        signature = label_signature(labels[i])
+        if signature is not None:
+            side_signatures[side].add(signature)
     patterns.common_words = {
         side: frozenset(
             w for w, n in counts.items()
@@ -627,17 +641,52 @@ def transfer_patterns(
         for side, counts in side_words.items()
     }
 
+    # Counted over distinct labels, not operations: a salary's employer comes
+    # back every month under one label or a few, while "VIR" or "CARTE" sits in
+    # most of them. Counted over operations, the employer would read as common
+    # and a rule could never reach the next month's reference.
+    patterns.label_common_words = {}
+    for side, signatures in side_signatures.items():
+        counts: dict[str, int] = defaultdict(int)
+        for signature in signatures:
+            for word in signature.split():
+                counts[word] += 1
+        patterns.label_common_words[side] = frozenset(
+            w for w, n in counts.items()
+            if n >= COMMON_WORD_MIN_COUNT and n > COMMON_WORD_SHARE * len(signatures)
+        )
+
     pairing = _Pairing(
         master_key=master_key,
         decisions=load_decisions(session, user_uuid, master_key),
         patterns=patterns,
         savings=savings,
     )
+    transfer_legs = _internal_transfer_legs(movements, pairing)
     questions: dict[str, int] = defaultdict(int)
-    for index, leg in _internal_transfer_legs(movements, pairing).items():
+    for index, leg in transfer_legs.items():
         if leg.status is BankTransferStatus.SUGGESTED and not movements[index].is_credit:
             questions[movements[index].period] += 1
     patterns.questions = dict(sorted(questions.items()))
+
+    filing = _filing(session, user_uuid, master_key, accounts, patterns)
+    groups: dict[tuple[str, bool, str], list[int]] = defaultdict(list)
+    for index, movement in enumerate(movements):
+        label = labels[index]
+        resolution = _filed(movements, transfer_legs, index, label, filing)
+        if _asks_flow(movement, transfer_legs.get(index), label, resolution):
+            groups[(movement.account_bidx, movement.is_credit, label_signature(label))].append(index)
+    flow_questions: dict[str, int] = defaultdict(int)
+    flow_open: dict[str, int] = defaultdict(int)
+    for members in groups.values():
+        # Movements come sorted by day: the last one is the most recent.
+        carrier = movements[members[-1]]
+        patterns.flow_carriers[carrier.row.uuid] = len(members)
+        flow_questions[carrier.period] += 1
+        for index in members:
+            flow_open[movements[index].period] += 1
+    patterns.flow_questions = dict(sorted(flow_questions.items()))
+    patterns.flow_open = dict(sorted(flow_open.items()))
 
     stored_patterns.write_patterns(session, user_bidx, source, patterns, master_key)
     return patterns
@@ -809,7 +858,7 @@ def _filed(
     override = movement.row.type_override_enc
     rule = filing.rules.reach(
         movement.account_bidx, movement.is_credit, label_signature(label),
-        filing.patterns.common(movement.account_bidx, movement.is_credit),
+        filing.patterns.label_common(movement.account_bidx, movement.is_credit),
     )
     return resolve_type(
         movement.is_credit,
@@ -818,6 +867,21 @@ def _filed(
         CashflowType(decrypt_data(override, filing.master_key)) if override else None,
         (rule.uuid, rule.type) if rule else None,
     )
+
+
+def _asks_flow(movement: _Movement, leg: _TransferLeg | None, label: str | None, resolution: Resolution) -> bool:
+    """Whether only the user can say how this operation counts: nothing pairs
+    or types it, and it is a credit or a transfer sent.
+
+    The operation type decides whether to ask, never an amount: a label format
+    the lexicon misses only asks one question fewer, and the default applies.
+    A suggested pair keeps its own question until the user settles it.
+    """
+    if not movement.is_final or leg is not None or resolution.source is not TypeSource.DEFAULT:
+        return False
+    if label_signature(label) is None:
+        return False
+    return movement.is_credit or operation_type(label) is OperationType.TRANSFER
 
 
 def _item_builder(
@@ -839,6 +903,8 @@ def _item_builder(
         row = movement.row
         label = _label(movement, master_key)
         resolution = _filed(movements, transfer_legs, index, label, filing)
+        settles = filing.patterns.flow_carriers.get(row.uuid)
+        asks = settles is not None and _asks_flow(movement, leg, label, resolution)
         return BankTransactionItem(
             id=row.uuid,
             account_id=accounts.by_bidx[movement.account_bidx].uuid,
@@ -863,6 +929,9 @@ def _item_builder(
             cashflow_type=resolution.type,
             type_source=resolution.source,
             type_rule_id=resolution.rule_id,
+            flow_question=BankFlowQuestion(
+                choices=CREDIT_CHOICES if movement.is_credit else DEBIT_CHOICES, operation_count=settles,
+            ) if asks else None,
         )
 
     return item
@@ -899,6 +968,7 @@ def list_month_transactions(
     item = _item_builder(
         movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts, pairing.patterns),
     )
+    transactions = [item(i) for i in reversed(selected)]
 
     return BankTransactionsResponse(
         period=period,
@@ -908,14 +978,14 @@ def list_month_transactions(
         net=month.net,
         internal_transfers_excluded=totals.transfers_count,
         internal_transfers_amount=totals.transfers_amount,
-        transfer_questions=totals.questions_count,
+        transfer_questions=totals.questions_count + sum(1 for tx in transactions if tx.flow_question),
         reversals_excluded=totals.reversals_count,
         reversals_amount=totals.reversals_amount,
         pending_count=totals.pending_count,
         pending_inflow=totals.pending_inflow,
         pending_outflow=totals.pending_outflow,
         other_currencies=totals.other_currencies,
-        transactions=[item(i) for i in reversed(selected)],
+        transactions=transactions,
     )
 
 

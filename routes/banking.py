@@ -9,6 +9,7 @@ whatever cookies ride along under SameSite=Lax. It authenticates itself via
 
 import base64
 import html
+from collections import defaultdict
 from datetime import date
 from typing import Annotated
 
@@ -640,8 +641,13 @@ def get_transfer_questions(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
-    """How many pairs wait for the user, and in which months. Ungated, like /transactions."""
-    questions = transfer_patterns(session, current_user.uuid, master_key).questions
+    """How many pairs and flow questions wait for the user, and in which months.
+    Ungated, like /transactions."""
+    patterns = transfer_patterns(session, current_user.uuid, master_key)
+    questions = defaultdict(int, patterns.questions)
+    for period, count in patterns.flow_questions.items():
+        questions[period] += count
+    questions = dict(sorted(questions.items()))
     return BankTransferQuestionsResponse(
         total=sum(questions.values()),
         months=[BankTransferQuestionMonth(period=p, count=n) for p, n in questions.items()],

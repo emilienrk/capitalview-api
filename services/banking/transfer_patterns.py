@@ -18,8 +18,10 @@ sync, an import, a deletion or a decision can never leave them stale, whichever
 path wrote it.
 
 Stored alongside, from the same pass: the words too common on each side of an
-account to tell a refund from its purchase ("CARTE", "CB", "VIR"), and how many
-pairs are left for the user to settle, month by month.
+account to tell a refund from its purchase ("CARTE", "CB", "VIR"), how many
+pairs are left for the user to settle, month by month, and the flow questions:
+which operation of each label nothing types but the user carries its question,
+since a month's reader cannot tell which occurrence of a label is the last.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ from datetime import datetime, timezone
 import sqlalchemy as sa
 from sqlmodel import Session, select
 
-from models.banking import BankTransaction, BankTransferDecision, BankTransferPatterns
+from models.banking import BankTransaction, BankTransferDecision, BankTransferPatterns, BankTypeRule
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 # A shape that occurred this many times is trusted without asking. Measured:
@@ -40,7 +42,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "4"
+_VERSION = "6"
 
 
 @dataclass
@@ -49,8 +51,16 @@ class TransferPatterns:
     shapes: dict[str, int] = field(default_factory=dict)
     # "account|C" or "account|D" -> words too common on that side
     common_words: dict[str, frozenset[str]] = field(default_factory=dict)
+    # Same keys -> words found in too many distinct labels of that side
+    label_common_words: dict[str, frozenset[str]] = field(default_factory=dict)
     # "YYYY-MM" -> pairs offered to the user and not settled
     questions: dict[str, int] = field(default_factory=dict)
+    # Operation uuid -> how many operations of its label its flow question settles.
+    flow_carriers: dict[str, int] = field(default_factory=dict)
+    # "YYYY-MM" -> flow questions carried by an operation of that month
+    flow_questions: dict[str, int] = field(default_factory=dict)
+    # "YYYY-MM" -> operations of that month waiting on a flow question
+    flow_open: dict[str, int] = field(default_factory=dict)
 
     def recurs(
         self, debit_account: str, credit_account: str, debit_signature: str | None, credit_signature: str | None
@@ -62,6 +72,9 @@ class TransferPatterns:
 
     def common(self, account: str, is_credit: bool) -> frozenset[str]:
         return self.common_words.get(side_key(account, is_credit), frozenset())
+
+    def label_common(self, account: str, is_credit: bool) -> frozenset[str]:
+        return self.label_common_words.get(side_key(account, is_credit), frozenset())
 
 
 def shape_key(debit_account: str, credit_account: str, debit_signature: str, credit_signature: str) -> str:
@@ -79,8 +92,9 @@ def source_digest(
 
     Cheap on purpose — counts and timestamps, no row decrypted — since every
     read computes it. Any row added, removed or rewritten moves a count or a
-    timestamp; so does a decision. The savings accounts are part of it as they
-    are, not through a timestamp: an account's type decides whole tiers.
+    timestamp; so do a decision and a type rule, which is replaced rather than
+    updated. The savings accounts are part of it as they are, not through a
+    timestamp: an account's type decides whole tiers.
     """
     rows = (0, None, None)
     if readable:
@@ -96,7 +110,12 @@ def source_digest(
             BankTransferDecision.user_uuid_bidx == user_bidx
         )
     ).one()
-    raw = json.dumps([_VERSION, sorted(readable), sorted(savings), list(rows), list(decisions)], default=str)
+    rules = session.exec(
+        select(sa.func.count(), sa.func.max(BankTypeRule.created_at)).where(BankTypeRule.user_uuid_bidx == user_bidx)
+    ).one()
+    raw = json.dumps(
+        [_VERSION, sorted(readable), sorted(savings), list(rows), list(decisions), list(rules)], default=str,
+    )
     return hash_index(raw, master_key)
 
 
@@ -112,7 +131,11 @@ def read_patterns(
     return TransferPatterns(
         shapes=content["shapes"],
         common_words={key: frozenset(words) for key, words in content["common_words"].items()},
+        label_common_words={key: frozenset(words) for key, words in content["label_common_words"].items()},
         questions=content["questions"],
+        flow_carriers=content["flow_carriers"],
+        flow_questions=content["flow_questions"],
+        flow_open=content["flow_open"],
     )
 
 
@@ -123,7 +146,11 @@ def write_patterns(
         json.dumps({
             "shapes": patterns.shapes,
             "common_words": {key: sorted(words) for key, words in patterns.common_words.items()},
+            "label_common_words": {key: sorted(words) for key, words in patterns.label_common_words.items()},
             "questions": patterns.questions,
+            "flow_carriers": patterns.flow_carriers,
+            "flow_questions": patterns.flow_questions,
+            "flow_open": patterns.flow_open,
         }),
         master_key,
     )
