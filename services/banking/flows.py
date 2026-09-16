@@ -69,7 +69,7 @@ from services.banking.transfer_decisions import (
     load_decisions,
 )
 from services.banking.transfer_patterns import TransferPatterns
-from services.banking.type_rules import TypeRules, load_rules, save_rule
+from services.banking.type_rules import TypeRules, load_rules, save_rule, telling_words
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 logger = logging.getLogger(__name__)
@@ -624,15 +624,15 @@ def transfer_patterns(
 
     side_rows: dict[str, int] = defaultdict(int)
     side_words: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    side_signatures: dict[str, set[str]] = defaultdict(set)
+    side_labels: dict[str, set[frozenset[str]]] = defaultdict(set)
     for i, movement in enumerate(movements):
         side = stored_patterns.side_key(movement.account_bidx, movement.is_credit)
         side_rows[side] += 1
         for word in label_words(labels[i]):
             side_words[side][word] += 1
-        signature = label_signature(labels[i])
-        if signature is not None:
-            side_signatures[side].add(signature)
+        telling = telling_words(labels[i])
+        if telling:
+            side_labels[side].add(telling)
     patterns.common_words = {
         side: frozenset(
             w for w, n in counts.items()
@@ -646,14 +646,14 @@ def transfer_patterns(
     # most of them. Counted over operations, the employer would read as common
     # and a rule could never reach the next month's reference.
     patterns.label_common_words = {}
-    for side, signatures in side_signatures.items():
+    for side, distinct in side_labels.items():
         counts: dict[str, int] = defaultdict(int)
-        for signature in signatures:
-            for word in signature.split():
+        for words in distinct:
+            for word in words:
                 counts[word] += 1
         patterns.label_common_words[side] = frozenset(
             w for w, n in counts.items()
-            if n >= COMMON_WORD_MIN_COUNT and n > COMMON_WORD_SHARE * len(signatures)
+            if n >= COMMON_WORD_MIN_COUNT and n > COMMON_WORD_SHARE * len(distinct)
         )
 
     pairing = _Pairing(
@@ -857,7 +857,7 @@ def _filed(
     )
     override = movement.row.type_override_enc
     rule = filing.rules.reach(
-        movement.account_bidx, movement.is_credit, label_signature(label),
+        movement.account_bidx, movement.is_credit, label,
         filing.patterns.label_common(movement.account_bidx, movement.is_credit),
     )
     return resolve_type(
@@ -1066,7 +1066,7 @@ def set_transaction_type(
     row.type_override_enc = None
     session.add(row)
     rule = save_rule(
-        session, user_uuid, master_key, accounts.by_bidx[row.account_id_bidx].uuid, current.is_credit, signature, kind,
+        session, user_uuid, master_key, accounts.by_bidx[row.account_id_bidx].uuid, current.is_credit, current.label, kind,
     )
     covered = sum(
         1 for _, _, resolution in _typed_history(session, user_uuid, master_key, accounts)

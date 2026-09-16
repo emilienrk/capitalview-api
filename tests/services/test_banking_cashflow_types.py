@@ -123,11 +123,16 @@ class TestRules:
         assert rules.reach("a", False, "emilien inst roukine vir", frozenset()) is None
 
     def test_the_nearest_rule_wins_then_the_most_recent(self):
-        far = _rule("a b c d e", Type.SAVING, minute=9)
-        near = _rule("a b c d f", Type.EXPENSE, minute=1)
-        older = _rule("a b c d g", Type.INCOME, minute=2)
-        assert _rules(far, near).reach("a", False, "a b c d f z", frozenset()) is near
-        assert _rules(near, older).reach("a", False, "a b c d z", frozenset()).type is Type.INCOME
+        far = _rule("aa bb cc dd ee", Type.SAVING, minute=9)
+        near = _rule("aa bb cc dd ff", Type.EXPENSE, minute=1)
+        older = _rule("aa bb cc dd gg", Type.INCOME, minute=2)
+        assert _rules(far, near).reach("a", False, "aa bb cc dd ff zz", frozenset()) is near
+        assert _rules(near, older).reach("a", False, "aa bb cc dd zz", frozenset()).type is Type.INCOME
+
+    def test_a_reference_changing_every_month_does_not_keep_labels_apart(self):
+        rule = _rule("cie de ref salaire sepa vilmorin vir", Type.INCOME)
+        label = "VIR SEPA VILMORIN & CIE SALAIRE DE 2026-08 402147-1 Réf ZZ1L2ZJSYU78NB5TWZZ1L2ZJSZ8833T8P0"
+        assert _rules(rule).reach("a", False, label, frozenset()) is rule
 
 
 class TestTheList:
