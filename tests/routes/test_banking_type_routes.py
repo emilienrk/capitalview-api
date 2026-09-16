@@ -121,14 +121,16 @@ def test_another_user_s_operation_is_a_404(client, session, master_key):
 def test_rules_are_listed_with_what_they_type_and_can_be_deleted(client, session, master_key):
     from services.auth import get_current_user
 
-    _seed(session, master_key)
+    # Each word on two debits only: none is common enough to be set aside.
+    _link(session, master_key, "current")
+    _op(session, master_key, "current", "2026-03-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN")
     _op(session, master_key, "current", "2026-03-25", "60.00", "DBIT", "VIR INST ROUKINE EMILIEN LIVRET")
     target = _month(client)["VIR INST ROUKINE EMILIEN"]
     client.put(f"/banking/transactions/{target['id']}/type", json={"type": "SAVING", "scope": "label"})
 
     [rule] = client.get("/banking/type-rules").json()
     assert (rule["signature"], rule["label"], rule["type"], rule["operation_count"], rule["is_credit"]) == (
-        "emilien inst roukine vir", "VIR INST ROUKINE EMILIEN LIVRET", "SAVING", 3, False,
+        "emilien inst roukine vir", "VIR INST ROUKINE EMILIEN LIVRET", "SAVING", 2, False,
     )
 
     owner = app.dependency_overrides[get_current_user]
