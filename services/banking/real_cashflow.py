@@ -34,6 +34,7 @@ from dtos.banking import (
 )
 from models.banking import BankTransaction
 from services.banking.cashflow_types import counted_leg, signed_amount
+from services.banking.transfer_patterns import TransferPatterns
 from services.banking.flows import (
     _Accounts,
     _filed,
@@ -91,7 +92,12 @@ def real_cashflow_year(
 
     reading = _read(session, user_uuid, master_key, accounts, periods)
     months = [
-        RealCashflowMonth(period=p, operation_count=reading.months[p].count, **_totals(reading.months[p]).model_dump())
+        RealCashflowMonth(
+            period=p,
+            operation_count=reading.months[p].count,
+            open_questions=reading.open_questions(p),
+            **_totals(reading.months[p]).model_dump(),
+        )
         for p in periods
     ]
     covered = [m for m in months if m.operation_count]
@@ -102,6 +108,7 @@ def real_cashflow_year(
         months=months,
         totals=_sum(months),
         covered_months=len(covered),
+        open_questions=sum(m.open_questions for m in months),
         monthly_mean=_per_month(covered, lambda values: sum(values, Decimal("0")) / len(values)),
         monthly_median=_per_month(covered, median),
         top_expenses=reading.top_expenses(),
@@ -131,6 +138,7 @@ def real_cashflow_month(
         currency=reading.currency,
         totals=_totals(tally),
         operation_count=tally.count,
+        open_questions=reading.open_questions(period),
         previous_period=earlier[-1] if earlier else None,
         next_period=later[0] if later else None,
         other_currencies=reading.other_currencies(),
@@ -148,6 +156,12 @@ class _Reading:
     months: dict[str, _Tally]
     expenses: list[tuple[Decimal, RealCashflowExpense]]
     others: dict[str, dict[str, Decimal]]
+    patterns: TransferPatterns
+
+    def open_questions(self, period: str) -> int:
+        # From the whole history: a label's question sits on its last operation,
+        # possibly years later, while it decides how this month's count.
+        return self.patterns.questions.get(period, 0) + self.patterns.flow_open.get(period, 0)
 
     def top_expenses(self) -> list[RealCashflowExpense]:
         ranked = sorted(self.expenses, key=lambda e: (-e[0], e[1].operation_date or date.min, e[1].id))
@@ -179,6 +193,7 @@ def _read(session: Session, user_uuid: str, master_key: str, accounts: _Accounts
         months={p: _Tally() for p in periods},
         expenses=[],
         others=defaultdict(lambda: {"in": Decimal("0"), "out": Decimal("0")}),
+        patterns=pairing.patterns,
     )
     for index in selected:
         movement = movements[index]
@@ -223,7 +238,8 @@ def _stored_periods(session: Session, master_key: str, accounts: _Accounts, toda
 
 
 def _totals(tally: _Tally) -> RealCashflowTotals:
-    return RealCashflowTotals(**tally.totals)
+    t = tally.totals
+    return RealCashflowTotals(**t, net=t["income"] - t["expenses"] - t["saving"] - t["investment"])
 
 
 def _sum(months: list[RealCashflowMonth]) -> RealCashflowTotals:
