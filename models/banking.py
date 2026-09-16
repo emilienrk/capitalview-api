@@ -241,6 +241,8 @@ class BankTransaction(SQLModel, table=True):
     # An OperationType (services/banking/operation_types.py). NULL on rows
     # stored before it existed, until transfer patterns backfill it.
     operation_type_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    # A CashflowType the user forced on this one operation, over any rule.
+    type_override_enc: str | None = Field(default=None, sa_column=Column(TEXT))
 
     created_at: datetime = Field(
         default=sa.func.now(),
@@ -313,6 +315,39 @@ class BankTransferDecision(SQLModel, table=True):
     debit_tokens_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     credit_tokens_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     # Set by the service, to the microsecond: decisions are replayed in order.
+    created_at: datetime = Field(
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False)
+    )
+
+
+class BankTypeRule(SQLModel, table=True):
+    """The cashflow type the user gave a label on one account and direction: it
+    types every operation reading like it, past and future, as they are read
+    (see services/banking/type_rules.py).
+
+    Nothing here is joinable in clear with `bank_transactions`: the account, the
+    direction and the label signature are only ever encrypted, and uniqueness
+    rests on a blind index of the three together.
+    """
+    __tablename__ = "bank_type_rules"
+    __table_args__ = (
+        UniqueConstraint("user_uuid_bidx", "rule_bidx", name="uq_bank_type_rules_rule"),
+        {"extend_existing": True},
+    )
+
+    uuid: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        sa_column=Column(TEXT, primary_key=True, nullable=False),
+    )
+    user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
+    rule_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    signature_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    account_ref_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    credit_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    # JSON list of the label's words, for rules reaching nearby labels.
+    words_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    type_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    # Set by the service, to the microsecond: the most recent rule wins a tie.
     created_at: datetime = Field(
         sa_column=Column(sa.DateTime(timezone=True), nullable=False)
     )
