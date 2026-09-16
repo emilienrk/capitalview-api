@@ -4,11 +4,12 @@ The operation type read from a label (services/banking/operation_types.py).
 Labels are shaped like the real ones, names replaced.
 """
 import pytest
+import sqlalchemy as sa
 from sqlmodel import Session, select
 
 from dtos.banking import OperationType as Type
 from models.banking import BankTransaction
-from services.banking.flows import transfer_patterns
+from services.banking.flows import list_month_transactions, transfer_patterns
 from services.banking.operation_types import operation_type
 from services.encryption import decrypt_data, encrypt_data
 from tests.services.test_banking_flows import ACCOUNT_A, USER, _link, _raw, _store
@@ -92,3 +93,22 @@ def test_the_rebuild_corrects_a_type_the_lexicon_now_reads_otherwise(session: Se
     transfer_patterns(session, USER, master_key)
 
     assert _stored_types(session, master_key) == ["WITHDRAWAL"]
+
+
+def test_a_row_the_rebuild_has_not_reached_reads_its_type_from_its_label(session: Session, master_key: str):
+    _link(session, master_key, ACCOUNT_A)
+    _store(session, master_key, ACCOUNT_A, _raw("12.00", "DBIT", "2026-03-05", ref="r1", label="CARTE 04/03/26 BOULANGERIE CB*08"))
+    transfer_patterns(session, USER, master_key)
+    # Kept at its timestamp, so the stored patterns stay current and nothing rebuilds.
+    [row] = session.exec(select(BankTransaction)).all()
+    session.exec(
+        sa.update(BankTransaction)
+        .where(BankTransaction.uuid == row.uuid)
+        .values(operation_type_enc=None, updated_at=row.updated_at)
+    )
+    session.commit()
+
+    [item] = list_month_transactions(session, USER, master_key, "2026-03").transactions
+
+    assert item.operation_type is Type.CARD
+    assert _stored_types(session, master_key) == [None]
