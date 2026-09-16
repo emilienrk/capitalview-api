@@ -18,9 +18,8 @@ sync, an import, a deletion or a decision can never leave them stale, whichever
 path wrote it.
 
 Stored alongside, from the same pass: the words too common on each side of an
-account to tell a refund from its purchase ("CARTE", "CB", "VIR"), how many
-pairs are left for the user to settle, month by month, and how often each word
-occurs across the history, which category rules are proposed and checked on.
+account to tell a refund from its purchase ("CARTE", "CB", "VIR"), and how many
+pairs are left for the user to settle, month by month.
 """
 
 from __future__ import annotations
@@ -33,7 +32,6 @@ import sqlalchemy as sa
 from sqlmodel import Session, select
 
 from models.banking import BankTransaction, BankTransferDecision, BankTransferPatterns
-from services.banking.categorize import WordFrequency
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 # A shape that occurred this many times is trusted without asking. Measured:
@@ -53,8 +51,6 @@ class TransferPatterns:
     common_words: dict[str, frozenset[str]] = field(default_factory=dict)
     # "YYYY-MM" -> pairs offered to the user and not settled
     questions: dict[str, int] = field(default_factory=dict)
-    # How often each word occurs across the signatures, for category rules.
-    word_frequency: WordFrequency = field(default_factory=WordFrequency)
 
     def recurs(
         self, debit_account: str, credit_account: str, debit_signature: str | None, credit_signature: str | None
@@ -117,7 +113,6 @@ def read_patterns(
         shapes=content["shapes"],
         common_words={key: frozenset(words) for key, words in content["common_words"].items()},
         questions=content["questions"],
-        word_frequency=WordFrequency(**content["word_frequency"]),
     )
 
 
@@ -129,10 +124,6 @@ def write_patterns(
             "shapes": patterns.shapes,
             "common_words": {key: sorted(words) for key, words in patterns.common_words.items()},
             "questions": patterns.questions,
-            "word_frequency": {
-                "counts": patterns.word_frequency.counts,
-                "common_above": patterns.word_frequency.common_above,
-            },
         }),
         master_key,
     )

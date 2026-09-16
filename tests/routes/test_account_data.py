@@ -12,8 +12,6 @@ from models.bank import BankAccount
 from models.banking import (
     BankAccountLink,
     BankAuthorization,
-    BankCategory,
-    BankCategoryRule,
     BankSession,
     BankTransaction,
     BankTransferDecision,
@@ -81,8 +79,6 @@ BIDX_MODELS = (
     BankAccountLink,
     BankTransferDecision,
     BankTransferPatterns,
-    BankCategory,
-    BankCategoryRule,
 )
 FK_MODELS = (
     (ApiToken, "user_uuid"),
@@ -488,50 +484,6 @@ def test_export_includes_bank_transactions_and_excludes_private_key(session):
     assert "app-id-123" not in raw_export
 
 
-def _seed_categories(session, user_bidx: str, master_key: str) -> BankCategory:
-    from datetime import datetime, timezone
-    from services.encryption import encrypt_data
-
-    category = BankCategory(
-        user_uuid_bidx=user_bidx,
-        name_enc=encrypt_data("Courses", master_key),
-        name_bidx=hash_index("courses", master_key),
-        nature_enc=encrypt_data("EXPENSE", master_key),
-        origin_enc=encrypt_data("bank", master_key),
-    )
-    session.add(category)
-    session.add(
-        BankCategoryRule(
-            user_uuid_bidx=user_bidx,
-            tokens_enc=encrypt_data('["carrefour"]', master_key),
-            tokens_bidx=hash_index("carrefour", master_key),
-            category_ref_enc=encrypt_data(category.uuid, master_key),
-            source_enc=encrypt_data("user", master_key),
-            created_at=datetime.now(timezone.utc),
-        )
-    )
-    return category
-
-
-def test_export_includes_categories_and_rules_in_clear(session):
-    client = TestClient(app)
-    access_token, master_key, user_uuid = _register(client, session, "categories_export@example.com")
-    headers = _auth_headers(access_token, master_key)
-    category = _seed_categories(session, hash_index(user_uuid, master_key), master_key)
-    session.commit()
-
-    response = client.get("/auth/me/export", headers=headers)
-
-    assert response.status_code == 200
-    data = response.json()
-    assert [(c["uuid"], c["name"], c["nature"], c["origin"]) for c in data["bank_categories"]] == [
-        (category.uuid, "Courses", "EXPENSE", "bank")
-    ]
-    assert [(r["tokens"], r["category_id"], r["source"]) for r in data["bank_category_rules"]] == [
-        (["carrefour"], category.uuid, "user")
-    ]
-
-
 def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeypatch):
     client = TestClient(app)
     access_token, master_key, user_uuid = _register(client, session, "bank_purge@example.com")
@@ -621,7 +573,6 @@ def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeyp
             built_at=datetime.now(timezone.utc),
         )
     )
-    _seed_categories(session, user_bidx, master_key)
     session.commit()
 
     # Track that close_session was called on the mock client
@@ -645,8 +596,6 @@ def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeyp
     assert before["bank_authorizations"] == 1
     assert before["bank_transfer_decisions"] == 1
     assert before["bank_transfer_patterns"] == 1
-    assert before["bank_categories"] == 1
-    assert before["bank_category_rules"] == 1
 
     # Purge
     response = client.request(

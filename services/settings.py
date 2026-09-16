@@ -75,7 +75,6 @@ def _map_settings_to_response(
         cashflow_module_enabled=settings.cashflow_module_enabled,
         wealth_module_enabled=settings.wealth_module_enabled,
         ai_feature_enabled=settings.ai_feature_enabled,
-        ai_categorization_enabled=settings.ai_categorization_enabled,
         ai_vision_provider=settings.ai_vision_provider,
         ai_chat_provider=settings.ai_chat_provider,
         ai_providers=provider_configs,
@@ -215,9 +214,6 @@ def update_settings(
 
     if data.ai_feature_enabled is not None:
         settings.ai_feature_enabled = data.ai_feature_enabled
-
-    if data.ai_categorization_enabled is not None:
-        settings.ai_categorization_enabled = data.ai_categorization_enabled
 
     if "ai_vision_provider" in data.model_fields_set:
         p = data.ai_vision_provider
