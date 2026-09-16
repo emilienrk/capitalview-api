@@ -297,6 +297,14 @@ class OperationType(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class BankFlowQuestion(BaseModel):
+    """Asked on the last operation of a label nothing types but the user: a
+    credit, or a transfer sent. Answered by typing the label."""
+    choices: list[CashflowType]
+    # The operations of the label the answer types.
+    operation_count: int
+
+
 class BankTransactionItem(BaseModel):
     """One stored movement, as the bank reported it."""
     id: str
@@ -321,6 +329,7 @@ class BankTransactionItem(BaseModel):
     type_source: TypeSource = TypeSource.DEFAULT
     # The rule typing it, exact or reached from a nearby label.
     type_rule_id: str | None = None
+    flow_question: BankFlowQuestion | None = None
 
 
 class BankTransactionsResponse(BaseModel):
@@ -333,7 +342,8 @@ class BankTransactionsResponse(BaseModel):
     net: Decimal
     internal_transfers_excluded: int
     internal_transfers_amount: Decimal
-    # Pairs offered to the user this month, not deducted.
+    # Pairs offered to the user this month, not deducted, and flow questions
+    # carried by an operation of this month.
     transfer_questions: int = 0
     reversals_excluded: int = 0
     reversals_amount: Decimal = Decimal("0")
@@ -390,8 +400,8 @@ class BankTransferQuestionMonth(BaseModel):
 
 
 class BankTransferQuestionsResponse(BaseModel):
-    """GET /banking/transfer-questions — pairs offered to the user across the
-    whole history, month by month."""
+    """GET /banking/transfer-questions — pairs offered to the user and flow
+    questions across the whole history, month by month."""
     total: int
     months: list[BankTransferQuestionMonth]
 

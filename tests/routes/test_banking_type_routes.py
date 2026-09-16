@@ -142,3 +142,14 @@ def test_rules_are_listed_with_what_they_type_and_can_be_deleted(client, session
     assert client.delete(f"/banking/type-rules/{rule['id']}").status_code == 204
     assert client.delete(f"/banking/type-rules/{rule['id']}").status_code == 404
     assert _month(client)["VIR INST ROUKINE EMILIEN"]["cashflow_type"] == "EXPENSE"
+
+
+def test_flow_questions_count_with_the_transfer_questions_until_answered(client, session, master_key):
+    _seed(session, master_key)
+    assert client.get("/banking/transfer-questions").json() == {"total": 1, "months": [{"period": "2026-03", "count": 1}]}
+    [target] = [tx for tx in client.get("/banking/transactions?period=2026-03").json()["transactions"] if tx["flow_question"]]
+    assert (target["label"], target["flow_question"]["operation_count"]) == ("VIR INST ROUKINE EMILIEN", 2)
+
+    client.put(f"/banking/transactions/{target['id']}/type", json={"type": "SAVING", "scope": "label"})
+
+    assert client.get("/banking/transfer-questions").json() == {"total": 0, "months": []}
