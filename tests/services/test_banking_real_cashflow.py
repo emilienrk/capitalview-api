@@ -1,6 +1,6 @@
 """
 The real cashflow (services/banking/real_cashflow.py): completed months only,
-each operation counted by the nature the Opérations list shows.
+each operation counted by the type the Opérations list shows.
 """
 from datetime import date
 from decimal import Decimal
@@ -45,7 +45,7 @@ def _year(session: Session, master_key: str, year: int = 2026, today: date = TOD
 
 def _figures(totals) -> dict[str, Decimal]:
     return {name: value for name, value in totals.model_dump().items() if value and name in {
-        "income", "expenses", "saving", "investment", "internal", "neutralized",
+        "income", "expenses", "saving", "investment", "neutral",
     }}
 
 
@@ -79,7 +79,7 @@ def test_a_refund_is_neutralised(session: Session, master_key: str):
         (CURRENT, "2026-03-02", "59.45", "DBIT", "CARTE 01/03/26 ZALANDO PAYMENTS CB*08"),
         (CURRENT, "2026-03-12", "59.45", "CRDT", "AVOIR 11/03/26 ZALANDO PAYMENTS CB*08"),
     )
-    assert _figures(_year(session, master_key).totals) == {"neutralized": Decimal("59.45")}
+    assert _figures(_year(session, master_key).totals) == {"neutral": Decimal("59.45")}
 
 
 def test_the_monthly_median_and_mean_are_over_the_months_with_data(session: Session, master_key: str):
