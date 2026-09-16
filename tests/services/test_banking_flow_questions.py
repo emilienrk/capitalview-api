@@ -93,6 +93,20 @@ def test_an_answer_settles_the_label_and_a_nearby_one_imported_later(session: Se
     assert _questions(session, master_key) == {}
 
 
+def test_a_salary_whose_reference_changes_every_month_asks_once(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        (CURRENT, "2026-06-30", "1410.86", "CRDT", "VIR SEPA VILMORIN & CIE SALAIRE DE 2026-06 402147-1 Réf ZZ1KQCU8WQC5OZZ7OWGDQFCIK"),
+        (CURRENT, "2026-07-31", "1410.86", "CRDT", "VIR SEPA VILMORIN & CIE SALAIRE DE 2026-07 402147-1 Réf ZZ1KWVXDWRC9GJPBAZZ1KWVXDX4JPFVFQ"),
+    )
+    [june] = list_month_transactions(session, USER, master_key, "2026-06").transactions
+    set_transaction_type(session, USER, master_key, june.id, Type.INCOME, TypeScope.LABEL)
+
+    _ops(session, master_key, (CURRENT, "2026-08-31", "1410.86", "CRDT", "VIR SEPA VILMORIN & CIE SALAIRE DE 2026-08 402147-1 Réf ZZ1L2ZJSYU78NB5TWZZ1L2ZJSZ8833T8P0"))
+
+    assert _total(session, master_key) == 0
+
+
 def test_a_suggested_pair_asks_its_own_question_until_it_is_refused(session: Session, master_key: str):
     _ops(
         session, master_key,

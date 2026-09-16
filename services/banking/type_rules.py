@@ -9,7 +9,9 @@ month. Nearby is measured the way transfer decisions measure it
 (`transfer_decisions.SIMILARITY_THRESHOLD`): the words both labels share over
 the words either holds, once the words found in too many distinct labels on
 that side of the account ("CARTE", "VIR") are set aside, since they tell
-nothing apart.
+nothing apart. Only whole words count here: a run of letters and digits such
+as a transfer reference ("ZZ1L2ZJSYU78NB5") changes every month and would
+otherwise leave its letters behind as words no two months share.
 
 Rules are applied as operations are read, never written onto them, so a rule
 also types the operations imported after it.
@@ -18,6 +20,7 @@ also types the operations imported after it.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -26,8 +29,21 @@ from sqlmodel import Session, select
 
 from dtos.banking import CashflowType
 from models.banking import BankTypeRule
+from services.banking.transactions import label_signature
 from services.banking.transfer_decisions import SIMILARITY_THRESHOLD
 from services.encryption import decrypt_data, encrypt_data, hash_index
+
+
+_RUN = re.compile(r"[^\W_]+")
+
+
+def telling_words(label: str | None) -> frozenset[str]:
+    """The words a nearby label is measured on: runs of letters only, a run
+    holding a digit dropped whole."""
+    return frozenset(
+        run.lower() for run in _RUN.findall(label or "")
+        if len(run) >= 2 and not any(char.isdigit() for char in run)
+    )
 
 
 class RuleNotFoundError(LookupError):
@@ -53,22 +69,23 @@ class TypeRules:
     _reached: dict[tuple[str, bool, str], TypeRule | None] = field(default_factory=dict)
 
     def reach(
-        self, account_bidx: str, is_credit: bool, signature: str | None, common: frozenset[str]
+        self, account_bidx: str, is_credit: bool, label: str | None, common: frozenset[str]
     ) -> TypeRule | None:
         """The rule of this label: its own, else the nearest one on the same
         side of the account, the most recent on a tie."""
+        signature = label_signature(label)
         if signature is None:
             return None
         key = (account_bidx, is_credit, signature)
         if key in self.exact:
             return self.exact[key]
         if key not in self._reached:
-            self._reached[key] = _nearest(self.by_side.get((account_bidx, is_credit), []), signature, common)
+            self._reached[key] = _nearest(self.by_side.get((account_bidx, is_credit), []), label, common)
         return self._reached[key]
 
 
-def _nearest(rules: list[TypeRule], signature: str, common: frozenset[str]) -> TypeRule | None:
-    informative = frozenset(signature.split()) - common
+def _nearest(rules: list[TypeRule], label: str | None, common: frozenset[str]) -> TypeRule | None:
+    informative = telling_words(label) - common
     if not informative:
         return None
     best: tuple[float, datetime] | None = None
@@ -112,7 +129,7 @@ def save_rule(
     master_key: str,
     account_id: str,
     is_credit: bool,
-    signature: str,
+    label: str,
     kind: CashflowType,
 ) -> BankTypeRule:
     """Write the rule of a label, replacing the one it had.
@@ -120,6 +137,9 @@ def save_rule(
     Replaced by a new row rather than updated: its creation time is what tells
     the stored transfer patterns that the rules moved.
     """
+    signature = label_signature(label)
+    if signature is None:
+        raise ValueError("A rule needs a label with words.")
     user_bidx = hash_index(user_uuid, master_key)
     bidx = rule_bidx(account_id, is_credit, signature, master_key)
     session.exec(sa.delete(BankTypeRule).where(
@@ -131,7 +151,7 @@ def save_rule(
         signature_enc=encrypt_data(signature, master_key),
         account_ref_enc=encrypt_data(account_id, master_key),
         credit_enc=encrypt_data(_flag(is_credit), master_key),
-        words_enc=encrypt_data(json.dumps(signature.split()), master_key),
+        words_enc=encrypt_data(json.dumps(sorted(telling_words(label))), master_key),
         type_enc=encrypt_data(kind.value, master_key),
         created_at=datetime.now(timezone.utc),
     )
