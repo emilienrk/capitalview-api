@@ -24,7 +24,8 @@ from sqlmodel import Session, select
 
 from dtos.banking import (
     BankFlowCurrencyTotal,
-    OperationNature,
+    CashflowType,
+    TypeSource,
     RealCashflowExpense,
     RealCashflowMonth,
     RealCashflowMonthDetail,
@@ -32,16 +33,15 @@ from dtos.banking import (
     RealCashflowYear,
 )
 from models.banking import BankTransaction
+from services.banking.cashflow_types import counted_leg, signed_amount
 from services.banking.flows import (
     _Accounts,
     _filed,
     _filing,
     _label,
-    _Movement,
     _pairing,
     _paired_movements,
     _shift_period,
-    _TransferLeg,
     _user_accounts,
 )
 from services.encryption import decrypt_data, hash_index
@@ -52,12 +52,11 @@ TOP_EXPENSES = 5
 _HISTORY_YEARS = 40
 
 _FIELD_OF = {
-    OperationNature.INCOME: "income",
-    OperationNature.EXPENSE: "expenses",
-    OperationNature.SAVING: "saving",
-    OperationNature.INVESTMENT: "investment",
-    OperationNature.INTERNAL: "internal",
-    OperationNature.NEUTRALIZED: "neutralized",
+    CashflowType.INCOME: "income",
+    CashflowType.EXPENSE: "expenses",
+    CashflowType.SAVING: "saving",
+    CashflowType.INVESTMENT: "investment",
+    CashflowType.NEUTRAL: "neutral",
 }
 
 
@@ -164,7 +163,7 @@ class _Reading:
 def _read(session: Session, user_uuid: str, master_key: str, accounts: _Accounts, periods: list[str]) -> _Reading:
     pairing = _pairing(session, user_uuid, master_key, accounts)
     movements, transfer_legs = _paired_movements(session, master_key, accounts.readable, periods, pairing)
-    filing = _filing(session, user_uuid, master_key, accounts)
+    filing = _filing(session, user_uuid, master_key, accounts, pairing.patterns)
     window = set(periods)
     selected = [i for i, m in enumerate(movements) if m.period in window and m.is_final]
 
@@ -186,53 +185,24 @@ def _read(session: Session, user_uuid: str, master_key: str, accounts: _Accounts
         if movement.currency != currency:
             reading.others[movement.currency]["in" if movement.is_credit else "out"] += movement.amount
             continue
-        nature = _filed(movements, transfer_legs, index, filing)
-        if not _counted(movements, transfer_legs, index, nature, filing.savings):
+        label = _label(movement, master_key)
+        resolution = _filed(movements, transfer_legs, index, label, filing)
+        kind = resolution.type
+        paired = resolution.source is TypeSource.PAIR
+        if not counted_leg(movement.is_credit, movement.account_bidx in filing.savings, kind, paired):
             continue
-        amount = _signed(movement, nature)
         tally = reading.months[movement.period]
-        tally.totals[_FIELD_OF[nature]] += amount
+        tally.totals[_FIELD_OF[kind]] += signed_amount(movement.amount, movement.is_credit, kind)
         tally.count += 1
-        if nature is OperationNature.EXPENSE and not movement.is_credit:
+        if kind is CashflowType.EXPENSE and not movement.is_credit:
             reading.expenses.append((movement.amount, RealCashflowExpense(
                 id=movement.row.uuid,
                 operation_date=movement.day,
-                label=_label(movement, master_key),
+                label=label,
                 amount=movement.amount,
                 account_name=names[movement.account_bidx],
             )))
     return reading
-
-
-def _counted(
-    movements: list[_Movement],
-    transfer_legs: dict[int, _TransferLeg],
-    index: int,
-    nature: OperationNature,
-    savings: frozenset[str],
-) -> bool:
-    """Whether this leg is the one a pair is counted on, so a pair counts once.
-
-    Saving reads on the leg outside the savings account: its debit puts money
-    aside, its credit takes it back. Any other pair reads on its debit.
-    """
-    leg = transfer_legs.get(index)
-    if leg is None or nature not in (OperationNature.SAVING, OperationNature.INTERNAL, OperationNature.NEUTRALIZED):
-        return True
-    movement = movements[index]
-    if nature is OperationNature.SAVING:
-        return movement.account_bidx not in savings
-    return not movement.is_credit
-
-
-def _signed(movement: _Movement, nature: OperationNature) -> Decimal:
-    """An amount in its nature's own direction: a credit is income, a debit is
-    spent, set aside or invested, and the reverse is taken back off."""
-    if nature is OperationNature.INCOME:
-        return movement.amount if movement.is_credit else -movement.amount
-    if nature in (OperationNature.INTERNAL, OperationNature.NEUTRALIZED):
-        return movement.amount
-    return -movement.amount if movement.is_credit else movement.amount
 
 
 def _stored_periods(session: Session, master_key: str, accounts: _Accounts, today: date) -> list[str]:

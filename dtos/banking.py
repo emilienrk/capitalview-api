@@ -267,16 +267,23 @@ class BankTransferStatus(str, Enum):
     REFUND = "refund"
 
 
-class OperationNature(str, Enum):
-    """How an operation counts in the real cashflow. Only EXPENSE and INCOME
-    count as such; SAVING and INVESTMENT are totalled apart, INTERNAL and
-    NEUTRALIZED only reported."""
-    EXPENSE = "EXPENSE"
+class CashflowType(str, Enum):
+    """How an operation counts in the real cashflow, one per operation
+    (services/banking/cashflow_types.py). NEUTRAL counts nowhere: money moved
+    between the user's own accounts, or came back as it went."""
     INCOME = "INCOME"
+    EXPENSE = "EXPENSE"
     SAVING = "SAVING"
     INVESTMENT = "INVESTMENT"
-    INTERNAL = "INTERNAL"
-    NEUTRALIZED = "NEUTRALIZED"
+    NEUTRAL = "NEUTRAL"
+
+
+class TypeSource(str, Enum):
+    """What gave an operation its cashflow type, strongest first."""
+    PAIR = "pair"
+    OVERRIDE = "override"
+    RULE = "rule"
+    DEFAULT = "default"
 
 
 class OperationType(str, Enum):
@@ -310,7 +317,10 @@ class BankTransactionItem(BaseModel):
     transfer_id: str | None = None
     transfer_status: BankTransferStatus | None = None
     operation_type: OperationType = OperationType.UNKNOWN
-    nature: OperationNature | None = None
+    cashflow_type: CashflowType = CashflowType.EXPENSE
+    type_source: TypeSource = TypeSource.DEFAULT
+    # The rule typing it, exact or reached from a nearby label.
+    type_rule_id: str | None = None
 
 
 class BankTransactionsResponse(BaseModel):
@@ -395,15 +405,14 @@ class RealCashflowTotals(BaseModel):
     """What moved, by nature, in the response's currency.
 
     `income` and `expenses` are net of their own reversals. `saving` and `investment` are net
-    too: money taken back from a savings account lowers `saving`. `internal`
-    and `neutralized` are only informative, and never part of any other figure.
+    too: money taken back from a savings account lowers `saving`. `neutral` is
+    only informative, and never part of any other figure.
     """
     income: Decimal = Decimal("0")
     expenses: Decimal = Decimal("0")
     saving: Decimal = Decimal("0")
     investment: Decimal = Decimal("0")
-    internal: Decimal = Decimal("0")
-    neutralized: Decimal = Decimal("0")
+    neutral: Decimal = Decimal("0")
 
 
 class RealCashflowMonth(RealCashflowTotals):

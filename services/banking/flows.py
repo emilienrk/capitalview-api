@@ -39,13 +39,14 @@ from dtos.banking import (
     BankTransactionsResponse,
     BankTransferDecisionKind,
     BankTransferStatus,
-    OperationNature,
+    CashflowType,
     OperationType,
 )
 from models.bank import BankAccount
 from models.banking import BankTransaction
 from models.enums import BankAccountType
 from services.banking import transfer_patterns as stored_patterns
+from services.banking.cashflow_types import Resolution, resolve_type
 from services.banking.linking import readable_account_bidxs
 from services.banking.operation_types import operation_type
 from services.banking.transactions import (
@@ -63,6 +64,7 @@ from services.banking.transfer_decisions import (
     load_decisions,
 )
 from services.banking.transfer_patterns import TransferPatterns
+from services.banking.type_rules import TypeRules, load_rules
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 logger = logging.getLogger(__name__)
@@ -149,6 +151,8 @@ class _Filing(NamedTuple):
     """What reading how each operation counts needs, loaded once per request."""
     master_key: str
     savings: frozenset[str]
+    rules: TypeRules
+    patterns: TransferPatterns
 
 
 @dataclass
@@ -499,10 +503,14 @@ def _accounts_of_types(accounts: _Accounts, types: frozenset[BankAccountType], m
     )
 
 
-def _filing(session: Session, user_uuid: str, master_key: str, accounts: _Accounts) -> _Filing:
+def _filing(
+    session: Session, user_uuid: str, master_key: str, accounts: _Accounts, patterns: TransferPatterns
+) -> _Filing:
     return _Filing(
         master_key=master_key,
         savings=_savings_accounts(accounts, master_key),
+        rules=load_rules(session, user_uuid, master_key),
+        patterns=patterns,
     )
 
 
@@ -776,23 +784,29 @@ def _filed(
     movements: list[_Movement],
     transfer_legs: dict[int, _TransferLeg],
     index: int,
+    label: str | None,
     filing: _Filing,
-) -> OperationNature:
+) -> Resolution:
     """How one operation counts: the single reading every view of the
-    operations shares.
-
-    A transfer with exactly one savings leg puts money aside or takes it back;
-    between two savings accounts, or two current ones, money only moved. A pair
-    only offered to the user is not a pair yet.
-    """
+    operations shares."""
     movement = movements[index]
     leg = transfer_legs.get(index)
-    if leg is not None and leg.status in _CANCELLATIONS:
-        return OperationNature.NEUTRALIZED
-    if leg is not None and leg.status in DEDUCTED:
-        savings_legs = (movement.account_bidx in filing.savings) + (movements[leg.other].account_bidx in filing.savings)
-        return OperationNature.SAVING if savings_legs == 1 else OperationNature.INTERNAL
-    return OperationNature.INCOME if movement.is_credit else OperationNature.EXPENSE
+    savings_legs = (
+        (movement.account_bidx in filing.savings) + (movements[leg.other].account_bidx in filing.savings)
+        if leg else 0
+    )
+    override = movement.row.type_override_enc
+    rule = filing.rules.reach(
+        movement.account_bidx, movement.is_credit, label_signature(label),
+        filing.patterns.common(movement.account_bidx, movement.is_credit),
+    )
+    return resolve_type(
+        movement.is_credit,
+        leg.status if leg else None,
+        savings_legs,
+        CashflowType(decrypt_data(override, filing.master_key)) if override else None,
+        (rule.uuid, rule.type) if rule else None,
+    )
 
 
 def _item_builder(
@@ -813,6 +827,7 @@ def _item_builder(
         counterpart = movements[leg.other] if leg else None
         row = movement.row
         label = _label(movement, master_key)
+        resolution = _filed(movements, transfer_legs, index, label, filing)
         return BankTransactionItem(
             id=row.uuid,
             account_id=accounts.by_bidx[movement.account_bidx].uuid,
@@ -834,7 +849,9 @@ def _item_builder(
                 OperationType(decrypt_data(row.operation_type_enc, master_key))
                 if row.operation_type_enc else operation_type(label)
             ),
-            nature=_filed(movements, transfer_legs, index, filing),
+            cashflow_type=resolution.type,
+            type_source=resolution.source,
+            type_rule_id=resolution.rule_id,
         )
 
     return item
@@ -859,9 +876,8 @@ def list_month_transactions(
     if not scope:
         return _empty_month(period)
 
-    movements, transfer_legs = _paired_movements(
-        session, master_key, accounts.readable, [period], _pairing(session, user_uuid, master_key, accounts),
-    )
+    pairing = _pairing(session, user_uuid, master_key, accounts)
+    movements, transfer_legs = _paired_movements(session, master_key, accounts.readable, [period], pairing)
     in_scope = set(scope)
     selected = [
         i for i, m in enumerate(movements) if m.period == period and m.account_bidx in in_scope
@@ -869,7 +885,9 @@ def list_month_transactions(
     totals = _aggregate(movements, transfer_legs, selected, [period])
     [month] = totals.months
 
-    item = _item_builder(movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts))
+    item = _item_builder(
+        movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts, pairing.patterns),
+    )
 
     return BankTransactionsResponse(
         period=period,
@@ -912,9 +930,8 @@ def list_transfer_counterparts(
         return []
 
     period = f"{day.year:04d}-{day.month:02d}"
-    movements, transfer_legs = _paired_movements(
-        session, master_key, accounts.readable, [period], _pairing(session, user_uuid, master_key, accounts),
-    )
+    pairing = _pairing(session, user_uuid, master_key, accounts)
+    movements, transfer_legs = _paired_movements(session, master_key, accounts.readable, [period], pairing)
     [origin] = [m for m in movements if m.row.uuid == transaction_id]
     matches = sorted(
         (
@@ -928,7 +945,9 @@ def list_transfer_counterparts(
             and abs((m.day - day).days) <= MAX_DECISION_DAYS
         ),
     )
-    item = _item_builder(movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts))
+    item = _item_builder(
+        movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts, pairing.patterns),
+    )
     return [item(i) for _, i in matches]
 
 
@@ -937,16 +956,17 @@ def _transaction_item(
 ) -> BankTransactionItem:
     """One operation exactly as its month's list shows it."""
     day = row_date(row, master_key)
+    pairing = _pairing(session, user_uuid, master_key, accounts)
     if day is None:
         movements = _load_movements(session, master_key, [row.account_id_bidx], None)
         transfer_legs: dict[int, _TransferLeg] = {}
     else:
         movements, transfer_legs = _paired_movements(
-            session, master_key, accounts.readable, [f"{day:%Y-%m}"],
-            _pairing(session, user_uuid, master_key, accounts),
+            session, master_key, accounts.readable, [f"{day:%Y-%m}"], pairing,
         )
     [index] = [i for i, m in enumerate(movements) if m.row.uuid == row.uuid]
-    return _item_builder(movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts))(index)
+    filing = _filing(session, user_uuid, master_key, accounts, pairing.patterns)
+    return _item_builder(movements, transfer_legs, accounts, filing)(index)
 
 
 def _empty(periods: list[str]) -> BankFlowsResponse:
