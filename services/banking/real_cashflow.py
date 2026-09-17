@@ -42,7 +42,7 @@ from dtos.banking import (
 )
 from models.banking import BankAccountLink, BankTransaction
 from services.banking.cashflow_types import counted_leg, signed_amount
-from services.banking.label_groups import group_key, group_name
+from services.banking.label_groups import group_key, group_name, group_words, merge_similar
 from services.banking.transfer_patterns import TransferPatterns
 from services.banking.flows import (
     SAVINGS_ACCOUNTS,
@@ -250,6 +250,9 @@ class _Reading:
     expenses: list[tuple[str, Decimal, RealCashflowExpense]]
     # (period, is_source, key, day, label, amount)
     flows: list[tuple[str, bool, str, date | None, str | None, Decimal]]
+    # The words each (side, key) is named by, to bring one counterpart's
+    # spellings together.
+    group_words: dict[tuple[bool, str], frozenset[str]]
     others: dict[str, dict[str, dict[str, Decimal]]]
     patterns: TransferPatterns
     # Expenses by period and day of the month, when asked for.
@@ -273,12 +276,22 @@ class _Reading:
         return [expense for _, expense in ranked[:TOP_EXPENSES]]
 
     def counterparts(self, periods: set[str], sources: bool) -> list[RealCashflowCounterpart]:
-        amounts: dict[str, Decimal] = defaultdict(Decimal)
-        occurrences: dict[str, list[tuple[date | None, str | None]]] = defaultdict(list)
+        raw_amounts: dict[str, Decimal] = defaultdict(Decimal)
+        raw_occurrences: dict[str, list[tuple[date | None, str | None]]] = defaultdict(list)
         for period, is_source, key, day, label, amount in self.flows:
             if period in periods and is_source == sources:
-                amounts[key] += amount
-                occurrences[key].append((day, label))
+                raw_amounts[key] += amount
+                raw_occurrences[key].append((day, label))
+        # The same counterpart spelled several ways holds one line, as in the
+        # ledger the Explorer reads.
+        into = merge_similar([
+            (key, self.group_words[(sources, key)], len(raw_occurrences[key])) for key in raw_occurrences
+        ])
+        amounts: dict[str, Decimal] = defaultdict(Decimal)
+        occurrences: dict[str, list[tuple[date | None, str | None]]] = defaultdict(list)
+        for key, rows in raw_occurrences.items():
+            amounts[into[key]] += raw_amounts[key]
+            occurrences[into[key]].extend(rows)
         total = sum(amounts.values(), Decimal("0"))
         ranked = sorted(amounts, key=lambda key: (-amounts[key], key))[:TOP_COUNTERPARTS]
         return [
@@ -346,6 +359,7 @@ def _read(
         patterns=pairing.patterns,
         daily={p: defaultdict(Decimal) for p in periods},
         pending={p: defaultdict(Decimal) for p in periods},
+        group_words={},
     )
     for index in selected:
         movement = movements[index]
@@ -378,10 +392,9 @@ def _read(
                 account_name=names[movement.account_bidx],
             )))
         if (kind is CashflowType.INCOME and movement.is_credit) or (kind is CashflowType.EXPENSE and not movement.is_credit):
-            reading.flows.append((
-                movement.period, movement.is_credit, group_key(label, common[movement.is_credit]),
-                movement.day, label, movement.amount,
-            ))
+            key = group_key(label, common[movement.is_credit])
+            reading.group_words[(movement.is_credit, key)] = group_words(label, common[movement.is_credit])
+            reading.flows.append((movement.period, movement.is_credit, key, movement.day, label, movement.amount))
     return reading
 
 
