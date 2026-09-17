@@ -54,6 +54,17 @@ class StockTransaction(SQLModel, table=True):
     fees_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     executed_at_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     notes_enc: str | None = Field(sa_column=Column(TEXT))
+    # A EUR deposit the app wrote itself to cover a BUY the cash was short for
+    # (services/stock_transaction.py). It is bookkeeping: no money crossed the
+    # account's boundary, so nothing may read it as a transfer from the bank.
+    # In clear, unlike everything else here: it says nothing the row's existence
+    # does not already say, and the bank reading needs it without the key.
+    # False on rows stored before it existed, until the deposits are read once
+    # (services/banking/contributions.py).
+    is_auto_provision: bool = Field(
+        default=False,
+        sa_column=Column(sa.Boolean, nullable=False, server_default=sa.false()),
+    )
 
     created_at: datetime = Field(
         default=sa.func.now(),

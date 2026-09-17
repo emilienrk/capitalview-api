@@ -49,6 +49,16 @@ class TestResolution:
     def test_the_rule_beats_the_default(self):
         assert resolve_type(False, None, 0, None, ("r1", Type.SAVING)) == Resolution(Type.SAVING, Source.RULE, "r1")
 
+    def test_a_declared_deposit_types_what_nothing_else_does(self):
+        assert resolve_type(False, None, 0, None, None, contributed=True) == Resolution(
+            Type.INVESTMENT, Source.CONTRIBUTION, None
+        )
+        assert resolve_type(True, None, 0, None, None, contributed=True).type is Type.INVESTMENT
+
+    def test_the_user_beats_a_declared_deposit(self):
+        assert resolve_type(False, None, 0, Type.EXPENSE, None, contributed=True).source is Source.OVERRIDE
+        assert resolve_type(False, None, 0, None, ("r1", Type.EXPENSE), contributed=True).source is Source.RULE
+
     def test_a_suggested_pair_is_not_a_pair_yet(self):
         assert resolve_type(False, Status.SUGGESTED, 1, None, None) == Resolution(Type.EXPENSE, Source.DEFAULT, None)
         assert resolve_type(False, Status.SUGGESTED, 1, None, ("r1", Type.SAVING)).type is Type.SAVING

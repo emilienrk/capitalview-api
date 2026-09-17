@@ -48,11 +48,18 @@ def _tx_day(tx) -> date | None:
 
 
 def is_auto_provision(tx) -> bool:
-    """True for a cash row the app generated itself to cover a BUY shortfall."""
+    """True for a cash row the app generated itself to cover a BUY shortfall.
+
+    Read from the row's own flag, and from its note for the rows written before
+    that flag existed: they carry it until the deposits are read once
+    (services/banking/contributions.py).
+    """
     if _tx_type(tx) != "DEPOSIT":
         return False
     if str(getattr(tx, "asset_key", "") or "").upper() != "EUR":
         return False
+    if getattr(tx, "is_auto_provision", False):
+        return True
     return (getattr(tx, "notes", None) or "").strip() == AUTO_PROVISION_NOTE
 
 

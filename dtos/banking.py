@@ -283,6 +283,10 @@ class TypeSource(str, Enum):
     PAIR = "pair"
     OVERRIDE = "override"
     RULE = "rule"
+    # A deposit or a withdrawal the user declared on one of their investment
+    # accounts, on the very day and for the very amount
+    # (services/banking/contributions.py).
+    CONTRIBUTION = "contribution"
     DEFAULT = "default"
 
 
@@ -295,6 +299,21 @@ class OperationType(str, Enum):
     WITHDRAWAL = "WITHDRAWAL"
     INTEREST = "INTEREST"
     UNKNOWN = "UNKNOWN"
+
+
+class BankContributionMatch(BaseModel):
+    """A movement declared on an investment account that this operation could be.
+
+    `exact` means the same day and a single candidate: the operation is typed as
+    an investment on it. Otherwise it is a nearby amount, shown beside the
+    question for the user to judge — it types nothing.
+    """
+    account_name: str
+    day: date
+    amount: Decimal
+    # A deposit into the account, as opposed to a withdrawal out of it.
+    is_deposit: bool
+    exact: bool
 
 
 class BankFlowQuestion(BaseModel):
@@ -332,6 +351,9 @@ class BankTransactionItem(BaseModel):
     # The rule typing it, exact or reached from a nearby label.
     type_rule_id: str | None = None
     flow_question: BankFlowQuestion | None = None
+    # What the user's investment accounts say about it: the evidence that typed
+    # it, or a nearby deposit to judge the question by.
+    contribution: BankContributionMatch | None = None
 
 
 class BankTransactionsResponse(BaseModel):

@@ -55,6 +55,16 @@ class CryptoTransaction(SQLModel, table=True):
     executed_at_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     tx_hash_enc: str | None = Field(sa_column=Column(TEXT))
     notes_enc: str | None = Field(sa_column=Column(TEXT))
+    # The EUR leg the app writes itself beside another row of the same group: a
+    # purchase's funding, a sale's proceeds. Same meaning as on a stock
+    # transaction, and in clear for the same reasons — no money crossed the
+    # account's boundary, so nothing may read it as a transfer from the bank.
+    # False on rows stored before it existed, until the deposits are read once
+    # (services/banking/contributions.py).
+    is_auto_provision: bool = Field(
+        default=False,
+        sa_column=Column(sa.Boolean, nullable=False, server_default=sa.false()),
+    )
 
     created_at: datetime = Field(
         default=sa.func.now(),

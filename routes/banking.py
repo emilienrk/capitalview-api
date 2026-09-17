@@ -63,6 +63,7 @@ from services.banking.flows import (
     UnknownAccountError,
     clear_transaction_type,
     compute_real_flows,
+    list_flow_group,
     list_month_transactions,
     list_transfer_counterparts,
     list_type_rules,
@@ -580,6 +581,21 @@ def get_transfer_counterparts(
     cancellation. Ungated, like /transactions."""
     try:
         return list_transfer_counterparts(session, current_user.uuid, master_key, transaction_id)
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail="Opération introuvable.")
+
+
+@router.get("/transactions/{transaction_id}/flow-group", response_model=list[BankTransactionItem])
+def get_flow_group(
+    transaction_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """The operations one answer to this flow question would type, newest first.
+    Ungated, like /transactions."""
+    try:
+        return list_flow_group(session, current_user.uuid, master_key, transaction_id)
     except TransactionNotFoundError:
         raise HTTPException(status_code=404, detail="Opération introuvable.")
 

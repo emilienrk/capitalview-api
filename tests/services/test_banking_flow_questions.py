@@ -17,6 +17,7 @@ from services.banking.flows import (
     DEBIT_CHOICES,
     _regulated_savings,
     _user_accounts,
+    list_flow_group,
     list_month_transactions,
     set_transaction_type,
     transfer_patterns,
@@ -205,3 +206,31 @@ def test_each_account_s_history_span_is_stored(session: Session, master_key: str
         hash_index(CURRENT, master_key): (date(2025, 11, 3), date(2026, 3, 5)),
         hash_index(NEOBANK, master_key): (date(2026, 1, 10), date(2026, 1, 10)),
     }
+
+
+def test_the_group_lists_the_very_operations_the_answer_types(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        (CURRENT, "2026-01-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-02-05", "150.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-03-05", "90.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-03-08", "42.10", "DBIT", "CARTE 07/03/26 CARREFOUR ANNECY CB*08"),
+    )
+    [carrier] = [tx for tx in list_month_transactions(session, USER, master_key, "2026-03").transactions if tx.flow_question]
+
+    group = list_flow_group(session, USER, master_key, carrier.id)
+    assert [(tx.operation_date.isoformat(), tx.amount) for tx in group] == [
+        ("2026-03-05", Decimal("90.00")),
+        ("2026-02-05", Decimal("150.00")),
+        ("2026-01-05", Decimal("400.00")),
+    ]
+    assert len(group) == carrier.flow_question.operation_count
+    assert sum(tx.amount for tx in group) == carrier.flow_question.amount
+
+
+def test_an_answered_label_has_no_group_left(session: Session, master_key: str):
+    _ops(session, master_key, (CURRENT, "2026-03-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"))
+    [carrier] = [tx for tx in list_month_transactions(session, USER, master_key, "2026-03").transactions if tx.flow_question]
+    set_transaction_type(session, USER, master_key, carrier.id, Type.INVESTMENT, TypeScope.LABEL)
+
+    assert list_flow_group(session, USER, master_key, carrier.id) == []

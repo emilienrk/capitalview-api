@@ -7,10 +7,12 @@ Pure: every input is already decrypted and loaded by `flows.py`.
 The order is fixed, strongest first. A pair the pairing trusts is a transfer or
 a cancellation whatever the user said of either leg — it is undone through the
 transfer decisions, not here. Then what the user forced on this very
-operation, then the rule of its label, and only then the direction.
+operation, then the rule of its label, then the deposit found facing it on one
+of the user's investment accounts, and only then the direction.
 
 A type is never guessed from a label's vocabulary: NEUTRAL only comes from a
-pair or from the user, and saving or investing from a pair or from the user.
+pair or from the user, and saving or investing from a pair, from the user, or
+from a movement the user declared on the account the money went to.
 """
 
 from __future__ import annotations
@@ -41,13 +43,17 @@ def resolve_type(
     savings_legs: int,
     override: CashflowType | None,
     rule: tuple[str, CashflowType] | None,
+    contributed: bool = False,
 ) -> Resolution:
     """One operation's type.
 
     `transfer_status` is its pair's, None when unpaired; `savings_legs` is how
     many of the pair's two accounts hold savings; `rule` is the (id, type) of
     the rule its label reaches, exact or nearby. A pair only offered to the user
-    is not a pair yet.
+    is not a pair yet. `contributed` is set when a deposit the user declared on
+    an investment account proves this very operation
+    (`services/banking/contributions.py`) — it comes after the user's own
+    answers, which correct a deduction rather than being corrected by it.
     """
     if transfer_status in CANCELLATIONS:
         return Resolution(CashflowType.NEUTRAL, TypeSource.PAIR)
@@ -61,6 +67,9 @@ def resolve_type(
     if rule is not None:
         rule_id, kind = rule
         return Resolution(kind, TypeSource.RULE, rule_id)
+    if contributed:
+        # A debit went to the investment account, a credit came back from it.
+        return Resolution(CashflowType.INVESTMENT, TypeSource.CONTRIBUTION)
     return Resolution(CashflowType.INCOME if is_credit else CashflowType.EXPENSE, TypeSource.DEFAULT)
 
 

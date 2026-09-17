@@ -153,3 +153,25 @@ def test_flow_questions_count_with_the_transfer_questions_until_answered(client,
     client.put(f"/banking/transactions/{target['id']}/type", json={"type": "SAVING", "scope": "label"})
 
     assert client.get("/banking/transfer-questions").json() == {"total": 0, "months": []}
+
+
+def test_the_flow_group_route_lists_what_one_answer_would_type(client, session, master_key):
+    _seed(session, master_key)
+    # The question sits on the label's last operation: read the list itself, which
+    # `_month` keys by label and would leave only one operation per label.
+    listed = client.get("/banking/transactions?period=2026-03").json()["transactions"]
+    [carrier] = [tx for tx in listed if tx["flow_question"]]
+    assert carrier["flow_question"]["operation_count"] == 2
+
+    response = client.get(f"/banking/transactions/{carrier['id']}/flow-group")
+
+    assert response.status_code == 200
+    assert [(op["operation_date"], op["amount"]) for op in response.json()] == [
+        ("2026-03-19", "150"),
+        ("2026-03-05", "400"),
+    ]
+
+
+def test_the_flow_group_of_an_unknown_operation_is_a_404(client, session, master_key):
+    _seed(session, master_key)
+    assert client.get("/banking/transactions/nope/flow-group").status_code == 404

@@ -32,6 +32,7 @@ from typing import NamedTuple
 from sqlmodel import Session, select
 
 from dtos.banking import (
+    BankContributionMatch,
     BankFlowCurrencyTotal,
     BankFlowMonth,
     BankFlowQuestion,
@@ -53,9 +54,17 @@ from dtos.banking import (
 )
 from models.bank import BankAccount
 from models.banking import BankTransaction
+from models.currency import BASE_CURRENCY
 from models.enums import BankAccountType
 from services.banking import transfer_patterns as stored_patterns
 from services.banking.cashflow_types import Resolution, resolve_type
+from services.banking.contributions import (
+    Candidate,
+    Contributions,
+    Match,
+    load_contributions,
+    match_candidates,
+)
 from services.banking.linking import readable_account_bidxs
 from services.banking.operation_types import operation_type
 from services.banking.transactions import (
@@ -184,6 +193,10 @@ class _Filing(NamedTuple):
     savings: frozenset[str]
     rules: TypeRules
     patterns: TransferPatterns
+    # Movement index -> the deposit or withdrawal the user declared facing it.
+    # Resolved over the whole set of movements, since a deposit proves one of
+    # them at most (services/banking/contributions.py).
+    contributions: dict[int, Match]
 
 
 @dataclass
@@ -535,14 +548,63 @@ def _accounts_of_types(accounts: _Accounts, types: frozenset[BankAccountType], m
 
 
 def _filing(
-    session: Session, user_uuid: str, master_key: str, accounts: _Accounts, patterns: TransferPatterns
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    accounts: _Accounts,
+    patterns: TransferPatterns,
+    movements: list[_Movement],
+    transfer_legs: dict[int, _TransferLeg],
 ) -> _Filing:
+    """Everything the reading needs, the movements included: the deposits facing
+    them are matched one for one, which no single operation can decide alone.
+
+    Every reader passes the movements it loaded, so they all read one operation
+    the same way — the whole point of `_filed`.
+    """
     return _Filing(
         master_key=master_key,
         savings=_savings_accounts(accounts, master_key),
         rules=load_rules(session, user_uuid, master_key),
         patterns=patterns,
+        contributions=_contributions(
+            movements, transfer_legs, master_key, load_contributions(session, user_uuid, master_key)
+        ),
     )
+
+
+def _contributions(
+    movements: list[_Movement],
+    transfer_legs: dict[int, _TransferLeg],
+    master_key: str,
+    contributions: Contributions,
+) -> dict[int, Match]:
+    """The declared movement facing each bank movement, where there is one.
+
+    Offered to the matching: every operation whose question only the user could
+    answer otherwise — an unpaired credit, or an unpaired transfer sent
+    (`_asks_flow`). What the user or a rule already settled is offered too and
+    stays typed by them: `resolve_type` reads the deduction last.
+    """
+    candidates = [
+        Candidate(index, movement.day, movement.amount, movement.is_credit)
+        for index, movement in enumerate(movements)
+        if movement.is_final
+        and movement.day is not None
+        and movement.currency == BASE_CURRENCY
+        and index not in transfer_legs
+        and (movement.is_credit or _operation_type(movement, master_key) is OperationType.TRANSFER)
+    ]
+    return match_candidates(candidates, contributions)
+
+
+def _operation_type(movement: _Movement, master_key: str) -> OperationType:
+    """Read from the stored type, from the label when the rebuild has not
+    reached the row yet."""
+    stored = movement.row.operation_type_enc
+    if stored:
+        return OperationType(decrypt_data(stored, master_key))
+    return operation_type(_label(movement, master_key))
 
 
 def _label(movement: _Movement, master_key: str) -> str | None:
@@ -682,7 +744,7 @@ def transfer_patterns(
     patterns.questions = dict(sorted(questions.items()))
     patterns.questions_amount = dict(sorted(questions_amount.items()))
 
-    filing = _filing(session, user_uuid, master_key, accounts, patterns)
+    filing = _filing(session, user_uuid, master_key, accounts, patterns, movements, transfer_legs)
     resolutions = [
         _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
     ]
@@ -901,12 +963,14 @@ def _filed(
         movement.account_bidx, movement.is_credit, label,
         filing.patterns.label_common(movement.account_bidx, movement.is_credit),
     )
+    match = filing.contributions.get(index)
     return resolve_type(
         movement.is_credit,
         leg.status if leg else None,
         savings_legs,
         CashflowType(decrypt_data(override, filing.master_key)) if override else None,
         (rule.uuid, rule.type) if rule else None,
+        contributed=match is not None and match.exact,
     )
 
 
@@ -962,11 +1026,7 @@ def _item_builder(
             transfer_account_name=names[counterpart.account_bidx] if counterpart else None,
             transfer_id=counterpart.row.uuid if counterpart else None,
             transfer_status=leg.status if leg else None,
-            # Read from the label when the rebuild has not reached the row yet.
-            operation_type=(
-                OperationType(decrypt_data(row.operation_type_enc, master_key))
-                if row.operation_type_enc else operation_type(label)
-            ),
+            operation_type=_operation_type(movement, master_key),
             cashflow_type=resolution.type,
             type_source=resolution.source,
             type_rule_id=resolution.rule_id,
@@ -975,9 +1035,24 @@ def _item_builder(
                 operation_count=settles.count,
                 amount=settles.amount,
             ) if asks else None,
+            contribution=_contribution_item(filing.contributions.get(index)),
         )
 
     return item
+
+
+def _contribution_item(match: Match | None) -> BankContributionMatch | None:
+    """The declared movement to show: the evidence that typed the operation, or
+    a nearby deposit the user may answer the question with."""
+    if match is None:
+        return None
+    return BankContributionMatch(
+        account_name=match.contribution.account_name,
+        day=match.contribution.day,
+        amount=match.contribution.amount,
+        is_deposit=match.contribution.is_deposit,
+        exact=match.exact,
+    )
 
 
 def list_month_transactions(
@@ -1009,7 +1084,7 @@ def list_month_transactions(
     [month] = totals.months
 
     item = _item_builder(
-        movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts, pairing.patterns),
+        movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs),
     )
     transactions = [item(i) for i in reversed(selected)]
 
@@ -1046,7 +1121,7 @@ def review_queue(
     movements = _load_movements(session, master_key, accounts.readable, None)
     transfer_legs = _internal_transfer_legs(movements, pairing)
     item = _item_builder(
-        movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts, pairing.patterns),
+        movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs),
     )
 
     questions: list[BankReviewItem] = []
@@ -1121,9 +1196,43 @@ def list_transfer_counterparts(
         ),
     )
     item = _item_builder(
-        movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts, pairing.patterns),
+        movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs),
     )
     return [item(i) for _, i in matches]
+
+
+def list_flow_group(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    transaction_id: str,
+) -> list[BankTransactionItem]:
+    """The operations one answer to a flow question would type, newest first.
+
+    Exactly the operations its count is made of (`_flow_groups`), so what the
+    list shows and what the question claims can never disagree. Read over the
+    whole history, as the questions are counted: the group spans every month.
+    Empty when the operation carries no question — an answered label types
+    nothing more.
+    """
+    accounts = _user_accounts(session, user_uuid, master_key)
+    _readable_row(session, accounts, transaction_id)
+    pairing = _pairing(session, user_uuid, master_key, accounts)
+    movements = _load_movements(session, master_key, accounts.readable, None)
+    transfer_legs = _internal_transfer_legs(movements, pairing)
+    filing = _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs)
+    labels = {index: _label(movement, master_key) for index, movement in enumerate(movements)}
+    resolutions = [
+        _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
+    ]
+
+    groups = _flow_groups(movements, transfer_legs, labels, resolutions)
+    members = next(
+        (group for group in groups if any(movements[i].row.uuid == transaction_id for i in group)),
+        [],
+    )
+    item = _item_builder(movements, transfer_legs, accounts, filing)
+    return [item(i) for i in reversed(members)]
 
 
 def set_transaction_type(
@@ -1224,7 +1333,7 @@ def _typed_history(session: Session, user_uuid: str, master_key: str, accounts: 
     pairing = _pairing(session, user_uuid, master_key, accounts)
     movements = _load_movements(session, master_key, accounts.readable, None)
     transfer_legs = _internal_transfer_legs(movements, pairing)
-    filing = _filing(session, user_uuid, master_key, accounts, pairing.patterns)
+    filing = _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs)
     for index, movement in enumerate(movements):
         label = _label(movement, master_key)
         yield movement, label, _filed(movements, transfer_legs, index, label, filing)
@@ -1244,7 +1353,7 @@ def _transaction_item(
             session, master_key, accounts.readable, [f"{day:%Y-%m}"], pairing,
         )
     [index] = [i for i, m in enumerate(movements) if m.row.uuid == row.uuid]
-    filing = _filing(session, user_uuid, master_key, accounts, pairing.patterns)
+    filing = _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs)
     return _item_builder(movements, transfer_legs, accounts, filing)(index)
 
 
