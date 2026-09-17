@@ -9,11 +9,12 @@ whatever cookies ride along under SameSite=Lax. It authenticates itself via
 
 import base64
 import html
+from collections import defaultdict
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlmodel import Session
 
 from config import get_settings
@@ -31,14 +32,22 @@ from dtos.banking import (
     BankConnectionUpdate,
     BankExportImportResponse,
     BankFlowsResponse,
+    BankLedger,
+    BankReviewQueue,
     BankSessionAccount,
     BankSessionSummary,
     BankSyncResponse,
     BankTransactionItem,
+    BankTransactionTypeResult,
+    BankTransactionTypeUpdate,
     BankTransactionsResponse,
     BankTransferDecisionCreate,
     BankTransferQuestionMonth,
     BankTransferQuestionsResponse,
+    BankTypeRuleItem,
+    RealCashflowCurrent,
+    RealCashflowMonthDetail,
+    RealCashflowYear,
     SyncStatus,
 )
 from models import User
@@ -49,10 +58,17 @@ from services.banking.credentials import (
 )
 from services.banking.export_import import import_enablebanking_export
 from services.banking.flows import (
+    LabelRequiredError,
+    PairedOperationError,
     UnknownAccountError,
+    clear_transaction_type,
     compute_real_flows,
+    list_flow_group,
     list_month_transactions,
     list_transfer_counterparts,
+    list_type_rules,
+    review_queue,
+    set_transaction_type,
     transfer_patterns,
 )
 from services.banking.transfer_decisions import (
@@ -61,6 +77,14 @@ from services.banking.transfer_decisions import (
     record_decision,
 )
 from services.banking.errors import BankingApiError
+from services.banking.type_rules import RuleNotFoundError, delete_rule
+from services.banking.ledger import build_ledger, ledger_etag
+from services.banking.real_cashflow import (
+    PeriodNotCompletedError,
+    real_cashflow_current,
+    real_cashflow_month,
+    real_cashflow_year,
+)
 from services.banking.linking import (
     AccountNotFoundInSessionError,
     AspspNotFoundError,
@@ -561,18 +585,131 @@ def get_transfer_counterparts(
         raise HTTPException(status_code=404, detail="Opération introuvable.")
 
 
+@router.get("/transactions/{transaction_id}/flow-group", response_model=list[BankTransactionItem])
+def get_flow_group(
+    transaction_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """The operations one answer to this flow question would type, newest first.
+    Ungated, like /transactions."""
+    try:
+        return list_flow_group(session, current_user.uuid, master_key, transaction_id)
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail="Opération introuvable.")
+
+
+@router.put("/transactions/{transaction_id}/type", response_model=BankTransactionTypeResult)
+def put_transaction_type(
+    transaction_id: str,
+    body: BankTransactionTypeUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Type this operation, or every operation reading like it on its account
+    and direction. Ungated, like /transactions."""
+    try:
+        return set_transaction_type(
+            session, current_user.uuid, master_key, transaction_id, body.type, body.scope,
+        )
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail="Opération introuvable.")
+    except PairedOperationError:
+        raise HTTPException(
+            status_code=409,
+            detail="Cette opération est appariée à une autre : défaites d'abord le virement ou l'annulation.",
+        )
+    except LabelRequiredError:
+        raise HTTPException(status_code=400, detail="Une opération sans libellé ne se corrige qu'à l'unité.")
+
+
+@router.delete("/transactions/{transaction_id}/type", response_model=BankTransactionItem)
+def delete_transaction_type(
+    transaction_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Drop the type forced on this one operation."""
+    try:
+        return clear_transaction_type(session, current_user.uuid, master_key, transaction_id)
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail="Opération introuvable.")
+
+
+@router.get("/type-rules", response_model=list[BankTypeRuleItem])
+def get_type_rules(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    return list_type_rules(session, current_user.uuid, master_key)
+
+
+@router.delete("/type-rules/{rule_id}", status_code=204)
+def delete_type_rule(
+    rule_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    try:
+        delete_rule(session, current_user.uuid, master_key, rule_id)
+    except RuleNotFoundError:
+        raise HTTPException(status_code=404, detail="Règle introuvable.")
+
+
 @router.get("/transfer-questions", response_model=BankTransferQuestionsResponse)
 def get_transfer_questions(
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
-    """How many pairs wait for the user, and in which months. Ungated, like /transactions."""
-    questions = transfer_patterns(session, current_user.uuid, master_key).questions
+    """How many pairs and flow questions wait for the user, and in which months.
+    Ungated, like /transactions."""
+    patterns = transfer_patterns(session, current_user.uuid, master_key)
+    questions = defaultdict(int, patterns.questions)
+    for period, count in patterns.flow_questions.items():
+        questions[period] += count
+    questions = dict(sorted(questions.items()))
     return BankTransferQuestionsResponse(
         total=sum(questions.values()),
         months=[BankTransferQuestionMonth(period=p, count=n) for p, n in questions.items()],
     )
+
+
+@router.get("/review-queue", response_model=BankReviewQueue)
+def get_review_queue(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    year: Annotated[int | None, Query(ge=1970, le=9999)] = None,
+    session: Session = Depends(get_session),
+):
+    """Every open question, the heaviest first. Ungated, like /transactions."""
+    return review_queue(session, current_user.uuid, master_key, year)
+
+
+@router.get("/ledger", response_model=BankLedger)
+def get_ledger(
+    request: Request,
+    response: Response,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Every stored operation, typed. Ungated, like /transactions.
+
+    Answered 304 when nothing it is read from changed: the whole history is
+    the heaviest read there is, and the Explorer asks for it on every visit.
+    """
+    etag = f'"{ledger_etag(session, current_user.uuid, master_key)}"'
+    headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    response.headers.update(headers)
+    return build_ledger(session, current_user.uuid, master_key)
 
 
 @router.post("/transfer-decisions", status_code=204)
@@ -593,6 +730,41 @@ def post_transfer_decision(
         raise HTTPException(status_code=404, detail="Opération introuvable.")
     except DecisionError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/real-cashflow", response_model=RealCashflowYear)
+def get_real_cashflow(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    year: Annotated[int | None, Query(ge=1970, le=9999)] = None,
+    session: Session = Depends(get_session),
+):
+    """What was earned, spent, set aside and invested over a year's completed
+    months, from the stored operations. Ungated, like /flows."""
+    return real_cashflow_year(session, current_user.uuid, master_key, year)
+
+
+@router.get("/real-cashflow/current", response_model=RealCashflowCurrent)
+def get_real_cashflow_current(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """The month in progress, day by day, against the recent months."""
+    return real_cashflow_current(session, current_user.uuid, master_key)
+
+
+@router.get("/real-cashflow/months/{period}", response_model=RealCashflowMonthDetail)
+def get_real_cashflow_month(
+    period: Annotated[str, Path(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")],
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    try:
+        return real_cashflow_month(session, current_user.uuid, master_key, period)
+    except PeriodNotCompletedError:
+        raise HTTPException(status_code=400, detail="Seul un mois terminé a un cashflow réel.")
 
 
 @router.post(

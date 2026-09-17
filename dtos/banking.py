@@ -267,6 +267,65 @@ class BankTransferStatus(str, Enum):
     REFUND = "refund"
 
 
+class CashflowType(str, Enum):
+    """How an operation counts in the real cashflow, one per operation
+    (services/banking/cashflow_types.py). NEUTRAL counts nowhere: money moved
+    between the user's own accounts, or came back as it went."""
+    INCOME = "INCOME"
+    EXPENSE = "EXPENSE"
+    SAVING = "SAVING"
+    INVESTMENT = "INVESTMENT"
+    NEUTRAL = "NEUTRAL"
+
+
+class TypeSource(str, Enum):
+    """What gave an operation its cashflow type, strongest first."""
+    PAIR = "pair"
+    OVERRIDE = "override"
+    RULE = "rule"
+    # A deposit or a withdrawal the user declared on one of their investment
+    # accounts, on the very day and for the very amount
+    # (services/banking/contributions.py).
+    CONTRIBUTION = "contribution"
+    DEFAULT = "default"
+
+
+class OperationType(str, Enum):
+    """How an operation was made, as far as its label tells
+    (services/banking/operation_types.py). Display and filtering only."""
+    CARD = "CARD"
+    TRANSFER = "TRANSFER"
+    DIRECT_DEBIT = "DIRECT_DEBIT"
+    WITHDRAWAL = "WITHDRAWAL"
+    INTEREST = "INTEREST"
+    UNKNOWN = "UNKNOWN"
+
+
+class BankContributionMatch(BaseModel):
+    """A movement declared on an investment account that this operation could be.
+
+    `exact` means the same day and a single candidate: the operation is typed as
+    an investment on it. Otherwise it is a nearby amount, shown beside the
+    question for the user to judge — it types nothing.
+    """
+    account_name: str
+    day: date
+    amount: Decimal
+    # A deposit into the account, as opposed to a withdrawal out of it.
+    is_deposit: bool
+    exact: bool
+
+
+class BankFlowQuestion(BaseModel):
+    """Asked on the last operation of a label nothing types but the user: a
+    credit, or a transfer sent. Answered by typing the label."""
+    choices: list[CashflowType]
+    # The operations of the label the answer types.
+    operation_count: int
+    # What those operations add up to: what the answer can move.
+    amount: Decimal
+
+
 class BankTransactionItem(BaseModel):
     """One stored movement, as the bank reported it."""
     id: str
@@ -286,6 +345,15 @@ class BankTransactionItem(BaseModel):
     # The movement on the other side, and how the pair was made.
     transfer_id: str | None = None
     transfer_status: BankTransferStatus | None = None
+    operation_type: OperationType = OperationType.UNKNOWN
+    cashflow_type: CashflowType = CashflowType.EXPENSE
+    type_source: TypeSource = TypeSource.DEFAULT
+    # The rule typing it, exact or reached from a nearby label.
+    type_rule_id: str | None = None
+    flow_question: BankFlowQuestion | None = None
+    # What the user's investment accounts say about it: the evidence that typed
+    # it, or a nearby deposit to judge the question by.
+    contribution: BankContributionMatch | None = None
 
 
 class BankTransactionsResponse(BaseModel):
@@ -298,7 +366,8 @@ class BankTransactionsResponse(BaseModel):
     net: Decimal
     internal_transfers_excluded: int
     internal_transfers_amount: Decimal
-    # Pairs offered to the user this month, not deducted.
+    # Pairs offered to the user this month, not deducted, and flow questions
+    # carried by an operation of this month.
     transfer_questions: int = 0
     reversals_excluded: int = 0
     reversals_amount: Decimal = Decimal("0")
@@ -355,7 +424,281 @@ class BankTransferQuestionMonth(BaseModel):
 
 
 class BankTransferQuestionsResponse(BaseModel):
-    """GET /banking/transfer-questions — pairs offered to the user across the
-    whole history, month by month."""
+    """GET /banking/transfer-questions — pairs offered to the user and flow
+    questions across the whole history, month by month."""
     total: int
     months: list[BankTransferQuestionMonth]
+
+
+class BankReviewKind(str, Enum):
+    FLOW = "flow"
+    TRANSFER = "transfer"
+
+
+class BankReviewItem(BaseModel):
+    """One question waiting for the user, on the operation that carries it."""
+    kind: BankReviewKind
+    transaction: BankTransactionItem
+    # What the answer can move: the operations of the label for a flow
+    # question, the pair's amount for a suggested transfer.
+    amount: Decimal
+    operation_count: int
+
+
+class BankReviewYear(BaseModel):
+    year: int
+    amount: Decimal
+    count: int
+
+
+class BankReviewQueue(BaseModel):
+    """GET /banking/review-queue — every open question, heaviest first."""
+    total_amount: Decimal
+    total_count: int
+    # Over the whole history, whatever the year asked for.
+    years: list[BankReviewYear]
+    questions: list[BankReviewItem]
+
+
+class BankLedgerAccount(BaseModel):
+    id: str
+    name: str
+    type: str
+    institution: str | None
+    currency: str
+    balance: Decimal
+    first_day: date | None
+    # Its last sync when linked, its last operation otherwise.
+    covered_until: date | None
+    linked: bool
+
+
+class BankLedgerGroup(BaseModel):
+    """The operations of one counterpart in one direction (label_groups.py)."""
+    key: str
+    name: str
+    is_credit: bool
+
+
+class BankLedgerRow(BaseModel):
+    id: str
+    # Indexes into `accounts` and `groups`: repeated names would outweigh the rows.
+    account: int
+    group: int
+    day: date | None
+    # Unsigned, direction in `is_credit`, as the bank reports it.
+    amount: Decimal
+    currency: str
+    is_credit: bool
+    is_pending: bool
+    label: str | None
+    operation_type: OperationType
+    cashflow_type: CashflowType
+    type_source: TypeSource
+    type_rule_id: str | None = None
+    transfer_status: BankTransferStatus | None
+    # Whether the real cashflow counts it, and by how much in its type's own
+    # direction: summing `signed` over the counted rows of a completed month
+    # gives that month's real cashflow, type by type.
+    counted: bool
+    signed: Decimal
+    # The question it carries, if any, and whether an answer still to come can
+    # change how it counts.
+    question: BankReviewKind | None
+    open: bool
+
+
+class BankLedger(BaseModel):
+    """GET /banking/ledger — every stored operation, typed, for the reader to
+    filter and group on its own side."""
+    currency: str
+    accounts: list[BankLedgerAccount]
+    groups: list[BankLedgerGroup]
+    rows: list[BankLedgerRow]
+
+
+class TypeScope(str, Enum):
+    """What a type correction reaches: every operation reading like this one
+    on its account and direction, past and future, or this one alone."""
+    LABEL = "label"
+    OPERATION = "operation"
+
+
+class BankTransactionTypeUpdate(BaseModel):
+    """PUT /banking/transactions/{id}/type."""
+    type: CashflowType
+    scope: TypeScope = TypeScope.LABEL
+
+
+class BankTransactionTypeResult(BaseModel):
+    transaction: BankTransactionItem
+    # Operations the label's rule now types across the whole history, pairs
+    # left out; 1 for a correction of this operation alone.
+    covered_count: int
+
+
+class BankTypeRuleItem(BaseModel):
+    """GET /banking/type-rules."""
+    id: str
+    account_id: str
+    account_name: str
+    is_credit: bool
+    signature: str
+    # The most recent operation it types, to read the rule by; None when it
+    # types nothing any more.
+    label: str | None = None
+    type: CashflowType
+    operation_count: int
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Real cashflow
+# ---------------------------------------------------------------------------
+
+
+class RealCashflowTotals(BaseModel):
+    """What moved, by cashflow type, in the response's currency.
+
+    `income` and `expenses` are net of their own reversals: a refund lowers the
+    expenses. `saving` and `investment` are net too: money taken back from a
+    savings account lowers `saving`. `neutral` is only informative, and never
+    part of any other figure. `net` is what is left once spent, set aside and
+    invested.
+    """
+    income: Decimal = Decimal("0")
+    expenses: Decimal = Decimal("0")
+    saving: Decimal = Decimal("0")
+    investment: Decimal = Decimal("0")
+    neutral: Decimal = Decimal("0")
+    net: Decimal = Decimal("0")
+    # Percent of the income: what was not spent, and the part of it set aside
+    # or invested. None without income to divide by.
+    savings_rate: Decimal | None = None
+    placed_rate: Decimal | None = None
+
+
+class RealCashflowMonth(RealCashflowTotals):
+    period: str  # YYYY-MM
+    operation_count: int = 0
+    # Suggested pairs and operations waiting on a flow question: what can
+    # still move this month's figures.
+    open_questions: int = 0
+    # What those operations weigh.
+    open_amount: Decimal = Decimal("0")
+    # Spent far more than the year's other months.
+    atypical: bool = False
+
+
+class RealCashflowExpense(BaseModel):
+    id: str
+    operation_date: date | None
+    label: str | None
+    amount: Decimal
+    account_name: str
+
+
+class RealCashflowCounterpart(BaseModel):
+    """Where money went, or came from, read off the labels of one group."""
+    group_key: str
+    name: str
+    amount: Decimal
+    operation_count: int
+    # Percent of what the listed direction weighs over the period.
+    share: Decimal
+
+
+class RealCashflowCoverageGap(BaseModel):
+    """An account whose stored operations leave part of the period out: a
+    transfer to it there cannot pair, and counts as spent."""
+    account_id: str
+    account_name: str
+    first_day: date
+    # The last day its operations are known complete: the last sync of a
+    # linked account, the last operation of an imported one.
+    covered_until: date
+    starts_late: bool
+    ends_early: bool
+
+
+class RealCashflowSafetyNet(BaseModel):
+    """How many months of spending the money at hand would cover."""
+    # Current and savings accounts, at their stored balance.
+    available: Decimal
+    savings: Decimal
+    # Median over the last twelve completed months carrying operations.
+    monthly_expenses: Decimal
+    months: Decimal | None
+    savings_months: Decimal | None
+    # Balances not refreshed by a sync in the last week.
+    stale_accounts: list[str]
+
+
+class RealCashflowYear(BaseModel):
+    """GET /banking/real-cashflow — one year of completed months."""
+    year: int
+    currency: str
+    # From the year of the first stored operation to the current one.
+    years_available: list[int]
+    # Only completed months: the current one and later ones are left out.
+    months: list[RealCashflowMonth]
+    totals: RealCashflowTotals
+    # Over the months carrying data, not the months elapsed.
+    covered_months: int
+    open_questions: int = 0
+    open_amount: Decimal = Decimal("0")
+    monthly_mean: RealCashflowTotals
+    monthly_median: RealCashflowTotals
+    # Shown, never removed from the totals.
+    top_expenses: list[RealCashflowExpense]
+    top_sources: list[RealCashflowCounterpart] = []
+    top_destinations: list[RealCashflowCounterpart] = []
+    other_currencies: list[BankFlowCurrencyTotal]
+    # The previous year over the same months; None when it has none covered.
+    previous_year_to_date: RealCashflowTotals | None = None
+    # The current year only: its totals plus the median month for each month left.
+    projection: RealCashflowTotals | None = None
+    safety_net: RealCashflowSafetyNet | None = None
+    coverage_gaps: list[RealCashflowCoverageGap] = []
+
+
+class RealCashflowMonthDetail(BaseModel):
+    """GET /banking/real-cashflow/months/{period} — one completed month."""
+    period: str
+    currency: str
+    totals: RealCashflowTotals
+    operation_count: int
+    open_questions: int = 0
+    open_amount: Decimal = Decimal("0")
+    # The nearest completed months carrying data either side, if any.
+    previous_period: str | None = None
+    next_period: str | None = None
+    other_currencies: list[BankFlowCurrencyTotal]
+    top_expenses: list[RealCashflowExpense] = []
+    top_sources: list[RealCashflowCounterpart] = []
+    top_destinations: list[RealCashflowCounterpart] = []
+    coverage_gaps: list[RealCashflowCoverageGap] = []
+
+
+class RealCashflowPacePoint(BaseModel):
+    day: int
+    # None past today.
+    spent: Decimal | None
+    median: Decimal | None
+
+
+class RealCashflowCurrent(BaseModel):
+    """GET /banking/real-cashflow/current — the month in progress against the
+    months before it, day by day."""
+    period: str
+    currency: str
+    day: int
+    # Pending card payments included: they are spent already.
+    spent_to_date: Decimal
+    pending_to_date: Decimal
+    # Over the last twelve completed months carrying operations; None without any.
+    median_to_date: Decimal | None
+    median_month: Decimal | None
+    projection: Decimal | None
+    open_amount: Decimal
+    curve: list[RealCashflowPacePoint]

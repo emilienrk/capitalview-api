@@ -16,6 +16,7 @@ from models.banking import (
     BankTransaction,
     BankTransferDecision,
     BankTransferPatterns,
+    BankTypeRule,
     UserBankConnection,
 )
 from models.card import Card
@@ -79,6 +80,7 @@ BIDX_MODELS = (
     BankAccountLink,
     BankTransferDecision,
     BankTransferPatterns,
+    BankTypeRule,
 )
 FK_MODELS = (
     (ApiToken, "user_uuid"),
@@ -484,6 +486,36 @@ def test_export_includes_bank_transactions_and_excludes_private_key(session):
     assert "app-id-123" not in raw_export
 
 
+def _type_rule(user_bidx: str, bank_account_uuid: str, master_key: str) -> BankTypeRule:
+    from datetime import datetime, timezone
+    from services.encryption import encrypt_data
+
+    return BankTypeRule(
+        user_uuid_bidx=user_bidx,
+        rule_bidx=hash_index(f"type-rule:{bank_account_uuid}:false:emilien inst roukine vir", master_key),
+        signature_enc=encrypt_data("emilien inst roukine vir", master_key),
+        account_ref_enc=encrypt_data(bank_account_uuid, master_key),
+        credit_enc=encrypt_data("false", master_key),
+        words_enc=encrypt_data('["emilien", "inst", "roukine", "vir"]', master_key),
+        type_enc=encrypt_data("SAVING", master_key),
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+def test_export_includes_type_rules_in_clear(session):
+    client = TestClient(app)
+    access_token, master_key, user_uuid = _register(client, session, "type_rules_export@example.com")
+    session.add(_type_rule(hash_index(user_uuid, master_key), "acc-1", master_key))
+    session.commit()
+
+    response = client.get("/auth/me/export", headers=_auth_headers(access_token, master_key))
+
+    assert response.status_code == 200
+    assert [
+        (r["signature"], r["bank_account_id"], r["is_credit"], r["type"]) for r in response.json()["bank_type_rules"]
+    ] == [("emilien inst roukine vir", "acc-1", False, "SAVING")]
+
+
 def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeypatch):
     client = TestClient(app)
     access_token, master_key, user_uuid = _register(client, session, "bank_purge@example.com")
@@ -573,6 +605,7 @@ def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeyp
             built_at=datetime.now(timezone.utc),
         )
     )
+    session.add(_type_rule(user_bidx, bank_acc_uuid, master_key))
     session.commit()
 
     # Track that close_session was called on the mock client
@@ -596,6 +629,7 @@ def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeyp
     assert before["bank_authorizations"] == 1
     assert before["bank_transfer_decisions"] == 1
     assert before["bank_transfer_patterns"] == 1
+    assert before["bank_type_rules"] == 1
 
     # Purge
     response = client.request(

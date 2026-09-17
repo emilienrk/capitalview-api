@@ -369,7 +369,13 @@ def execute_crypto_groups(
                 price_per_unit=Decimal(str(row.mapped_price)),
                 executed_at=timestamp,
             )
-            create_crypto_transaction(session, tx, master_key, group_uuid=group_uuid)
+            # A fiat deposit sitting beside other rows is the counterpart of
+            # what they describe — a sale's proceeds — not money wired in. On
+            # its own, it is the platform's own funding line.
+            counterpart = len(group.rows) > 1 and tx.type is CryptoTransactionType.DEPOSIT
+            create_crypto_transaction(
+                session, tx, master_key, group_uuid=group_uuid, auto_provision=counterpart,
+            )
             total_imported += 1
 
         # Add ANCHOR if group needs EUR and user provided an amount > 0
