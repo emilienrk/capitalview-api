@@ -62,6 +62,21 @@
 
 **Tests** : API 1 540, web 172, verts ; mutation sur les tests ajoutés.
 
+### Revue avant fusion (2026-09-17)
+
+Relecture des calculs et des écrans avec les vraies données. Rien de faux trouvé ; quatre points de lisibilité, traités sauf mention.
+
+- **Une contrepartie tenait plusieurs lignes.** « Vilmorin & Cie » et « Vilmorin & Cie Salaire De » comptaient pour deux sources (26 % + 16 %). Deux changements dans `label_groups` :
+  - `NOISE_WORDS` : la plomberie bancaire (`sepa`, `prlv`, `tdf`, `emis`, `via`…) et les mots outils sortent de la clé. `label_common` ne les attrapait pas tous : « TDF EMIS VIA CB » ne touche que 36 opérations, et laissait « Revolut » et « Lydia » partager trois quarts de leur clé.
+  - `merge_similar` : deux groupes qui partagent assez de mots sont la même contrepartie, au seuil déjà utilisé pour les libellés proches (`SIMILARITY_THRESHOLD`, 0,6). Le groupe qui porte le plus d'opérations donne son nom. Seuls les groupes partageant un mot sont comparés : 1 451 comparaisons sur le dump, temps de `/banking/ledger` inchangé (296 ms).
+  - **Mesuré avant de choisir** : à 0,6 sur clés nettoyées, 38 groupes absorbés sur 1 051, toutes fusions justes (Vilmorin, Amazon, Burger King, PayPal, MACIF, loyer Transalp'Dome, virements personnels). À 0,5 et avec la règle « mots inclus » (223 groupes absorbés), « Carrefour Annecy » avalait « Annecy », « Lyon » et les retraits d'espèces : écartés.
+  - Résultat sur 2026 : Vilmorin devient une source unique à 42,1 %, et le grand livre passe de 1 081 à 1 028 groupes. Parité avec le Réel toujours exacte.
+- **Noms tronqués dans le diagramme des flux.** La cause n'était pas la troncature mais le seuil « compact » : il se déclenche sous 768 px **de largeur de graphique**, or une carte sur un écran de 1 400 px n'en fait que 746. La largeur des noms suit maintenant celle du graphique (30 %, entre 72 et 280 px). Vérifié en 1 400 px et en 390 px.
+- **La tuile « Solde » de l'Explorer** lit comme une perte alors qu'une partie n'a été que mise de côté (l'autre jambe du virement est hors sélection). La ligne qui existait déjà dit maintenant « dont X mis de côté ». Pas de bloc en plus.
+- **Ce que fait chaque réponse de type** est expliqué au survol (`answerHint`, attribut `title`), sur la question de flux comme dans la fenêtre du type. Aucune place prise à l'écran : l'interface reste minimale.
+
+`LEDGER_VERSION` passée à 3 (la lecture des groupes a changé). Tests : API 1 544, web 173, verts ; mutation sur chaque test neuf.
+
 ### Reste à faire
 
 1. Mesurer l'Explorer sur le build de prod (après déploiement, ou en autorisant une seconde origine en dev).
