@@ -44,13 +44,13 @@ from services.banking.flows import (
     _regulated_savings,
     _user_accounts,
 )
-from services.banking.label_groups import group_key, group_name
+from services.banking.label_groups import group_key, group_name, group_words, merge_similar
 from services.banking.operation_types import operation_type
 from services.encryption import decrypt_data, hash_index
 
 # Part of the ETag: a change to how rows are read or grouped must reach a
 # browser holding the previous ledger, even though no data moved.
-LEDGER_VERSION = "2"
+LEDGER_VERSION = "3"
 
 
 def ledger_etag(session: Session, user_uuid: str, master_key: str) -> str:
@@ -104,6 +104,7 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
     }
     group_index: dict[tuple[bool, str], int] = {}
     occurrences: list[list[tuple[date | None, str | None]]] = []
+    words: list[frozenset[str]] = []
     account_index = {bidx: n for n, bidx in enumerate(accounts.readable)}
 
     rows: list[BankLedgerRow] = []
@@ -115,6 +116,7 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
         if key not in group_index:
             group_index[key] = len(occurrences)
             occurrences.append([])
+            words.append(group_words(label, common[movement.is_credit]))
         occurrences[group_index[key]].append((movement.day, label))
 
         counted = (
@@ -155,6 +157,9 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
             open=index in open_rows,
         ))
     rows.reverse()
+    merged, groups = _merge_groups(group_index, occurrences, words)
+    for row in rows:
+        row.group = merged[row.group]
 
     links = {
         link.bank_account_uuid_bidx: link.last_synced_at
@@ -181,9 +186,37 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
     return BankLedger(
         currency=currency,
         accounts=ledger_accounts,
-        groups=[
-            BankLedgerGroup(key=key, name=group_name(occurrences[n]), is_credit=is_credit)
-            for (is_credit, key), n in sorted(group_index.items(), key=lambda item: item[1])
-        ],
+        groups=groups,
         rows=rows,
     )
+
+
+def _merge_groups(
+    group_index: dict[tuple[bool, str], int],
+    occurrences: list[list[tuple[date | None, str | None]]],
+    words: list[frozenset[str]],
+) -> tuple[dict[int, int], list[BankLedgerGroup]]:
+    """The groups once the spellings of one counterpart are brought together,
+    and where each old group landed."""
+    canonical: dict[tuple[bool, str], tuple[bool, str]] = {}
+    for is_credit in (True, False):
+        side = [
+            (key, words[n], len(occurrences[n]))
+            for (credit, key), n in group_index.items() if credit is is_credit
+        ]
+        canonical.update({(is_credit, key): (is_credit, into) for key, into in merge_similar(side).items()})
+
+    moved: dict[int, int] = {}
+    kept: dict[tuple[bool, str], int] = {}
+    merged_occurrences: list[list[tuple[date | None, str | None]]] = []
+    for group, n in sorted(group_index.items(), key=lambda item: item[1]):
+        into = canonical[group]
+        if into not in kept:
+            kept[into] = len(merged_occurrences)
+            merged_occurrences.append([])
+        moved[n] = kept[into]
+        merged_occurrences[kept[into]].extend(occurrences[n])
+    return moved, [
+        BankLedgerGroup(key=key, name=group_name(merged_occurrences[n]), is_credit=is_credit)
+        for (is_credit, key), n in sorted(kept.items(), key=lambda item: item[1])
+    ]

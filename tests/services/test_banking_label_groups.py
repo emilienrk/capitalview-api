@@ -8,7 +8,7 @@ from datetime import date
 
 import pytest
 
-from services.banking.label_groups import display_label, group_key, group_name
+from services.banking.label_groups import display_label, group_key, group_name, merge_similar
 
 
 @pytest.mark.parametrize(("label", "name"), [
@@ -67,3 +67,49 @@ def test_a_group_is_named_after_its_most_frequent_label_then_its_latest():
         (date(2026, 1, 5), "CARTE 04/01/26 CARREFOUR CB*08"),
         (date(2026, 3, 5), "Carrefour Market"),
     ]) == "Carrefour Market"
+
+
+def test_bank_plumbing_never_names_a_counterpart():
+    # Only the way it was sent differs: one counterpart, not two.
+    assert group_key("PRLV SEPA EDF", frozenset()) == group_key("VIR SEPA EDF", frozenset())
+    # "TDF EMIS VIA CB" sits on few enough labels to escape the common words,
+    # and used to leave two shops sharing three quarters of their key.
+    assert group_key("TDF EMIS VIA CB Revolut", frozenset()) != group_key("TDF EMIS VIA CB Lydia", frozenset())
+
+
+def test_spellings_of_one_counterpart_merge_into_the_most_frequent():
+    groups = [
+        ("cie salaire vilmorin", frozenset({"cie", "salaire", "vilmorin"}), 3),
+        ("cie vilmorin", frozenset({"cie", "vilmorin"}), 9),
+        ("annecy carrefour", frozenset({"annecy", "carrefour"}), 93),
+        ("annecy", frozenset({"annecy"}), 7),
+        ("h&l", frozenset(), 2),
+        ("a.r.e.a.", frozenset(), 4),
+    ]
+    into = merge_similar(groups)
+
+    assert into["cie salaire vilmorin"] == "cie vilmorin"
+    # Half the words shared is not enough: a town is not a shop.
+    assert into["annecy"] == "annecy"
+    assert into["annecy carrefour"] == "annecy carrefour"
+    # Groups no word names merge with nothing, each other included.
+    assert into["h&l"] == "h&l"
+    assert into["a.r.e.a."] == "a.r.e.a."
+
+
+def test_three_words_in_five_are_enough():
+    # Exactly the threshold a nearby label is measured by.
+    groups = [("a b c", frozenset({"a", "b", "c"}), 4), ("a b c d e", frozenset("abcde"), 1)]
+
+    assert merge_similar(groups)["a b c d e"] == "a b c"
+
+
+def test_merging_carries_over_a_chain_of_spellings():
+    groups = [
+        ("a b", frozenset({"a", "b"}), 1),
+        ("a b c", frozenset({"a", "b", "c"}), 5),
+        ("a b c d", frozenset({"a", "b", "c", "d"}), 2),
+    ]
+    into = merge_similar(groups)
+
+    assert into == {"a b": "a b c", "a b c": "a b c", "a b c d": "a b c"}
