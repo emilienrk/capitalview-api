@@ -13,6 +13,7 @@ _pyproject = Path(__file__).parent / "pyproject.toml"
 with _pyproject.open("rb") as _f:
     __version__: str = tomllib.load(_f)["project"]["version"]
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from sqlmodel import Session, select
@@ -161,6 +162,9 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(RequestIdMiddleware)
+# Outermost, so it compresses what every other middleware produced. The ledger
+# of a four-year history is close to a megabyte of JSON and a sixth of it gzipped.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 app.include_router(auth_router)

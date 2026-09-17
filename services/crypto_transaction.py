@@ -78,8 +78,10 @@ def create_crypto_transaction(
     data: CryptoTransactionCreate,
     master_key: str,
     group_uuid: str | None = None,
+    auto_provision: bool = False,
 ) -> TransactionResponse:
-
+    """`auto_provision` marks a EUR leg the app wrote itself beside another row
+    of the same group: it never stands for a transfer from the bank."""
 
     account_bidx = hash_index(data.account_id, master_key)
 
@@ -102,6 +104,7 @@ def create_crypto_transaction(
         notes_enc=notes_enc,
         tx_hash_enc=tx_hash_enc,
         group_uuid=group_uuid,
+        is_auto_provision=auto_provision,
     )
 
     session.add(transaction)
@@ -135,7 +138,10 @@ def create_composite_crypto_transaction(
             executed_at=data.executed_at,
             notes=data.notes,
         )
-        rows.append(create_crypto_transaction(session, fiat_deposit, master_key, group_uuid=group))
+        # The app funds the purchase itself: this EUR never came from the bank.
+        rows.append(
+            create_crypto_transaction(session, fiat_deposit, master_key, group_uuid=group, auto_provision=True)
+        )
 
         buy = CryptoTransactionCreate(
             account_id=data.account_id,
@@ -232,7 +238,10 @@ def create_composite_crypto_transaction(
                 tx_hash=data.tx_hash,
                 notes=data.notes,
             )
-            rows.append(create_crypto_transaction(session, deposit_fiat, master_key, group_uuid=group))
+            # The proceeds of the sale, credited on the platform itself.
+            rows.append(
+                create_crypto_transaction(session, deposit_fiat, master_key, group_uuid=group, auto_provision=True)
+            )
 
         fee_sym = (data.fee_asset_key or "").upper()
         fee_qty = data.fee_amount or Decimal("0")

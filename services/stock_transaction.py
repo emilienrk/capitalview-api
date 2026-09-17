@@ -161,11 +161,15 @@ def create_eur_deposit(
     master_key: str,
     notes: str | None = None,
     fees: Decimal = Decimal("0"),
+    auto_provision: bool = False,
 ) -> TransactionResponse:
     """Record a EUR cash deposit into a stock account.
-    
+
     Uses type=DEPOSIT + asset_key=EUR as sentinel: price_per_unit=1 (EUR is source of
     truth, no market call needed).
+
+    `auto_provision` marks a deposit the app wrote itself rather than one the
+    user declared: it never stands for a transfer from the bank.
     """
     account_bidx = hash_index(account_uuid, master_key)
 
@@ -178,6 +182,7 @@ def create_eur_deposit(
         fees_enc=encrypt_data(str(fees), master_key),
         executed_at_enc=encrypt_data(executed_at.isoformat(), master_key),
         notes_enc=encrypt_data(notes, master_key) if notes else None,
+        is_auto_provision=auto_provision,
     )
     session.add(transaction)
     session.commit()
@@ -323,7 +328,7 @@ def create_stock_transaction(
             deposit_time = data.executed_at - timedelta(seconds=1)
             create_eur_deposit(
                 session, data.account_id, round(shortage, 2), deposit_time, master_key,
-                notes="Provision automatique",
+                notes="Provision automatique", auto_provision=True,
             )
 
     account_bidx = hash_index(data.account_id, master_key)

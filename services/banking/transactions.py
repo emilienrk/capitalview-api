@@ -60,6 +60,7 @@ from models.banking import BankTransaction
 # Currency the rest of CapitalView reasons in; anything else is stored as-is.
 # Re-exported from here because the banking modules already read it from this one.
 from models.currency import BASE_CURRENCY
+from services.banking.operation_types import operation_type
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 logger = logging.getLogger(__name__)
@@ -360,6 +361,7 @@ def _apply(
     row.remittance_enc = encrypt_data(tx.remittance, master_key) if tx.remittance else None
     signature = label_signature(tx.remittance)
     row.label_signature_bidx = hash_index(signature, master_key) if signature else None
+    row.operation_type_enc = encrypt_data(operation_type(tx.remittance).value, master_key)
 
 
 _WORD = re.compile(r"[^\W\d_]{2,}")
