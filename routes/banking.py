@@ -14,7 +14,7 @@ from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlmodel import Session
 
 from config import get_settings
@@ -32,6 +32,8 @@ from dtos.banking import (
     BankConnectionUpdate,
     BankExportImportResponse,
     BankFlowsResponse,
+    BankLedger,
+    BankReviewQueue,
     BankSessionAccount,
     BankSessionSummary,
     BankSyncResponse,
@@ -43,6 +45,7 @@ from dtos.banking import (
     BankTransferQuestionMonth,
     BankTransferQuestionsResponse,
     BankTypeRuleItem,
+    RealCashflowCurrent,
     RealCashflowMonthDetail,
     RealCashflowYear,
     SyncStatus,
@@ -63,6 +66,7 @@ from services.banking.flows import (
     list_month_transactions,
     list_transfer_counterparts,
     list_type_rules,
+    review_queue,
     set_transaction_type,
     transfer_patterns,
 )
@@ -73,7 +77,13 @@ from services.banking.transfer_decisions import (
 )
 from services.banking.errors import BankingApiError
 from services.banking.type_rules import RuleNotFoundError, delete_rule
-from services.banking.real_cashflow import PeriodNotCompletedError, real_cashflow_month, real_cashflow_year
+from services.banking.ledger import build_ledger, ledger_etag
+from services.banking.real_cashflow import (
+    PeriodNotCompletedError,
+    real_cashflow_current,
+    real_cashflow_month,
+    real_cashflow_year,
+)
 from services.banking.linking import (
     AccountNotFoundInSessionError,
     AspspNotFoundError,
@@ -654,6 +664,38 @@ def get_transfer_questions(
     )
 
 
+@router.get("/review-queue", response_model=BankReviewQueue)
+def get_review_queue(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    year: Annotated[int | None, Query(ge=1970, le=9999)] = None,
+    session: Session = Depends(get_session),
+):
+    """Every open question, the heaviest first. Ungated, like /transactions."""
+    return review_queue(session, current_user.uuid, master_key, year)
+
+
+@router.get("/ledger", response_model=BankLedger)
+def get_ledger(
+    request: Request,
+    response: Response,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Every stored operation, typed. Ungated, like /transactions.
+
+    Answered 304 when nothing it is read from changed: the whole history is
+    the heaviest read there is, and the Explorer asks for it on every visit.
+    """
+    etag = f'"{ledger_etag(session, current_user.uuid, master_key)}"'
+    headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    response.headers.update(headers)
+    return build_ledger(session, current_user.uuid, master_key)
+
+
 @router.post("/transfer-decisions", status_code=204)
 def post_transfer_decision(
     body: BankTransferDecisionCreate,
@@ -684,6 +726,16 @@ def get_real_cashflow(
     """What was earned, spent, set aside and invested over a year's completed
     months, from the stored operations. Ungated, like /flows."""
     return real_cashflow_year(session, current_user.uuid, master_key, year)
+
+
+@router.get("/real-cashflow/current", response_model=RealCashflowCurrent)
+def get_real_cashflow_current(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """The month in progress, day by day, against the recent months."""
+    return real_cashflow_current(session, current_user.uuid, master_key)
 
 
 @router.get("/real-cashflow/months/{period}", response_model=RealCashflowMonthDetail)

@@ -11,6 +11,7 @@ from sqlmodel import Session
 
 from dtos.banking import BankTransferDecisionKind, CashflowType as Type, TypeScope
 from services.banking import transfer_patterns as stored_patterns
+from services.banking.transfer_patterns import FlowCarrier
 from services.banking.flows import (
     CREDIT_CHOICES,
     DEBIT_CHOICES,
@@ -42,7 +43,7 @@ def _total(session: Session, master_key: str) -> int:
 
 
 def test_a_credit_asks_whatever_its_payment_means(session: Session, master_key: str):
-    _ops(session, master_key, (CURRENT, "2026-03-12", "59.45", "CRDT", "AVOIR 11/03/26 ZALANDO PAYMENTS CB*08"))
+    _ops(session, master_key, (CURRENT, "2026-03-12", "159.45", "CRDT", "AVOIR 11/03/26 ZALANDO PAYMENTS CB*08"))
     assert _questions(session, master_key) == {"AVOIR 11/03/26 ZALANDO PAYMENTS CB*08": (CREDIT_CHOICES, 1)}
 
 
@@ -110,8 +111,8 @@ def test_a_salary_whose_reference_changes_every_month_asks_once(session: Session
 def test_a_suggested_pair_asks_its_own_question_until_it_is_refused(session: Session, master_key: str):
     _ops(
         session, master_key,
-        (NEOBANK, "2026-03-16", "50.00", "DBIT", "To Emilien Roukine"),
-        (CURRENT, "2026-03-17", "50.00", "CRDT", "VIR Virement de Emilien ROUKINE"),
+        (NEOBANK, "2026-03-16", "150.00", "DBIT", "To Emilien Roukine"),
+        (CURRENT, "2026-03-17", "150.00", "CRDT", "VIR Virement de Emilien ROUKINE"),
     )
     month = {tx.label: tx for tx in list_month_transactions(session, USER, master_key, "2026-03").transactions}
     assert _questions(session, master_key) == {}
@@ -146,7 +147,7 @@ def test_a_stored_carrier_asks_only_if_the_month_still_reads_it_as_one(session: 
     _ops(session, master_key, (CURRENT, "2026-03-02", "42.10", "DBIT", "CARTE 01/03/26 CARREFOUR ANNECY CB*08"))
     [card] = list_month_transactions(session, USER, master_key, "2026-03").transactions
     patterns = transfer_patterns(session, USER, master_key)
-    patterns.flow_carriers[card.id] = 1
+    patterns.flow_carriers[card.id] = FlowCarrier(1, Decimal("42.10"))
     accounts = _user_accounts(session, USER, master_key)
     user_bidx = hash_index(USER, master_key)
     source = stored_patterns.source_digest(
@@ -155,3 +156,52 @@ def test_a_stored_carrier_asks_only_if_the_month_still_reads_it_as_one(session: 
     stored_patterns.write_patterns(session, user_bidx, source, patterns, master_key)
 
     assert _questions(session, master_key) == {}
+
+
+def test_a_label_asks_once_its_operations_reach_the_minimum_amount(session: Session, master_key: str):
+    _ops(session, master_key, (CURRENT, "2026-02-05", "99.99", "CRDT", "VIR SEPA VINTED"))
+    patterns = transfer_patterns(session, USER, master_key)
+    assert (_total(session, master_key), patterns.flow_open, patterns.flow_open_amount) == (0, {}, {})
+    [sale] = list_month_transactions(session, USER, master_key, "2026-02").transactions
+    assert (sale.cashflow_type, sale.flow_question) == (Type.INCOME, None)
+
+    _ops(session, master_key, (CURRENT, "2026-03-05", "0.01", "CRDT", "VIR SEPA VINTED"))
+
+    assert _questions(session, master_key) == {"VIR SEPA VINTED": (CREDIT_CHOICES, 2)}
+
+
+def test_a_question_carries_what_its_label_adds_up_to(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        (CURRENT, "2026-02-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-03-05", "90.50", "DBIT", "VIR INST ROUKINE EMILIEN"),
+    )
+    [carrier] = [tx for tx in list_month_transactions(session, USER, master_key, "2026-03").transactions]
+    patterns = transfer_patterns(session, USER, master_key)
+
+    assert carrier.flow_question.amount == Decimal("490.50")
+    assert patterns.flow_open_amount == {"2026-02": Decimal("400.00"), "2026-03": Decimal("90.50")}
+
+
+def test_a_small_suggested_pair_still_asks_and_weighs_once(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        (NEOBANK, "2026-03-16", "10.00", "DBIT", "To Emilien Roukine"),
+        (CURRENT, "2026-03-17", "10.00", "CRDT", "VIR Virement de Emilien ROUKINE"),
+    )
+    patterns = transfer_patterns(session, USER, master_key)
+    assert (patterns.questions, patterns.questions_amount) == ({"2026-03": 1}, {"2026-03": Decimal("10.00")})
+
+
+def test_each_account_s_history_span_is_stored(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        (CURRENT, "2025-11-03", "10.00", "DBIT", "CARTE BOULANGERIE CB*08"),
+        (CURRENT, "2026-03-05", "10.00", "DBIT", "CARTE BOULANGERIE CB*08"),
+        (NEOBANK, "2026-01-10", "10.00", "DBIT", "Carrefour"),
+    )
+    coverage = transfer_patterns(session, USER, master_key).coverage
+    assert coverage == {
+        hash_index(CURRENT, master_key): (date(2025, 11, 3), date(2026, 3, 5)),
+        hash_index(NEOBANK, master_key): (date(2026, 1, 10), date(2026, 1, 10)),
+    }
