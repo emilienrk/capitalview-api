@@ -79,7 +79,7 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
     patterns = pairing.patterns
     movements = _load_movements(session, master_key, accounts.readable, None)
     transfer_legs = _internal_transfer_legs(movements, pairing)
-    filing = _filing(session, user_uuid, master_key, accounts, patterns)
+    filing = _filing(session, user_uuid, master_key, accounts, patterns, movements, transfer_legs)
     labels = {index: _label(movement, master_key) for index, movement in enumerate(movements)}
     resolutions = [_filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))]
 

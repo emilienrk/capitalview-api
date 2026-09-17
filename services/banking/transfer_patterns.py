@@ -38,6 +38,8 @@ import sqlalchemy as sa
 from sqlmodel import Session, select
 
 from models.banking import BankTransaction, BankTransferDecision, BankTransferPatterns, BankTypeRule
+from models.crypto import CryptoAccount, CryptoTransaction
+from models.stock import StockAccount, StockTransaction
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 # A shape that occurred this many times is trusted without asking. Measured:
@@ -46,7 +48,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "8"
+_VERSION = "9"
 
 
 class FlowCarrier(NamedTuple):
@@ -111,6 +113,10 @@ def source_digest(
     timestamp; so do a decision and a type rule, which is replaced rather than
     updated. The savings accounts are part of it as they are, not through a
     timestamp: an account's type decides whole tiers.
+
+    The investment accounts count too: a deposit declared on one of them types
+    the transfer that fed it, so saving one settles a question
+    (services/banking/contributions.py).
     """
     rows = (0, None, None)
     if readable:
@@ -129,10 +135,39 @@ def source_digest(
     rules = session.exec(
         select(sa.func.count(), sa.func.max(BankTypeRule.created_at)).where(BankTypeRule.user_uuid_bidx == user_bidx)
     ).one()
+    investments = _investment_rows(session, user_bidx, master_key)
     raw = json.dumps(
-        [_VERSION, sorted(readable), sorted(savings), list(rows), list(decisions), list(rules)], default=str,
+        [
+            _VERSION, sorted(readable), sorted(savings),
+            list(rows), list(decisions), list(rules), investments,
+        ],
+        default=str,
     )
     return hash_index(raw, master_key)
+
+
+def _investment_rows(session: Session, user_bidx: str, master_key: str) -> list[list]:
+    """Counts and timestamps of the user's stock and crypto transactions."""
+    signature: list[list] = []
+    for account_model, row_model in ((StockAccount, StockTransaction), (CryptoAccount, CryptoTransaction)):
+        bidxs = [
+            hash_index(account.uuid, master_key)
+            for account in session.exec(
+                select(account_model).where(account_model.user_uuid_bidx == user_bidx)
+            ).all()
+        ]
+        if not bidxs:
+            signature.append([0, None, None])
+            continue
+        counted = session.exec(
+            select(
+                sa.func.count(),
+                sa.func.max(row_model.updated_at),
+                sa.func.max(row_model.created_at),
+            ).where(row_model.account_id_bidx.in_(bidxs))  # type: ignore[attr-defined]
+        ).one()
+        signature.append(list(counted))
+    return signature
 
 
 def read_patterns(

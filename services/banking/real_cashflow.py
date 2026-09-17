@@ -330,7 +330,7 @@ def _read(
     periods whose pending operations count too."""
     pairing = _pairing(session, user_uuid, master_key, accounts)
     movements, transfer_legs = _paired_movements(session, master_key, accounts.readable, periods, pairing)
-    filing = _filing(session, user_uuid, master_key, accounts, pairing.patterns)
+    filing = _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs)
     window = set(periods)
     selected = [
         i for i, m in enumerate(movements)
