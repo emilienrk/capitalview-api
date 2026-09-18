@@ -351,3 +351,40 @@ class BankTypeRule(SQLModel, table=True):
     created_at: datetime = Field(
         sa_column=Column(sa.DateTime(timezone=True), nullable=False)
     )
+
+
+class BankSubscription(SQLModel, table=True):
+    """What the user said of a recurring charge: it is a subscription, or it is
+    not — with the corrections they made to it (services/banking/subscriptions.py).
+
+    The series itself is derived, never stored here: it is found again on every
+    rebuild of the transfer patterns, and the decision attaches to it through
+    its anchors — blind indexes of the operations it covered when decided,
+    kept inside an encrypted JSON so that nothing here is joinable in clear
+    with `bank_transactions` — or, when those operations were imported again
+    under other ids, through the identity it recorded.
+    """
+    __tablename__ = "bank_subscriptions"
+    __table_args__ = {"extend_existing": True}
+
+    uuid: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        sa_column=Column(TEXT, primary_key=True, nullable=False),
+    )
+    user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
+    # "confirmed" or "refused".
+    status_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    # JSON lists of `hash_index(operation uuid)`.
+    anchors_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    includes_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    excludes_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    # JSON: merchant words, account uuids, cadence, amount, means of payment.
+    identity_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    # What the user set: a name, a cadence, the day they ended it.
+    name_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    cadence_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    ended_on_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    # Set by the service, to the microsecond: decisions are replayed in order,
+    # and the latest one tells the stored patterns that decisions moved.
+    created_at: datetime = Field(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+    updated_at: datetime = Field(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
