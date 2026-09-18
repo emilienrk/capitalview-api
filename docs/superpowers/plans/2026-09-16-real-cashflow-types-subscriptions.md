@@ -140,6 +140,8 @@ Conservé : `services/banking/operation_types.py`, écriture dans `transactions.
 
 ## Tâche R5 — Abonnements
 
+> **Remplacée** par `2026-09-18-subscriptions.md` : algorithme mesuré sur le dump du 2026-09-18, table `bank_subscriptions` redéfinie.
+
 **Fichiers :** nouveau `services/banking/subscriptions.py` (détection pure + stockage), `services/banking/transfer_patterns.py` (cache), `services/banking/flows.py`, `routes/banking.py`.
 
 - [ ] Entrée : débits **finals** résolus `EXPENSE`, par compte. **Mots distinctifs** d'une opération = mots du libellé moins ceux présents dans > 5 % (min 3) des débits de ce compte.
