@@ -9,7 +9,8 @@ from decimal import Decimal
 
 from sqlmodel import Session, select
 
-from dtos.banking import BankTransferDecisionKind, CashflowType as Type, SubscriptionDecisionKind, TypeScope
+from dtos.banking import BankTransferDecisionKind, SubscriptionDecisionKind, TypeScope
+from dtos.banking import CashflowType as Type
 from models.banking import BankAccountLink
 from services.banking.flows import (
     list_flow_group,
@@ -19,7 +20,11 @@ from services.banking.flows import (
     transfer_patterns,
 )
 from services.banking.ledger import build_ledger
-from services.banking.real_cashflow import real_cashflow_current, real_cashflow_month, real_cashflow_year
+from services.banking.real_cashflow import (
+    real_cashflow_current,
+    real_cashflow_month,
+    real_cashflow_year,
+)
 from services.banking.subscriptions import decide, list_subscriptions
 from services.banking.transfer_decisions import record_decision
 from services.encryption import hash_index
