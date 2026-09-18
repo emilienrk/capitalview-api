@@ -37,7 +37,13 @@ from typing import NamedTuple
 import sqlalchemy as sa
 from sqlmodel import Session, select
 
-from models.banking import BankTransaction, BankTransferDecision, BankTransferPatterns, BankTypeRule
+from models.banking import (
+    BankSubscription,
+    BankTransaction,
+    BankTransferDecision,
+    BankTransferPatterns,
+    BankTypeRule,
+)
 from models.crypto import CryptoAccount, CryptoTransaction
 from models.stock import StockAccount, StockTransaction
 from services.encryption import decrypt_data, encrypt_data, hash_index
@@ -48,7 +54,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "9"
+_VERSION = "10"
 
 
 class FlowCarrier(NamedTuple):
@@ -112,7 +118,8 @@ def source_digest(
     read computes it. Any row added, removed or rewritten moves a count or a
     timestamp; so do a decision and a type rule, which is replaced rather than
     updated. The savings accounts are part of it as they are, not through a
-    timestamp: an account's type decides whole tiers.
+    timestamp: an account's type decides whole tiers. A subscription decision
+    is updated in place, so its latest update time counts, not its creation.
 
     The investment accounts count too: a deposit declared on one of them types
     the transfer that fed it, so saving one settles a question
@@ -135,11 +142,16 @@ def source_digest(
     rules = session.exec(
         select(sa.func.count(), sa.func.max(BankTypeRule.created_at)).where(BankTypeRule.user_uuid_bidx == user_bidx)
     ).one()
+    subscriptions = session.exec(
+        select(sa.func.count(), sa.func.max(BankSubscription.updated_at)).where(
+            BankSubscription.user_uuid_bidx == user_bidx
+        )
+    ).one()
     investments = _investment_rows(session, user_bidx, master_key)
     raw = json.dumps(
         [
             _VERSION, sorted(readable), sorted(savings),
-            list(rows), list(decisions), list(rules), investments,
+            list(rows), list(decisions), list(rules), list(subscriptions), investments,
         ],
         default=str,
     )
