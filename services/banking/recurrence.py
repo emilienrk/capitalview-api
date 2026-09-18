@@ -310,7 +310,10 @@ def _is_variable(chain: list[RecurrenceOp]) -> bool:
 
 
 def compatible(a: Cadence, b: Cadence) -> bool:
-    return a is b or {a, b} == {MONTHLY, FOURWEEKLY}
+    return a is b or (a.name in _MONTH_LIKE and b.name in _MONTH_LIKE)
+
+
+_MONTH_LIKE = frozenset({"monthly", "fourweekly"})
 
 
 def _family(method: OperationType) -> str:
@@ -458,22 +461,36 @@ def _detect_currency(debits: list[RecurrenceOp]) -> tuple[list[Series], dict[int
     return series, dict(by_merchant)
 
 
+def _near(amount: Decimal) -> tuple[Decimal, ...]:
+    """The amounts `exact` takes for this one."""
+    return amount - CENT, amount, amount + CENT
+
+
 def _hand_offs(series: list[Series]) -> None:
     """A merchant renamed: the same amount, to the cent, carried on at the next
     due date, on the same account and the same kind of payment."""
     series.sort(key=lambda s: (s.first.day, s.first.id))
+    # Looked up by how a series starts rather than compared pair by pair:
+    # a real history holds a few hundred series.
+    starts: dict[tuple[str, str, Decimal], list[Series]] = defaultdict(list)
+    for s in series:
+        starts[(s.first.account, _family(s.first.method), s.first.amount)].append(s)
     changed = True
     while changed:
         changed = False
+        position = {id(s): n for n, s in enumerate(series)}
         for before in series:
             if before.variable or len(before.regular) < 2 or not exact(before.regular[-2].amount, before.last.amount):
                 continue
-            for after in series:
+            last = before.last
+            candidates = sorted(
+                (after for amount in _near(last.amount) for after in starts.get((last.account, _family(last.method), amount), ())),
+                key=lambda after: position[id(after)],
+            )
+            for after in candidates:
                 if after is before or before.merchants & after.merchants or not compatible(before.cadence, after.cadence):
                     continue
-                if after.first.account != before.last.account or _family(after.first.method) != _family(before.last.method):
-                    continue
-                if not exact(before.last.amount, after.first.amount) or after.first.day <= before.last.day:
+                if after.first.day <= before.last.day:
                     continue
                 if any(op.day >= after.first.day for op in before.regular):
                     continue
@@ -486,6 +503,7 @@ def _hand_offs(series: list[Series]) -> None:
                 before.variable = before.variable or after.variable
                 before.sort()
                 series.remove(after)
+                starts[(after.first.account, _family(after.first.method), after.first.amount)].remove(after)
                 changed = True
                 break
             if changed:
@@ -497,6 +515,10 @@ def _renamed_once(
 ) -> None:
     """The same, seen only once so far under its new name: the only debit of
     that amount at the next due date."""
+    by_payment: dict[tuple[str, OperationType, Decimal], list[RecurrenceOp]] = defaultdict(list)
+    for op in debits:
+        by_payment[(op.account, op.method, op.amount)].append(op)
+    position = {op.id: n for n, op in enumerate(debits)}
     for s in series:
         s.sort()
         if len(s.regular) < 3:
@@ -507,10 +529,13 @@ def _renamed_once(
         if s.variable and is_round(s.last.amount):
             continue
         successors = []
-        for op in debits:
+        last = s.last
+        candidates = sorted(
+            (op for amount in _near(last.amount) for op in by_payment.get((last.account, last.method, amount), ())),
+            key=lambda op: position[op.id],
+        )
+        for op in candidates:
             if op.id in used or op.merchant in s.merchants or len(by_merchant[op.merchant]) > RENAME_ONCE_MAX_DEBITS:
-                continue
-            if op.account != s.last.account or op.method is not s.last.method or not exact(op.amount, s.last.amount):
                 continue
             stepped = step(s.cadence, s.last, op)
             if stepped is not None and stepped[0] == 1:
@@ -801,15 +826,19 @@ def confidence(series: Series, f: Features) -> Confidence | None:
 REFUND_MONTHS_AFTER = 4
 
 
-def linked_refunds(series: Series, credits: Iterable[RecurrenceOp]) -> list[RecurrenceOp]:
-    """Credits from the series' own merchants, on any account, from a due date
-    before its first debit to four months after its last."""
+def linked_refunds(
+    series: Series, credits: Iterable[RecurrenceOp], merchants: set[int] | None = None,
+) -> list[RecurrenceOp]:
+    """Credits from the series' own merchants — or from `merchants`, when the
+    caller knows more of them — on any account, from a due date before its
+    first debit to four months after its last."""
+    merchants = merchants if merchants is not None else series.merchants
     low = series.first.day - timedelta(days=int(series.cadence.nominal))
     high = add_months(series.last.day, REFUND_MONTHS_AFTER)
     return sorted(
         (
             op for op in credits
-            if op.merchant in series.merchants and op.currency == series.currency
+            if op.merchant in merchants and op.currency == series.currency
             and not op.cancelled and low <= op.day <= high
         ),
         key=_by_day,
