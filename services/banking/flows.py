@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass
 from functools import lru_cache
 from datetime import date, timedelta
@@ -56,6 +57,7 @@ from models.bank import BankAccount
 from models.banking import BankTransaction
 from models.currency import BASE_CURRENCY
 from models.enums import BankAccountType
+from services.banking import subscription_series
 from services.banking import transfer_patterns as stored_patterns
 from services.banking.cashflow_types import Resolution, resolve_type
 from services.banking.contributions import (
@@ -67,6 +69,7 @@ from services.banking.contributions import (
 )
 from services.banking.linking import readable_account_bidxs
 from services.banking.operation_types import operation_type
+from services.banking.subscription_decisions import load_decisions as load_subscription_decisions
 from services.banking.transactions import (
     CREDIT,
     FINAL_STATUSES,
@@ -664,6 +667,7 @@ def transfer_patterns(
         for i, m in enumerate(movements)
     }
     backfilled = False
+    kinds: list[OperationType] = []
     for i, movement in enumerate(movements):
         row = movement.row
         changed = False
@@ -673,7 +677,8 @@ def transfer_patterns(
             changed = True
         # Every row, not only those stored before types existed: this is how a
         # change to the lexicon reaches the history.
-        kind = operation_type(labels[i]).value
+        kinds.append(operation_type(labels[i]))
+        kind = kinds[-1].value
         if row.operation_type_enc is None or decrypt_data(row.operation_type_enc, master_key) != kind:
             row.operation_type_enc = encrypt_data(kind, master_key)
             changed = True
@@ -748,10 +753,32 @@ def transfer_patterns(
     resolutions = [
         _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
     ]
+    asking_groups = _asking_groups(movements, transfer_legs, labels, resolutions)
+    heavy = [members for members in asking_groups if _heavy(movements, members)]
+    derived = subscription_series.derive(
+        [
+            _subscription_movement(index, movement, labels[index], transfer_legs.get(index), resolutions[index],
+                                   kinds[index], master_key)
+            for index, movement in enumerate(movements)
+        ],
+        load_subscription_decisions(session, user_uuid, master_key),
+        {bidx: account.uuid for bidx, account in accounts.by_bidx.items()},
+        {index for members in heavy for index in members},
+        master_key,
+    )
+    patterns.subscriptions = derived.subscriptions
+    patterns.subscription_questions = derived.questions
+    # A refund of a counted subscription asks whatever it weighs: its answer
+    # moves the subscription's own figure.
+    forced = [
+        members for members in asking_groups
+        if not _heavy(movements, members) and derived.refunds.intersection(members)
+    ]
+
     flow_questions: dict[str, int] = defaultdict(int)
     flow_open: dict[str, int] = defaultdict(int)
     flow_open_amount: dict[str, Decimal] = defaultdict(Decimal)
-    for members in _flow_groups(movements, transfer_legs, labels, resolutions):
+    for members in heavy + forced:
         # Movements come sorted by day: the last one is the most recent.
         carrier = movements[members[-1]]
         patterns.flow_carriers[carrier.row.uuid] = FlowCarrier(
@@ -781,18 +808,57 @@ def _flow_groups(
     transfer_legs: dict[int, _TransferLeg],
     labels: dict[int, str | None],
     resolutions: list[Resolution],
+    carriers: Collection[str] = frozenset(),
 ) -> list[list[int]]:
     """The labels only the user can type, each as its operations in date order:
-    one group per account, direction and signature, heavy enough to ask."""
+    one group per account, direction and signature, heavy enough to ask — or
+    carrying a question the rebuild asked all the same (`carriers`, the stored
+    `TransferPatterns.flow_carriers`)."""
+    return [
+        members for members in _asking_groups(movements, transfer_legs, labels, resolutions)
+        if _heavy(movements, members) or movements[members[-1]].row.uuid in carriers
+    ]
+
+
+def _asking_groups(
+    movements: list[_Movement],
+    transfer_legs: dict[int, _TransferLeg],
+    labels: dict[int, str | None],
+    resolutions: list[Resolution],
+) -> list[list[int]]:
     groups: dict[tuple[str, bool, str], list[int]] = defaultdict(list)
     for index, movement in enumerate(movements):
         label = labels[index]
         if _asks_flow(movement, transfer_legs.get(index), label, resolutions[index]):
             groups[(movement.account_bidx, movement.is_credit, label_signature(label))].append(index)
-    return [
-        members for members in groups.values()
-        if sum((movements[i].amount for i in members), Decimal("0")) >= FLOW_QUESTION_MIN_AMOUNT
-    ]
+    return list(groups.values())
+
+
+def _heavy(movements: list[_Movement], members: list[int]) -> bool:
+    return sum((movements[i].amount for i in members), Decimal("0")) >= FLOW_QUESTION_MIN_AMOUNT
+
+
+def _subscription_movement(
+    index: int,
+    movement: _Movement,
+    label: str | None,
+    leg: _TransferLeg | None,
+    resolution: Resolution,
+    kind: OperationType,
+    master_key: str,
+) -> subscription_series.Movement:
+    # The card payment's own date keeps a subscription's rhythm through the
+    # zero to six days a bank takes to book it: read for the debits only.
+    paid_on = None
+    stored = movement.row.transaction_date_enc
+    if stored and movement.is_final and not movement.is_credit:
+        paid_on = date.fromisoformat(decrypt_data(stored, master_key))
+    return subscription_series.Movement(
+        index=index, uuid=movement.row.uuid, account=movement.account_bidx, period=movement.period,
+        day=movement.day, paid_on=paid_on, amount=movement.amount, currency=movement.currency,
+        is_credit=movement.is_credit, is_final=movement.is_final, label=label,
+        leg=leg.status if leg else None, type=resolution.type, method=kind,
+    )
 
 
 def _aggregate(
@@ -1226,7 +1292,7 @@ def list_flow_group(
         _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
     ]
 
-    groups = _flow_groups(movements, transfer_legs, labels, resolutions)
+    groups = _flow_groups(movements, transfer_legs, labels, resolutions, pairing.patterns.flow_carriers)
     members = next(
         (group for group in groups if any(movements[i].row.uuid == transaction_id for i in group)),
         [],

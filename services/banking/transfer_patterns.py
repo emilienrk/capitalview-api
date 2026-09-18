@@ -19,7 +19,8 @@ path wrote it.
 
 Stored alongside, from the same pass: the words too common on each side of an
 account to tell a refund from its purchase ("CARTE", "CB", "VIR"), how many
-pairs are left for the user to settle, month by month, and the flow questions:
+pairs are left for the user to settle, month by month, the subscriptions
+(services/banking/subscription_series.py), and the flow questions:
 which operation of each label nothing types but the user carries its question,
 since a month's reader cannot tell which occurrence of a label is the last —
 with the amounts still open, so a reader can say what an answer may move — and
@@ -63,6 +64,100 @@ class FlowCarrier(NamedTuple):
     amount: Decimal
 
 
+# What a subscription member is to it. Only the first three and a refund count
+# towards "dont abonnements", and only when typed EXPENSE.
+REGULAR, EXTRA, MANUAL, CANCELLED, REFUND = "regular", "extra", "manual", "cancelled", "refund"
+COUNTED_ROLES = frozenset({REGULAR, EXTRA, MANUAL, REFUND})
+
+
+class SubscriptionMember(NamedTuple):
+    uuid: str
+    role: str
+    day: date
+    amount: Decimal
+    is_credit: bool
+    # Typed EXPENSE when the patterns were built.
+    expense: bool
+
+
+@dataclass
+class StoredSubscription:
+    """One subscription as the rebuild found it (services/banking/subscription_series.py).
+
+    `key` is the decision's id when the user decided, else the id of its first
+    debit: stable while the series keeps that debit, which is all a reader
+    holding it between two rebuilds needs.
+    """
+    key: str
+    decision: str | None
+    # auto | confirmed | candidate | refused
+    state: str
+    confidence: str | None
+    cadence: str
+    variable: bool
+    currency: str
+    members: list[SubscriptionMember]
+    # (start, end, amount, count), oldest first.
+    levels: list[tuple[date, date, Decimal, int]]
+    episodes: list[tuple[date, date]]
+    first: date
+    last: date
+    amount: Decimal
+    name: str
+    renamed: list[tuple[date, str, str]]
+    accounts: list[str]
+    # The account of the last regular debit: whose coverage says whether it still runs.
+    last_account: str
+    method: str
+    # The debit a question sits on, and whether it asks.
+    carrier: str | None
+    question: bool
+    counted: bool
+    # The merchant's words, to record as a decision's identity.
+    words: list[str]
+    ended_on: date | None = None
+
+    def to_json(self) -> dict:
+        return {
+            "key": self.key, "decision": self.decision, "state": self.state, "confidence": self.confidence,
+            "cadence": self.cadence, "variable": self.variable, "currency": self.currency,
+            "members": [
+                [m.uuid, m.role, m.day.isoformat(), str(m.amount), m.is_credit, m.expense] for m in self.members
+            ],
+            "levels": [[a.isoformat(), b.isoformat(), str(amount), count] for a, b, amount, count in self.levels],
+            "episodes": [[a.isoformat(), b.isoformat()] for a, b in self.episodes],
+            "first": self.first.isoformat(), "last": self.last.isoformat(), "amount": str(self.amount),
+            "name": self.name, "renamed": [[day.isoformat(), before, after] for day, before, after in self.renamed],
+            "accounts": self.accounts, "last_account": self.last_account, "method": self.method,
+            "carrier": self.carrier, "question": self.question, "counted": self.counted, "words": self.words,
+            "ended_on": self.ended_on.isoformat() if self.ended_on else None,
+        }
+
+    @classmethod
+    def from_json(cls, content: dict) -> StoredSubscription:
+        return cls(
+            key=content["key"], decision=content["decision"], state=content["state"],
+            confidence=content["confidence"], cadence=content["cadence"], variable=content["variable"],
+            currency=content["currency"],
+            members=[
+                SubscriptionMember(uuid, role, date.fromisoformat(day), Decimal(amount), is_credit, expense)
+                for uuid, role, day, amount, is_credit, expense in content["members"]
+            ],
+            levels=[
+                (date.fromisoformat(a), date.fromisoformat(b), Decimal(amount), count)
+                for a, b, amount, count in content["levels"]
+            ],
+            episodes=[(date.fromisoformat(a), date.fromisoformat(b)) for a, b in content["episodes"]],
+            first=date.fromisoformat(content["first"]), last=date.fromisoformat(content["last"]),
+            amount=Decimal(content["amount"]), name=content["name"],
+            renamed=[(date.fromisoformat(day), before, after) for day, before, after in content["renamed"]],
+            accounts=content["accounts"], last_account=content["last_account"], method=content["method"],
+            carrier=content["carrier"], question=content["question"], counted=content["counted"],
+            words=content["words"],
+            ended_on=date.fromisoformat(content["ended_on"]) if content["ended_on"] else None,
+        )
+
+
 @dataclass
 class TransferPatterns:
     # "debit account|credit account|debit signature|credit signature" -> count
@@ -85,6 +180,29 @@ class TransferPatterns:
     flow_open_amount: dict[str, Decimal] = field(default_factory=dict)
     # Account blind index -> (first, last) day of its stored operations
     coverage: dict[str, tuple[date, date]] = field(default_factory=dict)
+    # Every series offered, counted or decided (services/banking/subscription_series.py).
+    subscriptions: list[StoredSubscription] = field(default_factory=list)
+    # "YYYY-MM" -> subscription questions carried by an operation of that month
+    subscription_questions: dict[str, int] = field(default_factory=dict)
+    _members: dict[str, tuple[StoredSubscription, SubscriptionMember]] | None = field(default=None, repr=False)
+
+    def subscription_of(self, uuid: str) -> tuple[StoredSubscription, SubscriptionMember] | None:
+        """The subscription an operation belongs to, and as what."""
+        if self._members is None:
+            self._members = {
+                member.uuid: (subscription, member)
+                for subscription in self.subscriptions for member in subscription.members
+            }
+        return self._members.get(uuid)
+
+    def counted_subscription(self, uuid: str) -> StoredSubscription | None:
+        """The subscription whose spending this operation counts in, whatever
+        its type: the reader still checks it is an expense."""
+        found = self.subscription_of(uuid)
+        if found is None:
+            return None
+        subscription, member = found
+        return subscription if subscription.counted and member.role in COUNTED_ROLES else None
 
     def recurs(
         self, debit_account: str, credit_account: str, debit_signature: str | None, credit_signature: str | None
@@ -207,6 +325,8 @@ def read_patterns(
             account: (date.fromisoformat(first), date.fromisoformat(last))
             for account, (first, last) in content["coverage"].items()
         },
+        subscriptions=[StoredSubscription.from_json(item) for item in content["subscriptions"]],
+        subscription_questions=content["subscription_questions"],
     )
 
 
@@ -229,6 +349,8 @@ def write_patterns(
             "coverage": {
                 account: [first.isoformat(), last.isoformat()] for account, (first, last) in patterns.coverage.items()
             },
+            "subscriptions": [subscription.to_json() for subscription in patterns.subscriptions],
+            "subscription_questions": patterns.subscription_questions,
         }),
         master_key,
     )

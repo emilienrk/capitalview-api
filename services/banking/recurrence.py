@@ -309,7 +309,7 @@ def _is_variable(chain: list[RecurrenceOp]) -> bool:
     return len(chain) >= 3 and sum(flat(a.value, b.value) for a, b in pairs) < 0.5 * len(pairs)
 
 
-def _compatible(a: Cadence, b: Cadence) -> bool:
+def compatible(a: Cadence, b: Cadence) -> bool:
     return a is b or {a, b} == {MONTHLY, FOURWEEKLY}
 
 
@@ -349,7 +349,7 @@ def _merchant_series(merchant: int, points: list[RecurrenceOp]) -> list[Series]:
     for stream in streams:
         host = None
         for candidate in merged:
-            if not _compatible(candidate.cadence, stream.cadence) or stream.first.day <= candidate.last.day:
+            if not compatible(candidate.cadence, stream.cadence) or stream.first.day <= candidate.last.day:
                 continue
             if any(op.day > stream.first.day for op in candidate.regular):
                 continue
@@ -469,7 +469,7 @@ def _hand_offs(series: list[Series]) -> None:
             if before.variable or len(before.regular) < 2 or not exact(before.regular[-2].amount, before.last.amount):
                 continue
             for after in series:
-                if after is before or before.merchants & after.merchants or not _compatible(before.cadence, after.cadence):
+                if after is before or before.merchants & after.merchants or not compatible(before.cadence, after.cadence):
                     continue
                 if after.first.account != before.last.account or _family(after.first.method) != _family(before.last.method):
                     continue
@@ -675,17 +675,28 @@ def next_date(series: Series) -> date:
 
 
 def status(series: Series, today: date, covered_until: date | None) -> Status:
+    return status_at(series.cadence, series.last.day, today, covered_until)
+
+
+# An account known up to three days ago is up to date: a bank books a debit a
+# day or two after it is made.
+STALE_AFTER_DAYS = 3
+
+
+def status_at(cadence: Cadence, last: date, today: date, covered_until: date | None) -> Status:
     """Read on the day, never stored. `covered_until` is the last day the
     account of the last debit is known complete: its last sync when linked,
     its last operation when imported."""
-    c = series.cadence
-    due = next_date(series)
-    grace = timedelta(days=max(5, int(0.25 * c.nominal)))
-    if covered_until is not None and covered_until < today - timedelta(days=3) and due + grace > covered_until:
+    due = advance(cadence, last)
+    grace = timedelta(days=max(5, int(0.25 * cadence.nominal)))
+    if (
+        covered_until is not None and covered_until < today - timedelta(days=STALE_AFTER_DAYS)
+        and due + grace > covered_until
+    ):
         return Status.STALE
     if today <= due + grace:
         return Status.ACTIVE
-    if today <= series.last.day + timedelta(days=int((1 + c.max_missed) * c.nominal + c.tolerance)):
+    if today <= last + timedelta(days=int((1 + cadence.max_missed) * cadence.nominal + cadence.tolerance)):
         return Status.LATE
     return Status.ENDED
 
