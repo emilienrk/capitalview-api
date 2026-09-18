@@ -8,7 +8,13 @@ import random
 
 import pytest
 
-from services.banking.merchants import Idf, group_merchants, merchant_words, same_merchant, words_alike
+from services.banking.merchants import (
+    Idf,
+    group_merchants,
+    merchant_words,
+    same_merchant,
+    words_alike,
+)
 
 # Other labels of a history, so that word weights read as they do on a real one.
 HISTORY = [
