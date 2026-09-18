@@ -108,6 +108,10 @@ def derive(
     merchants = group_merchants(keys.values())
     idf = Idf(keys.values())
     ops = {m.index: _op(m, merchants[keys[m.index]]) for m in debits + credits}
+    heads: dict[int, set[str]] = defaultdict(set)
+    for key in keys.values():
+        if not key[0].startswith("#"):
+            heads[merchants[key]].add(key[0])
     by_uuid = {m.uuid: m for m in debits + credits}
     debit_ops = [ops[m.index] for m in debits]
     credit_ops = [ops[m.index] for m in credits]
@@ -129,7 +133,7 @@ def derive(
     taken_refunds: set[str] = set()
     excluded = {refs[ref] for decision in decisions for ref in decision.excludes if ref in refs}
     for entry in grouped:
-        stored = _stored(entry, keys, by_uuid, account_uuids, credit_ops, taken_refunds, excluded, asking)
+        stored = _stored(entry, keys, heads, by_uuid, account_uuids, credit_ops, taken_refunds, excluded, asking)
         if stored is None:
             continue
         derived.subscriptions.append(stored)
@@ -319,6 +323,7 @@ def _corrections(
 def _stored(
     entry: _Held,
     keys: dict[int, MerchantKey],
+    heads: dict[int, set[str]],
     by_uuid: dict[str, Movement],
     account_uuids: dict[str, str],
     credit_ops: list[RecurrenceOp],
@@ -340,7 +345,7 @@ def _stored(
     counted = state in (AUTO, CONFIRMED)
 
     refunds = [
-        op for op in recurrence.linked_refunds(series, credit_ops)
+        op for op in recurrence.linked_refunds(series, credit_ops, _refunding(series, heads))
         if op.id not in taken_refunds and op.id not in excluded
     ] + [op for op in entry.manual if by_uuid[op.id].is_credit]
     taken_refunds.update(op.id for op in refunds)
@@ -382,6 +387,16 @@ def _stored(
         words=list(keys[by_uuid[series.last.id].index]),
         ended_on=decision.ended_on if decision else None,
     )
+
+
+def _refunding(series: Series, heads: dict[int, set[str]]) -> set[int]:
+    """The merchants a refund of the series may come from: its own, and any
+    whose label starts with the same word as one of theirs. A supplier writes
+    its refunds its own way ("EDF CLT PART RBT" for "EDF clients
+    particuliers"), too short to read as the same merchant, but it keeps its
+    name first."""
+    own = set().union(*(heads.get(m, set()) for m in series.merchants))
+    return set(series.merchants) | {m for m, first in heads.items() if first & own}
 
 
 def _member(m: Movement, role: str) -> SubscriptionMember:

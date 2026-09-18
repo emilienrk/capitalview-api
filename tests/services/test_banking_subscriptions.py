@@ -392,3 +392,17 @@ def test_totals_hold_the_active_counted_subscriptions_only(session: Session, mas
         (EDF_NAME, "auto", "active"), ("Anthropic* Claude", "candidate", "active"),
         ("Deezer", "auto", "ended"), ("Basic Fit", "refused", "active"),
     ]
+
+
+def test_a_refund_its_supplier_abbreviates_is_still_its_refund(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        *_months(CURRENT, "2025-06", 8, 5, "60.00", EDF),
+        (CURRENT, "2025-08-29", "44.15", "CRDT", "VIR SEPA EDF CLT PART RBT"),
+        # Another supplier's refund, whose label shares a word further in.
+        (CURRENT, "2025-09-16", "18.22", "CRDT", "VIR SEPA TOTALENERGIES ELECTRICITE PARTICULIERS"),
+    )
+    [subscription] = _subscriptions(session, master_key)
+    assert [(m.amount, m.label) for m in subscription.members if m.role == "refund"] == [
+        (Decimal("44.15"), "VIR SEPA EDF CLT PART RBT"),
+    ]
