@@ -246,3 +246,23 @@ def test_nothing_about_the_operations_sits_in_clear(client, session, master_key)
     stored = " ".join(str(value) for value in row.model_dump().values())
     for tx in session.exec(select(BankTransaction)).all():
         assert tx.uuid not in stored and hash_index(tx.uuid, master_key) not in stored
+
+
+def test_a_refund_detached_from_one_subscription_stays_another_s(client, session, master_key):
+    _ops(
+        session, master_key,
+        *_months(CURRENT, "2025-06", 8, 5, "60.00", EDF),
+        *_months(CURRENT, "2025-06", 8, 20, "15.00", EDF),
+        (CURRENT, "2026-01-25", "9.00", "CRDT", "VIR SEPA EDF clients particuliers"),
+    )
+    items = sorted(_items(client), key=lambda item: Decimal(item["amount"]))
+    refund = next(tx for tx in client.get("/banking/transactions?period=2026-01").json()["transactions"] if tx["is_credit"])
+    holder = next(item for item in items if item["refunds"]["items"])
+    other = next(item for item in items if item is not holder)
+    decided = _decide(client, holder["transaction_id"], "confirm")
+    _decide(client, other["transaction_id"], "confirm")
+
+    client.post(f"/banking/subscriptions/{decided['id']}/operations", json={"transaction_id": refund["id"], "action": "exclude"})
+
+    refunds = {item["key"]: [r["id"] for r in item["refunds"]["items"]] for item in _items(client)}
+    assert refunds[decided["id"]] == [] and [refund["id"]] in refunds.values()
