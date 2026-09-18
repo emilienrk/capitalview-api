@@ -25,8 +25,10 @@ from dtos.banking import (
     BankLedgerAccount,
     BankLedgerGroup,
     BankLedgerRow,
+    BankLedgerSubscription,
     BankReviewKind,
     BankTransferStatus,
+    CashflowType,
     OperationType,
     TypeSource,
 )
@@ -50,7 +52,7 @@ from services.encryption import decrypt_data, hash_index
 
 # Part of the ETag: a change to how rows are read or grouped must reach a
 # browser holding the previous ledger, even though no data moved.
-LEDGER_VERSION = "3"
+LEDGER_VERSION = "4"
 
 
 def ledger_etag(session: Session, user_uuid: str, master_key: str) -> str:
@@ -98,6 +100,10 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
         if leg.status is BankTransferStatus.SUGGESTED:
             open_rows.add(index)
 
+    subscription_index: dict[str, int] = {}
+    subscriptions: list[BankLedgerSubscription] = []
+    asking = {s.carrier for s in patterns.subscriptions if s.question}
+
     common = {
         side: frozenset().union(*(patterns.label_common(bidx, side) for bidx in accounts.readable))
         for side in (True, False)
@@ -132,6 +138,20 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
             question = BankReviewKind.FLOW
         elif leg is not None and leg.status is BankTransferStatus.SUGGESTED and not movement.is_credit:
             question = BankReviewKind.TRANSFER
+        elif movement.row.uuid in asking:
+            question = BankReviewKind.SUBSCRIPTION
+        # The rows adding up to "dont abonnements": counted, spent, and a
+        # counted subscription's.
+        subscription = patterns.counted_subscription(movement.row.uuid)
+        if subscription is not None and counted and resolution.type is CashflowType.EXPENSE:
+            if subscription.key not in subscription_index:
+                subscription_index[subscription.key] = len(subscriptions)
+                subscriptions.append(BankLedgerSubscription(
+                    id=subscription.decision, key=subscription.key, name=subscription.name, cadence=subscription.cadence,
+                ))
+            in_subscription = subscription_index[subscription.key]
+        else:
+            in_subscription = None
         row = movement.row
         rows.append(BankLedgerRow(
             id=row.uuid,
@@ -155,6 +175,7 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
             signed=signed_amount(movement.amount, movement.is_credit, resolution.type) if counted else Decimal("0"),
             question=question,
             open=index in open_rows,
+            subscription=in_subscription,
         ))
     rows.reverse()
     merged, groups = _merge_groups(group_index, occurrences, words)
@@ -188,6 +209,7 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
         accounts=ledger_accounts,
         groups=groups,
         rows=rows,
+        subscriptions=subscriptions,
     )
 
 

@@ -143,6 +143,16 @@ def derive(
     return derived
 
 
+def annual_estimate(subscription: StoredSubscription) -> Decimal:
+    """What it costs a year at its current price: a subscription billed every
+    four weeks is paid thirteen times."""
+    return subscription.amount * CADENCE[subscription.cadence].per_year
+
+
+def occurrence_count(subscription: StoredSubscription) -> int:
+    return sum(1 for member in subscription.members if member.role in (REGULAR, CANCELLED))
+
+
 def _eligible(movements: list[Movement]) -> tuple[list[Movement], list[Movement]]:
     """Final debits outside internal transfers and cash withdrawals, a debit
     its refund or rejection cancelled included for its rhythm; unpaired final
@@ -168,11 +178,16 @@ def _op(m: Movement, merchant: int) -> RecurrenceOp:
 
 def _attach_by_anchors(held: list[_Held], decisions: list[Decision], covered: dict[str, set[str]]) -> None:
     """Each series takes the decision sharing the most of its operations, the
-    latest on a tie."""
+    latest on a tie — unless the user set that decision's cadence and the
+    series runs at another: an operation marked as a yearly charge is not the
+    monthly series of purchases it happened to fall into."""
     for entry in held:
         ids = {op.id for op in entry.series.regular + entry.series.extras}
         best: tuple[int, int] | None = None
         for order, decision in enumerate(decisions):
+            forced = CADENCE.get(decision.cadence) if decision.cadence else None
+            if forced is not None and not recurrence.compatible(forced, entry.series.cadence):
+                continue
             shared = len(ids & covered[decision.uuid])
             if shared and (best is None or (shared, order) > best):
                 best, entry.decision = (shared, order), decision
@@ -370,7 +385,10 @@ def _stored(
 
 
 def _member(m: Movement, role: str) -> SubscriptionMember:
-    return SubscriptionMember(m.uuid, role, m.day, m.amount, m.is_credit, m.type is CashflowType.EXPENSE)
+    return SubscriptionMember(
+        m.uuid, role, m.day, m.amount, m.is_credit, m.type is CashflowType.EXPENSE,
+        m.label if role == REFUND else None,
+    )
 
 
 def _names(series: Series, by_uuid: dict[str, Movement]) -> tuple[str, list[tuple[date, str, str]]]:

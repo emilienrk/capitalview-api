@@ -36,6 +36,13 @@ from dtos.banking import (
     BankReviewQueue,
     BankSessionAccount,
     BankSessionSummary,
+    BankSubscriptionCreate,
+    BankSubscriptionDecisionCreate,
+    BankSubscriptionItem,
+    BankSubscriptionMerge,
+    BankSubscriptionOperation,
+    BankSubscriptionsResponse,
+    BankSubscriptionUpdate,
     BankSyncResponse,
     BankTransactionItem,
     BankTransactionTypeResult,
@@ -77,6 +84,8 @@ from services.banking.transfer_decisions import (
     record_decision,
 )
 from services.banking.errors import BankingApiError
+from services.banking import subscriptions as subscription_service
+from services.banking.subscription_decisions import SubscriptionNotFoundError
 from services.banking.type_rules import RuleNotFoundError, delete_rule
 from services.banking.ledger import build_ledger, ledger_etag
 from services.banking.real_cashflow import (
@@ -667,11 +676,11 @@ def get_transfer_questions(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
-    """How many pairs and flow questions wait for the user, and in which months.
-    Ungated, like /transactions."""
+    """How many pairs, flow and subscription questions wait for the user, and
+    in which months. Ungated, like /transactions."""
     patterns = transfer_patterns(session, current_user.uuid, master_key)
     questions = defaultdict(int, patterns.questions)
-    for period, count in patterns.flow_questions.items():
+    for period, count in [*patterns.flow_questions.items(), *patterns.subscription_questions.items()]:
         questions[period] += count
     questions = dict(sorted(questions.items()))
     return BankTransferQuestionsResponse(
@@ -730,6 +739,168 @@ def post_transfer_decision(
         raise HTTPException(status_code=404, detail="Opération introuvable.")
     except DecisionError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+_NO_OPERATION = "Opération introuvable."
+_NO_SUBSCRIPTION = "Abonnement introuvable."
+
+
+@router.get("/subscriptions", response_model=BankSubscriptionsResponse)
+def get_subscriptions(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Every subscription found or decided, from the stored operations.
+    Ungated, like /transactions."""
+    return subscription_service.list_subscriptions(session, current_user.uuid, master_key)
+
+
+@router.get("/subscriptions/operations", response_model=list[BankTransactionItem])
+def get_undecided_subscription_operations(
+    transaction_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """The operations of the subscription this operation belongs to, decided or not."""
+    try:
+        return subscription_service.subscription_operations(
+            session, current_user.uuid, master_key, transaction_id=transaction_id,
+        )
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail=_NO_OPERATION)
+    except subscription_service.NoSubscriptionError:
+        raise HTTPException(status_code=404, detail="Cette opération n'appartient à aucun abonnement.")
+
+
+@router.get("/subscriptions/{subscription_id}/operations", response_model=list[BankTransactionItem])
+def get_subscription_operations(
+    subscription_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    try:
+        return subscription_service.subscription_operations(
+            session, current_user.uuid, master_key, subscription_id=subscription_id,
+        )
+    except SubscriptionNotFoundError:
+        raise HTTPException(status_code=404, detail=_NO_SUBSCRIPTION)
+
+
+@router.post("/subscriptions/decisions", response_model=BankSubscriptionItem | None)
+def post_subscription_decision(
+    body: BankSubscriptionDecisionCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Yes or no to the subscription an operation belongs to."""
+    try:
+        return subscription_service.decide(
+            session, current_user.uuid, master_key, body.transaction_id, body.decision, body.name,
+        )
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail=_NO_OPERATION)
+    except subscription_service.NoSubscriptionError:
+        raise HTTPException(status_code=404, detail="Cette opération n'appartient à aucun abonnement.")
+
+
+@router.post("/subscriptions", response_model=BankSubscriptionItem | None, status_code=201)
+def post_subscription(
+    body: BankSubscriptionCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Mark an operation the detection missed as a subscription."""
+    try:
+        return subscription_service.mark(
+            session, current_user.uuid, master_key, body.transaction_id, body.cadence, body.name,
+        )
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail=_NO_OPERATION)
+    except subscription_service.NotAnExpenseError:
+        raise HTTPException(
+            status_code=409,
+            detail="Seul un débit passé, compté en dépense et hors virement entre vos comptes, "
+                   "peut être marqué comme abonnement.",
+        )
+
+
+@router.patch("/subscriptions/{subscription_id}", response_model=BankSubscriptionItem | None)
+def patch_subscription(
+    subscription_id: str,
+    body: BankSubscriptionUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Rename it, force its cadence, or say when it was ended."""
+    try:
+        return subscription_service.update(
+            session, current_user.uuid, master_key, subscription_id,
+            {name: getattr(body, name) for name in body.model_fields_set},
+        )
+    except SubscriptionNotFoundError:
+        raise HTTPException(status_code=404, detail=_NO_SUBSCRIPTION)
+
+
+@router.post("/subscriptions/{subscription_id}/operations", response_model=BankSubscriptionItem | None)
+def post_subscription_operation(
+    subscription_id: str,
+    body: BankSubscriptionOperation,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Attach an operation to it, or detach one from it."""
+    try:
+        return subscription_service.correct(
+            session, current_user.uuid, master_key, subscription_id, body.transaction_id, body.action,
+        )
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail=_NO_OPERATION)
+    except SubscriptionNotFoundError:
+        raise HTTPException(status_code=404, detail=_NO_SUBSCRIPTION)
+
+
+@router.post("/subscriptions/{subscription_id}/merge", response_model=BankSubscriptionItem | None)
+def post_subscription_merge(
+    subscription_id: str,
+    body: BankSubscriptionMerge,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Make one subscription of two."""
+    if (body.other_id is None) == (body.other_transaction_id is None):
+        raise HTTPException(status_code=400, detail="Indiquez l'autre abonnement, par son id ou par une opération.")
+    try:
+        return subscription_service.merge(
+            session, current_user.uuid, master_key, subscription_id, body.other_id, body.other_transaction_id,
+        )
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail=_NO_OPERATION)
+    except SubscriptionNotFoundError:
+        raise HTTPException(status_code=404, detail=_NO_SUBSCRIPTION)
+    except subscription_service.NoSubscriptionError:
+        raise HTTPException(status_code=404, detail="Cette opération n'appartient à aucun abonnement.")
+
+
+@router.delete("/subscriptions/{subscription_id}", status_code=204)
+def delete_subscription(
+    subscription_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Forget the decision: the series is found and asked about again."""
+    try:
+        subscription_service.forget(session, current_user.uuid, master_key, subscription_id)
+    except SubscriptionNotFoundError:
+        raise HTTPException(status_code=404, detail=_NO_SUBSCRIPTION)
 
 
 @router.get("/real-cashflow", response_model=RealCashflowYear)

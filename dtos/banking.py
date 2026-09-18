@@ -324,6 +324,81 @@ class BankFlowQuestion(BaseModel):
     operation_count: int
     # What those operations add up to: what the answer can move.
     amount: Decimal
+    # Offered first, never applied: a credit from a subscription's merchant
+    # reads as a refund, typed EXPENSE to come off the spending.
+    suggested: CashflowType | None = None
+    subscription_name: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Subscriptions (services/banking/subscriptions.py)
+# ---------------------------------------------------------------------------
+
+
+class SubscriptionCadence(str, Enum):
+    WEEKLY = "weekly"
+    BIWEEKLY = "biweekly"
+    FOURWEEKLY = "fourweekly"
+    MONTHLY = "monthly"
+    BIMONTHLY = "bimonthly"
+    QUARTERLY = "quarterly"
+    SEMIANNUAL = "semiannual"
+    ANNUAL = "annual"
+
+
+class SubscriptionState(str, Enum):
+    # Found sure enough to count without asking; not decided by the user.
+    AUTO = "auto"
+    CONFIRMED = "confirmed"
+    # Found, asked about.
+    CANDIDATE = "candidate"
+    REFUSED = "refused"
+
+
+class SubscriptionStatus(str, Enum):
+    ACTIVE = "active"
+    LATE = "late"
+    ENDED = "ended"
+    # The account is known only up to `covered_until`, before the next due date.
+    STALE = "stale"
+
+
+class SubscriptionRole(str, Enum):
+    # Debited at a due date.
+    REGULAR = "regular"
+    # Debited off a due date: a prorata, a regularisation, a debit billed twice.
+    EXTRA = "extra"
+    # Its refund or its rejection was paired with it: it counts for nothing.
+    CANCELLED = "cancelled"
+    # A credit from the subscription's merchant.
+    REFUND = "refund"
+    # Attached by the user.
+    MANUAL = "manual"
+
+
+class BankSubscriptionTag(BaseModel):
+    """The counted subscription an operation belongs to."""
+    # The user's decision; None for one counted without asking and never decided.
+    id: str | None
+    # Stable while the series keeps its first debit, decided or not.
+    key: str
+    name: str
+    cadence: SubscriptionCadence
+    role: SubscriptionRole
+    state: SubscriptionState
+
+
+class BankSubscriptionQuestion(BaseModel):
+    """Asked on the last debit of a series found but not sure enough to count:
+    is this a subscription? Answered by POST /banking/subscriptions/decisions."""
+    cadence: SubscriptionCadence
+    amount: Decimal
+    variable: bool
+    occurrence_count: int
+    since: date
+    annual_estimate: Decimal
+    # The names it was paid under before its current one.
+    renamed_from: list[str] = []
 
 
 class BankTransactionItem(BaseModel):
@@ -354,6 +429,8 @@ class BankTransactionItem(BaseModel):
     # What the user's investment accounts say about it: the evidence that typed
     # it, or a nearby deposit to judge the question by.
     contribution: BankContributionMatch | None = None
+    subscription: BankSubscriptionTag | None = None
+    subscription_question: BankSubscriptionQuestion | None = None
 
 
 class BankTransactionsResponse(BaseModel):
@@ -433,6 +510,7 @@ class BankTransferQuestionsResponse(BaseModel):
 class BankReviewKind(str, Enum):
     FLOW = "flow"
     TRANSFER = "transfer"
+    SUBSCRIPTION = "subscription"
 
 
 class BankReviewItem(BaseModel):
@@ -440,21 +518,26 @@ class BankReviewItem(BaseModel):
     kind: BankReviewKind
     transaction: BankTransactionItem
     # What the answer can move: the operations of the label for a flow
-    # question, the pair's amount for a suggested transfer.
+    # question, the pair's amount for a suggested transfer. For a
+    # subscription, what it costs a year: the answer moves no total, only
+    # what the expenses say is fixed.
     amount: Decimal
     operation_count: int
 
 
 class BankReviewYear(BaseModel):
     year: int
+    # Subscription questions are counted, not added: their answer moves no total.
     amount: Decimal
     count: int
 
 
 class BankReviewQueue(BaseModel):
     """GET /banking/review-queue — every open question, heaviest first."""
+    # What the flow and transfer questions can still move.
     total_amount: Decimal
     total_count: int
+    subscription_count: int = 0
     # Over the whole history, whatever the year asked for.
     years: list[BankReviewYear]
     questions: list[BankReviewItem]
@@ -506,6 +589,16 @@ class BankLedgerRow(BaseModel):
     # change how it counts.
     question: BankReviewKind | None
     open: bool
+    # Index into `subscriptions`: set on counted rows whose spending is a
+    # counted subscription's, so their `signed` add up to its figure.
+    subscription: int | None = None
+
+
+class BankLedgerSubscription(BaseModel):
+    id: str | None
+    key: str
+    name: str
+    cadence: SubscriptionCadence
 
 
 class BankLedger(BaseModel):
@@ -515,6 +608,7 @@ class BankLedger(BaseModel):
     accounts: list[BankLedgerAccount]
     groups: list[BankLedgerGroup]
     rows: list[BankLedgerRow]
+    subscriptions: list[BankLedgerSubscription] = []
 
 
 class TypeScope(str, Enum):
@@ -552,6 +646,129 @@ class BankTypeRuleItem(BaseModel):
     created_at: datetime
 
 
+class SubscriptionDecisionKind(str, Enum):
+    CONFIRM = "confirm"
+    REFUSE = "refuse"
+
+
+class BankSubscriptionDecisionCreate(BaseModel):
+    """POST /banking/subscriptions/decisions — answer for the series an
+    operation belongs to."""
+    transaction_id: str
+    decision: SubscriptionDecisionKind
+    name: str | None = None
+
+
+class BankSubscriptionCreate(BaseModel):
+    """POST /banking/subscriptions — mark an operation the detection missed."""
+    transaction_id: str
+    cadence: SubscriptionCadence | None = None
+    name: str | None = None
+
+
+class BankSubscriptionUpdate(BaseModel):
+    """PATCH /banking/subscriptions/{id}. A field left out is unchanged; null
+    clears it."""
+    name: str | None = None
+    cadence: SubscriptionCadence | None = None
+    # The day the user ended it.
+    ended_on: date | None = None
+
+
+class SubscriptionOperationAction(str, Enum):
+    INCLUDE = "include"
+    EXCLUDE = "exclude"
+
+
+class BankSubscriptionOperation(BaseModel):
+    transaction_id: str
+    action: SubscriptionOperationAction
+
+
+class BankSubscriptionMerge(BaseModel):
+    """The other subscription, by its decision or by any of its operations
+    when it was never decided."""
+    other_id: str | None = None
+    other_transaction_id: str | None = None
+
+
+class BankSubscriptionPriceChange(BaseModel):
+    date: date
+    before: Decimal
+    after: Decimal
+    percent: Decimal
+
+
+class BankSubscriptionEpisode(BaseModel):
+    start: date
+    end: date
+
+
+class BankSubscriptionRename(BaseModel):
+    date: date
+    before: str
+    after: str
+
+
+class BankSubscriptionRefund(BaseModel):
+    id: str
+    date: date
+    amount: Decimal
+    label: str | None
+
+
+class BankSubscriptionRefunds(BaseModel):
+    total: Decimal
+    items: list[BankSubscriptionRefund]
+
+
+class BankSubscriptionItem(BaseModel):
+    # The user's decision; None for a series never decided.
+    id: str | None
+    key: str
+    # Its last debit, to act on it: answer, decide, list its operations.
+    transaction_id: str
+    name: str
+    state: SubscriptionState
+    confidence: str | None
+    status: SubscriptionStatus
+    # When `status` is stale: the day its account is known complete up to.
+    covered_until: date | None = None
+    cadence: SubscriptionCadence
+    variable: bool
+    amount: Decimal
+    currency: str
+    monthly_equivalent: Decimal
+    annual_estimate: Decimal
+    # What was actually paid over the last twelve months, extras included,
+    # cancelled debits left out.
+    paid_last_12_months: Decimal
+    first_date: date
+    # Set when the first debit is within a due date of the account's first
+    # operation: it may have started before the history does.
+    since_at_least: bool = False
+    last_date: date
+    next_date: date
+    occurrence_count: int
+    extra_count: int
+    accounts: list[str]
+    payment_method: OperationType
+    price_changes: list[BankSubscriptionPriceChange] = []
+    episodes: list[BankSubscriptionEpisode] = []
+    renamed: list[BankSubscriptionRename] = []
+    refunds: BankSubscriptionRefunds
+    ended_on: date | None = None
+
+
+class BankSubscriptionsResponse(BaseModel):
+    """GET /banking/subscriptions."""
+    currency: str
+    # The active subscriptions counted, in `currency`: what is fixed.
+    monthly_total: Decimal
+    annual_total: Decimal
+    items: list[BankSubscriptionItem]
+
+
 # ---------------------------------------------------------------------------
 # Real cashflow
 # ---------------------------------------------------------------------------
@@ -572,6 +789,9 @@ class RealCashflowTotals(BaseModel):
     investment: Decimal = Decimal("0")
     neutral: Decimal = Decimal("0")
     net: Decimal = Decimal("0")
+    # The part of `expenses` spent on counted subscriptions, their refunds
+    # taken off: already in `expenses`, never added to anything else.
+    subscriptions: Decimal = Decimal("0")
     # Percent of the income: what was not spent, and the part of it set aside
     # or invested. None without income to divide by.
     savings_rate: Decimal | None = None
@@ -588,6 +808,24 @@ class RealCashflowMonth(RealCashflowTotals):
     open_amount: Decimal = Decimal("0")
     # Spent far more than the year's other months.
     atypical: bool = False
+
+
+class RealCashflowSubscription(BaseModel):
+    """What one subscription weighed in a month."""
+    id: str | None
+    key: str
+    name: str
+    amount: Decimal
+    count: int
+
+
+class RealCashflowUpcoming(BaseModel):
+    """A due date of an active subscription still to come this month."""
+    id: str | None
+    key: str
+    name: str
+    date: date
+    amount: Decimal
 
 
 class RealCashflowExpense(BaseModel):
@@ -660,6 +898,8 @@ class RealCashflowYear(BaseModel):
     projection: RealCashflowTotals | None = None
     safety_net: RealCashflowSafetyNet | None = None
     coverage_gaps: list[RealCashflowCoverageGap] = []
+    # The current year only: what the active subscriptions cost a month.
+    fixed_charges: Decimal | None = None
 
 
 class RealCashflowMonthDetail(BaseModel):
@@ -678,6 +918,7 @@ class RealCashflowMonthDetail(BaseModel):
     top_sources: list[RealCashflowCounterpart] = []
     top_destinations: list[RealCashflowCounterpart] = []
     coverage_gaps: list[RealCashflowCoverageGap] = []
+    subscriptions: list[RealCashflowSubscription] = []
 
 
 class RealCashflowPacePoint(BaseModel):
@@ -702,3 +943,5 @@ class RealCashflowCurrent(BaseModel):
     projection: Decimal | None
     open_amount: Decimal
     curve: list[RealCashflowPacePoint]
+    upcoming: list[RealCashflowUpcoming] = []
+    upcoming_amount: Decimal = Decimal("0")
