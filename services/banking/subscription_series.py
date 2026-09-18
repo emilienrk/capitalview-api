@@ -90,6 +90,8 @@ class _Held:
     decision: Decision | None = None
     confidence: Confidence | None = None
     manual: list[RecurrenceOp] = field(default_factory=list)
+    # What its decision detached: never a member, not even a refund.
+    excluded: set[str] = field(default_factory=set)
 
 
 def derive(
@@ -131,9 +133,8 @@ def derive(
 
     derived = Derived()
     taken_refunds: set[str] = set()
-    excluded = {refs[ref] for decision in decisions for ref in decision.excludes if ref in refs}
     for entry in grouped:
-        stored = _stored(entry, keys, heads, by_uuid, account_uuids, credit_ops, taken_refunds, excluded, asking)
+        stored = _stored(entry, keys, heads, by_uuid, account_uuids, credit_ops, taken_refunds, asking)
         if stored is None:
             continue
         derived.subscriptions.append(stored)
@@ -305,6 +306,7 @@ def _corrections(
         decision = entry.decision
         own = decision.uuid if decision else None
         excluded = {refs[ref] for ref in decision.excludes if ref in refs} if decision else set()
+        entry.excluded = excluded
         series = entry.series
         series.regular = [op for op in series.regular if op.id not in excluded and claimed.get(op.id, own) == own]
         series.extras = [op for op in series.extras if op.id not in excluded and claimed.get(op.id, own) == own]
@@ -328,7 +330,6 @@ def _stored(
     account_uuids: dict[str, str],
     credit_ops: list[RecurrenceOp],
     taken_refunds: set[str],
-    excluded: set[str],
     asking: set[int],
 ) -> StoredSubscription | None:
     series, decision = entry.series, entry.decision
@@ -346,7 +347,7 @@ def _stored(
 
     refunds = [
         op for op in recurrence.linked_refunds(series, credit_ops, _refunding(series, heads))
-        if op.id not in taken_refunds and op.id not in excluded
+        if op.id not in taken_refunds and op.id not in entry.excluded
     ] + [op for op in entry.manual if by_uuid[op.id].is_credit]
     taken_refunds.update(op.id for op in refunds)
 
