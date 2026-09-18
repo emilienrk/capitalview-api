@@ -42,6 +42,8 @@ from dtos.banking import (
     BankReviewKind,
     BankReviewQueue,
     BankReviewYear,
+    BankSubscriptionQuestion,
+    BankSubscriptionTag,
     BankTransactionItem,
     BankTransactionsResponse,
     BankTransferDecisionKind,
@@ -54,7 +56,7 @@ from dtos.banking import (
     TypeSource,
 )
 from models.bank import BankAccount
-from models.banking import BankTransaction
+from models.banking import BankAccountLink, BankTransaction
 from models.currency import BASE_CURRENCY
 from models.enums import BankAccountType
 from services.banking import subscription_series
@@ -476,6 +478,16 @@ def _user_accounts(session: Session, user_uuid: str, master_key: str) -> _Accoun
     # are the same blind index of the same CapitalView account uuid. Linked
     # accounts and CSV-imported ones alike.
     return _Accounts(by_bidx, readable_account_bidxs(session, user_bidx, master_key))
+
+
+def _links(session: Session, user_uuid: str, master_key: str) -> dict[str, date]:
+    """Each linked account's last successful sync, by its blind index."""
+    return {
+        link.bank_account_uuid_bidx: link.last_synced_at
+        for link in session.exec(
+            select(BankAccountLink).where(BankAccountLink.user_uuid_bidx == hash_index(user_uuid, master_key))
+        ).all()
+    }
 
 
 def _scope(accounts: _Accounts, account_id: str | None, master_key: str) -> list[str]:
@@ -1076,6 +1088,10 @@ def _item_builder(
         resolution = _filed(movements, transfer_legs, index, label, filing)
         settles = filing.patterns.flow_carriers.get(row.uuid)
         asks = settles is not None and _asks_flow(movement, leg, label, resolution)
+        subscription, member = filing.patterns.subscription_of(row.uuid) or (None, None)
+        refunds_subscription = (
+            subscription is not None and subscription.counted and member.role == stored_patterns.REFUND
+        )
         return BankTransactionItem(
             id=row.uuid,
             account_id=accounts.by_bidx[movement.account_bidx].uuid,
@@ -1100,11 +1116,33 @@ def _item_builder(
                 choices=CREDIT_CHOICES if movement.is_credit else DEBIT_CHOICES,
                 operation_count=settles.count,
                 amount=settles.amount,
+                suggested=CashflowType.EXPENSE if refunds_subscription else None,
+                subscription_name=subscription.name if refunds_subscription else None,
             ) if asks else None,
             contribution=_contribution_item(filing.contributions.get(index)),
+            subscription=BankSubscriptionTag(
+                id=subscription.decision, key=subscription.key, name=subscription.name,
+                cadence=subscription.cadence, role=member.role, state=subscription.state,
+            ) if subscription is not None and subscription.counted else None,
+            subscription_question=(
+                _subscription_question(subscription)
+                if subscription is not None and subscription.question and subscription.carrier == row.uuid else None
+            ),
         )
 
     return item
+
+
+def _subscription_question(subscription: stored_patterns.StoredSubscription) -> BankSubscriptionQuestion:
+    return BankSubscriptionQuestion(
+        cadence=subscription.cadence,
+        amount=subscription.amount,
+        variable=subscription.variable,
+        occurrence_count=subscription_series.occurrence_count(subscription),
+        since=subscription.first,
+        annual_estimate=subscription_series.annual_estimate(subscription),
+        renamed_from=[before for _, before, _ in subscription.renamed],
+    )
 
 
 def _contribution_item(match: Match | None) -> BankContributionMatch | None:
@@ -1162,7 +1200,9 @@ def list_month_transactions(
         net=month.net,
         internal_transfers_excluded=totals.transfers_count,
         internal_transfers_amount=totals.transfers_amount,
-        transfer_questions=totals.questions_count + sum(1 for tx in transactions if tx.flow_question),
+        transfer_questions=totals.questions_count + sum(
+            1 for tx in transactions if tx.flow_question or tx.subscription_question
+        ),
         reversals_excluded=totals.reversals_count,
         reversals_amount=totals.reversals_amount,
         pending_count=totals.pending_count,
@@ -1191,10 +1231,18 @@ def review_queue(
     )
 
     questions: list[BankReviewItem] = []
+    subscriptions = {s.carrier: s for s in pairing.patterns.subscriptions if s.question}
     for index, movement in enumerate(movements):
         leg = transfer_legs.get(index)
         carrier = pairing.patterns.flow_carriers.get(movement.row.uuid)
-        if carrier is not None:
+        subscription = subscriptions.get(movement.row.uuid)
+        if subscription is not None:
+            questions.append(BankReviewItem(
+                kind=BankReviewKind.SUBSCRIPTION, transaction=item(index),
+                amount=subscription_series.annual_estimate(subscription),
+                operation_count=subscription_series.occurrence_count(subscription),
+            ))
+        elif carrier is not None:
             built = item(index)
             if built.flow_question:
                 questions.append(BankReviewItem(
@@ -1205,20 +1253,26 @@ def review_queue(
                 kind=BankReviewKind.TRANSFER, transaction=item(index), amount=movement.amount, operation_count=2,
             ))
 
+    # A subscription's answer moves no total: counted in, never added up
+    # (decision 5 of docs/superpowers/plans/2026-09-18-subscriptions.md).
+    def moves(question: BankReviewItem) -> Decimal:
+        return Decimal("0") if question.kind is BankReviewKind.SUBSCRIPTION else question.amount
+
     years: dict[int, BankReviewYear] = {}
     for question in questions:
         day = question.transaction.operation_date
         if day is None:
             continue
         entry = years.setdefault(day.year, BankReviewYear(year=day.year, amount=Decimal("0"), count=0))
-        entry.amount += question.amount
+        entry.amount += moves(question)
         entry.count += 1
     if year is not None:
         questions = [q for q in questions if q.transaction.operation_date and q.transaction.operation_date.year == year]
     questions.sort(key=lambda q: (-q.amount, -(q.transaction.operation_date or date.min).toordinal()))
     return BankReviewQueue(
-        total_amount=sum((q.amount for q in questions), Decimal("0")),
+        total_amount=sum((moves(q) for q in questions), Decimal("0")),
         total_count=len(questions),
+        subscription_count=sum(1 for q in questions if q.kind is BankReviewKind.SUBSCRIPTION),
         years=sorted(years.values(), key=lambda entry: -entry.year),
         questions=questions,
     )

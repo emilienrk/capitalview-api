@@ -78,6 +78,8 @@ class SubscriptionMember(NamedTuple):
     is_credit: bool
     # Typed EXPENSE when the patterns were built.
     expense: bool
+    # Kept for a refund only, which the subscription shows by its label.
+    label: str | None = None
 
 
 @dataclass
@@ -122,7 +124,8 @@ class StoredSubscription:
             "key": self.key, "decision": self.decision, "state": self.state, "confidence": self.confidence,
             "cadence": self.cadence, "variable": self.variable, "currency": self.currency,
             "members": [
-                [m.uuid, m.role, m.day.isoformat(), str(m.amount), m.is_credit, m.expense] for m in self.members
+                [m.uuid, m.role, m.day.isoformat(), str(m.amount), m.is_credit, m.expense, m.label]
+                for m in self.members
             ],
             "levels": [[a.isoformat(), b.isoformat(), str(amount), count] for a, b, amount, count in self.levels],
             "episodes": [[a.isoformat(), b.isoformat()] for a, b in self.episodes],
@@ -140,8 +143,8 @@ class StoredSubscription:
             confidence=content["confidence"], cadence=content["cadence"], variable=content["variable"],
             currency=content["currency"],
             members=[
-                SubscriptionMember(uuid, role, date.fromisoformat(day), Decimal(amount), is_credit, expense)
-                for uuid, role, day, amount, is_credit, expense in content["members"]
+                SubscriptionMember(uuid, role, date.fromisoformat(day), Decimal(amount), is_credit, expense, label)
+                for uuid, role, day, amount, is_credit, expense, label in content["members"]
             ],
             levels=[
                 (date.fromisoformat(a), date.fromisoformat(b), Decimal(amount), count)

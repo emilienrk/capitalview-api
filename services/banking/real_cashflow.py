@@ -37,13 +37,18 @@ from dtos.banking import (
     RealCashflowMonthDetail,
     RealCashflowPacePoint,
     RealCashflowSafetyNet,
+    RealCashflowSubscription,
     RealCashflowTotals,
+    RealCashflowUpcoming,
     RealCashflowYear,
 )
-from models.banking import BankAccountLink, BankTransaction
+from models.banking import BankTransaction
 from services.banking.cashflow_types import counted_leg, signed_amount
+from services.banking import recurrence
 from services.banking.label_groups import group_key, group_name, group_words, merge_similar
-from services.banking.transfer_patterns import TransferPatterns
+from services.banking.recurrence import CADENCE
+from services.banking.subscriptions import active_counted
+from services.banking.transfer_patterns import StoredSubscription, TransferPatterns
 from services.banking.flows import (
     SAVINGS_ACCOUNTS,
     _Accounts,
@@ -51,6 +56,7 @@ from services.banking.flows import (
     _filed,
     _filing,
     _label,
+    _links,
     _pairing,
     _paired_movements,
     _shift_period,
@@ -78,7 +84,7 @@ _FIELD_OF = {
     CashflowType.INVESTMENT: "investment",
     CashflowType.NEUTRAL: "neutral",
 }
-_AMOUNTS = ("income", "expenses", "saving", "investment", "neutral", "net")
+_AMOUNTS = ("income", "expenses", "saving", "investment", "neutral", "net", "subscriptions")
 _PERCENT = Decimal("0.1")
 
 
@@ -144,6 +150,12 @@ def real_cashflow_year(
             session, user_uuid, master_key, accounts, reading.patterns,
             date.fromisoformat(f"{periods[0]}-01"), _last_day(periods[-1]),
         ),
+        fixed_charges=sum(
+            (item.monthly_equivalent for _, item in active_counted(
+                session, user_uuid, master_key, accounts, reading.patterns, today,
+            ) if item.currency == reading.currency),
+            Decimal("0"),
+        ) if current else None,
     )
 
 
@@ -182,6 +194,7 @@ def real_cashflow_month(
             session, user_uuid, master_key, accounts, reading.patterns,
             date.fromisoformat(f"{period}-01"), _last_day(period),
         ),
+        subscriptions=reading.month_subscriptions(period),
     )
 
 
@@ -214,6 +227,10 @@ def real_cashflow_current(
 
     cumulated = _cumulated(reading.daily[period], length)
     spent_to_date = cumulated[today.day - 1]
+    upcoming = _upcoming(
+        active_counted(session, user_uuid, master_key, accounts, reading.patterns, today),
+        reading, today, _last_day(period),
+    )
     median_to_date = median_at(today.day)
     median_month = Decimal(median(curve[-1] for curve in curves)) if curves else None
     return RealCashflowCurrent(
@@ -235,7 +252,50 @@ def real_cashflow_current(
             )
             for day in range(1, length + 1)
         ],
+        upcoming=upcoming,
+        upcoming_amount=sum((due.amount for due in upcoming), Decimal("0")),
     )
+
+
+def _upcoming(
+    active: list, reading: _Reading, today: date, month_end: date,
+) -> list[RealCashflowUpcoming]:
+    """The due dates of the active subscriptions left this month: from the
+    last debit on, one cadence at a time, up to the month's end — less the
+    ones a pending debit already answers, of about the amount, near the date,
+    on the account the subscription is paid from."""
+    start = today.replace(day=1)
+    pending = list(reading.pending_debits)
+    upcoming = []
+    for subscription, item in active:
+        if subscription.currency != reading.currency:
+            continue
+        cadence = CADENCE[subscription.cadence]
+        due = recurrence.advance(cadence, subscription.last)
+        while due <= month_end:
+            if due >= start:
+                answered = next((
+                    debit for debit in pending
+                    if debit[0] == subscription.last_account and abs((debit[1] - due).days) <= cadence.tolerance
+                    and _about(debit[2], subscription)
+                ), None)
+                if answered is not None:
+                    pending.remove(answered)
+                else:
+                    upcoming.append(RealCashflowUpcoming(
+                        id=subscription.decision, key=subscription.key, name=subscription.name,
+                        date=due, amount=subscription.amount,
+                    ))
+            due = recurrence.advance(cadence, due)
+    return sorted(upcoming, key=lambda due: (due.date, due.key))
+
+
+def _about(amount: Decimal, subscription: StoredSubscription) -> bool:
+    """An amount a pending debit of this subscription may carry: its price, or
+    anywhere near it for one whose amount varies."""
+    if subscription.variable:
+        return abs(amount - subscription.amount) <= subscription.amount / 2
+    return recurrence.flat(float(amount), float(subscription.amount))
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +318,15 @@ class _Reading:
     # Expenses by period and day of the month, when asked for.
     daily: dict[str, dict[int, Decimal]]
     pending: dict[str, dict[int, Decimal]]
+    # (account, day, amount) of the pending debits read.
+    pending_debits: list[tuple[str, date, Decimal]] = field(default_factory=list)
+    # Period -> subscription key -> what it weighed that month.
+    subscriptions: dict[str, dict[str, RealCashflowSubscription]] = field(
+        default_factory=lambda: defaultdict(dict)
+    )
+
+    def month_subscriptions(self, period: str) -> list[RealCashflowSubscription]:
+        return sorted(self.subscriptions[period].values(), key=lambda s: (-s.amount, s.name, s.key))
 
     def open_questions(self, period: str) -> int:
         # From the whole history: a label's question sits on its last operation,
@@ -379,10 +448,22 @@ def _read(
             if not movement.is_final:
                 reading.pending[movement.period][movement.day.day] += signed
         if not movement.is_final:
+            if not movement.is_credit and movement.day is not None:
+                reading.pending_debits.append((movement.account_bidx, movement.day, movement.amount))
             continue
         tally = reading.months[movement.period]
         tally.totals[_FIELD_OF[kind]] += signed
         tally.count += 1
+        subscription = reading.patterns.counted_subscription(movement.row.uuid)
+        if subscription is not None and kind is CashflowType.EXPENSE:
+            tally.totals["subscriptions"] += signed
+            month = reading.subscriptions[movement.period]
+            entry = month.setdefault(subscription.key, RealCashflowSubscription(
+                id=subscription.decision, key=subscription.key, name=subscription.name,
+                amount=Decimal("0"), count=0,
+            ))
+            entry.amount += signed
+            entry.count += 1
         if kind is CashflowType.EXPENSE and not movement.is_credit:
             reading.expenses.append((movement.period, movement.amount, RealCashflowExpense(
                 id=movement.row.uuid,
@@ -501,16 +582,6 @@ def _projection(totals: RealCashflowTotals, monthly: RealCashflowTotals, months_
     amounts = {name: getattr(totals, name) + getattr(monthly, name) * months_left for name in _AMOUNTS if name != "net"}
     amounts["net"] = amounts["income"] - amounts["expenses"] - amounts["saving"] - amounts["investment"]
     return _with_rates(amounts)
-
-
-def _links(session: Session, user_uuid: str, master_key: str) -> dict[str, date]:
-    """Each linked account's last successful sync, by its blind index."""
-    return {
-        link.bank_account_uuid_bidx: link.last_synced_at
-        for link in session.exec(
-            select(BankAccountLink).where(BankAccountLink.user_uuid_bidx == hash_index(user_uuid, master_key))
-        ).all()
-    }
 
 
 def _safety_net(
