@@ -22,7 +22,7 @@ import math
 import re
 import unicodedata
 from collections import Counter, defaultdict
-from typing import Iterable
+from collections.abc import Iterable
 
 from services.banking.label_groups import NOISE_WORDS, display_label
 
