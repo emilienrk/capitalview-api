@@ -9,7 +9,7 @@ from decimal import Decimal
 
 from sqlmodel import Session, select
 
-from dtos.banking import BankTransferDecisionKind, RecurringDecisionKind, TypeScope
+from dtos.banking import BankTransferDecisionKind, RecurringDecisionKind, RecurringNature, TypeScope
 from dtos.banking import CashflowType as Type
 from models.banking import BankAccountLink
 from services.banking.flows import (
@@ -25,7 +25,7 @@ from services.banking.real_cashflow import (
     real_cashflow_month,
     real_cashflow_year,
 )
-from services.banking.recurring import decide, list_recurring
+from services.banking.recurring import decide, list_recurring, update
 from services.banking.transfer_decisions import record_decision
 from services.encryption import hash_index
 from tests.services.test_banking_flows import USER, _raw, _store
@@ -255,6 +255,52 @@ def test_recurring_payments_are_part_of_the_expenses_month_by_month_as_the_ledge
     assert {p: m.recurring for p, m in months.items() if m.recurring} == {
         p: amount for p, amount in by_month.items() if p.startswith("2025") and amount
     }
+
+
+def test_the_expenses_say_which_part_of_what_returns_cannot_be_avoided(session: Session, master_key: str):
+    # A power bill nobody can stop, a gym anybody can.
+    _ops(
+        session, master_key,
+        *_months(CURRENT, "2025-06", 8, 5, "60.00", EDF),
+        *_months(CURRENT, "2025-06", 8, 12, "39.00", BASIC_FIT),
+    )
+
+    year = real_cashflow_year(session, USER, master_key, 2025, today=TODAY)
+    months = {m.period: m for m in year.months}
+    assert (months["2025-09"].recurring, months["2025-09"].recurring_fixed) == (Decimal("99.00"), Decimal("60.00"))
+    assert all(m.recurring_fixed <= m.recurring <= m.expenses for m in year.months)
+
+    detail = real_cashflow_month(session, USER, master_key, "2025-09", today=TODAY)
+    assert {item.name: (item.nature.value, item.fixed) for item in detail.recurring} == {
+        EDF_NAME: ("energy", True), "Basic Fit": ("sport", False),
+    }
+
+
+def test_what_a_recurring_payment_took_year_by_year(session: Session, master_key: str):
+    # Two landlords, one roof: each keeps its own years, the nature joins them.
+    # A rent paid to a person says nothing, so the user says it; the one whose
+    # label carries the word is guessed.
+    _ops(
+        session, master_key,
+        *_months(CURRENT, "2025-07", 12, 3, "380.00", "VIR SEPA Frederic Durand"),
+        *_months(CURRENT, "2026-07", 3, 3, "530.00", "VIR SEPA TRANSALP'DOME Virement pour le loyer"),
+    )
+    first = next(
+        item for item in list_recurring(session, USER, master_key, today=TODAY).items
+        if item.amount == Decimal("380.00")
+    )
+    assert first.nature is RecurringNature.OTHER
+    decided = decide(session, USER, master_key, first.transaction_id, RecurringDecisionKind.CONFIRM)
+    update(session, USER, master_key, decided.id, {"nature": RecurringNature.HOUSING})
+
+    items = {item.name: item for item in list_recurring(session, USER, master_key, today=TODAY).items}
+    housing = [item for item in items.values() if item.nature is RecurringNature.HOUSING]
+    assert len(housing) == 2
+    by_year: dict[int, Decimal] = {}
+    for item in housing:
+        for paid in item.paid_by_year:
+            by_year[paid.year] = by_year.get(paid.year, Decimal("0")) + paid.amount
+    assert by_year == {2025: Decimal("2280.00"), 2026: Decimal("3870.00")}
 
 
 def test_the_month_lists_what_each_recurring_payment_weighed(session: Session, master_key: str):

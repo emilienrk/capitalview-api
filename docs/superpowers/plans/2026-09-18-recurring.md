@@ -398,9 +398,14 @@ Les quatre premières sont les **charges fixes** : ce qu'un mois ne peut pas
 bloc ; c'est là que le loyer cesse de noyer le reste. La frontière est tenue
 côté web (`utils/recurring.ts`), seul endroit qui en a besoin aujourd'hui.
 
-**Reste à faire** : « dont charges fixes » / « dont abonnements » dans le Réel,
-qui demande que `RealCashflowTotals` porte la coupure côté API ; et l'historique
-par nature (le loyer d'un bail à l'autre).
+Le Réel porte la coupure : `RealCashflowTotals.recurring_fixed`, une part de
+`recurring`, affichée « dont X qui reviennent, Y incompressibles » ; le détail
+d'un mois donne la nature de chaque ligne. Et chaque paiement porte
+`paid_by_year`, d'où « Ce que ça a coûté, année par année » par nature —
+terminés compris, ce qui donne le loyer d'un bail à l'autre.
+
+**Sans compte bancaire** l'onglet répond vide et le dit ; rien d'autre dans
+l'app n'en dépend (`test_a_user_without_a_bank_account_reads_an_empty_list`).
 
 ## Hors périmètre
 

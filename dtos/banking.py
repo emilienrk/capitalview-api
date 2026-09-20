@@ -741,6 +741,11 @@ class BankRecurringRefunds(BaseModel):
     items: list[BankRecurringRefund]
 
 
+class BankRecurringYearPaid(BaseModel):
+    year: int
+    amount: Decimal
+
+
 class BankRecurringItem(BaseModel):
     # The user's decision; None for a series never decided.
     id: str | None
@@ -752,6 +757,8 @@ class BankRecurringItem(BaseModel):
     nature: RecurringNature
     # Whether the user set it: a guess is a proposal, and says so.
     nature_set: bool = False
+    # Whether its nature is one a month cannot avoid (services/banking/natures.py).
+    fixed: bool = False
     state: RecurringState
     confidence: str | None
     status: RecurringStatus
@@ -776,6 +783,9 @@ class BankRecurringItem(BaseModel):
     extra_count: int
     accounts: list[str]
     payment_method: OperationType
+    # What it took each year, extras in, cancelled debits out: the years a
+    # rent was paid, whatever the landlord was called then.
+    paid_by_year: list[BankRecurringYearPaid] = []
     price_changes: list[BankRecurringPriceChange] = []
     episodes: list[BankRecurringEpisode] = []
     renamed: list[BankRecurringRename] = []
@@ -815,6 +825,9 @@ class RealCashflowTotals(BaseModel):
     # The part of `expenses` spent on counted recurring payments, their refunds
     # taken off: already in `expenses`, never added to anything else.
     recurring: Decimal = Decimal("0")
+    # The part of `recurring` a month cannot avoid: rent, power, insurance,
+    # credit (services/banking/natures.py). The rest can be stopped.
+    recurring_fixed: Decimal = Decimal("0")
     # Percent of the income: what was not spent, and the part of it set aside
     # or invested. None without income to divide by.
     savings_rate: Decimal | None = None
@@ -838,6 +851,8 @@ class RealCashflowRecurring(BaseModel):
     id: str | None
     key: str
     name: str
+    nature: RecurringNature = RecurringNature.OTHER
+    fixed: bool = False
     amount: Decimal
     count: int
 
