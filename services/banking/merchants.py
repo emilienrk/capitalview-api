@@ -5,14 +5,14 @@ labels a bank writes for the same merchant.
 A label changes under a charge that does not: a new bank format appends a
 client number or a mandate reference, a card payment becomes a direct debit, a
 payment moves from one account to another. `label_groups` keeps the exact
-words, which is right for grouping one month's operations; a subscription
+words, which is right for grouping one month's operations; a recurring payment
 spans years of those changes, so this reads the label looser — words
 weighted by how rare they are among the user's labels, a word matching its
 truncation or a one-letter typo, a label that grew still matching the one it
 grew from.
 
 Measured on 53 months of real operations (docs/superpowers/plans/
-2026-09-18-subscriptions.md): 3 088 debits, 758 merchants. Pure: labels in,
+2026-09-18-recurring.md): 3 088 debits, 758 merchants. Pure: labels in,
 groups out.
 """
 

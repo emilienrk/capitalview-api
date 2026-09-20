@@ -51,7 +51,7 @@ MIN_OCCURRENCES = 2
 # How far the observed amount may sit from the declared one before it reads as a
 # drift rather than rounding. Tight on purpose: at 5 % a 850 € rent could climb
 # by 42 € — 500 € a year — without a word, which is exactly what this is meant to
-# catch. The absolute floor keeps a 12,50 € subscription from being flagged over
+# catch. The absolute floor keeps a 12,50 € recurring payment from being flagged over
 # a cent, and the comparison runs on the median, so a one-off month cannot move
 # the verdict on its own.
 DRIFT_RATIO = Decimal("0.02")
@@ -181,7 +181,7 @@ def rank_candidates(
 
     Scored on how close the amount sits, how regular the group is, and how well
     its spacing matches the declared frequency. Always a proposal, never an
-    assignment: two subscriptions at 9,99 € are indistinguishable on amount
+    assignment: two recurring payments at 9,99 € are indistinguishable on amount
     alone, and a fuel card seen every month is a better statistical match for
     "58,55 € monthly" than the electricity bill actually meant. Only the user
     knows which is which, so several are offered rather than one guessed at.

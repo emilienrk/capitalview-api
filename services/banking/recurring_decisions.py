@@ -1,5 +1,5 @@
 """
-What the user said of their subscriptions, as stored: one row per decision.
+What the user said of their recurring payments, as stored: one row per decision.
 
 A decision is about a series the rebuild finds again every time, never stored
 itself. So a decision keeps what it takes to find its series again: anchors,
@@ -10,7 +10,7 @@ again). Everything is encrypted; the anchors are blind indexes inside an
 encrypted JSON, so nothing here is joinable in clear with `bank_transactions`.
 
 Storage only: attaching decisions to series is the rebuild's
-(services/banking/subscriptions.py).
+(services/banking/recurring.py).
 """
 
 from __future__ import annotations
@@ -22,14 +22,14 @@ from decimal import Decimal
 
 from sqlmodel import Session, select
 
-from models.banking import BankSubscription
+from models.banking import BankRecurringSeries
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 CONFIRMED = "confirmed"
 REFUSED = "refused"
 
 
-class SubscriptionNotFoundError(LookupError):
+class RecurringNotFoundError(LookupError):
     """No decision of this user has this id."""
 
 
@@ -75,26 +75,26 @@ def load_decisions(session: Session, user_uuid: str, master_key: str) -> list[De
     """Every decision of the user, oldest change first: they are replayed in
     that order, so the latest word on a series wins."""
     rows = session.exec(
-        select(BankSubscription).where(BankSubscription.user_uuid_bidx == hash_index(user_uuid, master_key))
+        select(BankRecurringSeries).where(BankRecurringSeries.user_uuid_bidx == hash_index(user_uuid, master_key))
     ).all()
     decisions = [_decision(row, master_key) for row in rows]
     return sorted(decisions, key=lambda d: (d.updated_at, d.uuid))
 
 
-def get_decision(session: Session, user_uuid: str, master_key: str, decision_id: str) -> tuple[BankSubscription, Decision]:
-    row = session.get(BankSubscription, decision_id)
+def get_decision(session: Session, user_uuid: str, master_key: str, decision_id: str) -> tuple[BankRecurringSeries, Decision]:
+    row = session.get(BankRecurringSeries, decision_id)
     if row is None or row.user_uuid_bidx != hash_index(user_uuid, master_key):
-        raise SubscriptionNotFoundError(decision_id)
+        raise RecurringNotFoundError(decision_id)
     return row, _decision(row, master_key)
 
 
-def save_decision(session: Session, user_uuid: str, master_key: str, decision: Decision) -> BankSubscription:
+def save_decision(session: Session, user_uuid: str, master_key: str, decision: Decision) -> BankRecurringSeries:
     """Write a decision, new or changed. Its update time moves to now: it is
     what tells the stored patterns that decisions moved."""
-    row = session.get(BankSubscription, decision.uuid)
+    row = session.get(BankRecurringSeries, decision.uuid)
     now = datetime.now(timezone.utc)
     if row is None:
-        row = BankSubscription(
+        row = BankRecurringSeries(
             uuid=decision.uuid, user_uuid_bidx=hash_index(user_uuid, master_key), created_at=now,
             status_enc="", anchors_enc="", identity_enc="", updated_at=now,
         )
@@ -121,7 +121,7 @@ def delete_decision(session: Session, user_uuid: str, master_key: str, decision_
 def forget_account(session: Session, user_bidx: str, account_uuid: str, master_key: str) -> None:
     """A bank account deleted: the decisions about it alone go with it, the
     others stop naming it. Not committed: the account's deletion commits."""
-    for row in session.exec(select(BankSubscription).where(BankSubscription.user_uuid_bidx == user_bidx)).all():
+    for row in session.exec(select(BankRecurringSeries).where(BankRecurringSeries.user_uuid_bidx == user_bidx)).all():
         identity = Identity.from_json(json.loads(decrypt_data(row.identity_enc, master_key)))
         if account_uuid not in identity.accounts:
             continue
@@ -139,7 +139,7 @@ def export_decisions(session: Session, user_bidx: str, master_key: str) -> list[
     """The decisions as the user can read them. The anchors are left out:
     blind indexes mean nothing outside this database."""
     rows = session.exec(
-        select(BankSubscription).where(BankSubscription.user_uuid_bidx == user_bidx).order_by(BankSubscription.created_at)
+        select(BankRecurringSeries).where(BankRecurringSeries.user_uuid_bidx == user_bidx).order_by(BankRecurringSeries.created_at)
     ).all()
     exported = []
     for row in rows:
@@ -159,7 +159,7 @@ def export_decisions(session: Session, user_bidx: str, master_key: str) -> list[
     return exported
 
 
-def _decision(row: BankSubscription, master_key: str) -> Decision:
+def _decision(row: BankRecurringSeries, master_key: str) -> Decision:
     return Decision(
         uuid=row.uuid,
         status=decrypt_data(row.status_enc, master_key),

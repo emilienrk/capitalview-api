@@ -1,5 +1,5 @@
 """
-Subscription detection (services/banking/recurrence.py) on synthetic debits:
+Recurring payment detection (services/banking/recurrence.py) on synthetic debits:
 the 29 edge cases the plan was measured on, and the rules each of its false
 positives taught.
 """
@@ -150,7 +150,7 @@ def test_a_pause_is_a_second_episode_of_the_same_series():
     assert found.episodes == 2
 
 
-def test_two_subscriptions_under_one_label_on_different_days():
+def test_two_recurring_payments_under_one_label_on_different_days():
     found = _found(
         _monthly(START, 12, "2.99", "CARTE APPLE.COM/BILL", day=3)
         + _monthly(START, 12, "9.99", "CARTE APPLE.COM/BILL", day=18)
@@ -160,7 +160,7 @@ def test_two_subscriptions_under_one_label_on_different_days():
     ]
 
 
-def test_two_subscriptions_under_one_label_on_the_same_day():
+def test_two_recurring_payments_under_one_label_on_the_same_day():
     found = _found(
         _monthly(START, 12, "2.99", "CARTE APPLE.COM/BILL", day=3)
         + _monthly(START, 12, "10.99", "CARTE APPLE.COM/BILL", day=3)
@@ -178,7 +178,7 @@ def test_two_lines_at_the_same_price():
     assert [(f.confidence, f.count) for f in found] == [("certain", 10), ("certain", 10)]
 
 
-def test_an_annual_subscription_among_a_shops_purchases():
+def test_an_annual_recurring_payment_among_a_shops_purchases():
     rng = random.Random(1)
     found = _one(
         [_Debit(date(2023, 3, 10), "69.90", "CARTE AMAZON PRIME FR"),
@@ -362,7 +362,7 @@ def test_the_same_amount_at_another_merchant_is_not_a_rename():
     assert all(len(s.merchants) == 1 for s in R.detect(_ops(debits)).series)
 
 
-def test_two_identical_bills_a_year_apart_at_a_pub_are_not_an_annual_subscription():
+def test_two_identical_bills_a_year_apart_at_a_pub_are_not_an_annual_recurring_payment():
     rng = random.Random(8)
     visits = [
         _Debit(date(2025, 3, 14) + timedelta(days=rng.randint(1, 360)), f"{rng.uniform(8, 40):.2f}", "CARTE LE PUB DU COIN")
@@ -372,7 +372,7 @@ def test_two_identical_bills_a_year_apart_at_a_pub_are_not_an_annual_subscriptio
     assert _found(debits) == []
 
 
-def test_a_regular_chain_inside_weekly_shopping_is_not_a_subscription():
+def test_a_regular_chain_inside_weekly_shopping_is_not_a_recurring_payment():
     rng = random.Random(9)
     debits = []
     for k in range(12):
@@ -394,7 +394,7 @@ def test_a_rejected_last_debit_leaves_the_question_on_the_one_before():
     assert R.current_amount(series) == Decimal("30.00")
 
 
-def test_a_debit_refunded_every_other_time_is_not_a_subscription():
+def test_a_debit_refunded_every_other_time_is_not_a_recurring_payment():
     debits = [
         d._replace(cancelled=True, type=NEUTRAL) if n % 2 == 0 else d
         for n, d in enumerate(_monthly(START, 8, "12.00", "CARTE LW - YAPLA", day=3))
@@ -402,13 +402,13 @@ def test_a_debit_refunded_every_other_time_is_not_a_subscription():
     assert _found(debits) == []
 
 
-def test_a_series_mostly_typed_neutral_is_not_a_subscription():
+def test_a_series_mostly_typed_neutral_is_not_a_recurring_payment():
     debits = _monthly(START, 8, "380.00", "PRLV SEPA FREDERIC DURAND", day=5, method=DD)
     debits = [d._replace(type=NEUTRAL) if n < 5 else d for n, d in enumerate(debits)]
     assert _found(debits) == []
 
 
-def test_a_series_whose_last_debit_is_neutral_is_not_a_subscription():
+def test_a_series_whose_last_debit_is_neutral_is_not_a_recurring_payment():
     debits = _monthly(START, 8, "380.00", "PRLV SEPA FREDERIC DURAND", day=5, method=DD)
     debits[-1] = debits[-1]._replace(type=NEUTRAL)
     assert _found(debits) == []
@@ -426,7 +426,7 @@ def test_a_first_card_payment_and_a_last_prorata_are_the_series_extras():
     assert sorted(op.amount for op in series.extras) == [Decimal("14.15"), Decimal("17.00")]
 
 
-def test_extras_are_never_taken_at_a_shop_that_also_bills_a_subscription():
+def test_extras_are_never_taken_at_a_shop_that_also_bills_a_recurring_payment():
     rng = random.Random(11)
     debits = _monthly(START, 12, "6.99", "CARTE AMAZON PRIME", day=3) + _noise(START, 360, 1, "CARTE AMAZON", 5, 20, rng)
     series = [s for s in R.detect(_ops(debits)).series if s.regular[0].amount == Decimal("6.99")]
@@ -445,7 +445,7 @@ def test_four_debits_28_days_apart_stay_monthly():
     assert found.cadence == "monthly"
 
 
-def test_two_subscriptions_of_one_merchant_that_overlap_are_never_stitched():
+def test_two_recurring_payments_of_one_merchant_that_overlap_are_never_stitched():
     first = _monthly(date(2026, 3, 4), 7, "4.02", "PRLV SEPA ALLIANZ DIRECT", day=4, method=DD)
     second = _monthly(date(2026, 5, 4), 5, lambda k: "12.31" if k == 0 else "5.81", "PRLV SEPA ALLIANZ DIRECT", day=4, method=DD)
     series = R.detect(_ops(first + second)).series

@@ -20,7 +20,7 @@ from dtos.bank import BankHistoryEntry, LinkStatus, ReconciliationStatus
 from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotResponse
 from services.banking.health import is_session_active
 from services.banking.linking import is_card_account
-from services.banking.subscription_decisions import forget_account
+from services.banking.recurring_decisions import forget_account
 from services.encryption import encrypt_data, decrypt_data, hash_index
 from services.market import (
     get_exchange_rate,

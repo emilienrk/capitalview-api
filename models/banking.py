@@ -353,9 +353,9 @@ class BankTypeRule(SQLModel, table=True):
     )
 
 
-class BankSubscription(SQLModel, table=True):
-    """What the user said of a recurring charge: it is a subscription, or it is
-    not — with the corrections they made to it (services/banking/subscriptions.py).
+class BankRecurringSeries(SQLModel, table=True):
+    """What the user said of a recurring charge: it is a recurring payment, or it is
+    not — with the corrections they made to it (services/banking/recurring.py).
 
     The series itself is derived, never stored here: it is found again on every
     rebuild of the transfer patterns, and the decision attaches to it through
@@ -364,7 +364,7 @@ class BankSubscription(SQLModel, table=True):
     with `bank_transactions` — or, when those operations were imported again
     under other ids, through the identity it recorded.
     """
-    __tablename__ = "bank_subscriptions"
+    __tablename__ = "bank_recurring_series"
     __table_args__ = {"extend_existing": True}
 
     uuid: str = Field(

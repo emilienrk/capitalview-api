@@ -172,7 +172,7 @@ class TestAutoSync:
         # -1200 rent on 5th
         _link_cashflow(session, master_key, acc.uuid, Decimal("1200"), FlowType.OUTFLOW,
                        Frequency.MONTHLY, date(2026, 1, 5), user_uuid=user_uuid)
-        # -50 subscription on 15th
+        # -50 recurring payment on 15th
         _link_cashflow(session, master_key, acc.uuid, Decimal("50"), FlowType.OUTFLOW,
                        Frequency.MONTHLY, date(2026, 1, 15), user_uuid=user_uuid)
 

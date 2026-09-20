@@ -220,7 +220,7 @@ class TestVerdicts:
         _confirm(session, master_key, cashflow_id, "PRLV SEPA FONCIA")
         assert _only(session, master_key).status == DRIFTED
 
-    def test_a_subscription_that_stopped_reads_as_missing(
+    def test_a_recurring_payment_that_stopped_reads_as_missing(
         self, session: Session, master_key: str
     ):
         """Declared, confirmed, and gone quiet for months — the one you keep
