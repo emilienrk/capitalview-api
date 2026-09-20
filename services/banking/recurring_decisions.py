@@ -66,6 +66,7 @@ class Decision:
     excludes: frozenset[str] = frozenset()
     name: str | None = None
     cadence: str | None = None
+    nature: str | None = None
     ended_on: date | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -105,6 +106,7 @@ def save_decision(session: Session, user_uuid: str, master_key: str, decision: D
     row.identity_enc = encrypt_data(json.dumps(decision.identity.to_json()), master_key)
     row.name_enc = encrypt_data(decision.name, master_key) if decision.name else None
     row.cadence_enc = encrypt_data(decision.cadence, master_key) if decision.cadence else None
+    row.nature_enc = encrypt_data(decision.nature, master_key) if decision.nature else None
     row.ended_on_enc = encrypt_data(decision.ended_on.isoformat(), master_key) if decision.ended_on else None
     row.updated_at = now
     session.add(row)
@@ -149,6 +151,7 @@ def export_decisions(session: Session, user_bidx: str, master_key: str) -> list[
             "status": decision.status,
             "name": decision.name,
             "cadence": decision.cadence or decision.identity.cadence,
+            "nature": decision.nature,
             "merchant_words": list(decision.identity.words),
             "bank_account_ids": list(decision.identity.accounts),
             "amount": str(decision.identity.amount),
@@ -169,6 +172,7 @@ def _decision(row: BankRecurringSeries, master_key: str) -> Decision:
         excludes=_decrypt_set(row.excludes_enc, master_key),
         name=decrypt_data(row.name_enc, master_key) if row.name_enc else None,
         cadence=decrypt_data(row.cadence_enc, master_key) if row.cadence_enc else None,
+        nature=decrypt_data(row.nature_enc, master_key) if row.nature_enc else None,
         ended_on=date.fromisoformat(decrypt_data(row.ended_on_enc, master_key)) if row.ended_on_enc else None,
         created_at=row.created_at,
         updated_at=row.updated_at,

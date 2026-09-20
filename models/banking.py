@@ -380,9 +380,10 @@ class BankRecurringSeries(SQLModel, table=True):
     excludes_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     # JSON: merchant words, account uuids, cadence, amount, means of payment.
     identity_enc: str = Field(sa_column=Column(TEXT, nullable=False))
-    # What the user set: a name, a cadence, the day they ended it.
+    # What the user set: a name, a cadence, what it is for, the day they ended it.
     name_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     cadence_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    nature_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     ended_on_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     # Set by the service, to the microsecond: decisions are replayed in order,
     # and the latest one tells the stored patterns that decisions moved.

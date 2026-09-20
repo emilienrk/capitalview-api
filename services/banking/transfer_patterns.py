@@ -55,7 +55,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "11"
+_VERSION = "12"
 
 
 class FlowCarrier(NamedTuple):
@@ -115,8 +115,11 @@ class StoredRecurring:
     carrier: str | None
     question: bool
     counted: bool
-    # The merchant's words, to record as a decision's identity.
+    # The merchant's words, to record as a decision's identity and to guess
+    # what the payment is for.
     words: list[str]
+    # What the user said it is for; None leaves the guess to the reader.
+    nature: str | None = None
     ended_on: date | None = None
 
     def to_json(self) -> dict:
@@ -133,6 +136,7 @@ class StoredRecurring:
             "name": self.name, "renamed": [[day.isoformat(), before, after] for day, before, after in self.renamed],
             "accounts": self.accounts, "last_account": self.last_account, "method": self.method,
             "carrier": self.carrier, "question": self.question, "counted": self.counted, "words": self.words,
+            "nature": self.nature,
             "ended_on": self.ended_on.isoformat() if self.ended_on else None,
         }
 
@@ -157,6 +161,7 @@ class StoredRecurring:
             accounts=content["accounts"], last_account=content["last_account"], method=content["method"],
             carrier=content["carrier"], question=content["question"], counted=content["counted"],
             words=content["words"],
+            nature=content["nature"],
             ended_on=date.fromisoformat(content["ended_on"]) if content["ended_on"] else None,
         )
 

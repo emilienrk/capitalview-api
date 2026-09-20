@@ -384,6 +384,24 @@ Reste une collision de vocabulaire à connaître : `BankTransferStatus.RECURRING
 désigne une **paire** de virements vue souvent, sans rapport avec un paiement
 récurrent.
 
+## Nature du 2026-09-20 : à quoi sert le paiement
+
+Chaque paiement récurrent porte une **nature** sur une liste fermée — Logement,
+Énergie, Assurance, Crédit, Télécom, Transport, Sport, Loisirs, Logiciels, Autre.
+Elle est **devinée du marchand** (`services/banking/natures.py`, un mot → une
+nature, rien de stocké : enrichir le dictionnaire améliore l'existant sans
+reconstruction) et l'utilisateur la corrige d'un menu, ce qui la stocke dans sa
+décision (`nature_enc`). `nature_set` dit laquelle des deux l'écran affiche.
+
+Les quatre premières sont les **charges fixes** : ce qu'un mois ne peut pas
+éviter. L'onglet les sépare des **abonnements**, résiliables, avec un total par
+bloc ; c'est là que le loyer cesse de noyer le reste. La frontière est tenue
+côté web (`utils/recurring.ts`), seul endroit qui en a besoin aujourd'hui.
+
+**Reste à faire** : « dont charges fixes » / « dont abonnements » dans le Réel,
+qui demande que `RealCashflowTotals` porte la coupure côté API ; et l'historique
+par nature (le loyer d'un bail à l'autre).
+
 ## Hors périmètre
 
 Catégories de dépenses, IA, lecture des dates dans les libellés, base de marchands externe (logos, noms officiels), apprentissage entre utilisateurs.

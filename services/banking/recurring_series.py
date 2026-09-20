@@ -386,6 +386,7 @@ def _stored(
         question=question,
         counted=counted,
         words=list(keys[by_uuid[series.last.id].index]),
+        nature=decision.nature if decision else None,
         ended_on=decision.ended_on if decision else None,
     )
 

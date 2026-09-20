@@ -35,7 +35,7 @@ from dtos.banking import (
     RecurringState,
     RecurringStatus,
 )
-from services.banking import recurrence
+from services.banking import natures, recurrence
 from services.banking.flows import (
     _Accounts,
     _filing,
@@ -181,6 +181,8 @@ class _Reader:
             key=stored.key,
             transaction_id=stored.carrier or max(due, key=lambda m: m.day).uuid,
             name=stored.name,
+            nature=stored.nature or natures.guess(stored.words),
+            nature_set=stored.nature is not None,
             state=stored.state,
             confidence=stored.confidence,
             status=status.value,
@@ -318,13 +320,15 @@ def mark(
 def update(
     session: Session, user_uuid: str, master_key: str, decision_id: str, changes: dict,
 ) -> BankRecurringItem | None:
-    """Rename it, force its cadence, or say when it was ended: `changes` holds
-    only the fields sent, None clearing one."""
+    """Rename it, force its cadence, say what it is for or when it was ended:
+    `changes` holds only the fields sent, None clearing one."""
     _, decision = get_decision(session, user_uuid, master_key, decision_id)
     if "name" in changes:
         decision.name = changes["name"] or None
     if "cadence" in changes:
         decision.cadence = changes["cadence"].value if changes["cadence"] else None
+    if "nature" in changes:
+        decision.nature = changes["nature"].value if changes["nature"] else None
     if "ended_on" in changes:
         decision.ended_on = changes["ended_on"]
     save_decision(session, user_uuid, master_key, decision)
