@@ -77,6 +77,15 @@ def test_an_operation_of_another_user_is_not_found(client, session, master_key):
     assert client.post("/banking/recurring", json={"transaction_id": row.uuid}).status_code == 404
 
 
+def test_a_user_without_a_bank_account_reads_an_empty_list(client):
+    # Not everyone imports their bank: the tab answers, empty, rather than
+    # failing on totals it has nothing to add up.
+    body = client.get("/banking/recurring").json()
+    assert (body["items"], body["currency"]) == ([], "EUR")
+    assert (Decimal(str(body["monthly_total"])), Decimal(str(body["annual_total"]))) == (0, 0)
+    assert client.get("/banking/review-queue").json()["recurring_count"] == 0
+
+
 def test_an_unknown_recurring_payment_is_not_found(client):
     assert client.patch("/banking/recurring/nope", json={"name": "x"}).status_code == 404
     assert client.delete("/banking/recurring/nope").status_code == 404

@@ -44,7 +44,7 @@ from dtos.banking import (
 )
 from models.banking import BankTransaction
 from services.banking.cashflow_types import counted_leg, signed_amount
-from services.banking import recurrence
+from services.banking import natures, recurrence
 from services.banking.label_groups import group_key, group_name, group_words, merge_similar
 from services.banking.recurrence import CADENCE
 from services.banking.recurring import active_counted
@@ -84,7 +84,7 @@ _FIELD_OF = {
     CashflowType.INVESTMENT: "investment",
     CashflowType.NEUTRAL: "neutral",
 }
-_AMOUNTS = ("income", "expenses", "saving", "investment", "neutral", "net", "recurring")
+_AMOUNTS = ("income", "expenses", "saving", "investment", "neutral", "net", "recurring", "recurring_fixed")
 _PERCENT = Decimal("0.1")
 
 
@@ -456,10 +456,14 @@ def _read(
         tally.count += 1
         stored = reading.patterns.counted_recurring(movement.row.uuid)
         if stored is not None and kind is CashflowType.EXPENSE:
+            nature = natures.of(stored.nature, stored.words)
+            fixed = natures.is_fixed(nature)
             tally.totals["recurring"] += signed
+            if fixed:
+                tally.totals["recurring_fixed"] += signed
             month = reading.recurring[movement.period]
             entry = month.setdefault(stored.key, RealCashflowRecurring(
-                id=stored.decision, key=stored.key, name=stored.name,
+                id=stored.decision, key=stored.key, name=stored.name, nature=nature, fixed=fixed,
                 amount=Decimal("0"), count=0,
             ))
             entry.amount += signed

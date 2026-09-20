@@ -25,6 +25,7 @@ from dtos.banking import (
     BankRecurringRefunds,
     BankRecurringRename,
     BankRecurringResponse,
+    BankRecurringYearPaid,
     BankTransactionItem,
     BankTransferStatus,
     CashflowType,
@@ -146,6 +147,16 @@ def _rank(item: BankRecurringItem) -> tuple:
     return (0, -item.monthly_equivalent, item.key)
 
 
+def _by_year(stored: StoredRecurring) -> list[BankRecurringYearPaid]:
+    """What it took each year, oldest first: the same debits as
+    `paid_last_12_months`, cut by calendar year."""
+    years: dict[int, Decimal] = {}
+    for member in stored.members:
+        if member.role in _PAID:
+            years[member.day.year] = years.get(member.day.year, Decimal("0")) + member.amount
+    return [BankRecurringYearPaid(year=year, amount=amount) for year, amount in sorted(years.items())]
+
+
 class _Reader:
     """Turns stored recurring payments into what the list shows, on a given day."""
 
@@ -169,6 +180,7 @@ class _Reader:
         if stored.ended_on and stored.ended_on < self.today and stored.last <= stored.ended_on:
             status = recurrence.Status.ENDED
         annual = annual_estimate(stored)
+        nature = natures.of(stored.nature, stored.words)
         year_ago = self.today - timedelta(days=365)
         refunds = [member for member in stored.members if member.role == REFUND]
         due = [member for member in stored.members if member.role in (REGULAR, CANCELLED)]
@@ -181,8 +193,9 @@ class _Reader:
             key=stored.key,
             transaction_id=stored.carrier or max(due, key=lambda m: m.day).uuid,
             name=stored.name,
-            nature=stored.nature or natures.guess(stored.words),
+            nature=nature,
             nature_set=stored.nature is not None,
+            fixed=natures.is_fixed(nature),
             state=stored.state,
             confidence=stored.confidence,
             status=status.value,
@@ -196,6 +209,7 @@ class _Reader:
             paid_last_12_months=sum(
                 (m.amount for m in stored.members if m.role in _PAID and m.day > year_ago), Decimal("0"),
             ),
+            paid_by_year=_by_year(stored),
             first_date=stored.first,
             since_at_least=bool(starts) and (stored.first - min(starts)).days < cadence.nominal,
             last_date=stored.last,

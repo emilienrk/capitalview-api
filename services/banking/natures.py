@@ -58,7 +58,7 @@ _add(
 )
 _add(
     RecurringNature.SPORT,
-    "fitness", "gym", "sport", "sports", "basicfit", "keepcool", "neoness", "crossfit", "yoga",
+    "fitness", "fit", "gym", "sport", "sports", "basicfit", "keepcool", "neoness", "crossfit", "yoga",
     "musculation", "piscine", "escalade", "arkose",
 )
 _add(
@@ -74,6 +74,22 @@ _add(
     "notion", "dropbox", "icloud", "apple", "microsoft", "google", "gandi", "namecheap", "canva",
     "midjourney", "zoom", "slack",
 )
+
+
+# What a month cannot avoid: a roof, the power it takes, the insurances the
+# two demand and a credit already signed. The rest can be stopped tonight.
+FIXED = frozenset({
+    RecurringNature.HOUSING, RecurringNature.ENERGY, RecurringNature.INSURANCE, RecurringNature.CREDIT,
+})
+
+
+def is_fixed(nature: RecurringNature) -> bool:
+    return nature in FIXED
+
+
+def of(nature: str | None, words: tuple[str, ...] | list[str]) -> RecurringNature:
+    """What the user said it is for, else what its merchant says."""
+    return RecurringNature(nature) if nature else guess(words)
 
 
 def guess(words: tuple[str, ...] | list[str]) -> RecurringNature:
