@@ -837,7 +837,7 @@ def patch_recurring(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
-    """Rename it, force its cadence, or say when it was ended."""
+    """Rename it, force its cadence, say what it is for or when it was ended."""
     try:
         return recurring_service.update(
             session, current_user.uuid, master_key, recurring_id,

@@ -376,6 +376,23 @@ class RecurringRole(str, Enum):
     MANUAL = "manual"
 
 
+class RecurringNature(str, Enum):
+    """What a payment is for. Guessed from the merchant
+    (services/banking/natures.py), and set by the user over the guess.
+
+    The first four are what a month cannot avoid; the others can be stopped."""
+    HOUSING = "housing"
+    ENERGY = "energy"
+    INSURANCE = "insurance"
+    CREDIT = "credit"
+    TELECOM = "telecom"
+    TRANSPORT = "transport"
+    SPORT = "sport"
+    LEISURE = "leisure"
+    SOFTWARE = "software"
+    OTHER = "other"
+
+
 class BankRecurringTag(BaseModel):
     """The counted recurring payment an operation belongs to."""
     # The user's decision; None for one counted without asking and never decided.
@@ -671,6 +688,8 @@ class BankRecurringUpdate(BaseModel):
     clears it."""
     name: str | None = None
     cadence: RecurringCadence | None = None
+    # What it is for; null goes back to the guess.
+    nature: RecurringNature | None = None
     # The day the user ended it.
     ended_on: date | None = None
 
@@ -729,6 +748,10 @@ class BankRecurringItem(BaseModel):
     # Its last debit, to act on it: answer, decide, list its operations.
     transaction_id: str
     name: str
+    # What it is for: the user's answer, else the guess from its merchant.
+    nature: RecurringNature
+    # Whether the user set it: a guess is a proposal, and says so.
+    nature_set: bool = False
     state: RecurringState
     confidence: str | None
     status: RecurringStatus

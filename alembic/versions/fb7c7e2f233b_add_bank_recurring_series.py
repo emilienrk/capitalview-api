@@ -29,6 +29,7 @@ def upgrade() -> None:
     sa.Column('identity_enc', sa.TEXT(), nullable=False),
     sa.Column('name_enc', sa.TEXT(), nullable=True),
     sa.Column('cadence_enc', sa.TEXT(), nullable=True),
+    sa.Column('nature_enc', sa.TEXT(), nullable=True),
     sa.Column('ended_on_enc', sa.TEXT(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
