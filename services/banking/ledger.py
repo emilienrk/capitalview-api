@@ -25,7 +25,7 @@ from dtos.banking import (
     BankLedgerAccount,
     BankLedgerGroup,
     BankLedgerRow,
-    BankLedgerSubscription,
+    BankLedgerRecurring,
     BankReviewKind,
     BankTransferStatus,
     CashflowType,
@@ -100,9 +100,9 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
         if leg.status is BankTransferStatus.SUGGESTED:
             open_rows.add(index)
 
-    subscription_index: dict[str, int] = {}
-    subscriptions: list[BankLedgerSubscription] = []
-    asking = {s.carrier for s in patterns.subscriptions if s.question}
+    recurring_index: dict[str, int] = {}
+    recurring: list[BankLedgerRecurring] = []
+    asking = {s.carrier for s in patterns.recurring if s.question}
 
     common = {
         side: frozenset().union(*(patterns.label_common(bidx, side) for bidx in accounts.readable))
@@ -139,19 +139,19 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
         elif leg is not None and leg.status is BankTransferStatus.SUGGESTED and not movement.is_credit:
             question = BankReviewKind.TRANSFER
         elif movement.row.uuid in asking:
-            question = BankReviewKind.SUBSCRIPTION
-        # The rows adding up to "dont abonnements": counted, spent, and a
-        # counted subscription's.
-        subscription = patterns.counted_subscription(movement.row.uuid)
-        if subscription is not None and counted and resolution.type is CashflowType.EXPENSE:
-            if subscription.key not in subscription_index:
-                subscription_index[subscription.key] = len(subscriptions)
-                subscriptions.append(BankLedgerSubscription(
-                    id=subscription.decision, key=subscription.key, name=subscription.name, cadence=subscription.cadence,
+            question = BankReviewKind.RECURRING
+        # The rows adding up to "dont … qui reviennent": counted, spent, and a
+        # counted recurring payment's.
+        stored = patterns.counted_recurring(movement.row.uuid)
+        if stored is not None and counted and resolution.type is CashflowType.EXPENSE:
+            if stored.key not in recurring_index:
+                recurring_index[stored.key] = len(recurring)
+                recurring.append(BankLedgerRecurring(
+                    id=stored.decision, key=stored.key, name=stored.name, cadence=stored.cadence,
                 ))
-            in_subscription = subscription_index[subscription.key]
+            in_recurring = recurring_index[stored.key]
         else:
-            in_subscription = None
+            in_recurring = None
         row = movement.row
         rows.append(BankLedgerRow(
             id=row.uuid,
@@ -175,7 +175,7 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
             signed=signed_amount(movement.amount, movement.is_credit, resolution.type) if counted else Decimal("0"),
             question=question,
             open=index in open_rows,
-            subscription=in_subscription,
+            recurring=in_recurring,
         ))
     rows.reverse()
     merged, groups = _merge_groups(group_index, occurrences, words)
@@ -209,7 +209,7 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
         accounts=ledger_accounts,
         groups=groups,
         rows=rows,
-        subscriptions=subscriptions,
+        recurring=recurring,
     )
 
 

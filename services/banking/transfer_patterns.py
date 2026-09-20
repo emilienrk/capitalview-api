@@ -19,8 +19,8 @@ path wrote it.
 
 Stored alongside, from the same pass: the words too common on each side of an
 account to tell a refund from its purchase ("CARTE", "CB", "VIR"), how many
-pairs are left for the user to settle, month by month, the subscriptions
-(services/banking/subscription_series.py), and the flow questions:
+pairs are left for the user to settle, month by month, the recurring payments
+(services/banking/recurring_series.py), and the flow questions:
 which operation of each label nothing types but the user carries its question,
 since a month's reader cannot tell which occurrence of a label is the last —
 with the amounts still open, so a reader can say what an answer may move — and
@@ -39,7 +39,7 @@ import sqlalchemy as sa
 from sqlmodel import Session, select
 
 from models.banking import (
-    BankSubscription,
+    BankRecurringSeries,
     BankTransaction,
     BankTransferDecision,
     BankTransferPatterns,
@@ -55,7 +55,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "10"
+_VERSION = "11"
 
 
 class FlowCarrier(NamedTuple):
@@ -64,13 +64,13 @@ class FlowCarrier(NamedTuple):
     amount: Decimal
 
 
-# What a subscription member is to it. Only the first three and a refund count
-# towards "dont abonnements", and only when typed EXPENSE.
+# What a member is to its recurring payment. Only the first three and a refund
+# count towards "dont … qui reviennent", and only when typed EXPENSE.
 REGULAR, EXTRA, MANUAL, CANCELLED, REFUND = "regular", "extra", "manual", "cancelled", "refund"
 COUNTED_ROLES = frozenset({REGULAR, EXTRA, MANUAL, REFUND})
 
 
-class SubscriptionMember(NamedTuple):
+class RecurringMember(NamedTuple):
     uuid: str
     role: str
     day: date
@@ -78,13 +78,13 @@ class SubscriptionMember(NamedTuple):
     is_credit: bool
     # Typed EXPENSE when the patterns were built.
     expense: bool
-    # Kept for a refund only, which the subscription shows by its label.
+    # Kept for a refund only, which the recurring payment shows by its label.
     label: str | None = None
 
 
 @dataclass
-class StoredSubscription:
-    """One subscription as the rebuild found it (services/banking/subscription_series.py).
+class StoredRecurring:
+    """One recurring payment as the rebuild found it (services/banking/recurring_series.py).
 
     `key` is the decision's id when the user decided, else the id of its first
     debit: stable while the series keeps that debit, which is all a reader
@@ -98,7 +98,7 @@ class StoredSubscription:
     cadence: str
     variable: bool
     currency: str
-    members: list[SubscriptionMember]
+    members: list[RecurringMember]
     # (start, end, amount, count), oldest first.
     levels: list[tuple[date, date, Decimal, int]]
     episodes: list[tuple[date, date]]
@@ -137,13 +137,13 @@ class StoredSubscription:
         }
 
     @classmethod
-    def from_json(cls, content: dict) -> StoredSubscription:
+    def from_json(cls, content: dict) -> StoredRecurring:
         return cls(
             key=content["key"], decision=content["decision"], state=content["state"],
             confidence=content["confidence"], cadence=content["cadence"], variable=content["variable"],
             currency=content["currency"],
             members=[
-                SubscriptionMember(uuid, role, date.fromisoformat(day), Decimal(amount), is_credit, expense, label)
+                RecurringMember(uuid, role, date.fromisoformat(day), Decimal(amount), is_credit, expense, label)
                 for uuid, role, day, amount, is_credit, expense, label in content["members"]
             ],
             levels=[
@@ -183,29 +183,29 @@ class TransferPatterns:
     flow_open_amount: dict[str, Decimal] = field(default_factory=dict)
     # Account blind index -> (first, last) day of its stored operations
     coverage: dict[str, tuple[date, date]] = field(default_factory=dict)
-    # Every series offered, counted or decided (services/banking/subscription_series.py).
-    subscriptions: list[StoredSubscription] = field(default_factory=list)
-    # "YYYY-MM" -> subscription questions carried by an operation of that month
-    subscription_questions: dict[str, int] = field(default_factory=dict)
-    _members: dict[str, tuple[StoredSubscription, SubscriptionMember]] | None = field(default=None, repr=False)
+    # Every series offered, counted or decided (services/banking/recurring_series.py).
+    recurring: list[StoredRecurring] = field(default_factory=list)
+    # "YYYY-MM" -> recurring payment questions carried by an operation of that month
+    recurring_questions: dict[str, int] = field(default_factory=dict)
+    _members: dict[str, tuple[StoredRecurring, RecurringMember]] | None = field(default=None, repr=False)
 
-    def subscription_of(self, uuid: str) -> tuple[StoredSubscription, SubscriptionMember] | None:
-        """The subscription an operation belongs to, and as what."""
+    def recurring_of(self, uuid: str) -> tuple[StoredRecurring, RecurringMember] | None:
+        """The recurring payment an operation belongs to, and as what."""
         if self._members is None:
             self._members = {
-                member.uuid: (subscription, member)
-                for subscription in self.subscriptions for member in subscription.members
+                member.uuid: (stored, member)
+                for stored in self.recurring for member in stored.members
             }
         return self._members.get(uuid)
 
-    def counted_subscription(self, uuid: str) -> StoredSubscription | None:
-        """The subscription whose spending this operation counts in, whatever
+    def counted_recurring(self, uuid: str) -> StoredRecurring | None:
+        """The recurring payment whose spending this operation counts in, whatever
         its type: the reader still checks it is an expense."""
-        found = self.subscription_of(uuid)
+        found = self.recurring_of(uuid)
         if found is None:
             return None
-        subscription, member = found
-        return subscription if subscription.counted and member.role in COUNTED_ROLES else None
+        stored, member = found
+        return stored if stored.counted and member.role in COUNTED_ROLES else None
 
     def recurs(
         self, debit_account: str, credit_account: str, debit_signature: str | None, credit_signature: str | None
@@ -239,7 +239,7 @@ def source_digest(
     read computes it. Any row added, removed or rewritten moves a count or a
     timestamp; so do a decision and a type rule, which is replaced rather than
     updated. The savings accounts are part of it as they are, not through a
-    timestamp: an account's type decides whole tiers. A subscription decision
+    timestamp: an account's type decides whole tiers. A recurring payment decision
     is updated in place, so its latest update time counts, not its creation.
 
     The investment accounts count too: a deposit declared on one of them types
@@ -263,16 +263,16 @@ def source_digest(
     rules = session.exec(
         select(sa.func.count(), sa.func.max(BankTypeRule.created_at)).where(BankTypeRule.user_uuid_bidx == user_bidx)
     ).one()
-    subscriptions = session.exec(
-        select(sa.func.count(), sa.func.max(BankSubscription.updated_at)).where(
-            BankSubscription.user_uuid_bidx == user_bidx
+    recurring = session.exec(
+        select(sa.func.count(), sa.func.max(BankRecurringSeries.updated_at)).where(
+            BankRecurringSeries.user_uuid_bidx == user_bidx
         )
     ).one()
     investments = _investment_rows(session, user_bidx, master_key)
     raw = json.dumps(
         [
             _VERSION, sorted(readable), sorted(savings),
-            list(rows), list(decisions), list(rules), list(subscriptions), investments,
+            list(rows), list(decisions), list(rules), list(recurring), investments,
         ],
         default=str,
     )
@@ -328,8 +328,8 @@ def read_patterns(
             account: (date.fromisoformat(first), date.fromisoformat(last))
             for account, (first, last) in content["coverage"].items()
         },
-        subscriptions=[StoredSubscription.from_json(item) for item in content["subscriptions"]],
-        subscription_questions=content["subscription_questions"],
+        recurring=[StoredRecurring.from_json(item) for item in content["recurring"]],
+        recurring_questions=content["recurring_questions"],
     )
 
 
@@ -352,8 +352,8 @@ def write_patterns(
             "coverage": {
                 account: [first.isoformat(), last.isoformat()] for account, (first, last) in patterns.coverage.items()
             },
-            "subscriptions": [subscription.to_json() for subscription in patterns.subscriptions],
-            "subscription_questions": patterns.subscription_questions,
+            "recurring": [stored.to_json() for stored in patterns.recurring],
+            "recurring_questions": patterns.recurring_questions,
         }),
         master_key,
     )

@@ -360,6 +360,30 @@ La dérivation dépassait le budget (220 ms) avant l'indexation des renommages p
 
 **Reste à faire** : la partie Web ; les noms affichés reprennent `label_groups.group_name` et sont parfois longs sous le nouveau format Boursorama (`TRANSALP'DOME S.A.S. Virement pour le loyer…`) — le renommage est possible, un nettoyage des libellés longs est à faire avec l'identité marchand partagée (« Après ce plan », point 3).
 
+## Renommage du 2026-09-20 : abonnement → paiement récurrent
+
+La fonctionnalité ne détecte pas des abonnements mais **toute charge qui revient** —
+loyer, crédit, énergie compris. Le vocabulaire a suivi, avant tout push et sur une
+table encore vide ; ce plan garde le mot « abonnement » là où il raconte ce qui a
+été décidé le 2026-09-18. Correspondance :
+
+| Avant | Après |
+|---|---|
+| `services/banking/subscriptions.py` | `services/banking/recurring.py` |
+| `services/banking/subscription_series.py` | `services/banking/recurring_series.py` |
+| `services/banking/subscription_decisions.py` | `services/banking/recurring_decisions.py` |
+| table `bank_subscriptions`, migration `8d4e2a6b1c93` | table `bank_recurring_series`, migration `fb7c7e2f233b` |
+| `BankSubscription`, `StoredSubscription`, `BankSubscription*` | `BankRecurringSeries`, `StoredRecurring`, `BankRecurring*` |
+| `GET /banking/subscriptions` | `GET /banking/recurring` |
+| `RealCashflowTotals.subscriptions` | `RealCashflowTotals.recurring` |
+| onglet « Abonnements » | onglet « Récurrent » |
+
+Le moteur (`recurrence.py`) ne change pas de nom : il portait déjà le bon.
+`_VERSION` des patterns passe à `11`, deux clés du JSON stocké ayant changé.
+Reste une collision de vocabulaire à connaître : `BankTransferStatus.RECURRING`
+désigne une **paire** de virements vue souvent, sans rapport avec un paiement
+récurrent.
+
 ## Hors périmètre
 
 Catégories de dépenses, IA, lecture des dates dans les libellés, base de marchands externe (logos, noms officiels), apprentissage entre utilisateurs.

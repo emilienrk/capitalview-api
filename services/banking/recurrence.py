@@ -1,5 +1,5 @@
 """
-Charges that come back: the subscriptions in a user's debits, whatever moves
+Charges that come back: the recurring payments in a user's debits, whatever moves
 under them — a price, a missed month, a pause, a refund, a rejected debit, a
 new label, a new account, a new means of payment.
 
@@ -7,10 +7,10 @@ Pure: debits in, series out. Nothing here reads a label (the merchant comes
 from `merchants.py`) nor a type rule (each debit carries its resolved type).
 
 Layers, each catching what the one before lets through
-(docs/superpowers/plans/2026-09-18-subscriptions.md, "L'algorithme"):
+(docs/superpowers/plans/2026-09-18-recurring.md, "L'algorithme"):
 
 1. streams per merchant: the best chain of dates per cadence, flat amounts
-   first (a subscription hidden among a shop's purchases), any amount then;
+   first (a recurring payment hidden among a shop's purchases), any amount then;
 2. stitching inside a merchant: a price change, a pause; a weak stream
    overlapping a strong one is its irregular part;
 3. renames across merchants: the same amount, to the cent, carried on at the
@@ -19,7 +19,7 @@ Layers, each catching what the one before lets through
    has to itself;
 5. reading: how sure, what it costs now, whether it still runs.
 
-Measured on the real dump of 2026-09-18 (15 subscriptions, no false one) and
+Measured on the real dump of 2026-09-18 (15 recurring payments, no false one) and
 on 29 synthetic edge cases, all kept as tests.
 """
 
@@ -166,7 +166,7 @@ def _by_day(op: RecurrenceOp) -> tuple[date, str]:
 # Amounts and steps
 # ---------------------------------------------------------------------------
 
-# One price, give or take the exchange rate of a subscription billed in
+# One price, give or take the exchange rate of a recurring payment billed in
 # another currency.
 FLAT_SHARE, FLAT_MIN = 0.03, 0.10
 # One price, a cent's rounding apart.
@@ -329,7 +329,7 @@ def _family(method: OperationType) -> str:
 # A merchant is the series' own when its regular debits are most of what it
 # was paid over the series' span: only then are its other debits the series'
 # (a prorata, a regularisation) rather than purchases at a shop that also
-# bills a subscription.
+# bills a recurring payment.
 DEDICATED_SHARE = 0.75
 
 
@@ -378,7 +378,7 @@ def _merchant_series(merchant: int, points: list[RecurrenceOp]) -> list[Series]:
             host.cadence = fourweekly_or(MONTHLY, sorted(host.regular, key=_by_day))
 
     # A weak stream overlapping a stronger one is its irregular part, unless it
-    # is a clean fixed stream of its own: a second subscription of one merchant.
+    # is a clean fixed stream of its own: a second recurring payment of one merchant.
     merged.sort(key=lambda s: (-len(s.regular), s.first.day, s.first.id))
     kept: list[Series] = []
     for stream in merged:
@@ -401,7 +401,7 @@ def _merchant_series(merchant: int, points: list[RecurrenceOp]) -> list[Series]:
 # ---------------------------------------------------------------------------
 
 # A single debit under a new name takes over a series only from a merchant
-# seen this rarely: a shop visited often is not a renamed subscription.
+# seen this rarely: a shop visited often is not a renamed recurring payment.
 RENAME_ONCE_MAX_DEBITS = 2
 # Extras sit between a tenth and four times the series' usual amount.
 EXTRA_MIN_SHARE, EXTRA_MAX_SHARE = Decimal("0.1"), Decimal("4")
@@ -413,7 +413,7 @@ class Detection:
     # (currency, merchant) -> its debits, by day.
     by_merchant: dict[tuple[str, int], list[RecurrenceOp]]
     # Series id -> the regular debits of the other clean fixed series of its
-    # merchants: a second subscription billed under one label is not a shop
+    # merchants: a second recurring payment billed under one label is not a shop
     # visited in between.
     others: dict[int, set[str]] = field(default_factory=dict)
 
@@ -601,7 +601,7 @@ class Status(str, Enum):
     LATE = "late"
     ENDED = "ended"
     # The account is known only up to a day before the next due date: an
-    # account nobody synced does not end its subscriptions.
+    # account nobody synced does not end its recurring payments.
     STALE = "stale"
 
 
@@ -763,11 +763,11 @@ TRANSFER_MIN_EXCLUSIVE = 0.5
 
 
 def confidence(series: Series, f: Features) -> Confidence | None:
-    """How sure the series is a subscription, by what the means of payment can
+    """How sure the series is a recurring payment, by what the means of payment can
     prove; None when it is not offered at all."""
     c, n = series.cadence, f.count
     last = carrier(series)
-    # Only an expense is a subscription; a debit refunded every time is not one.
+    # Only an expense is a recurring payment; a debit refunded every time is not one.
     if f.cancelled >= 0.5 or f.expense < 0.5 or last is None or last.type is not CashflowType.EXPENSE:
         return None
     if c.name in ("annual", "semiannual") and n == 2:

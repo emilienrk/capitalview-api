@@ -1,17 +1,17 @@
 """
-The subscriptions of a user, derived on each rebuild of the transfer patterns:
+The recurring payments of a user, derived on each rebuild of the transfer patterns:
 the series `recurrence.py` finds in their debits, with what the user said of
-them (`subscription_decisions.py`) laid over.
+them (`recurring_decisions.py`) laid over.
 
 Called by `flows.transfer_patterns` with the operations it already read and
 typed, so that this module reads no row and imports no reader: movements in,
-stored subscriptions out.
+stored recurring payments out.
 
 A decision finds its series again by its anchors — the operations it covered
 when decided — and failing that by its identity, when those operations were
 imported again under other ids. A confirmed decision nothing matches any
 longer grows its own series from its operations (`recurrence.seed_series`):
-that is also how an operation the user marked by hand becomes a subscription.
+that is also how an operation the user marked by hand becomes a recurring payment.
 The latest decision on a series wins; one decision may hold several series,
 merged by the user.
 """
@@ -36,15 +36,15 @@ from services.banking.merchants import (
     same_merchant,
 )
 from services.banking.recurrence import CADENCE, Confidence, RecurrenceOp, Series
-from services.banking.subscription_decisions import CONFIRMED, REFUSED, Decision
+from services.banking.recurring_decisions import CONFIRMED, REFUSED, Decision
 from services.banking.transfer_patterns import (
     CANCELLED,
     EXTRA,
     MANUAL,
     REFUND,
     REGULAR,
-    StoredSubscription,
-    SubscriptionMember,
+    StoredRecurring,
+    RecurringMember,
 )
 from services.encryption import hash_index
 
@@ -75,10 +75,10 @@ class Movement(NamedTuple):
 
 @dataclass
 class Derived:
-    subscriptions: list[StoredSubscription] = field(default_factory=list)
-    # "YYYY-MM" -> subscription questions carried by an operation of that month.
+    recurring: list[StoredRecurring] = field(default_factory=list)
+    # "YYYY-MM" -> recurring payment questions carried by an operation of that month.
     questions: dict[str, int] = field(default_factory=dict)
-    # Movement indexes of the credits refunding a counted subscription: their
+    # Movement indexes of the credits refunding a counted recurring payment: their
     # flow question is asked whatever their amount (decision 4 of the plan).
     refunds: set[int] = field(default_factory=set)
 
@@ -137,25 +137,25 @@ def derive(
         stored = _stored(entry, keys, heads, by_uuid, account_uuids, credit_ops, taken_refunds, asking)
         if stored is None:
             continue
-        derived.subscriptions.append(stored)
+        derived.recurring.append(stored)
         if stored.question:
             period = by_uuid[stored.carrier].period
             derived.questions[period] = derived.questions.get(period, 0) + 1
         if stored.counted:
             derived.refunds.update(by_uuid[m.uuid].index for m in stored.members if m.role == REFUND)
-    derived.subscriptions.sort(key=lambda s: (s.first, s.key))
+    derived.recurring.sort(key=lambda s: (s.first, s.key))
     derived.questions = dict(sorted(derived.questions.items()))
     return derived
 
 
-def annual_estimate(subscription: StoredSubscription) -> Decimal:
-    """What it costs a year at its current price: a subscription billed every
+def annual_estimate(stored: StoredRecurring) -> Decimal:
+    """What it costs a year at its current price: a recurring payment billed every
     four weeks is paid thirteen times."""
-    return subscription.amount * CADENCE[subscription.cadence].per_year
+    return stored.amount * CADENCE[stored.cadence].per_year
 
 
-def occurrence_count(subscription: StoredSubscription) -> int:
-    return sum(1 for member in subscription.members if member.role in (REGULAR, CANCELLED))
+def occurrence_count(stored: StoredRecurring) -> int:
+    return sum(1 for member in stored.members if member.role in (REGULAR, CANCELLED))
 
 
 def _eligible(movements: list[Movement]) -> tuple[list[Movement], list[Movement]]:
@@ -296,7 +296,7 @@ def _corrections(
     refs: dict[str, str],
 ) -> None:
     """What the user attached or detached by hand, over what was detected: an
-    operation they attached belongs to their subscription alone."""
+    operation they attached belongs to their recurring payment alone."""
     claimed: dict[str, str] = {}
     for decision in decisions:
         for ref in decision.includes:
@@ -331,7 +331,7 @@ def _stored(
     credit_ops: list[RecurrenceOp],
     taken_refunds: set[str],
     asking: set[int],
-) -> StoredSubscription | None:
+) -> StoredRecurring | None:
     series, decision = entry.series, entry.decision
     manual_debits = [op for op in entry.manual if not by_uuid[op.id].is_credit]
     if not series.regular:
@@ -363,7 +363,7 @@ def _stored(
     )
     name, renamed = _names(series, by_uuid)
     method = Counter(op.method for op in series.regular).most_common(1)[0][0]
-    return StoredSubscription(
+    return StoredRecurring(
         key=decision.uuid if decision else series.first.id,
         decision=decision.uuid if decision else None,
         state=state,
@@ -400,8 +400,8 @@ def _refunding(series: Series, heads: dict[int, set[str]]) -> set[int]:
     return set(series.merchants) | {m for m, first in heads.items() if first & own}
 
 
-def _member(m: Movement, role: str) -> SubscriptionMember:
-    return SubscriptionMember(
+def _member(m: Movement, role: str) -> RecurringMember:
+    return RecurringMember(
         m.uuid, role, m.day, m.amount, m.is_credit, m.type is CashflowType.EXPENSE,
         m.label if role == REFUND else None,
     )

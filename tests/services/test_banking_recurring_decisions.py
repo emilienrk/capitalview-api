@@ -1,5 +1,5 @@
 """
-Subscription decisions as stored (services/banking/subscription_decisions.py):
+Recurring payment decisions as stored (services/banking/recurring_decisions.py):
 what they keep, what deleting an account does to them, and how writing one
 reaches the stored transfer patterns.
 """
@@ -8,11 +8,11 @@ from decimal import Decimal
 
 from sqlmodel import Session
 
-from models.banking import BankSubscription
+from models.banking import BankRecurringSeries
 from services.bank import delete_bank_account
 from services.banking import transfer_patterns as stored_patterns
 from services.banking.flows import _regulated_savings, _user_accounts, transfer_patterns
-from services.banking.subscription_decisions import (
+from services.banking.recurring_decisions import (
     CONFIRMED,
     REFUSED,
     Decision,
@@ -51,7 +51,7 @@ def test_nothing_about_an_operation_is_stored_in_clear(session: Session, master_
     decision = _decision("sub-1", CURRENT)
     decision.anchors = frozenset({hash_index("operation-uuid", master_key)})
     save_decision(session, USER, master_key, decision)
-    row = session.get(BankSubscription, "sub-1")
+    row = session.get(BankRecurringSeries, "sub-1")
     clear = " ".join(str(value) for value in row.model_dump().values())
     for secret in ("operation-uuid", hash_index("operation-uuid", master_key), CURRENT, "edf", "60.00", CONFIRMED):
         assert secret not in clear

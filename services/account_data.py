@@ -23,7 +23,7 @@ from models.banking import (
     BankAccountLink,
     BankAuthorization,
     BankSession,
-    BankSubscription,
+    BankRecurringSeries,
     BankTransaction,
     BankTransferDecision,
     BankTransferPatterns,
@@ -49,7 +49,7 @@ from models.user import (
     UserAIProvider,
     UserSettings,
 )
-from services.banking.subscription_decisions import export_decisions
+from services.banking.recurring_decisions import export_decisions
 from services.encryption import DecryptionError, decrypt_data, hash_index
 
 logger = logging.getLogger(__name__)
@@ -257,7 +257,7 @@ def export_account_data(session: Session, user: User, master_key: str) -> dict:
         "settings": get_settings(session, user.uuid, master_key),
         "bank_accounts": bank_accounts,
         "bank_type_rules": _export_bank_type_rules(session, user_bidx, master_key),
-        "bank_subscriptions": export_decisions(session, user_bidx, master_key),
+        "bank_recurring_series": export_decisions(session, user_bidx, master_key),
         "stock_accounts": stock_accounts,
         "crypto_accounts": crypto_accounts,
         "cashflows": get_all_user_cashflows(session, user.uuid, master_key),
@@ -344,7 +344,7 @@ def purge_account(session: Session, user: User, master_key: str) -> dict[str, in
     wipe(BankTransferDecision, BankTransferDecision.user_uuid_bidx == user_bidx)
     wipe(BankTransferPatterns, BankTransferPatterns.user_uuid_bidx == user_bidx)
     wipe(BankTypeRule, BankTypeRule.user_uuid_bidx == user_bidx)
-    wipe(BankSubscription, BankSubscription.user_uuid_bidx == user_bidx)
+    wipe(BankRecurringSeries, BankRecurringSeries.user_uuid_bidx == user_bidx)
 
     # 2. Asset valuations cascade from assets in Postgres, but assets themselves
     #    never cascade from the user, so the chain has to be walked by hand.

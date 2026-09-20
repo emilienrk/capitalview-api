@@ -1,8 +1,8 @@
-"""add bank subscriptions
+"""add bank recurring series
 
-Revision ID: 8d4e2a6b1c93
+Revision ID: fb7c7e2f233b
 Revises: 7b2e5f9c3a41
-Create Date: 2026-09-18 15:00:00.000000
+Create Date: 2026-09-20 17:13:26.508591
 
 """
 from typing import Sequence, Union
@@ -12,14 +12,14 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '8d4e2a6b1c93'
+revision: str = 'fb7c7e2f233b'
 down_revision: Union[str, None] = '7b2e5f9c3a41'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_table('bank_subscriptions',
+    op.create_table('bank_recurring_series',
     sa.Column('uuid', sa.TEXT(), nullable=False),
     sa.Column('user_uuid_bidx', sa.TEXT(), nullable=False),
     sa.Column('status_enc', sa.TEXT(), nullable=False),
@@ -34,9 +34,9 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.PrimaryKeyConstraint('uuid')
     )
-    op.create_index(op.f('ix_bank_subscriptions_user_uuid_bidx'), 'bank_subscriptions', ['user_uuid_bidx'], unique=False)
+    op.create_index(op.f('ix_bank_recurring_series_user_uuid_bidx'), 'bank_recurring_series', ['user_uuid_bidx'], unique=False)
 
 
 def downgrade() -> None:
-    op.drop_index(op.f('ix_bank_subscriptions_user_uuid_bidx'), table_name='bank_subscriptions')
-    op.drop_table('bank_subscriptions')
+    op.drop_index(op.f('ix_bank_recurring_series_user_uuid_bidx'), table_name='bank_recurring_series')
+    op.drop_table('bank_recurring_series')
