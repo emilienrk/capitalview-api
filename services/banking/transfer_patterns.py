@@ -115,10 +115,9 @@ class StoredRecurring:
     carrier: str | None
     question: bool
     counted: bool
-    # The merchant's words, to record as a decision's identity and to guess
-    # what the payment is for.
+    # The merchant's words, to record as a decision's identity.
     words: list[str]
-    # What the user said it is for; None leaves the guess to the reader.
+    # What the user filed it as; None until they say.
     nature: str | None = None
     ended_on: date | None = None
 

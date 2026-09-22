@@ -686,7 +686,7 @@ class BankRecurringUpdate(BaseModel):
     clears it."""
     name: str | None = None
     cadence: RecurringCadence | None = None
-    # What it is for; null goes back to the guess.
+    # What it is for; null files it back under « À classer ».
     nature: RecurringNature | None = None
     # The day the user ended it.
     ended_on: date | None = None
