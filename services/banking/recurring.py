@@ -194,7 +194,7 @@ class _Reader:
             transaction_id=stored.carrier or max(due, key=lambda m: m.day).uuid,
             name=stored.name,
             nature=nature,
-            nature_set=stored.nature is not None,
+            nature_set=stored.nature == nature.value,
             fixed=natures.is_fixed(nature),
             state=stored.state,
             confidence=stored.confidence,

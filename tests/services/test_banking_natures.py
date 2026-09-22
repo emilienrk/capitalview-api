@@ -6,7 +6,7 @@ import pytest
 
 from dtos.banking import RecurringNature
 from services.banking.merchants import merchant_words
-from services.banking.natures import guess
+from services.banking.natures import guess, of
 
 
 @pytest.mark.parametrize(
@@ -25,6 +25,14 @@ from services.banking.natures import guess
 )
 def test_the_merchant_says_what_the_payment_is_for(label: str, expected: RecurringNature):
     assert guess(merchant_words(label)) == expected
+
+
+def test_the_user_s_answer_wins_and_an_answer_nobody_knows_falls_back():
+    words = merchant_words("PRLV SEPA EDF clients particuliers")
+    assert of("housing", words) is RecurringNature.HOUSING
+    assert of(None, words) is RecurringNature.ENERGY
+    # A nature dropped from the list must not make the payment unreadable.
+    assert of("timeshare", words) is RecurringNature.ENERGY
 
 
 def test_a_merchant_nobody_recognises_is_left_to_the_user():
