@@ -1253,8 +1253,7 @@ def review_queue(
                 kind=BankReviewKind.TRANSFER, transaction=item(index), amount=movement.amount, operation_count=2,
             ))
 
-    # A recurring payment's answer moves no total: counted in, never added up
-    # (decision 5 of docs/superpowers/plans/2026-09-18-recurring.md).
+    # A recurring payment's answer moves no total: counted in, never added up.
     def moves(question: BankReviewItem) -> Decimal:
         return Decimal("0") if question.kind is BankReviewKind.RECURRING else question.amount
 
