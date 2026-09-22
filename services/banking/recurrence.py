@@ -589,7 +589,7 @@ def _clean_neighbours(series: list[Series]) -> dict[int, set[str]]:
 
 
 class Confidence(str, Enum):
-    # Counted without asking (decision 1 of the plan).
+    # Counted without asking.
     CERTAIN = "certain"
     # Asked about, yes or no.
     PROBABLE = "probable"

@@ -2,7 +2,7 @@
 Merchant identity (services/banking/merchants.py): one merchant for the labels a
 bank writes for the same payee over the years.
 
-Labels are the real ones the plan was measured on.
+Labels are real ones, taken from a user's operations.
 """
 import random
 

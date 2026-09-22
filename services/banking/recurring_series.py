@@ -79,7 +79,7 @@ class Derived:
     # "YYYY-MM" -> recurring payment questions carried by an operation of that month.
     questions: dict[str, int] = field(default_factory=dict)
     # Movement indexes of the credits refunding a counted recurring payment: their
-    # flow question is asked whatever their amount (decision 4 of the plan).
+    # flow question is asked whatever their amount.
     refunds: set[int] = field(default_factory=set)
 
 
