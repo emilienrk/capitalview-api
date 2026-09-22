@@ -12,7 +12,13 @@ from models import User
 from models.currency import BASE_CURRENCY, SUPPORTED_CURRENCIES
 from models.enums import AssetType
 from services.auth import get_current_user, get_master_key
-from services.market import backfill_price_history, get_all_assets, get_non_trading_days
+from dtos.market import AssetPriceTimelineResponse
+from services.market import (
+    backfill_price_history,
+    get_all_assets,
+    get_asset_price_timeline,
+    get_non_trading_days,
+)
 
 router = APIRouter(prefix="/market", tags=["Market"])
 
@@ -169,3 +175,34 @@ def non_trading_days(
 ) -> NonTradingDaysResponse:
     return NonTradingDaysResponse(days=get_non_trading_days(mic, from_date, to_date))
 
+
+
+@router.get(
+    "/assets/{asset_key}/price-timeline",
+    response_model=AssetPriceTimelineResponse,
+    summary="Cours d'un actif et achats de l'utilisateur",
+    description=(
+        "Renvoie le cours journalier de l'actif depuis la **première transaction** "
+        "de l'utilisateur, accompagné de ses propres achats, ventes et revenus "
+        "positionnés sur la courbe, ainsi que du prix de revient unitaire. "
+        "Tout est exprimé en EUR ; un prix d'exécution stocké dans une autre "
+        "devise est converti au taux historique de son jour. Restreindre à "
+        "`account_id` pour n'inclure qu'un compte."
+    ),
+)
+def asset_price_timeline(
+    asset_key: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    account_id: str | None = None,
+    session: Session = Depends(get_session),
+) -> AssetPriceTimelineResponse:
+    """Price curve of one asset annotated with the user's own trades."""
+    try:
+        timeline = get_asset_price_timeline(
+            session, current_user.uuid, master_key, asset_key, account_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    return AssetPriceTimelineResponse(**timeline)
