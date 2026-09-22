@@ -203,3 +203,129 @@ def test_asset_price_timeline_falls_back_to_last_close(_ensure, session, master_
 def test_asset_price_timeline_unknown_asset_is_404(session):
     resp = TestClient(app).get("/market/assets/NOPE/price-timeline")
     assert resp.status_code == 404
+
+
+def _open_wallet(client: TestClient) -> str:
+    resp = client.post("/crypto/accounts", json={"name": "Wallet Timeline"})
+    assert resp.status_code == 201
+    return resp.json()["id"]
+
+
+def _bulk(client: TestClient, account_id: str, rows: list[dict]) -> None:
+    resp = client.post(
+        "/crypto/transactions/bulk", json={"account_id": account_id, "transactions": rows}
+    )
+    assert resp.status_code == 201, resp.text
+
+
+def _seed_btc_prices(session, closes: dict) -> MarketAsset:
+    asset = MarketAsset(asset_key="BTC", symbol="BTC", name="Bitcoin", asset_type=AssetType.CRYPTO)
+    session.add(asset)
+    session.commit()
+    session.refresh(asset)
+    for day, price in closes.items():
+        session.add(MarketPriceHistory(market_asset_id=asset.id, price=price, price_date=day))
+    session.commit()
+    return asset
+
+
+@patch("services.market.ensure_price_history")
+def test_crypto_timeline_prices_a_buy_from_its_group(_ensure, session, master_key):
+    """A crypto BUY carries no price: the euros are on the group's other rows.
+
+    Reproduces the shape the app actually stores — a crypto-to-crypto trade
+    whose cost lives on an ANCHOR booked under EUR, and a euro purchase whose
+    cost lives on a fiat SPEND. Reading price_per_unit off the BUY row gives 0
+    and plots every marker on the zero line.
+    """
+    _seed_btc_prices(session, {date(2024, 1, 1): Decimal("30000")})
+    client = TestClient(app)
+    account_id = _open_wallet(client)
+
+    _bulk(client, account_id, [
+        # Bought with euros: the fiat SPEND carries the cost.
+        {"asset_key": "BTC", "type": "BUY", "amount": "0.1", "price_per_unit": "0",
+         "executed_at": "2024-01-01T12:00:00", "group_uuid": "g1"},
+        {"asset_key": "EUR", "type": "SPEND", "amount": "3000", "price_per_unit": "1",
+         "executed_at": "2024-01-01T12:00:00", "group_uuid": "g1"},
+        # Bought with USDC: no fiat leg at all, the ANCHOR carries the cost.
+        {"asset_key": "BTC", "type": "BUY", "amount": "0.1", "price_per_unit": "0",
+         "executed_at": "2024-02-01T12:00:00", "group_uuid": "g2"},
+        {"asset_key": "USDC", "type": "SPEND", "amount": "100", "price_per_unit": "1",
+         "executed_at": "2024-02-01T12:00:00", "group_uuid": "g2"},
+        {"asset_key": "EUR", "type": "ANCHOR", "amount": "1000", "price_per_unit": "1",
+         "executed_at": "2024-02-01T12:00:00", "group_uuid": "g2"},
+    ])
+
+    data = client.get(f"/market/assets/BTC/price-timeline?account_id={account_id}").json()
+
+    assert [e["type"] for e in data["events"]] == ["BUY", "BUY"]
+    assert [Decimal(e["price"]) for e in data["events"]] == [
+        Decimal("30000"), Decimal("10000"),
+    ]
+    assert [Decimal(e["total"]) for e in data["events"]] == [
+        Decimal("-3000"), Decimal("-1000"),
+    ]
+    # 3000 then 4000 spread over 0.2 — never zero, which is the bug this covers.
+    assert [Decimal(e["cost_basis_after"]) for e in data["events"]] == [
+        Decimal("30000"), Decimal("20000"),
+    ]
+    assert Decimal(data["average_buy_price"]) == Decimal("20000")
+
+
+@patch("services.market.ensure_price_history")
+def test_crypto_timeline_prices_a_disposal_from_its_group(_ensure, session, master_key):
+    """A SPEND of the asset is a sale priced by the euros the group brought in."""
+    _seed_btc_prices(session, {date(2024, 1, 1): Decimal("30000")})
+    client = TestClient(app)
+    account_id = _open_wallet(client)
+
+    _bulk(client, account_id, [
+        {"asset_key": "BTC", "type": "BUY", "amount": "0.2", "price_per_unit": "0",
+         "executed_at": "2024-01-01T12:00:00", "group_uuid": "g1"},
+        {"asset_key": "EUR", "type": "SPEND", "amount": "4000", "price_per_unit": "1",
+         "executed_at": "2024-01-01T12:00:00", "group_uuid": "g1"},
+        {"asset_key": "BTC", "type": "SPEND", "amount": "0.1", "price_per_unit": "0",
+         "executed_at": "2024-03-01T12:00:00", "group_uuid": "g3"},
+        {"asset_key": "EUR", "type": "DEPOSIT", "amount": "2500", "price_per_unit": "1",
+         "executed_at": "2024-03-01T12:00:00", "group_uuid": "g3"},
+    ])
+
+    data = client.get(f"/market/assets/BTC/price-timeline?account_id={account_id}").json()
+
+    sale = next(e for e in data["events"] if e["type"] == "SELL")
+    assert Decimal(sale["price"]) == Decimal("25000")
+    assert Decimal(sale["total"]) == Decimal("2500")
+    # Half the quantity leaves, so half the cost goes with it and the unit cost holds.
+    assert Decimal(sale["cost_basis_after"]) == Decimal("20000")
+
+
+@patch("services.market.ensure_price_history")
+def test_crypto_timeline_fee_in_kind_raises_the_unit_cost(_ensure, session, master_key):
+    """A fee paid in the asset takes quantity without refunding any cost."""
+    _seed_btc_prices(session, {date(2024, 1, 1): Decimal("30000")})
+    client = TestClient(app)
+    account_id = _open_wallet(client)
+
+    _bulk(client, account_id, [
+        {"asset_key": "BTC", "type": "BUY", "amount": "0.1", "price_per_unit": "0",
+         "executed_at": "2024-01-01T12:00:00", "group_uuid": "g1"},
+        {"asset_key": "EUR", "type": "SPEND", "amount": "2000", "price_per_unit": "1",
+         "executed_at": "2024-01-01T12:00:00", "group_uuid": "g1"},
+        {"asset_key": "BTC", "type": "FEE", "amount": "0.02", "price_per_unit": "30000",
+         "executed_at": "2024-01-02T12:00:00"},
+    ])
+
+    data = client.get(f"/market/assets/BTC/price-timeline?account_id={account_id}").json()
+
+    # The fee itself is not a decision, so it carries no marker...
+    assert [e["type"] for e in data["events"]] == ["BUY"]
+    # ...but 2000 € now sits on 0.08 BTC instead of 0.1.
+    assert Decimal(data["quantity_held"]) == Decimal("0.08")
+    assert Decimal(data["average_buy_price"]) == Decimal("25000")
+
+
+def test_asset_price_timeline_refuses_a_currency(session):
+    """EUR is what the curve is priced in, not a position with a curve."""
+    resp = TestClient(app).get("/market/assets/EUR/price-timeline")
+    assert resp.status_code == 404
