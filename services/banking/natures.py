@@ -88,8 +88,16 @@ def is_fixed(nature: RecurringNature) -> bool:
 
 
 def of(nature: str | None, words: tuple[str, ...] | list[str]) -> RecurringNature:
-    """What the user said it is for, else what its merchant says."""
-    return RecurringNature(nature) if nature else guess(words)
+    """What the user said it is for, else what its merchant says.
+
+    A stored answer this list no longer knows falls back to the guess: a nature
+    dropped from the enum must not make a payment unreadable."""
+    if nature:
+        try:
+            return RecurringNature(nature)
+        except ValueError:
+            pass
+    return guess(words)
 
 
 def guess(words: tuple[str, ...] | list[str]) -> RecurringNature:
