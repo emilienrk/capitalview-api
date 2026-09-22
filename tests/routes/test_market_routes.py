@@ -205,8 +205,8 @@ def test_asset_price_timeline_unknown_asset_is_404(session):
     assert resp.status_code == 404
 
 
-def _open_wallet(client: TestClient) -> str:
-    resp = client.post("/crypto/accounts", json={"name": "Wallet Timeline"})
+def _open_wallet(client: TestClient, name: str = "Wallet Timeline") -> str:
+    resp = client.post("/crypto/accounts", json={"name": name})
     assert resp.status_code == 201
     return resp.json()["id"]
 
@@ -329,3 +329,74 @@ def test_asset_price_timeline_refuses_a_currency(session):
     """EUR is what the curve is priced in, not a position with a curve."""
     resp = TestClient(app).get("/market/assets/EUR/price-timeline")
     assert resp.status_code == 404
+
+
+@patch("services.market.ensure_price_history")
+def test_timeline_keeps_each_wallet_cost_basis_apart(_ensure, session, master_key):
+    """Spanning wallets, a sale in one must not draw cost out of the other.
+
+    Pooling every row into one ledger made the sale below take half the combined
+    cost, leaving the untouched wallet's bitcoin at 40 000 € instead of the
+    50 000 € it actually cost.
+    """
+    _seed_btc_prices(session, {date(2024, 1, 1): Decimal("30000")})
+    client = TestClient(app)
+    first = _open_wallet(client, "Wallet A")
+    second = _open_wallet(client, "Wallet B")
+
+    _bulk(client, first, [
+        {"asset_key": "BTC", "type": "BUY", "amount": "1", "price_per_unit": "0",
+         "executed_at": "2024-01-01T12:00:00", "group_uuid": "a1"},
+        {"asset_key": "EUR", "type": "SPEND", "amount": "30000", "price_per_unit": "1",
+         "executed_at": "2024-01-01T12:00:00", "group_uuid": "a1"},
+        {"asset_key": "BTC", "type": "SPEND", "amount": "1", "price_per_unit": "0",
+         "executed_at": "2024-03-01T12:00:00", "group_uuid": "a3"},
+        {"asset_key": "EUR", "type": "DEPOSIT", "amount": "60000", "price_per_unit": "1",
+         "executed_at": "2024-03-01T12:00:00", "group_uuid": "a3"},
+    ])
+    _bulk(client, second, [
+        {"asset_key": "BTC", "type": "BUY", "amount": "1", "price_per_unit": "0",
+         "executed_at": "2024-02-01T12:00:00", "group_uuid": "b1"},
+        {"asset_key": "EUR", "type": "SPEND", "amount": "50000", "price_per_unit": "1",
+         "executed_at": "2024-02-01T12:00:00", "group_uuid": "b1"},
+    ])
+
+    # No account_id: both wallets at once.
+    data = client.get("/market/assets/BTC/price-timeline").json()
+
+    assert [e["date"] for e in data["events"]] == ["2024-01-01", "2024-02-01", "2024-03-01"]
+    assert [e["type"] for e in data["events"]] == ["BUY", "BUY", "SELL"]
+    # 30 000 on one, then 80 000 on two, then only the second wallet is left.
+    assert [Decimal(e["cost_basis_after"]) for e in data["events"]] == [
+        Decimal("30000"), Decimal("40000"), Decimal("50000"),
+    ]
+    assert Decimal(data["quantity_held"]) == Decimal("1")
+    assert Decimal(data["average_buy_price"]) == Decimal("50000")
+
+
+@patch("services.market.ensure_price_history")
+def test_timeline_scopes_to_one_account_when_asked(_ensure, session, master_key):
+    """account_id narrows the curve to that wallet's own trades and basis."""
+    _seed_btc_prices(session, {date(2024, 1, 1): Decimal("30000")})
+    client = TestClient(app)
+    first = _open_wallet(client, "Wallet A")
+    second = _open_wallet(client, "Wallet B")
+
+    _bulk(client, first, [
+        {"asset_key": "BTC", "type": "BUY", "amount": "1", "price_per_unit": "0",
+         "executed_at": "2024-01-01T12:00:00", "group_uuid": "a1"},
+        {"asset_key": "EUR", "type": "SPEND", "amount": "30000", "price_per_unit": "1",
+         "executed_at": "2024-01-01T12:00:00", "group_uuid": "a1"},
+    ])
+    _bulk(client, second, [
+        {"asset_key": "BTC", "type": "BUY", "amount": "1", "price_per_unit": "0",
+         "executed_at": "2024-02-01T12:00:00", "group_uuid": "b1"},
+        {"asset_key": "EUR", "type": "SPEND", "amount": "50000", "price_per_unit": "1",
+         "executed_at": "2024-02-01T12:00:00", "group_uuid": "b1"},
+    ])
+
+    data = client.get(f"/market/assets/BTC/price-timeline?account_id={second}").json()
+
+    assert len(data["events"]) == 1
+    assert Decimal(data["average_buy_price"]) == Decimal("50000")
+    assert Decimal(data["quantity_held"]) == Decimal("1")

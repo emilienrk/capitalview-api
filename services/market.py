@@ -1203,13 +1203,16 @@ def _collect_account_transactions(
     user_uuid: str,
     master_key: str,
     account_id: str | None,
-) -> tuple[list[TransactionResponse], list[TransactionResponse]]:
-    """(stock rows, crypto rows) for this user, oldest first, **unfiltered by asset**.
+) -> tuple[list[list[TransactionResponse]], list[list[TransactionResponse]]]:
+    """(stock accounts, crypto accounts), each one its own list of rows, oldest first.
 
-    Deliberately unfiltered: a crypto BUY row says how much of the asset arrived
-    but not what it cost, because the euros left on another row of the same
-    group — an ANCHOR, or a fiat SPEND — and those rows are booked under EUR.
-    Filtering by asset first would throw away the only rows that price the trade.
+    Kept per account rather than flattened, because cost basis is an account-level
+    quantity: pooling two wallets would let a sale in one draw cost out of the
+    other. Kept **unfiltered by asset** too — a crypto BUY row says how much of
+    the asset arrived but not what it cost, because the euros left on another row
+    of the same group (an ANCHOR, or a fiat SPEND), and those rows are booked
+    under EUR. Filtering by asset first would throw away the only rows that price
+    the trade.
 
     Imported locally: both transaction services read prices from this module, so
     importing them at module level would close the cycle.
@@ -1219,19 +1222,60 @@ def _collect_account_transactions(
     from services.stock_account import get_user_stock_accounts
     from services.stock_transaction import get_account_transactions as get_stock_txs
 
-    def gather(list_accounts, list_transactions) -> list[TransactionResponse]:
-        rows: list[TransactionResponse] = []
+    def gather(list_accounts, list_transactions) -> list[list[TransactionResponse]]:
+        per_account: list[list[TransactionResponse]] = []
         for account in list_accounts(session, user_uuid, master_key):
             # account_id is the caller's claim; only the accounts this user owns
             # were listed above, so filtering here is also the ownership check.
             if account_id and account.id != account_id:
                 continue
-            rows.extend(list_transactions(session, account.id, master_key))
-        return sorted(rows, key=lambda tx: tx.executed_at)
+            rows = list_transactions(session, account.id, master_key)
+            if rows:
+                per_account.append(sorted(rows, key=lambda tx: tx.executed_at))
+        return per_account
 
     return (
         gather(get_user_stock_accounts, get_stock_txs),
         gather(get_user_crypto_accounts, get_crypto_txs),
+    )
+
+
+def _merge_timelines(
+    per_account: list[tuple[list[dict], Decimal, Decimal]],
+) -> tuple[list[dict], Decimal, Decimal]:
+    """Interleave several accounts' markers and carry a portfolio-wide unit cost.
+
+    Each account keeps its own basis — a sale in one wallet must not draw cost
+    out of another — so the engines run per account and only the totals meet
+    here. Between two markers of the same account, a row that moves the position
+    without a marker of its own (a fee paid in the asset, a transfer out) is not
+    reflected in the line until that account's next marker; the quantity and unit
+    cost returned below come from each engine's final state and stay exact.
+    """
+    ordered = sorted(
+        (
+            (event["date"], index, event)
+            for index, (events, _, _) in enumerate(per_account)
+            for event in events
+        ),
+        # The account index only breaks ties, so each account's own rows keep
+        # the order its engine produced them in.
+        key=lambda item: (item[0], item[1]),
+    )
+
+    state: dict[int, tuple[Decimal, Decimal]] = {}
+    merged: list[dict] = []
+    for _, index, event in ordered:
+        state[index] = (event.pop("_quantity"), event.pop("_cost"))
+        held = sum((held for held, _ in state.values()), _ZERO_EUR)
+        spent = sum((spent for _, spent in state.values()), _ZERO_EUR)
+        event["cost_basis_after"] = round(spent / held, 8) if held > 0 else None
+        merged.append(event)
+
+    return (
+        merged,
+        sum((quantity for _, quantity, _ in per_account), _ZERO_EUR),
+        sum((cost for _, _, cost in per_account), _ZERO_EUR),
     )
 
 
@@ -1438,14 +1482,19 @@ def _timeline_event(
     quantity: Decimal,
     cost: Decimal,
 ) -> dict:
-    """One marker, with the unit cost held right after the trade behind it."""
+    """One marker, carrying the account's position right after the trade.
+
+    The underscored keys are the account's running state, which _merge_timelines
+    consumes to work out the unit cost to display and then strips.
+    """
     return {
         "date": day,
         "type": kind,
         "quantity": amount,
         "price": round(plot_price, 8) if plot_price is not None else None,
         "total": round(total, 2),
-        "cost_basis_after": round(cost / quantity, 8) if quantity > 0 else None,
+        "_quantity": quantity,
+        "_cost": cost,
     }
 
 
@@ -1475,12 +1524,14 @@ def get_asset_price_timeline(
     if not asset:
         raise ValueError(f"Actif introuvable : {asset_key!r}")
 
-    stock_rows, crypto_rows = _collect_account_transactions(
+    stock_accounts, crypto_accounts = _collect_account_transactions(
         session, user_uuid, master_key, account_id
     )
 
-    def holds(rows: list[TransactionResponse]) -> bool:
-        return any((tx.asset_key or "").upper() == key for tx in rows)
+    def holds(accounts: list[list[TransactionResponse]]) -> bool:
+        return any(
+            (tx.asset_key or "").upper() == key for rows in accounts for tx in rows
+        )
 
     asset_type = asset.asset_type
     if asset_type == AssetType.CRYPTO:
@@ -1489,10 +1540,13 @@ def get_asset_price_timeline(
         is_crypto = False
     else:
         # An asset whose type was never resolved: let the ledger holding it decide.
-        is_crypto = holds(crypto_rows) and not holds(stock_rows)
+        is_crypto = holds(crypto_accounts) and not holds(stock_accounts)
 
-    ledger_rows = crypto_rows if is_crypto else stock_rows
-    asset_rows = [tx for tx in ledger_rows if (tx.asset_key or "").upper() == key]
+    ledger_accounts = crypto_accounts if is_crypto else stock_accounts
+    asset_rows = sorted(
+        (tx for rows in ledger_accounts for tx in rows if (tx.asset_key or "").upper() == key),
+        key=lambda tx: tx.executed_at,
+    )
 
     today = date.today()
     floor_date = today - timedelta(days=_MAX_BACKFILL_DAYS)
@@ -1519,7 +1573,9 @@ def get_asset_price_timeline(
     price_at = _price_lookup(points)
 
     if is_crypto:
-        events, quantity, cost = _crypto_timeline_events(ledger_rows, key, price_at)
+        per_account = [
+            _crypto_timeline_events(rows, key, price_at) for rows in ledger_accounts
+        ]
     else:
         # One rate table per foreign currency, fetched once for the whole window
         # rather than per transaction.
@@ -1546,9 +1602,12 @@ def get_asset_price_timeline(
                 return table[max(earlier)]
             return get_exchange_rate(session, currency, "EUR")
 
-        events, quantity, cost = _stock_timeline_events(
-            ledger_rows, key, rate_for, price_at
-        )
+        per_account = [
+            _stock_timeline_events(rows, key, rate_for, price_at)
+            for rows in ledger_accounts
+        ]
+
+    events, quantity, cost = _merge_timelines(per_account)
 
     return {
         "asset_key": key,
