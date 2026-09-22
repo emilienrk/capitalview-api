@@ -257,41 +257,38 @@ def test_recurring_payments_are_part_of_the_expenses_month_by_month_as_the_ledge
     }
 
 
-def test_the_expenses_say_which_part_of_what_returns_cannot_be_avoided(session: Session, master_key: str):
-    # A power bill nobody can stop, a gym anybody can.
+def test_the_month_says_what_each_recurring_payment_is_filed_as(session: Session, master_key: str):
+    # Nothing is guessed: a payment carries a nature only once the user files it.
     _ops(
         session, master_key,
         *_months(CURRENT, "2025-06", 8, 5, "60.00", EDF),
         *_months(CURRENT, "2025-06", 8, 12, "39.00", BASIC_FIT),
     )
-
-    year = real_cashflow_year(session, USER, master_key, 2025, today=TODAY)
-    months = {m.period: m for m in year.months}
-    assert (months["2025-09"].recurring, months["2025-09"].recurring_fixed) == (Decimal("99.00"), Decimal("60.00"))
-    assert all(m.recurring_fixed <= m.recurring <= m.expenses for m in year.months)
+    edf = next(i for i in list_recurring(session, USER, master_key, today=TODAY).items if i.amount == Decimal("60.00"))
+    assert edf.nature is None
+    decided = decide(session, USER, master_key, edf.transaction_id, RecurringDecisionKind.CONFIRM)
+    update(session, USER, master_key, decided.id, {"nature": RecurringNature.ENERGY})
 
     detail = real_cashflow_month(session, USER, master_key, "2025-09", today=TODAY)
-    assert {item.name: (item.nature.value, item.fixed) for item in detail.recurring} == {
-        EDF_NAME: ("energy", True), "Basic Fit": ("sport", False),
-    }
+    assert {item.name: item.nature for item in detail.recurring} == {EDF_NAME: RecurringNature.ENERGY, "Basic Fit": None}
+    # Filing one moves no total: it says what the spending is, not how it counts.
+    year = real_cashflow_year(session, USER, master_key, 2025, today=TODAY)
+    assert {m.period: m.recurring for m in year.months}["2025-09"] == Decimal("99.00")
+    assert all(m.recurring <= m.expenses for m in year.months)
 
 
 def test_what_a_recurring_payment_took_year_by_year(session: Session, master_key: str):
-    # Two landlords, one roof: each keeps its own years, the nature joins them.
-    # A rent paid to a person says nothing, so the user says it; the one whose
-    # label carries the word is guessed.
+    # Two landlords, one roof: each keeps its own years, the nature the user
+    # filed joins them.
     _ops(
         session, master_key,
         *_months(CURRENT, "2025-07", 12, 3, "380.00", "VIR SEPA Frederic Durand"),
-        *_months(CURRENT, "2026-07", 3, 3, "530.00", "VIR SEPA TRANSALP'DOME Virement pour le loyer"),
+        *_months(CURRENT, "2026-07", 3, 3, "530.00", "VIR SEPA TRANSALP'DOME S.A.S."),
     )
-    first = next(
-        item for item in list_recurring(session, USER, master_key, today=TODAY).items
-        if item.amount == Decimal("380.00")
-    )
-    assert first.nature is RecurringNature.OTHER
-    decided = decide(session, USER, master_key, first.transaction_id, RecurringDecisionKind.CONFIRM)
-    update(session, USER, master_key, decided.id, {"nature": RecurringNature.HOUSING})
+    for item in list_recurring(session, USER, master_key, today=TODAY).items:
+        assert item.nature is None
+        decided = decide(session, USER, master_key, item.transaction_id, RecurringDecisionKind.CONFIRM)
+        update(session, USER, master_key, decided.id, {"nature": RecurringNature.HOUSING})
 
     items = {item.name: item for item in list_recurring(session, USER, master_key, today=TODAY).items}
     housing = [item for item in items.values() if item.nature is RecurringNature.HOUSING]
