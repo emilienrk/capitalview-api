@@ -377,10 +377,8 @@ class RecurringRole(str, Enum):
 
 
 class RecurringNature(str, Enum):
-    """What a payment is for. Guessed from the merchant
-    (services/banking/natures.py), and set by the user over the guess.
-
-    The first four are what a month cannot avoid; the others can be stopped."""
+    """What a payment is for, as the user filed it. Never guessed: it groups
+    what is paid, it does not judge what could be stopped."""
     HOUSING = "housing"
     ENERGY = "energy"
     INSURANCE = "insurance"
@@ -753,12 +751,8 @@ class BankRecurringItem(BaseModel):
     # Its last debit, to act on it: answer, decide, list its operations.
     transaction_id: str
     name: str
-    # What it is for: the user's answer, else the guess from its merchant.
-    nature: RecurringNature
-    # Whether the user set it: a guess is a proposal, and says so.
-    nature_set: bool = False
-    # Whether its nature is one a month cannot avoid (services/banking/natures.py).
-    fixed: bool = False
+    # What it is for; None until the user files it.
+    nature: RecurringNature | None = None
     state: RecurringState
     confidence: str | None
     status: RecurringStatus
@@ -825,9 +819,6 @@ class RealCashflowTotals(BaseModel):
     # The part of `expenses` spent on counted recurring payments, their refunds
     # taken off: already in `expenses`, never added to anything else.
     recurring: Decimal = Decimal("0")
-    # The part of `recurring` a month cannot avoid: rent, power, insurance,
-    # credit (services/banking/natures.py). The rest can be stopped.
-    recurring_fixed: Decimal = Decimal("0")
     # Percent of the income: what was not spent, and the part of it set aside
     # or invested. None without income to divide by.
     savings_rate: Decimal | None = None
@@ -851,8 +842,7 @@ class RealCashflowRecurring(BaseModel):
     id: str | None
     key: str
     name: str
-    nature: RecurringNature = RecurringNature.OTHER
-    fixed: bool = False
+    nature: RecurringNature | None = None
     amount: Decimal
     count: int
 

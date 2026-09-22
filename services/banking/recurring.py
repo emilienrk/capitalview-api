@@ -180,7 +180,7 @@ class _Reader:
         if stored.ended_on and stored.ended_on < self.today and stored.last <= stored.ended_on:
             status = recurrence.Status.ENDED
         annual = annual_estimate(stored)
-        nature = natures.of(stored.nature, stored.words)
+        nature = natures.of(stored.nature)
         year_ago = self.today - timedelta(days=365)
         refunds = [member for member in stored.members if member.role == REFUND]
         due = [member for member in stored.members if member.role in (REGULAR, CANCELLED)]
@@ -194,8 +194,6 @@ class _Reader:
             transaction_id=stored.carrier or max(due, key=lambda m: m.day).uuid,
             name=stored.name,
             nature=nature,
-            nature_set=stored.nature == nature.value,
-            fixed=natures.is_fixed(nature),
             state=stored.state,
             confidence=stored.confidence,
             status=status.value,

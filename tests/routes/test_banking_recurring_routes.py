@@ -246,19 +246,18 @@ def test_renamed_and_ended_on(client, session, master_key):
     assert (cleared["name"], cleared["ended_on"]) == ("Électricité", None)
 
 
-def test_the_nature_is_guessed_from_the_merchant_and_the_user_has_the_last_word(client, session, master_key):
+def test_the_nature_is_the_user_s_alone(client, session, master_key):
     _ops(session, master_key, *_months(CURRENT, "2025-06", 8, 5, "60.00", EDF))
-    guessed = _one(client)
-    assert (guessed["nature"], guessed["nature_set"]) == ("energy", False)
+    unfiled = _one(client)
+    assert unfiled["nature"] is None
 
-    stored = _decide(client, guessed["transaction_id"], "confirm")
-    set_by_user = client.patch(f"/banking/recurring/{stored['id']}", json={"nature": "housing"}).json()
-    assert (set_by_user["nature"], set_by_user["nature_set"]) == ("housing", True)
-    assert _one(client)["nature"] == "housing"
+    stored = _decide(client, unfiled["transaction_id"], "confirm")
+    filed = client.patch(f"/banking/recurring/{stored['id']}", json={"nature": "energy"}).json()
+    assert filed["nature"] == "energy"
+    assert _one(client)["nature"] == "energy"
 
-    # Cleared, the guess comes back: the dictionary may know better by then.
     cleared = client.patch(f"/banking/recurring/{stored['id']}", json={"nature": None}).json()
-    assert (cleared["nature"], cleared["nature_set"]) == ("energy", False)
+    assert cleared["nature"] is None
 
 
 def test_nothing_about_the_operations_sits_in_clear(client, session, master_key):

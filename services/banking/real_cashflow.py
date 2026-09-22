@@ -84,7 +84,7 @@ _FIELD_OF = {
     CashflowType.INVESTMENT: "investment",
     CashflowType.NEUTRAL: "neutral",
 }
-_AMOUNTS = ("income", "expenses", "saving", "investment", "neutral", "net", "recurring", "recurring_fixed")
+_AMOUNTS = ("income", "expenses", "saving", "investment", "neutral", "net", "recurring")
 _PERCENT = Decimal("0.1")
 
 
@@ -456,14 +456,10 @@ def _read(
         tally.count += 1
         stored = reading.patterns.counted_recurring(movement.row.uuid)
         if stored is not None and kind is CashflowType.EXPENSE:
-            nature = natures.of(stored.nature, stored.words)
-            fixed = natures.is_fixed(nature)
             tally.totals["recurring"] += signed
-            if fixed:
-                tally.totals["recurring_fixed"] += signed
             month = reading.recurring[movement.period]
             entry = month.setdefault(stored.key, RealCashflowRecurring(
-                id=stored.decision, key=stored.key, name=stored.name, nature=nature, fixed=fixed,
+                id=stored.decision, key=stored.key, name=stored.name, nature=natures.of(stored.nature),
                 amount=Decimal("0"), count=0,
             ))
             entry.amount += signed

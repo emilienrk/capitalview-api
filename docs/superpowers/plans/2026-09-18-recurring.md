@@ -388,24 +388,26 @@ récurrent.
 
 Chaque paiement récurrent porte une **nature** sur une liste fermée — Logement,
 Énergie, Assurance, Crédit, Télécom, Transport, Sport, Loisirs, Logiciels, Autre.
-Elle est **devinée du marchand** (`services/banking/natures.py`, un mot → une
-nature, rien de stocké : enrichir le dictionnaire améliore l'existant sans
-reconstruction) et l'utilisateur la corrige d'un menu, ce qui la stocke dans sa
-décision (`nature_enc`). `nature_set` dit laquelle des deux l'écran affiche.
-
-Les quatre premières sont les **charges fixes** : ce qu'un mois ne peut pas
-éviter. L'onglet les sépare des **abonnements**, résiliables, avec un total par
-bloc ; c'est là que le loyer cesse de noyer le reste. La frontière est tenue
-côté web (`utils/recurring.ts`), seul endroit qui en a besoin aujourd'hui.
-
-Le Réel porte la coupure : `RealCashflowTotals.recurring_fixed`, une part de
-`recurring`, affichée « dont X qui reviennent, Y incompressibles » ; le détail
-d'un mois donne la nature de chaque ligne. Et chaque paiement porte
-`paid_by_year`, d'où « Ce que ça a coûté, année par année » par nature —
+Elle est **posée par l'utilisateur, jamais devinée** (`nature_enc` sur sa
+décision) ; tant qu'il n'a rien dit, elle vaut `null` et l'écran affiche
+« À classer ». L'onglet groupe les paiements par nature, avec un total par
+groupe, et « Ce que ça a coûté, année par année » additionne par nature — les
 terminés compris, ce qui donne le loyer d'un bail à l'autre.
 
-**Sans compte bancaire** l'onglet répond vide et le dit ; rien d'autre dans
-l'app n'en dépend (`test_a_user_without_a_bank_account_reads_an_empty_list`).
+**Un dictionnaire de marchands a été écrit puis retiré** le 2026-09-22 (161 mots,
+12 devinés sur 15 en mesure réelle). Deux raisons : nommer ce à quoi sert un
+paiement est un jugement, et l'écran doit montrer ce qui est payé sans dire ce
+qu'il faudrait couper ; et une liste de marques est la seule chose du dépôt qui
+encode le monde extérieur, donc la seule qui vieillit. Les autres listes de mots
+(`label_groups.NOISE_WORDS`, `merchants.NOISE`) décrivent la façon dont les
+banques écrivent un libellé : fermées et stables, elles restent.
+
+La séparation « charges fixes / abonnements » a disparu avec lui : elle
+reposait sur la même opinion (`recurring_fixed` côté Réel, `fixed` sur chaque
+paiement). Le Réel dit « dont X qui reviennent », qui est un fait.
+
+**Reste à faire** : rien pour la nature. Si un jour l'incompressible revient,
+c'est un réglage par nature chez l'utilisateur, pas une liste dans un service.
 
 ## Hors périmètre
 
