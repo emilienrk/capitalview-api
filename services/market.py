@@ -1,10 +1,12 @@
 """Market data service using Provider Pattern with DB caching + daily CRON."""
 
+import bisect
 import logging
 import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from functools import lru_cache
+from typing import Callable
 
 import exchange_calendars as ec
 import pandas as pd
@@ -13,6 +15,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, select
 
 from database import get_engine
+from dtos.transaction import TransactionResponse
 from models.enums import AssetType
 from models.market import MarketAsset, MarketPriceHistory
 from services.market_data import market_data_manager
@@ -1163,3 +1166,222 @@ def ensure_price_history(
             "ensure_price_history: could not backfill %s (%s) from %s: %s",
             lookup_key, asset_type, from_date, exc,
         )
+
+
+# ---------------------------------------------------------------------------
+# Per-asset price timeline — the asset's curve with the user's own trades on it
+# ---------------------------------------------------------------------------
+
+# Ledger types worth a marker on a price curve, mapped to the three families the
+# chart draws. Everything else is deliberately dropped: FEE and TRANSFER carry no
+# investment decision, and ANCHOR is a virtual EUR cost carrier with no trade
+# behind it, so plotting them would only add noise at a price they never had.
+_TIMELINE_BUY_TYPES = frozenset({"BUY"})
+_TIMELINE_SELL_TYPES = frozenset({"SELL", "SPEND", "WITHDRAW"})
+_TIMELINE_INCOME_TYPES = frozenset({"DIVIDEND", "REWARD"})
+# Income that arrives as units of the asset rather than as cash: it adds quantity
+# at a zero cost basis, which is what drags the PRU down.
+_TIMELINE_IN_KIND_INCOME = frozenset({"REWARD"})
+
+
+def _price_lookup(points: list[dict]) -> Callable[[date], Decimal | None]:
+    """Build a date → price reader that falls back to the last known close.
+
+    Weekends, holidays and gaps left by a failed backfill all mean a trade can
+    land on a day with no row; the price that mattered then is the last one
+    quoted before it.
+    """
+    dates = [p["date"] for p in points]
+    prices = [p["price"] for p in points]
+
+    def read(day: date) -> Decimal | None:
+        if not dates:
+            return None
+        index = bisect.bisect_right(dates, day)
+        if index == 0:
+            # Trade predates every price we hold — the first close is the
+            # closest honest answer, and leaving it None would drop the marker.
+            return prices[0]
+        return prices[index - 1]
+
+    return read
+
+
+def _collect_asset_transactions(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    asset_key: str,
+    asset_type: AssetType | None,
+    account_id: str | None,
+) -> list[TransactionResponse]:
+    """Every transaction the user holds for *asset_key*, oldest first.
+
+    Imported locally: both transaction services read prices from this module, so
+    importing them at module level would close the cycle.
+    """
+    from services.crypto_account import get_user_crypto_accounts
+    from services.crypto_transaction import get_account_transactions as get_crypto_txs
+    from services.stock_account import get_user_stock_accounts
+    from services.stock_transaction import get_account_transactions as get_stock_txs
+
+    families: list[tuple] = []
+    if asset_type in (None, AssetType.STOCK):
+        families.append((get_user_stock_accounts, get_stock_txs))
+    if asset_type in (None, AssetType.CRYPTO):
+        families.append((get_user_crypto_accounts, get_crypto_txs))
+
+    transactions = []
+    for list_accounts, list_transactions in families:
+        for account in list_accounts(session, user_uuid, master_key):
+            # account_id is the caller's claim; only the accounts this user owns
+            # were listed above, so filtering here is also the ownership check.
+            if account_id and account.id != account_id:
+                continue
+            transactions.extend(list_transactions(session, account.id, master_key))
+
+    key = asset_key.upper()
+    return sorted(
+        (tx for tx in transactions if (tx.asset_key or "").upper() == key),
+        key=lambda tx: tx.executed_at,
+    )
+
+
+def get_asset_price_timeline(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    asset_key: str,
+    account_id: str | None = None,
+) -> dict:
+    """Price history of *asset_key* since the user first traded it, with their trades.
+
+    Everything comes back in EUR. ``market_price_history`` is already stored
+    converted, and every ledger today records ``currency="EUR"`` too, so the
+    conversion below is a no-op in practice — it is there so that the day a
+    price is stored in the currency it was executed in, a 150 USD buy does not
+    land on a 138 EUR curve.
+    """
+    key = (asset_key or "").upper()
+    asset = session.exec(select(MarketAsset).where(MarketAsset.asset_key == key)).first()
+    if not asset:
+        raise ValueError(f"Actif introuvable : {asset_key!r}")
+
+    asset_type = asset.asset_type
+    transactions = _collect_asset_transactions(
+        session, user_uuid, master_key, key, asset_type, account_id
+    )
+
+    today = date.today()
+    floor_date = today - timedelta(days=_MAX_BACKFILL_DAYS)
+    if transactions:
+        from_date = max(transactions[0].executed_at.date(), floor_date)
+    else:
+        # No trade to anchor on (a position read from an import that carries no
+        # ledger, say): a year of context still beats an empty chart.
+        from_date = max(today - timedelta(days=365), floor_date)
+
+    if asset_type in (AssetType.STOCK, AssetType.CRYPTO):
+        ensure_price_history(session, key, asset_type, from_date)
+
+    rows = session.exec(
+        select(MarketPriceHistory)
+        .where(
+            MarketPriceHistory.market_asset_id == asset.id,
+            MarketPriceHistory.price_date >= from_date,
+            MarketPriceHistory.price_date <= today,
+        )
+        .order_by(MarketPriceHistory.price_date)
+    ).all()
+    points = [{"date": row.price_date, "price": row.price} for row in rows]
+    price_at = _price_lookup(points)
+
+    # One rate table per foreign currency, fetched once for the whole window
+    # rather than per transaction.
+    rates_by_currency: dict[str, dict[date, Decimal]] = {}
+    for tx in transactions:
+        currency = (tx.currency or "EUR").upper()
+        if currency == "EUR" or currency in rates_by_currency:
+            continue
+        rates_by_currency[currency] = get_historical_exchange_rates_db(
+            session, currency, from_date, today
+        )
+
+    def rate_for(currency: str, day: date) -> Decimal:
+        currency = (currency or "EUR").upper()
+        if currency == "EUR":
+            return Decimal("1")
+        table = rates_by_currency.get(currency, {})
+        if day in table:
+            return table[day]
+        # Same reasoning as the price fallback: a missing day means no quote that
+        # day, not a rate of zero.
+        earlier = [d for d in table if d <= day]
+        if earlier:
+            return table[max(earlier)]
+        return get_exchange_rate(session, currency, "EUR")
+
+    # Running average cost, mirroring get_stock_account_summary: fees are part of
+    # the basis, and a sale removes cost in proportion to the quantity it takes.
+    quantity = Decimal("0")
+    cost = Decimal("0")
+    events: list[dict] = []
+
+    for tx in transactions:
+        tx_type = (tx.type or "").upper()
+        day = tx.executed_at.date()
+        rate = rate_for(tx.currency, day)
+        unit_price = Decimal(tx.price_per_unit or 0) * rate
+        fees = Decimal(tx.fees or 0) * rate
+        amount = Decimal(tx.amount or 0)
+
+        if tx_type in _TIMELINE_BUY_TYPES:
+            spent = amount * unit_price + fees
+            quantity += amount
+            cost += spent
+            kind, plot_price, total = "BUY", unit_price, -spent
+
+        elif tx_type in _TIMELINE_SELL_TYPES:
+            proceeds = amount * unit_price - fees
+            if quantity > 0:
+                fraction = min(amount / quantity, Decimal("1"))
+                cost = max(cost * (Decimal("1") - fraction), Decimal("0"))
+                quantity = max(quantity - amount, Decimal("0"))
+            kind, plot_price, total = "SELL", unit_price, proceeds
+
+        elif tx_type in _TIMELINE_INCOME_TYPES:
+            # Income has no price of its own, so the marker rides the curve.
+            plot_price = price_at(day)
+            if tx_type in _TIMELINE_IN_KIND_INCOME:
+                quantity += amount
+                total = amount * (plot_price or Decimal("0"))
+            else:
+                total = amount * unit_price - fees
+            kind = "INCOME"
+
+        else:
+            continue
+
+        events.append(
+            {
+                "date": day,
+                "type": kind,
+                "quantity": amount,
+                "price": round(plot_price, 8) if plot_price is not None else None,
+                "total": round(total, 2),
+                "cost_basis_after": round(cost / quantity, 8) if quantity > 0 else None,
+            }
+        )
+
+    return {
+        "asset_key": key,
+        "symbol": asset.symbol,
+        "name": asset.name,
+        "asset_type": asset_type,
+        "currency": "EUR",
+        "points": points,
+        "events": events,
+        "average_buy_price": round(cost / quantity, 8) if quantity > 0 else None,
+        "quantity_held": quantity,
+        "current_price": get_latest_price(session, asset.id),
+    }
