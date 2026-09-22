@@ -1,7 +1,6 @@
 """
 Recurring payment detection (services/banking/recurrence.py) on synthetic debits:
-the 29 edge cases the plan was measured on, and the rules each of its false
-positives taught.
+29 edge cases, and the rules each false positive among them taught.
 """
 import random
 from datetime import date, timedelta
