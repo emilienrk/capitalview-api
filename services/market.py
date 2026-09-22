@@ -1172,16 +1172,7 @@ def ensure_price_history(
 # Per-asset price timeline — the asset's curve with the user's own trades on it
 # ---------------------------------------------------------------------------
 
-# Ledger types worth a marker on a price curve, mapped to the three families the
-# chart draws. Everything else is deliberately dropped: FEE and TRANSFER carry no
-# investment decision, and ANCHOR is a virtual EUR cost carrier with no trade
-# behind it, so plotting them would only add noise at a price they never had.
-_TIMELINE_BUY_TYPES = frozenset({"BUY"})
-_TIMELINE_SELL_TYPES = frozenset({"SELL", "SPEND", "WITHDRAW"})
-_TIMELINE_INCOME_TYPES = frozenset({"DIVIDEND", "REWARD"})
-# Income that arrives as units of the asset rather than as cash: it adds quantity
-# at a zero cost basis, which is what drags the PRU down.
-_TIMELINE_IN_KIND_INCOME = frozenset({"REWARD"})
+_ZERO_EUR = Decimal("0")
 
 
 def _price_lookup(points: list[dict]) -> Callable[[date], Decimal | None]:
@@ -1207,15 +1198,18 @@ def _price_lookup(points: list[dict]) -> Callable[[date], Decimal | None]:
     return read
 
 
-def _collect_asset_transactions(
+def _collect_account_transactions(
     session: Session,
     user_uuid: str,
     master_key: str,
-    asset_key: str,
-    asset_type: AssetType | None,
     account_id: str | None,
-) -> list[TransactionResponse]:
-    """Every transaction the user holds for *asset_key*, oldest first.
+) -> tuple[list[TransactionResponse], list[TransactionResponse]]:
+    """(stock rows, crypto rows) for this user, oldest first, **unfiltered by asset**.
+
+    Deliberately unfiltered: a crypto BUY row says how much of the asset arrived
+    but not what it cost, because the euros left on another row of the same
+    group — an ANCHOR, or a fiat SPEND — and those rows are booked under EUR.
+    Filtering by asset first would throw away the only rows that price the trade.
 
     Imported locally: both transaction services read prices from this module, so
     importing them at module level would close the cycle.
@@ -1225,26 +1219,234 @@ def _collect_asset_transactions(
     from services.stock_account import get_user_stock_accounts
     from services.stock_transaction import get_account_transactions as get_stock_txs
 
-    families: list[tuple] = []
-    if asset_type in (None, AssetType.STOCK):
-        families.append((get_user_stock_accounts, get_stock_txs))
-    if asset_type in (None, AssetType.CRYPTO):
-        families.append((get_user_crypto_accounts, get_crypto_txs))
-
-    transactions = []
-    for list_accounts, list_transactions in families:
+    def gather(list_accounts, list_transactions) -> list[TransactionResponse]:
+        rows: list[TransactionResponse] = []
         for account in list_accounts(session, user_uuid, master_key):
             # account_id is the caller's claim; only the accounts this user owns
             # were listed above, so filtering here is also the ownership check.
             if account_id and account.id != account_id:
                 continue
-            transactions.extend(list_transactions(session, account.id, master_key))
+            rows.extend(list_transactions(session, account.id, master_key))
+        return sorted(rows, key=lambda tx: tx.executed_at)
+
+    return (
+        gather(get_user_stock_accounts, get_stock_txs),
+        gather(get_user_crypto_accounts, get_crypto_txs),
+    )
+
+
+def _crypto_group_flows(
+    transactions: list[TransactionResponse],
+) -> tuple[dict[str, Decimal], dict[str, Decimal], dict[str, Decimal]]:
+    """Euro flows of each atomic group: (anchors, fiat spent, fiat received).
+
+    Mirrors get_crypto_account_summary, which is the app's reference for what a
+    crypto trade cost.
+    """
+    from dtos.crypto import FIAT_ASSET_KEYS
+
+    anchors: dict[str, Decimal] = {}
+    fiat_spent: dict[str, Decimal] = {}
+    fiat_received: dict[str, Decimal] = {}
+
+    for tx in transactions:
+        if not tx.group_uuid:
+            continue
+        value = Decimal(tx.amount or 0) * Decimal(tx.price_per_unit or 0)
+        is_fiat = (tx.asset_key or "").upper() in FIAT_ASSET_KEYS
+
+        if tx.type == "ANCHOR":
+            anchors[tx.group_uuid] = anchors.get(tx.group_uuid, _ZERO_EUR) + value
+        elif tx.type == "SPEND" and is_fiat:
+            fiat_spent[tx.group_uuid] = fiat_spent.get(tx.group_uuid, _ZERO_EUR) + value
+        elif tx.type == "DEPOSIT" and is_fiat:
+            # Fiat received inside a group: the proceeds side of a sell-to-fiat.
+            fiat_received[tx.group_uuid] = fiat_received.get(tx.group_uuid, _ZERO_EUR) + value
+
+    return anchors, fiat_spent, fiat_received
+
+
+
+def _crypto_timeline_events(
+    transactions: list[TransactionResponse],
+    asset_key: str,
+    price_at: Callable[[date], Decimal | None],
+) -> tuple[list[dict], Decimal, Decimal]:
+    """Markers and running cost basis for one crypto asset.
+
+    Follows get_crypto_account_summary exactly, including the parts that carry no
+    marker: a FEE paid in the asset takes quantity away without touching the
+    basis, and a TRANSFER out removes both — skip them and the unit cost drifts.
+    Fees stay out of the basis here, the opposite of the stock ledger, because
+    that is how the crypto summary computes the PRU shown everywhere else.
+    """
+    anchors, fiat_spent, fiat_received = _crypto_group_flows(transactions)
+
+    buy_cost: dict[str, Decimal] = {}
+    for tx in transactions:
+        if tx.type == "BUY" and tx.group_uuid:
+            if tx.group_uuid in anchors:
+                buy_cost[tx.id] = anchors[tx.group_uuid]
+            elif tx.group_uuid in fiat_spent:
+                buy_cost[tx.id] = fiat_spent[tx.group_uuid]
+            else:
+                buy_cost[tx.id] = _ZERO_EUR
+
+    def proceeds_of(group: str) -> Decimal | None:
+        """Euros a disposal brought in: fiat received, else the trade's anchor."""
+        if group in fiat_received:
+            return fiat_received[group]
+        if group in anchors:
+            return anchors[group]
+        return None
 
     key = asset_key.upper()
-    return sorted(
-        (tx for tx in transactions if (tx.asset_key or "").upper() == key),
-        key=lambda tx: tx.executed_at,
-    )
+    quantity = _ZERO_EUR
+    cost = _ZERO_EUR
+    events: list[dict] = []
+
+    for tx in transactions:
+        if (tx.asset_key or "").upper() != key:
+            continue
+
+        tx_type = (tx.type or "").upper()
+        day = tx.executed_at.date()
+        amount = Decimal(tx.amount or 0)
+        marker: tuple[str, Decimal | None, Decimal] | None = None
+
+        if tx_type == "BUY":
+            spent = buy_cost.get(tx.id, amount * Decimal(tx.price_per_unit or 0))
+            previous = quantity
+            quantity += amount
+            if previous < 0 and amount > 0:
+                # Buying back into a negative balance: only the part that
+                # survives the repayment carries cost.
+                surviving = max(quantity, _ZERO_EUR)
+                cost += spent * (surviving / amount)
+            else:
+                cost += spent
+            if amount > 0 and spent > 0:
+                marker = ("BUY", spent / amount, -spent)
+
+        elif tx_type in ("SPEND", "TRANSFER"):
+            if quantity > 0:
+                fraction = min(amount / quantity, Decimal("1"))
+                cost = max(cost - cost * fraction, _ZERO_EUR)
+            quantity -= amount
+            # Only a SPEND inside a group is a disposal with euros behind it; a
+            # TRANSFER moves the asset to another wallet at no price at all.
+            if tx_type == "SPEND" and tx.group_uuid and amount > 0:
+                proceeds = proceeds_of(tx.group_uuid)
+                if proceeds is not None and proceeds > 0:
+                    marker = ("SELL", proceeds / amount, proceeds)
+
+        elif tx_type == "WITHDRAW":
+            if quantity > 0:
+                fraction = min(amount / quantity, Decimal("1"))
+                cost = max(cost - cost * fraction, _ZERO_EUR)
+            quantity -= amount
+
+        elif tx_type in ("REWARD", "DEPOSIT"):
+            # Arrives as units of the asset at no cost, which is what drags the
+            # unit cost down. No price of its own, so the marker rides the curve.
+            quantity += amount
+            plot_price = price_at(day)
+            marker = ("INCOME", plot_price, amount * (plot_price or _ZERO_EUR))
+
+        elif tx_type == "FEE":
+            # Paid in the asset itself: takes quantity without touching the
+            # basis, so the unit cost rises. Not a decision, so no marker.
+            quantity -= amount
+
+        else:  # ANCHOR and anything unknown
+            continue
+
+        if marker is not None:
+            kind, plot_price, total = marker
+            events.append(
+                _timeline_event(day, kind, amount, plot_price, total, quantity, cost)
+            )
+
+    return events, quantity, cost
+
+
+def _stock_timeline_events(
+    transactions: list[TransactionResponse],
+    asset_key: str,
+    rate_for: Callable[[str, date], Decimal],
+    price_at: Callable[[date], Decimal | None],
+) -> tuple[list[dict], Decimal, Decimal]:
+    """Markers and running cost basis for one stock line.
+
+    Follows get_stock_account_summary: the price is carried by the row itself,
+    fees are part of the basis, and a sale removes cost in proportion to the
+    quantity it takes.
+    """
+    key = asset_key.upper()
+    quantity = _ZERO_EUR
+    cost = _ZERO_EUR
+    events: list[dict] = []
+
+    for tx in transactions:
+        if (tx.asset_key or "").upper() != key:
+            continue
+
+        tx_type = (tx.type or "").upper()
+        day = tx.executed_at.date()
+        rate = rate_for(tx.currency, day)
+        unit_price = Decimal(tx.price_per_unit or 0) * rate
+        fees = Decimal(tx.fees or 0) * rate
+        amount = Decimal(tx.amount or 0)
+
+        if tx_type == "BUY":
+            spent = amount * unit_price + fees
+            quantity += amount
+            cost += spent
+            kind, plot_price, total = "BUY", unit_price, -spent
+
+        elif tx_type == "SELL":
+            proceeds = amount * unit_price - fees
+            if quantity > 0:
+                fraction = min(amount / quantity, Decimal("1"))
+                cost = max(cost - cost * fraction, _ZERO_EUR)
+                quantity = max(quantity - amount, _ZERO_EUR)
+            kind, plot_price, total = "SELL", unit_price, proceeds
+
+        elif tx_type == "DIVIDEND":
+            # Cash income: it has no price of its own, so the marker rides the
+            # curve, and it leaves the position untouched.
+            kind = "INCOME"
+            plot_price = price_at(day)
+            total = amount * unit_price - fees
+
+        else:  # EUR deposits and withdrawals never reach a listed asset
+            continue
+
+        events.append(
+            _timeline_event(day, kind, amount, plot_price, total, quantity, cost)
+        )
+
+    return events, quantity, cost
+
+
+def _timeline_event(
+    day: date,
+    kind: str,
+    amount: Decimal,
+    plot_price: Decimal | None,
+    total: Decimal,
+    quantity: Decimal,
+    cost: Decimal,
+) -> dict:
+    """One marker, with the unit cost held right after the trade behind it."""
+    return {
+        "date": day,
+        "type": kind,
+        "quantity": amount,
+        "price": round(plot_price, 8) if plot_price is not None else None,
+        "total": round(total, 2),
+        "cost_basis_after": round(cost / quantity, 8) if quantity > 0 else None,
+    }
 
 
 def get_asset_price_timeline(
@@ -1262,20 +1464,40 @@ def get_asset_price_timeline(
     price is stored in the currency it was executed in, a 150 USD buy does not
     land on a 138 EUR curve.
     """
+    from dtos.crypto import FIAT_ASSET_KEYS
+
     key = (asset_key or "").upper()
+    if key in FIAT_ASSET_KEYS:
+        # Cash is not a position with a curve; it is what the curve is priced in.
+        raise ValueError(f"Pas de cours pour une devise : {asset_key!r}")
+
     asset = session.exec(select(MarketAsset).where(MarketAsset.asset_key == key)).first()
     if not asset:
         raise ValueError(f"Actif introuvable : {asset_key!r}")
 
-    asset_type = asset.asset_type
-    transactions = _collect_asset_transactions(
-        session, user_uuid, master_key, key, asset_type, account_id
+    stock_rows, crypto_rows = _collect_account_transactions(
+        session, user_uuid, master_key, account_id
     )
+
+    def holds(rows: list[TransactionResponse]) -> bool:
+        return any((tx.asset_key or "").upper() == key for tx in rows)
+
+    asset_type = asset.asset_type
+    if asset_type == AssetType.CRYPTO:
+        is_crypto = True
+    elif asset_type == AssetType.STOCK:
+        is_crypto = False
+    else:
+        # An asset whose type was never resolved: let the ledger holding it decide.
+        is_crypto = holds(crypto_rows) and not holds(stock_rows)
+
+    ledger_rows = crypto_rows if is_crypto else stock_rows
+    asset_rows = [tx for tx in ledger_rows if (tx.asset_key or "").upper() == key]
 
     today = date.today()
     floor_date = today - timedelta(days=_MAX_BACKFILL_DAYS)
-    if transactions:
-        from_date = max(transactions[0].executed_at.date(), floor_date)
+    if asset_rows:
+        from_date = max(asset_rows[0].executed_at.date(), floor_date)
     else:
         # No trade to anchor on (a position read from an import that carries no
         # ledger, say): a year of context still beats an empty chart.
@@ -1296,81 +1518,36 @@ def get_asset_price_timeline(
     points = [{"date": row.price_date, "price": row.price} for row in rows]
     price_at = _price_lookup(points)
 
-    # One rate table per foreign currency, fetched once for the whole window
-    # rather than per transaction.
-    rates_by_currency: dict[str, dict[date, Decimal]] = {}
-    for tx in transactions:
-        currency = (tx.currency or "EUR").upper()
-        if currency == "EUR" or currency in rates_by_currency:
-            continue
-        rates_by_currency[currency] = get_historical_exchange_rates_db(
-            session, currency, from_date, today
-        )
+    if is_crypto:
+        events, quantity, cost = _crypto_timeline_events(ledger_rows, key, price_at)
+    else:
+        # One rate table per foreign currency, fetched once for the whole window
+        # rather than per transaction.
+        rates_by_currency: dict[str, dict[date, Decimal]] = {}
+        for tx in asset_rows:
+            currency = (tx.currency or "EUR").upper()
+            if currency == "EUR" or currency in rates_by_currency:
+                continue
+            rates_by_currency[currency] = get_historical_exchange_rates_db(
+                session, currency, from_date, today
+            )
 
-    def rate_for(currency: str, day: date) -> Decimal:
-        currency = (currency or "EUR").upper()
-        if currency == "EUR":
-            return Decimal("1")
-        table = rates_by_currency.get(currency, {})
-        if day in table:
-            return table[day]
-        # Same reasoning as the price fallback: a missing day means no quote that
-        # day, not a rate of zero.
-        earlier = [d for d in table if d <= day]
-        if earlier:
-            return table[max(earlier)]
-        return get_exchange_rate(session, currency, "EUR")
+        def rate_for(currency: str, day: date) -> Decimal:
+            currency = (currency or "EUR").upper()
+            if currency == "EUR":
+                return Decimal("1")
+            table = rates_by_currency.get(currency, {})
+            if day in table:
+                return table[day]
+            # Same reasoning as the price fallback: a missing day means no quote
+            # that day, not a rate of zero.
+            earlier = [d for d in table if d <= day]
+            if earlier:
+                return table[max(earlier)]
+            return get_exchange_rate(session, currency, "EUR")
 
-    # Running average cost, mirroring get_stock_account_summary: fees are part of
-    # the basis, and a sale removes cost in proportion to the quantity it takes.
-    quantity = Decimal("0")
-    cost = Decimal("0")
-    events: list[dict] = []
-
-    for tx in transactions:
-        tx_type = (tx.type or "").upper()
-        day = tx.executed_at.date()
-        rate = rate_for(tx.currency, day)
-        unit_price = Decimal(tx.price_per_unit or 0) * rate
-        fees = Decimal(tx.fees or 0) * rate
-        amount = Decimal(tx.amount or 0)
-
-        if tx_type in _TIMELINE_BUY_TYPES:
-            spent = amount * unit_price + fees
-            quantity += amount
-            cost += spent
-            kind, plot_price, total = "BUY", unit_price, -spent
-
-        elif tx_type in _TIMELINE_SELL_TYPES:
-            proceeds = amount * unit_price - fees
-            if quantity > 0:
-                fraction = min(amount / quantity, Decimal("1"))
-                cost = max(cost * (Decimal("1") - fraction), Decimal("0"))
-                quantity = max(quantity - amount, Decimal("0"))
-            kind, plot_price, total = "SELL", unit_price, proceeds
-
-        elif tx_type in _TIMELINE_INCOME_TYPES:
-            # Income has no price of its own, so the marker rides the curve.
-            plot_price = price_at(day)
-            if tx_type in _TIMELINE_IN_KIND_INCOME:
-                quantity += amount
-                total = amount * (plot_price or Decimal("0"))
-            else:
-                total = amount * unit_price - fees
-            kind = "INCOME"
-
-        else:
-            continue
-
-        events.append(
-            {
-                "date": day,
-                "type": kind,
-                "quantity": amount,
-                "price": round(plot_price, 8) if plot_price is not None else None,
-                "total": round(total, 2),
-                "cost_basis_after": round(cost / quantity, 8) if quantity > 0 else None,
-            }
+        events, quantity, cost = _stock_timeline_events(
+            ledger_rows, key, rate_for, price_at
         )
 
     return {
