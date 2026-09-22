@@ -11,9 +11,8 @@ weighted by how rare they are among the user's labels, a word matching its
 truncation or a one-letter typo, a label that grew still matching the one it
 grew from.
 
-Measured on 53 months of real operations (docs/superpowers/plans/
-2026-09-18-recurring.md): 3 088 debits, 758 merchants. Pure: labels in,
-groups out.
+Measured on 53 months of real operations: 3 088 debits, 758 merchants.
+Pure: labels in, groups out.
 """
 
 from __future__ import annotations

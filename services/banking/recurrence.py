@@ -6,8 +6,7 @@ new label, a new account, a new means of payment.
 Pure: debits in, series out. Nothing here reads a label (the merchant comes
 from `merchants.py`) nor a type rule (each debit carries its resolved type).
 
-Layers, each catching what the one before lets through
-(docs/superpowers/plans/2026-09-18-recurring.md, "L'algorithme"):
+Layers, each catching what the one before lets through:
 
 1. streams per merchant: the best chain of dates per cadence, flat amounts
    first (a recurring payment hidden among a shop's purchases), any amount then;
