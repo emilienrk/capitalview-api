@@ -1,6 +1,7 @@
 """
 Recurring payment detection (services/banking/recurrence.py) on synthetic debits:
-29 edge cases, and the rules each false positive among them taught.
+29 edge cases, and the rules each false positive among them taught. Then the
+same layers over credits, for recurring income.
 """
 import random
 from datetime import date, timedelta
@@ -19,7 +20,8 @@ START = date(2025, 1, 1)
 CARD, DD, TRANSFER, UNKNOWN = (
     OperationType.CARD, OperationType.DIRECT_DEBIT, OperationType.TRANSFER, OperationType.UNKNOWN,
 )
-EXPENSE, NEUTRAL = CashflowType.EXPENSE, CashflowType.NEUTRAL
+EXPENSE, NEUTRAL, INCOME = CashflowType.EXPENSE, CashflowType.NEUTRAL, CashflowType.INCOME
+INTEREST = OperationType.INTEREST
 
 
 class _Debit(NamedTuple):
@@ -55,8 +57,8 @@ def _ops(debits: list[_Debit]) -> list[RecurrenceOp]:
     ]
 
 
-def _found(debits: list[_Debit], today: date = TODAY) -> list[Found]:
-    detection = R.detect(_ops(debits))
+def _found(debits: list[_Debit], today: date = TODAY, kind: CashflowType = EXPENSE) -> list[Found]:
+    detection = R.detect(_ops(debits), kind)
     found = []
     for series in detection.series:
         confidence = R.confidence(series, R.features(series, detection))
@@ -539,3 +541,125 @@ def test_detection_does_not_depend_on_the_order_debits_come_in():
         shuffled = list(ops)
         random.Random(seed).shuffle(shuffled)
         assert [[op.id for op in s.regular] for s in R.detect(shuffled).series] == expected
+
+
+# ---------------------------------------------------------------------------
+# Income: the same layers over credits
+# ---------------------------------------------------------------------------
+
+
+def _income(credits: list[_Debit], today: date = TODAY) -> list[Found]:
+    return _found(credits, today, INCOME)
+
+
+def _salary(n: int, amount="1380.71", **kw) -> list[_Debit]:
+    return _monthly(START, n, amount, "VIR SEPA VILMORIN & CIE SALAIRE", day=28, method=TRANSFER, type=INCOME, **kw)
+
+
+def _offered(credits: list[_Debit]) -> list[R.Series]:
+    detection = R.detect(_ops(credits), INCOME)
+    return [s for s in detection.series if R.confidence(s, R.features(s, detection))]
+
+
+def test_a_salary_paid_by_transfer_for_half_a_year_is_counted_unasked():
+    detection = R.detect(_ops(_salary(8, lag=(0, 3))), INCOME)
+    [series] = detection.series
+    features = R.features(series, detection)
+    level = R.confidence(series, features)
+    assert (level, series.cadence.name, len(series.regular)) == (R.Confidence.CERTAIN, "monthly", 8)
+    assert R.counted_unasked(series, level, features)
+
+
+def test_a_first_partial_salary_and_one_paid_early_for_the_holidays_are_extras():
+    credits = _salary(8, skip={4}) + [
+        _Debit(date(2024, 12, 30), "724.01", "VIR SEPA VILMORIN & CIE SALAIRE", TRANSFER, type=INCOME),
+        # Paid on the 20th, a week before its due date.
+        _Debit(date(2025, 5, 20), "1380.71", "VIR SEPA VILMORIN & CIE SALAIRE", TRANSFER, type=INCOME),
+    ]
+    [found] = _income(credits)
+    assert (found.count, found.extras, found.amount) == (7, 2, Decimal("1380.71"))
+
+
+def test_a_salary_whose_cents_move_keeps_its_first_months():
+    label = "VIR SEPA VILMORIN & CIE SALAIRE"
+    credits = _salary(8, lambda k: "1380.99" if k < 2 else "1380.71", skip={2}) + [
+        # December's, paid before the holidays: a payment off its due date.
+        _Debit(date(2025, 3, 20), "1380.99", label, TRANSFER, type=INCOME),
+    ]
+    [series] = _offered(credits)
+    assert series.first.day == date(2025, 1, 28)
+
+
+def test_a_salary_that_moves_is_asked():
+    amounts = ["487.20", "456.75", "609.00", "1196.24", "1286.76", "1369.20", "1245.04", "1237.24"]
+    detection = R.detect(_ops(_salary(8, lambda k: amounts[k])), INCOME)
+    [series] = detection.series
+    features = R.features(series, detection)
+    level = R.confidence(series, features)
+    # The first, partial months stay: the employer pays nothing else.
+    assert (level, len(series.regular)) == (R.Confidence.PROBABLE, 8)
+    assert not R.counted_unasked(series, level, features)
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_a_parent_s_allowance_starts_at_its_first_repeated_amount(seed):
+    rng = random.Random(seed)
+    label = "VIR SEPA M JEAN DUPONT"
+    # Two years of transfers of any amount, twice a month as on the real
+    # history, then the same one every month.
+    scattered = [
+        _Debit(date(2023, 1, 1) + timedelta(days=rng.randint(0, 700)), f"{rng.uniform(10, 200):.2f}", label,
+               TRANSFER, type=INCOME)
+        for _ in range(48)
+    ]
+    allowance = _monthly(date(2025, 1, 4), 16, "250", label, method=TRANSFER, type=INCOME)
+    [series] = _offered(scattered + allowance)
+    assert series.first.day == date(2025, 1, 4)
+    assert {op.amount for op in series.regular} == {Decimal("250")}
+
+
+def test_a_parent_s_allowance_is_asked_not_counted():
+    label = "VIR SEPA MME MARIE DUPONT"
+    [found] = _income(_monthly(START, 14, "250", label, day=28, method=TRANSFER, type=INCOME) + [
+        _Debit(date(2025, 6, 12), "80", label, TRANSFER, type=INCOME),
+        _Debit(date(2025, 9, 2), "35", label, TRANSFER, type=INCOME),
+    ])
+    # Other transfers from the same payer: sure enough to ask, never to count.
+    assert (found.confidence, found.count, found.amount) == ("probable", 14, Decimal("250"))
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_friends_paying_back_are_no_income(seed):
+    rng = random.Random(seed)
+    credits = [
+        _Debit(START + timedelta(days=rng.randint(0, 600)), f"{rng.uniform(4, 150):.2f}", f"Virement de : {name}",
+               TRANSFER, type=INCOME)
+        for name in ("TITOUAN MARTIN", "HUGO BERNARD", "MATTEO PETIT") for _ in range(rng.randint(8, 25))
+    ]
+    assert _income(credits) == []
+
+
+def test_bank_interest_once_a_year_is_counted_unasked():
+    credits = [
+        _Debit(date(2025, 1, 2), "13.50", "*INTER.BRUTS 31/12/24", INTEREST, type=INCOME),
+        _Debit(date(2026, 1, 2), "9.29", "*INTER.BRUTS 31/12/25", INTEREST, type=INCOME),
+    ]
+    [found] = _income(credits)
+    assert (found.confidence, found.cadence, found.amount) == ("certain", "annual", Decimal("9.29"))
+
+
+def test_weekly_pocket_money_is_no_recurring_income():
+    weeks = [
+        _Debit(START + timedelta(days=7 * k), "20", "VIR INST MME MARIE DUPONT", TRANSFER, type=INCOME)
+        for k in range(20)
+    ]
+    assert _income(weeks) == []
+
+
+def test_credits_the_user_typed_otherwise_are_no_income():
+    assert _income([d._replace(type=NEUTRAL) for d in _salary(8)]) == []
+
+
+def test_a_debit_series_is_never_read_as_income():
+    debits = _monthly(START, 8, "39.00", "PRLV SEPA BASIC FIT", day=5, method=DD)
+    assert _income(debits) == []

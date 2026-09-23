@@ -1,5 +1,5 @@
 """
-Recurring payments in the rebuild of the transfer patterns
+Recurring payments and income in the rebuild of the transfer patterns
 (services/banking/recurring_series.py) and what the readers make of them.
 
 Labels are shaped like the real ones, names replaced.
@@ -7,9 +7,17 @@ Labels are shaped like the real ones, names replaced.
 from datetime import date, timedelta
 from decimal import Decimal
 
+import pytest
 from sqlmodel import Session, select
 
-from dtos.banking import BankTransferDecisionKind, RecurringDecisionKind, RecurringNature, TypeScope
+from dtos.banking import (
+    BankTransferDecisionKind,
+    RecurringDecisionKind,
+    RecurringDirection,
+    RecurringNature,
+    RecurringState,
+    TypeScope,
+)
 from dtos.banking import CashflowType as Type
 from models.banking import BankAccountLink
 from services.banking.flows import (
@@ -25,7 +33,14 @@ from services.banking.real_cashflow import (
     real_cashflow_month,
     real_cashflow_year,
 )
-from services.banking.recurring import decide, list_recurring, update
+from services.banking.recurring import (
+    DirectionMismatchError,
+    NatureMismatchError,
+    decide,
+    list_recurring,
+    merge,
+    update,
+)
 from services.banking.transfer_decisions import record_decision
 from services.encryption import hash_index
 from tests.services.test_banking_flows import USER, _raw, _store
@@ -471,3 +486,137 @@ def test_a_refund_its_supplier_abbreviates_is_still_its_refund(session: Session,
     assert [(m.amount, m.label) for m in stored.members if m.role == "refund"] == [
         (Decimal("44.15"), "VIR SEPA EDF CLT PART RBT"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Recurring income
+# ---------------------------------------------------------------------------
+
+SALARY = "VIR SEPA VILMORIN & CIE SALAIRE"
+# A parent's monthly transfer, among others of any amount: asked, never counted.
+ALLOWANCE = "VIR SEPA MME JEANNE MARTIN"
+
+
+def _allowance(session: Session, master_key: str) -> None:
+    _ops(
+        session, master_key,
+        *_months(CURRENT, "2025-08", 8, 4, "250.00", ALLOWANCE, "CRDT"),
+        (CURRENT, "2025-11-15", "80.00", "CRDT", ALLOWANCE),
+        (CURRENT, "2026-01-20", "35.00", "CRDT", ALLOWANCE),
+    )
+
+
+def test_a_salary_is_recurring_income_counted_without_asking(session: Session, master_key: str):
+    _ops(session, master_key, *_months(CURRENT, "2025-08", 8, 28, "1380.71", SALARY, "CRDT"))
+
+    [stored] = _recurring(session, master_key)
+    assert (stored.direction, stored.state, stored.confidence, stored.counted) == ("income", "auto", "certain", True)
+    # Listed with the income alone.
+    assert list_recurring(session, USER, master_key, today=TODAY).items == []
+    listed = list_recurring(session, USER, master_key, today=TODAY, direction=RecurringDirection.INCOME)
+    [item] = listed.items
+    assert (item.direction, item.amount) == (RecurringDirection.INCOME, Decimal("1380.71"))
+    assert (listed.direction, listed.monthly_total) == (RecurringDirection.INCOME, Decimal("1380.71"))
+
+
+def test_income_splits_into_recurring_and_one_off_as_the_ledger_adds_them(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        *_months(CURRENT, "2025-08", 8, 28, "1380.71", SALARY, "CRDT"),
+        *_months(CURRENT, "2025-08", 8, 5, "60.00", EDF),
+        (CURRENT, "2026-03-12", "45.00", "CRDT", "VIR SEPA Leboncoin"),
+    )
+
+    detail = real_cashflow_month(session, USER, master_key, "2026-03", today=TODAY)
+    totals = detail.totals
+    assert (totals.income, totals.recurring_income, totals.one_off_income) == (
+        Decimal("1425.71"), Decimal("1380.71"), Decimal("45.00"),
+    )
+    # The payments keep their own split.
+    assert (totals.recurring, totals.one_off) == (Decimal("60.00"), Decimal("0.00"))
+    assert [(s.amount, s.count) for s in detail.recurring_income] == [(Decimal("1380.71"), 1)]
+    assert [s.amount for s in detail.recurring] == [Decimal("60.00")]
+
+    ledger = build_ledger(session, USER, master_key)
+    income_rows = [
+        row for row in ledger.rows
+        if row.recurring is not None and ledger.recurring[row.recurring].direction is RecurringDirection.INCOME
+    ]
+    assert sum(row.signed for row in income_rows if f"{row.day:%Y-%m}" == "2026-03") == totals.recurring_income
+    year = real_cashflow_year(session, USER, master_key, 2026, today=TODAY)
+    assert all(m.recurring_income + m.one_off_income == m.income for m in year.months)
+
+
+def test_a_parent_s_allowance_asks_once_its_flow_question_is_answered(session: Session, master_key: str):
+    _allowance(session, master_key)
+
+    [stored] = _recurring(session, master_key)
+    assert (stored.direction, stored.state, stored.question) == ("income", "candidate", False)
+
+    last = next(tx for tx in _month_items(session, master_key, "2026-03") if tx.label == ALLOWANCE)
+    set_transaction_type(session, USER, master_key, last.id, Type.INCOME, TypeScope.LABEL)
+
+    [stored] = _recurring(session, master_key)
+    assert stored.question
+    carrier = next(tx for tx in _month_items(session, master_key, "2026-03") if tx.id == stored.carrier)
+    assert carrier.recurring_question.direction is RecurringDirection.INCOME
+    decided = decide(session, USER, master_key, stored.carrier, RecurringDecisionKind.CONFIRM)
+    assert (decided.direction, decided.state) == (RecurringDirection.INCOME, RecurringState.CONFIRMED)
+    tagged = next(tx for tx in _month_items(session, master_key, "2026-03") if tx.id == stored.carrier)
+    assert tagged.recurring.direction is RecurringDirection.INCOME
+
+
+def test_what_the_income_brings_and_what_is_still_expected_this_month(session: Session, master_key: str):
+    today = date(2026, 4, 9)
+    _ops(
+        session, master_key,
+        *_months(CURRENT, "2025-08", 8, 28, "1380.71", SALARY, "CRDT"),
+        *_months(CURRENT, "2025-08", 8, 5, "60.00", EDF),
+    )
+    _synced(session, master_key, CURRENT, today)
+
+    year = real_cashflow_year(session, USER, master_key, 2026, today=today)
+    assert (year.running_recurring, year.running_recurring_income) == (Decimal("60.00"), Decimal("1380.71"))
+    current = real_cashflow_current(session, USER, master_key, today=today)
+    assert [(due.date, due.amount) for due in current.upcoming_income] == [(date(2026, 4, 28), Decimal("1380.71"))]
+    assert current.upcoming_income_amount == Decimal("1380.71")
+    # Expected income never joins what is still to be spent.
+    assert [due.amount for due in current.upcoming] == [Decimal("60.00")]
+
+
+def test_an_income_takes_the_natures_of_income_only(session: Session, master_key: str):
+    _ops(session, master_key, *_months(CURRENT, "2025-08", 8, 28, "1380.71", SALARY, "CRDT"))
+    [item] = list_recurring(session, USER, master_key, today=TODAY, direction=RecurringDirection.INCOME).items
+    decided = decide(session, USER, master_key, item.transaction_id, RecurringDecisionKind.CONFIRM)
+
+    assert update(session, USER, master_key, decided.id, {"nature": RecurringNature.SALARY}).nature is RecurringNature.SALARY
+    with pytest.raises(NatureMismatchError):
+        update(session, USER, master_key, decided.id, {"nature": RecurringNature.HOUSING})
+
+
+def test_a_payment_and_an_income_are_never_merged(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        *_months(CURRENT, "2025-08", 8, 28, "1380.71", SALARY, "CRDT"),
+        *_months(CURRENT, "2025-08", 8, 5, "60.00", EDF),
+    )
+    [salary] = list_recurring(session, USER, master_key, today=TODAY, direction=RecurringDirection.INCOME).items
+    [edf] = list_recurring(session, USER, master_key, today=TODAY).items
+    decided = decide(session, USER, master_key, salary.transaction_id, RecurringDecisionKind.CONFIRM)
+
+    with pytest.raises(DirectionMismatchError):
+        merge(session, USER, master_key, decided.id, other_transaction_id=edf.transaction_id)
+
+
+def test_a_refused_income_past_the_threshold_waits_to_be_sorted(session: Session, master_key: str):
+    # « Pas un revenu récurrent » says nothing of how it counts: past the
+    # threshold, its credits keep their flow question in « À trier ».
+    _allowance(session, master_key)
+    _ops(session, master_key, *_months(CURRENT, "2025-08", 8, 10, "9.00", "VIR SEPA MANGOPAY REMBOURSEMENT", "CRDT"))
+    for stored in _recurring(session, master_key):
+        decide(session, USER, master_key, stored.carrier, RecurringDecisionKind.REFUSE)
+
+    assert {s.state for s in _recurring(session, master_key)} <= {"refused"}
+    queue = review_queue(session, USER, master_key)
+    flows = {q.transaction.label: q.operation_count for q in queue.questions if q.kind.value == "flow"}
+    assert flows == {ALLOWANCE: 10}

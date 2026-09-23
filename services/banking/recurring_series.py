@@ -1,7 +1,8 @@
 """
-The recurring payments of a user, derived on each rebuild of the transfer patterns:
-the series `recurrence.py` finds in their debits, with what the user said of
-them (`recurring_decisions.py`) laid over.
+The recurring payments and recurring income of a user, derived on each rebuild
+of the transfer patterns: the series `recurrence.py` finds in their debits and
+in their credits, with what the user said of them (`recurring_decisions.py`)
+laid over. A decision holds one direction, and only ever meets series of it.
 
 Called by `flows.transfer_patterns` with the operations it already read and
 typed, so that this module reads no row and imports no reader: movements in,
@@ -24,7 +25,7 @@ from datetime import date
 from decimal import Decimal
 from typing import NamedTuple
 
-from dtos.banking import BankTransferStatus, CashflowType, OperationType
+from dtos.banking import BankTransferStatus, CashflowType, OperationType, RecurringDirection
 from services.banking import recurrence
 from services.banking.cashflow_types import CANCELLATIONS, TRANSFERS
 from services.banking.label_groups import group_name
@@ -36,7 +37,7 @@ from services.banking.merchants import (
     same_merchant,
 )
 from services.banking.recurrence import CADENCE, Confidence, RecurrenceOp, Series
-from services.banking.recurring_decisions import CONFIRMED, REFUSED, Decision
+from services.banking.recurring_decisions import CONFIRMED, REFUSED, Decision, kind_of
 from services.banking.transfer_patterns import (
     CANCELLED,
     EXTRA,
@@ -120,22 +121,23 @@ def derive(
     debit_ops = [ops[m.index] for m in debits]
     credit_ops = [ops[m.index] for m in credits]
 
-    detection = recurrence.detect(debit_ops)
-    held = []
-    for series in detection.series:
-        features = recurrence.features(series, detection)
-        level = recurrence.confidence(series, features)
-        held.append(_Held(series, confidence=level, unasked=recurrence.counted_unasked(series, level, features)))
+    held = _held(debit_ops, CashflowType.EXPENSE) + _held(credit_ops, CashflowType.INCOME)
     refs = {hash_index(m.uuid, master_key): m.uuid for m in debits + credits}
     covered = {decision.uuid: {refs[ref] for ref in decision.anchors | decision.includes if ref in refs} for decision in decisions}
     _attach_by_anchors(held, decisions, covered)
     _attach_by_identity(held, decisions, keys, by_uuid, idf, account_uuids)
-    held += _seeds(held, decisions, covered, ops, by_uuid, debit_ops)
+    held += _seeds(held, decisions, covered, ops, by_uuid, {CashflowType.EXPENSE: debit_ops, CashflowType.INCOME: credit_ops})
     grouped = _merged(held)
     _corrections(grouped, decisions, ops, by_uuid, refs)
 
     derived = Derived()
-    taken_refunds: set[str] = set()
+    # A credit an income holds is no refund of a payment, unless the user said
+    # that income is none.
+    taken_refunds: set[str] = {
+        op.id for entry in grouped
+        if entry.series.kind is CashflowType.INCOME and (entry.decision is None or entry.decision.status != REFUSED)
+        for op in entry.series.regular + entry.series.extras
+    }
     for entry in grouped:
         stored = _stored(entry, keys, heads, by_uuid, account_uuids, credit_ops, taken_refunds, asking)
         if stored is None:
@@ -151,9 +153,19 @@ def derive(
     return derived
 
 
+def _held(ops: list[RecurrenceOp], kind: CashflowType) -> list[_Held]:
+    detection = recurrence.detect(ops, kind)
+    held = []
+    for series in detection.series:
+        features = recurrence.features(series, detection)
+        level = recurrence.confidence(series, features)
+        held.append(_Held(series, confidence=level, unasked=recurrence.counted_unasked(series, level, features)))
+    return held
+
+
 def annual_estimate(stored: StoredRecurring) -> Decimal:
-    """What it costs a year at its current price: a recurring payment billed every
-    four weeks is paid thirteen times."""
+    """What it costs, or brings, a year at its current amount: a recurring
+    payment billed every four weeks is paid thirteen times."""
     return stored.amount * CADENCE[stored.cadence].per_year
 
 
@@ -164,7 +176,7 @@ def occurrence_count(stored: StoredRecurring) -> int:
 def _eligible(movements: list[Movement]) -> tuple[list[Movement], list[Movement]]:
     """Final debits outside internal transfers and cash withdrawals, a debit
     its refund or rejection cancelled included for its rhythm; unpaired final
-    credits, for refunds."""
+    credits, for income and for refunds."""
     debits, credits = [], []
     for m in movements:
         if not m.is_final or m.day is None or m.amount <= 0:
@@ -193,6 +205,8 @@ def _attach_by_anchors(held: list[_Held], decisions: list[Decision], covered: di
         ids = {op.id for op in entry.series.regular + entry.series.extras}
         best: tuple[int, int] | None = None
         for order, decision in enumerate(decisions):
+            if kind_of(decision) is not entry.series.kind:
+                continue
             forced = CADENCE.get(decision.cadence) if decision.cadence else None
             if forced is not None and not recurrence.compatible(forced, entry.series.cadence):
                 continue
@@ -222,6 +236,8 @@ def _attach_by_identity(
             series = entry.series
             if entry.decision is not None or cadence is None or not recurrence.compatible(cadence, series.cadence):
                 continue
+            if kind_of(decision) is not series.kind:
+                continue
             accounts = {account_uuids.get(op.account) for op in series.regular}
             if not accounts & set(identity.accounts):
                 continue
@@ -239,28 +255,32 @@ def _seeds(
     covered: dict[str, set[str]],
     ops: dict[int, RecurrenceOp],
     by_uuid: dict[str, Movement],
-    debit_ops: list[RecurrenceOp],
+    sides: dict[CashflowType, list[RecurrenceOp]],
 ) -> list[_Held]:
     """A confirmed decision no series carries grows one from its latest
-    operation: an operation marked by hand, or a series the detection no
-    longer finds."""
+    operation of its direction: an operation marked by hand, or a series the
+    detection no longer finds."""
     attached = {entry.decision.uuid for entry in held if entry.decision}
     in_series = {op.id for entry in held if entry.decision or entry.confidence for op in entry.series.regular + entry.series.extras}
-    pool = [op for op in debit_ops if op.id not in in_series]
+    pools = {kind: [op for op in side if op.id not in in_series] for kind, side in sides.items()}
     seeds = []
     for decision in decisions:
         if decision.status != CONFIRMED or decision.uuid in attached:
             continue
+        kind = kind_of(decision)
         own = sorted(
-            (ops[by_uuid[uuid].index] for uuid in covered[decision.uuid] if not by_uuid[uuid].is_credit),
+            (
+                ops[by_uuid[uuid].index] for uuid in covered[decision.uuid]
+                if by_uuid[uuid].is_credit is (kind is CashflowType.INCOME)
+            ),
             key=lambda op: (op.day, op.id),
         )
         if not own:
             continue
         cadence = CADENCE.get(decision.cadence or decision.identity.cadence)
-        series = recurrence.seed_series(own[-1], pool, cadence)
+        series = recurrence.seed_series(own[-1], pools[kind], cadence, kind)
         taken = {op.id for op in series.regular}
-        pool = [op for op in pool if op.id not in taken]
+        pools[kind] = [op for op in pools[kind] if op.id not in taken]
         seeds.append(_Held(series, decision))
     return seeds
 
@@ -287,6 +307,7 @@ def _merged(held: list[_Held]) -> list[_Held]:
             variable=any(e.series.variable for e in entries),
             merchants=set().union(*(e.series.merchants for e in entries)),
             links=[link for e in entries for link in e.series.links],
+            kind=latest.series.kind,
         )
         series.sort()
         confidences = [e.confidence for e in entries if e.confidence]
@@ -336,29 +357,36 @@ def _stored(
     asking: set[int],
 ) -> StoredRecurring | None:
     series, decision = entry.series, entry.decision
-    manual_debits = [op for op in entry.manual if not by_uuid[op.id].is_credit]
+    income = series.kind is CashflowType.INCOME
+    # Attached by hand on the series' own side, or on the other: a refund of a
+    # payment, a sum taken back from an income.
+    own_side = [op for op in entry.manual if by_uuid[op.id].is_credit is income]
+    other_side = [op for op in entry.manual if by_uuid[op.id].is_credit is not income]
     if not series.regular:
-        if not manual_debits:
+        if not own_side:
             return None
-        series.regular = manual_debits
-        manual_debits = []
+        series.regular = own_side
+        own_side = []
     if decision is None:
         state = AUTO if entry.unasked else CANDIDATE
     else:
         state = CONFIRMED if decision.status == CONFIRMED else REFUSED
     counted = state in (AUTO, CONFIRMED)
 
-    refunds = [
+    # An income is never refunded on its own: a payer the user also pays
+    # (a parent, a friend) would read as taking it back.
+    linked = [] if income else [
         op for op in recurrence.linked_refunds(series, credit_ops, _refunding(series, heads))
         if op.id not in taken_refunds and op.id not in entry.excluded
-    ] + [op for op in entry.manual if by_uuid[op.id].is_credit]
+    ]
+    refunds = linked + other_side
     taken_refunds.update(op.id for op in refunds)
 
     members = [
-        _member(by_uuid[op.id], CANCELLED if op.cancelled else REGULAR) for op in series.regular
-    ] + [_member(by_uuid[op.id], EXTRA) for op in series.extras] + [
-        _member(by_uuid[op.id], MANUAL) for op in manual_debits
-    ] + [_member(by_uuid[op.id], REFUND) for op in refunds]
+        _member(by_uuid[op.id], CANCELLED if op.cancelled else REGULAR, series.kind) for op in series.regular
+    ] + [_member(by_uuid[op.id], EXTRA, series.kind) for op in series.extras] + [
+        _member(by_uuid[op.id], MANUAL, series.kind) for op in own_side
+    ] + [_member(by_uuid[op.id], REFUND, series.kind) for op in refunds]
 
     carrier = recurrence.carrier(series)
     question = (
@@ -369,6 +397,7 @@ def _stored(
     return StoredRecurring(
         key=decision.uuid if decision else series.first.id,
         decision=decision.uuid if decision else None,
+        direction=(RecurringDirection.INCOME if income else RecurringDirection.EXPENSE).value,
         state=state,
         confidence=entry.confidence.value if entry.confidence else None,
         cadence=series.cadence.name,
@@ -404,15 +433,15 @@ def _refunding(series: Series, heads: dict[int, set[str]]) -> set[int]:
     return set(series.merchants) | {m for m, first in heads.items() if first & own}
 
 
-def _member(m: Movement, role: str) -> RecurringMember:
+def _member(m: Movement, role: str, kind: CashflowType) -> RecurringMember:
     return RecurringMember(
-        m.uuid, role, m.day, m.amount, m.is_credit, m.type is CashflowType.EXPENSE,
+        m.uuid, role, m.day, m.amount, m.is_credit, m.type is kind,
         m.label if role == REFUND else None,
     )
 
 
 def _names(series: Series, by_uuid: dict[str, Movement]) -> tuple[str, list[tuple[date, str, str]]]:
-    """The name its last debit's merchant goes by, and each time the series
+    """The name its last operation's merchant goes by, and each time the series
     moved on to a merchant it had not been paid under before."""
     occurrences: dict[int, list[tuple[date | None, str | None]]] = defaultdict(list)
     order: list[int] = []

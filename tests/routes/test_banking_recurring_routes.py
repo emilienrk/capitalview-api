@@ -169,9 +169,25 @@ def test_an_annual_charge_seen_once_is_marked_by_hand(client, session, master_ke
     )
 
 
-def test_only_an_expense_debit_can_be_marked(client, session, master_key):
+def test_a_credit_counted_as_income_is_marked_as_a_recurring_income(client, session, master_key):
     _ops(session, master_key, (CURRENT, "2026-03-10", "1850.00", "CRDT", "VIR SEPA VILMORIN SALAIRE"))
     [operation] = _ids(client, "2026-03").values()
+
+    response = client.post("/banking/recurring", json={"transaction_id": operation})
+
+    assert response.status_code == 201
+    assert (response.json()["direction"], response.json()["state"]) == ("income", "confirmed")
+    # Listed with the income, never among the payments.
+    assert _items(client) == []
+    [item] = client.get("/banking/recurring?direction=income").json()["items"]
+    assert item["id"] == response.json()["id"]
+
+
+def test_a_credit_counted_as_an_expense_cannot_be_marked(client, session, master_key):
+    _ops(session, master_key, (CURRENT, "2026-03-10", "25.00", "CRDT", "AVOIR AMAZON EU"))
+    [operation] = _ids(client, "2026-03").values()
+    client.put(f"/banking/transactions/{operation}/type", json={"type": "EXPENSE", "scope": "operation"})
+
     assert client.post("/banking/recurring", json={"transaction_id": operation}).status_code == 409
 
 
@@ -291,3 +307,25 @@ def test_a_refund_detached_from_one_recurring_payment_stays_another_s(client, se
 
     refunds = {item["key"]: [r["id"] for r in item["refunds"]["items"]] for item in _items(client)}
     assert refunds[decided["id"]] == [] and [refund["id"]] in refunds.values()
+
+
+SALARY = "VIR SEPA VILMORIN & CIE SALAIRE"
+
+
+def test_income_is_listed_apart_filed_as_income_and_never_merged_with_a_payment(client, session, master_key):
+    _ops(
+        session, master_key,
+        *_months(CURRENT, "2025-06", 8, 28, "1380.71", SALARY, "CRDT"),
+        *_months(CURRENT, "2025-06", 8, 5, "60.00", EDF),
+    )
+    [edf] = _items(client)
+    response = client.get("/banking/recurring", params={"direction": "income"})
+    assert response.status_code == 200
+    [salary] = response.json()["items"]
+    assert (response.json()["direction"], salary["direction"], edf["direction"]) == ("income", "income", "expense")
+
+    decided = _decide(client, salary["transaction_id"], "confirm")
+    assert client.patch(f"/banking/recurring/{decided['id']}", json={"nature": "salary"}).json()["nature"] == "salary"
+    assert client.patch(f"/banking/recurring/{decided['id']}", json={"nature": "housing"}).status_code == 422
+    merged = client.post(f"/banking/recurring/{decided['id']}/merge", json={"other_transaction_id": edf["transaction_id"]})
+    assert merged.status_code == 409
