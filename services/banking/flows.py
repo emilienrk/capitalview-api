@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass
 from functools import lru_cache
 from datetime import date, timedelta
@@ -41,6 +42,8 @@ from dtos.banking import (
     BankReviewKind,
     BankReviewQueue,
     BankReviewYear,
+    BankRecurringQuestion,
+    BankRecurringTag,
     BankTransactionItem,
     BankTransactionsResponse,
     BankTransferDecisionKind,
@@ -53,9 +56,10 @@ from dtos.banking import (
     TypeSource,
 )
 from models.bank import BankAccount
-from models.banking import BankTransaction
+from models.banking import BankAccountLink, BankTransaction
 from models.currency import BASE_CURRENCY
 from models.enums import BankAccountType
+from services.banking import recurring_series
 from services.banking import transfer_patterns as stored_patterns
 from services.banking.cashflow_types import Resolution, resolve_type
 from services.banking.contributions import (
@@ -67,6 +71,7 @@ from services.banking.contributions import (
 )
 from services.banking.linking import readable_account_bidxs
 from services.banking.operation_types import operation_type
+from services.banking.recurring_decisions import load_decisions as load_recurring_decisions
 from services.banking.transactions import (
     CREDIT,
     FINAL_STATUSES,
@@ -475,6 +480,16 @@ def _user_accounts(session: Session, user_uuid: str, master_key: str) -> _Accoun
     return _Accounts(by_bidx, readable_account_bidxs(session, user_bidx, master_key))
 
 
+def _links(session: Session, user_uuid: str, master_key: str) -> dict[str, date]:
+    """Each linked account's last successful sync, by its blind index."""
+    return {
+        link.bank_account_uuid_bidx: link.last_synced_at
+        for link in session.exec(
+            select(BankAccountLink).where(BankAccountLink.user_uuid_bidx == hash_index(user_uuid, master_key))
+        ).all()
+    }
+
+
 def _scope(accounts: _Accounts, account_id: str | None, master_key: str) -> list[str]:
     """The accounts a reader asked about, among those it may read."""
     if account_id is None:
@@ -664,6 +679,7 @@ def transfer_patterns(
         for i, m in enumerate(movements)
     }
     backfilled = False
+    kinds: list[OperationType] = []
     for i, movement in enumerate(movements):
         row = movement.row
         changed = False
@@ -673,7 +689,8 @@ def transfer_patterns(
             changed = True
         # Every row, not only those stored before types existed: this is how a
         # change to the lexicon reaches the history.
-        kind = operation_type(labels[i]).value
+        kinds.append(operation_type(labels[i]))
+        kind = kinds[-1].value
         if row.operation_type_enc is None or decrypt_data(row.operation_type_enc, master_key) != kind:
             row.operation_type_enc = encrypt_data(kind, master_key)
             changed = True
@@ -748,10 +765,32 @@ def transfer_patterns(
     resolutions = [
         _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
     ]
+    asking_groups = _asking_groups(movements, transfer_legs, labels, resolutions)
+    heavy = [members for members in asking_groups if _heavy(movements, members)]
+    derived = recurring_series.derive(
+        [
+            _recurring_movement(index, movement, labels[index], transfer_legs.get(index), resolutions[index],
+                                   kinds[index], master_key)
+            for index, movement in enumerate(movements)
+        ],
+        load_recurring_decisions(session, user_uuid, master_key),
+        {bidx: account.uuid for bidx, account in accounts.by_bidx.items()},
+        {index for members in heavy for index in members},
+        master_key,
+    )
+    patterns.recurring = derived.recurring
+    patterns.recurring_questions = derived.questions
+    # A refund of a counted recurring payment asks whatever it weighs: its answer
+    # moves the recurring payment's own figure.
+    forced = [
+        members for members in asking_groups
+        if not _heavy(movements, members) and derived.refunds.intersection(members)
+    ]
+
     flow_questions: dict[str, int] = defaultdict(int)
     flow_open: dict[str, int] = defaultdict(int)
     flow_open_amount: dict[str, Decimal] = defaultdict(Decimal)
-    for members in _flow_groups(movements, transfer_legs, labels, resolutions):
+    for members in heavy + forced:
         # Movements come sorted by day: the last one is the most recent.
         carrier = movements[members[-1]]
         patterns.flow_carriers[carrier.row.uuid] = FlowCarrier(
@@ -781,18 +820,57 @@ def _flow_groups(
     transfer_legs: dict[int, _TransferLeg],
     labels: dict[int, str | None],
     resolutions: list[Resolution],
+    carriers: Collection[str] = frozenset(),
 ) -> list[list[int]]:
     """The labels only the user can type, each as its operations in date order:
-    one group per account, direction and signature, heavy enough to ask."""
+    one group per account, direction and signature, heavy enough to ask — or
+    carrying a question the rebuild asked all the same (`carriers`, the stored
+    `TransferPatterns.flow_carriers`)."""
+    return [
+        members for members in _asking_groups(movements, transfer_legs, labels, resolutions)
+        if _heavy(movements, members) or movements[members[-1]].row.uuid in carriers
+    ]
+
+
+def _asking_groups(
+    movements: list[_Movement],
+    transfer_legs: dict[int, _TransferLeg],
+    labels: dict[int, str | None],
+    resolutions: list[Resolution],
+) -> list[list[int]]:
     groups: dict[tuple[str, bool, str], list[int]] = defaultdict(list)
     for index, movement in enumerate(movements):
         label = labels[index]
         if _asks_flow(movement, transfer_legs.get(index), label, resolutions[index]):
             groups[(movement.account_bidx, movement.is_credit, label_signature(label))].append(index)
-    return [
-        members for members in groups.values()
-        if sum((movements[i].amount for i in members), Decimal("0")) >= FLOW_QUESTION_MIN_AMOUNT
-    ]
+    return list(groups.values())
+
+
+def _heavy(movements: list[_Movement], members: list[int]) -> bool:
+    return sum((movements[i].amount for i in members), Decimal("0")) >= FLOW_QUESTION_MIN_AMOUNT
+
+
+def _recurring_movement(
+    index: int,
+    movement: _Movement,
+    label: str | None,
+    leg: _TransferLeg | None,
+    resolution: Resolution,
+    kind: OperationType,
+    master_key: str,
+) -> recurring_series.Movement:
+    # The card payment's own date keeps a recurring payment's rhythm through the
+    # zero to six days a bank takes to book it: read for the debits only.
+    paid_on = None
+    stored = movement.row.transaction_date_enc
+    if stored and movement.is_final and not movement.is_credit:
+        paid_on = date.fromisoformat(decrypt_data(stored, master_key))
+    return recurring_series.Movement(
+        index=index, uuid=movement.row.uuid, account=movement.account_bidx, period=movement.period,
+        day=movement.day, paid_on=paid_on, amount=movement.amount, currency=movement.currency,
+        is_credit=movement.is_credit, is_final=movement.is_final, label=label,
+        leg=leg.status if leg else None, type=resolution.type, method=kind,
+    )
 
 
 def _aggregate(
@@ -1010,6 +1088,10 @@ def _item_builder(
         resolution = _filed(movements, transfer_legs, index, label, filing)
         settles = filing.patterns.flow_carriers.get(row.uuid)
         asks = settles is not None and _asks_flow(movement, leg, label, resolution)
+        stored, member = filing.patterns.recurring_of(row.uuid) or (None, None)
+        refunds_recurring = (
+            stored is not None and stored.counted and member.role == stored_patterns.REFUND
+        )
         return BankTransactionItem(
             id=row.uuid,
             account_id=accounts.by_bidx[movement.account_bidx].uuid,
@@ -1034,11 +1116,33 @@ def _item_builder(
                 choices=CREDIT_CHOICES if movement.is_credit else DEBIT_CHOICES,
                 operation_count=settles.count,
                 amount=settles.amount,
+                suggested=CashflowType.EXPENSE if refunds_recurring else None,
+                recurring_name=stored.name if refunds_recurring else None,
             ) if asks else None,
             contribution=_contribution_item(filing.contributions.get(index)),
+            recurring=BankRecurringTag(
+                id=stored.decision, key=stored.key, name=stored.name,
+                cadence=stored.cadence, role=member.role, state=stored.state,
+            ) if stored is not None and stored.counted else None,
+            recurring_question=(
+                _recurring_question(stored)
+                if stored is not None and stored.question and stored.carrier == row.uuid else None
+            ),
         )
 
     return item
+
+
+def _recurring_question(stored: stored_patterns.StoredRecurring) -> BankRecurringQuestion:
+    return BankRecurringQuestion(
+        cadence=stored.cadence,
+        amount=stored.amount,
+        variable=stored.variable,
+        occurrence_count=recurring_series.occurrence_count(stored),
+        since=stored.first,
+        annual_estimate=recurring_series.annual_estimate(stored),
+        renamed_from=[before for _, before, _ in stored.renamed],
+    )
 
 
 def _contribution_item(match: Match | None) -> BankContributionMatch | None:
@@ -1096,7 +1200,9 @@ def list_month_transactions(
         net=month.net,
         internal_transfers_excluded=totals.transfers_count,
         internal_transfers_amount=totals.transfers_amount,
-        transfer_questions=totals.questions_count + sum(1 for tx in transactions if tx.flow_question),
+        transfer_questions=totals.questions_count + sum(
+            1 for tx in transactions if tx.flow_question or tx.recurring_question
+        ),
         reversals_excluded=totals.reversals_count,
         reversals_amount=totals.reversals_amount,
         pending_count=totals.pending_count,
@@ -1125,10 +1231,18 @@ def review_queue(
     )
 
     questions: list[BankReviewItem] = []
+    recurring = {s.carrier: s for s in pairing.patterns.recurring if s.question}
     for index, movement in enumerate(movements):
         leg = transfer_legs.get(index)
         carrier = pairing.patterns.flow_carriers.get(movement.row.uuid)
-        if carrier is not None:
+        stored = recurring.get(movement.row.uuid)
+        if stored is not None:
+            questions.append(BankReviewItem(
+                kind=BankReviewKind.RECURRING, transaction=item(index),
+                amount=recurring_series.annual_estimate(stored),
+                operation_count=recurring_series.occurrence_count(stored),
+            ))
+        elif carrier is not None:
             built = item(index)
             if built.flow_question:
                 questions.append(BankReviewItem(
@@ -1139,20 +1253,25 @@ def review_queue(
                 kind=BankReviewKind.TRANSFER, transaction=item(index), amount=movement.amount, operation_count=2,
             ))
 
+    # A recurring payment's answer moves no total: counted in, never added up.
+    def moves(question: BankReviewItem) -> Decimal:
+        return Decimal("0") if question.kind is BankReviewKind.RECURRING else question.amount
+
     years: dict[int, BankReviewYear] = {}
     for question in questions:
         day = question.transaction.operation_date
         if day is None:
             continue
         entry = years.setdefault(day.year, BankReviewYear(year=day.year, amount=Decimal("0"), count=0))
-        entry.amount += question.amount
+        entry.amount += moves(question)
         entry.count += 1
     if year is not None:
         questions = [q for q in questions if q.transaction.operation_date and q.transaction.operation_date.year == year]
     questions.sort(key=lambda q: (-q.amount, -(q.transaction.operation_date or date.min).toordinal()))
     return BankReviewQueue(
-        total_amount=sum((q.amount for q in questions), Decimal("0")),
+        total_amount=sum((moves(q) for q in questions), Decimal("0")),
         total_count=len(questions),
+        recurring_count=sum(1 for q in questions if q.kind is BankReviewKind.RECURRING),
         years=sorted(years.values(), key=lambda entry: -entry.year),
         questions=questions,
     )
@@ -1226,7 +1345,7 @@ def list_flow_group(
         _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
     ]
 
-    groups = _flow_groups(movements, transfer_legs, labels, resolutions)
+    groups = _flow_groups(movements, transfer_legs, labels, resolutions, pairing.patterns.flow_carriers)
     members = next(
         (group for group in groups if any(movements[i].row.uuid == transaction_id for i in group)),
         [],

@@ -4,6 +4,7 @@ each operation counted by the type the Opérations list shows.
 """
 from datetime import date
 from decimal import Decimal
+from statistics import median
 
 import pytest
 from sqlmodel import Session
@@ -11,7 +12,9 @@ from sqlmodel import Session
 from dtos.banking import CashflowType, TypeScope
 from models.bank import BankAccount
 from services.banking.flows import list_month_transactions, set_transaction_type
-from services.banking.real_cashflow import PeriodNotCompletedError, real_cashflow_month, real_cashflow_year
+from services.banking.real_cashflow import (
+    PeriodNotCompletedError, _per_month, _Tally, _totals, real_cashflow_month, real_cashflow_year,
+)
 from services.encryption import encrypt_data
 from tests.services.test_banking_flows import USER, _link, _raw, _store
 from tests.services.test_banking_transfer_patterns import _top_up
@@ -62,6 +65,19 @@ def test_the_current_month_is_left_out(session: Session, master_key: str):
     assert _figures(year.totals) == {"expenses": Decimal("40.00")}
     with pytest.raises(PeriodNotCompletedError):
         real_cashflow_month(session, USER, master_key, "2026-04", today=TODAY)
+
+
+def test_a_median_month_one_off_is_a_month_s_not_a_difference_of_medians():
+    months = []
+    for expenses, recurring in (("100", "0"), ("100", "100"), ("300", "50")):
+        tally = _Tally()
+        tally.totals["expenses"], tally.totals["recurring"] = Decimal(expenses), Decimal(recurring)
+        months.append(_totals(tally))
+
+    monthly = _per_month(months, median)
+
+    # 100 - 50 would describe no month at all; the one-off months are 100, 0 and 250.
+    assert (monthly.expenses, monthly.recurring, monthly.one_off) == (Decimal("100"), Decimal("50"), Decimal("100"))
 
 
 def test_a_transfer_to_a_livret_is_set_aside_not_spent(session: Session, master_key: str):

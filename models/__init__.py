@@ -26,6 +26,7 @@ from .banking import (
     BankTransferDecision,
     BankTransferPatterns,
     BankTypeRule,
+    BankRecurringSeries,
 )
 from .stock import StockAccount, StockTransaction
 from .crypto import CryptoAccount, CryptoTransaction
@@ -64,6 +65,7 @@ __all__ = [
     "BankTransferDecision",
     "BankTransferPatterns",
     "BankTypeRule",
+    "BankRecurringSeries",
     "StockAccount",
     "StockTransaction",
     "CryptoAccount",
