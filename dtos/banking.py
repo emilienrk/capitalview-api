@@ -763,11 +763,6 @@ class BankRecurringRefunds(BaseModel):
     items: list[BankRecurringRefund]
 
 
-class BankRecurringYearPaid(BaseModel):
-    year: int
-    amount: Decimal
-
-
 class BankRecurringItem(BaseModel):
     # The user's decision; None for a series never decided.
     id: str | None
@@ -802,9 +797,6 @@ class BankRecurringItem(BaseModel):
     extra_count: int
     accounts: list[str]
     payment_method: OperationType
-    # What it took each year, extras in, cancelled debits out: the years a
-    # rent was paid, whatever the landlord was called then.
-    paid_by_year: list[BankRecurringYearPaid] = []
     price_changes: list[BankRecurringPriceChange] = []
     episodes: list[BankRecurringEpisode] = []
     renamed: list[BankRecurringRename] = []

@@ -309,29 +309,6 @@ def test_the_month_says_what_each_recurring_payment_is_filed_as(session: Session
     assert all(m.recurring <= m.expenses for m in year.months)
 
 
-def test_what_a_recurring_payment_took_year_by_year(session: Session, master_key: str):
-    # Two landlords, one roof: each keeps its own years, the nature the user
-    # filed joins them.
-    _ops(
-        session, master_key,
-        *_months(CURRENT, "2025-07", 12, 3, "380.00", "VIR SEPA Frederic Durand"),
-        *_months(CURRENT, "2026-07", 3, 3, "530.00", "VIR SEPA TRANSALP'DOME S.A.S."),
-    )
-    for item in list_recurring(session, USER, master_key, today=TODAY).items:
-        assert item.nature is None
-        decided = decide(session, USER, master_key, item.transaction_id, RecurringDecisionKind.CONFIRM)
-        update(session, USER, master_key, decided.id, {"nature": RecurringNature.HOUSING})
-
-    items = {item.name: item for item in list_recurring(session, USER, master_key, today=TODAY).items}
-    housing = [item for item in items.values() if item.nature is RecurringNature.HOUSING]
-    assert len(housing) == 2
-    by_year: dict[int, Decimal] = {}
-    for item in housing:
-        for paid in item.paid_by_year:
-            by_year[paid.year] = by_year.get(paid.year, Decimal("0")) + paid.amount
-    assert by_year == {2025: Decimal("2280.00"), 2026: Decimal("3870.00")}
-
-
 def test_the_month_lists_what_each_recurring_payment_weighed(session: Session, master_key: str):
     _ops(
         session, master_key,
