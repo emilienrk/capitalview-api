@@ -1,5 +1,7 @@
 """Data export and account deletion from the security settings."""
 
+from decimal import Decimal
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import select
@@ -13,6 +15,7 @@ from models.banking import (
     BankAccountLink,
     BankAuthorization,
     BankSession,
+    BankRecurringSeries,
     BankTransaction,
     BankTransferDecision,
     BankTransferPatterns,
@@ -81,6 +84,7 @@ BIDX_MODELS = (
     BankTransferDecision,
     BankTransferPatterns,
     BankTypeRule,
+    BankRecurringSeries,
 )
 FK_MODELS = (
     (ApiToken, "user_uuid"),
@@ -516,6 +520,30 @@ def test_export_includes_type_rules_in_clear(session):
     ] == [("emilien inst roukine vir", "acc-1", False, "SAVING")]
 
 
+def _recurring(session, user_uuid: str, bank_account_uuid: str, master_key: str) -> None:
+    from services.banking.recurring_decisions import CONFIRMED, Decision, Identity, save_decision
+
+    save_decision(session, user_uuid, master_key, Decision(
+        uuid="sub-1", status=CONFIRMED, anchors=frozenset({hash_index("tx-1", master_key)}),
+        identity=Identity(("edf", "clients"), (bank_account_uuid,), "monthly", Decimal("60.00"), "DIRECT_DEBIT"),
+        name="Électricité",
+    ))
+
+
+def test_export_includes_recurring_decisions_without_their_anchors(session):
+    client = TestClient(app)
+    access_token, master_key, user_uuid = _register(client, session, "recurring_export@example.com")
+    _recurring(session, user_uuid, "acc-1", master_key)
+
+    response = client.get("/auth/me/export", headers=_auth_headers(access_token, master_key))
+
+    assert response.status_code == 200
+    [exported] = response.json()["bank_recurring_series"]
+    assert (exported["status"], exported["name"], exported["cadence"], exported["merchant_words"],
+            exported["bank_account_ids"]) == ("confirmed", "Électricité", "monthly", ["edf", "clients"], ["acc-1"])
+    assert hash_index("tx-1", master_key) not in response.text
+
+
 def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeypatch):
     client = TestClient(app)
     access_token, master_key, user_uuid = _register(client, session, "bank_purge@example.com")
@@ -607,6 +635,7 @@ def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeyp
     )
     session.add(_type_rule(user_bidx, bank_acc_uuid, master_key))
     session.commit()
+    _recurring(session, user_uuid, bank_acc_uuid, master_key)
 
     # Track that close_session was called on the mock client
     closed_sessions = []
@@ -630,6 +659,7 @@ def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeyp
     assert before["bank_transfer_decisions"] == 1
     assert before["bank_transfer_patterns"] == 1
     assert before["bank_type_rules"] == 1
+    assert before["bank_recurring_series"] == 1
 
     # Purge
     response = client.request(
