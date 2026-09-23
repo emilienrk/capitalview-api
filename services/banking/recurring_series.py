@@ -89,6 +89,8 @@ class _Held:
     series: Series
     decision: Decision | None = None
     confidence: Confidence | None = None
+    # Counted without a question while nothing is decided.
+    unasked: bool = False
     manual: list[RecurrenceOp] = field(default_factory=list)
     # What its decision detached: never a member, not even a refund.
     excluded: set[str] = field(default_factory=set)
@@ -119,10 +121,11 @@ def derive(
     credit_ops = [ops[m.index] for m in credits]
 
     detection = recurrence.detect(debit_ops)
-    held = [
-        _Held(series, confidence=recurrence.confidence(series, recurrence.features(series, detection)))
-        for series in detection.series
-    ]
+    held = []
+    for series in detection.series:
+        features = recurrence.features(series, detection)
+        level = recurrence.confidence(series, features)
+        held.append(_Held(series, confidence=level, unasked=recurrence.counted_unasked(series, level, features)))
     refs = {hash_index(m.uuid, master_key): m.uuid for m in debits + credits}
     covered = {decision.uuid: {refs[ref] for ref in decision.anchors | decision.includes if ref in refs} for decision in decisions}
     _attach_by_anchors(held, decisions, covered)
@@ -340,7 +343,7 @@ def _stored(
         series.regular = manual_debits
         manual_debits = []
     if decision is None:
-        state = AUTO if entry.confidence is Confidence.CERTAIN else CANDIDATE
+        state = AUTO if entry.unasked else CANDIDATE
     else:
         state = CONFIRMED if decision.status == CONFIRMED else REFUSED
     counted = state in (AUTO, CONFIRMED)

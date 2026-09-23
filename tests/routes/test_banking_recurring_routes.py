@@ -18,6 +18,8 @@ from tests.services.test_banking_recurring import _months
 
 EDF = "PRLV SEPA EDF clients particuliers"
 CLAUDE = "CARTE ANTHROPIC* CLAUDE CB*0837"
+# A transfer to a person: never counted unasked, so it carries a question.
+POCKET_MONEY = "VIR SEPA MARIE DUPONT"
 
 
 @pytest.fixture(autouse=True)
@@ -94,14 +96,14 @@ def test_an_unknown_recurring_payment_is_not_found(client):
 
 
 def test_confirmed_the_next_debit_counts_without_asking_again(client, session, master_key):
-    _ops(session, master_key, *_months(CURRENT, "2026-01", 3, 2, "21.60", CLAUDE))
+    _ops(session, master_key, *_months(CURRENT, "2026-01", 3, 2, "21.60", POCKET_MONEY))
     candidate = _one(client)
     assert (candidate["state"], _questions(client)) == ("candidate", 1)
 
-    confirmed = _decide(client, candidate["transaction_id"], "confirm", name="Claude")
-    assert (confirmed["state"], confirmed["name"], _questions(client)) == ("confirmed", "Claude", 0)
+    confirmed = _decide(client, candidate["transaction_id"], "confirm", name="Argent de poche")
+    assert (confirmed["state"], confirmed["name"], _questions(client)) == ("confirmed", "Argent de poche", 0)
 
-    _ops(session, master_key, (CURRENT, "2026-04-02", "21.60", "DBIT", CLAUDE))
+    _ops(session, master_key, (CURRENT, "2026-04-02", "21.60", "DBIT", POCKET_MONEY))
     item = _one(client)
     assert (item["id"], item["state"], item["occurrence_count"]) == (confirmed["id"], "confirmed", 4)
     april = client.get("/banking/transactions?period=2026-04").json()["transactions"][0]
@@ -224,7 +226,7 @@ def test_two_recurring_payments_merge_into_one(client, session, master_key):
 
 
 def test_forgetting_a_decision_asks_again(client, session, master_key):
-    _ops(session, master_key, *_months(CURRENT, "2026-01", 3, 2, "21.60", CLAUDE))
+    _ops(session, master_key, *_months(CURRENT, "2026-01", 3, 2, "21.60", POCKET_MONEY))
     refused = _decide(client, _one(client)["transaction_id"], "refuse")
 
     assert client.delete(f"/banking/recurring/{refused['id']}").status_code == 204

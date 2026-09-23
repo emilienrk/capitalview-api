@@ -62,8 +62,23 @@ def test_a_monthly_direct_debit_is_counted_without_asking(session: Session, mast
     assert transfer_patterns(session, USER, master_key).recurring_questions == {}
 
 
-def test_three_card_payments_ask_on_the_last_one(session: Session, master_key: str):
+def test_three_card_payments_of_one_amount_count_without_asking(session: Session, master_key: str):
     _ops(session, master_key, *_months(CURRENT, "2026-01", 3, 2, "21.60", "CARTE ANTHROPIC* CLAUDE CB*0837"))
+
+    [stored] = _recurring(session, master_key)
+    assert (stored.state, stored.confidence, stored.counted, stored.question) == ("auto", "probable", True, False)
+    assert transfer_patterns(session, USER, master_key).recurring_questions == {}
+
+
+def test_a_card_payment_whose_amount_moves_still_asks(session: Session, master_key: str):
+    _ops(session, master_key, *_months(CURRENT, "2026-01", 3, 2, lambda k: f"{7 + k}.79", "CARTE OVH SAS CB*0837"))
+
+    [stored] = _recurring(session, master_key)
+    assert (stored.state, stored.variable, stored.counted, stored.question) == ("candidate", True, False, True)
+
+
+def test_three_transfers_ask_on_the_last_one(session: Session, master_key: str):
+    _ops(session, master_key, *_months(CURRENT, "2026-01", 3, 2, "21.60", POCKET_MONEY))
 
     [stored] = _recurring(session, master_key)
     assert (stored.state, stored.confidence, stored.counted) == ("candidate", "probable", False)
@@ -130,6 +145,8 @@ def test_the_rebuild_is_the_same_twice(session: Session, master_key: str):
 # ---------------------------------------------------------------------------
 
 BASIC_FIT = "PRLV SEPA BASIC FIT"
+# A transfer to a person: rent, pocket money or savings elsewhere, always asked.
+POCKET_MONEY = "VIR SEPA MARIE DUPONT"
 EDF = "PRLV SEPA EDF clients particuliers"
 EDF_NAME = "EDF clients particuliers"
 
@@ -176,7 +193,7 @@ def test_a_member_carries_its_recurring_payment_and_a_cancelled_one_counts_for_n
 
 
 def test_the_question_sits_on_the_last_debit_alone_and_counts_in_the_month(session: Session, master_key: str):
-    _ops(session, master_key, *_months(CURRENT, "2026-01", 3, 2, "21.60", "CARTE ANTHROPIC* CLAUDE CB*0837"))
+    _ops(session, master_key, *_months(CURRENT, "2026-01", 3, 2, "21.60", POCKET_MONEY))
     [february] = _month_items(session, master_key, "2026-02")
     [march] = _month_items(session, master_key, "2026-03")
     assert february.recurring_question is None and february.recurring is None
@@ -193,7 +210,7 @@ def test_the_question_sits_on_the_last_debit_alone_and_counts_in_the_month(sessi
 def test_the_queue_ranks_a_recurring_payment_by_its_yearly_cost_without_adding_it_up(session: Session, master_key: str):
     _ops(
         session, master_key,
-        *_months(CURRENT, "2026-01", 3, 2, "21.60", "CARTE ANTHROPIC* CLAUDE CB*0837"),
+        *_months(CURRENT, "2026-01", 3, 2, "21.60", POCKET_MONEY),
         (CURRENT, "2026-02-10", "500.00", "CRDT", "VIR SEPA JEAN TIERS"),
         (CURRENT, "2026-02-12", "150.00", "CRDT", "VIR SEPA PAUL AUTRE"),
     )
@@ -427,7 +444,7 @@ def test_totals_hold_the_active_counted_recurring_payments_only(session: Session
         session, master_key,
         *_months(CURRENT, "2025-08", 8, 5, "60.00", EDF),
         *_months(CURRENT, "2024-01", 8, 15, "9.99", "PRLV SEPA DEEZER"),
-        *_months(CURRENT, "2026-01", 3, 2, "21.60", "CARTE 02/01/26 ANTHROPIC* CLAUDE CB*0837"),
+        *_months(CURRENT, "2026-01", 3, 2, "21.60", POCKET_MONEY),
         *_months(CURRENT, "2025-08", 8, 10, "39.00", BASIC_FIT),
     )
     _synced(session, master_key, CURRENT, today)
@@ -437,7 +454,7 @@ def test_totals_hold_the_active_counted_recurring_payments_only(session: Session
     listed = list_recurring(session, USER, master_key, today=today)
     assert (listed.monthly_total, listed.annual_total) == (Decimal("60.00"), Decimal("720.00"))
     assert [(i.name, i.state, i.status) for i in listed.items] == [
-        (EDF_NAME, "auto", "active"), ("Anthropic* Claude", "candidate", "active"),
+        (EDF_NAME, "auto", "active"), ("Marie Dupont", "candidate", "active"),
         ("Deezer", "auto", "ended"), ("Basic Fit", "refused", "active"),
     ]
 

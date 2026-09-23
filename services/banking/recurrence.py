@@ -589,9 +589,9 @@ def _clean_neighbours(series: list[Series]) -> dict[int, set[str]]:
 
 
 class Confidence(str, Enum):
-    # Counted without asking.
+    # Counted without asking, whatever pays it.
     CERTAIN = "certain"
-    # Asked about, yes or no.
+    # Counted without asking too, unless a habit could look the same (`counted_unasked`).
     PROBABLE = "probable"
 
 
@@ -819,6 +819,19 @@ def confidence(series: Series, f: Features) -> Confidence | None:
     if n >= 12 and f.exact >= 0.9 and f.deviation <= 2 and f.coverage >= 0.9 and f.exclusive >= 0.9:
         return Confidence.CERTAIN
     return Confidence.PROBABLE
+
+
+def counted_unasked(series: Series, level: Confidence | None, f: Features) -> bool:
+    """Whether a series is counted without a question: a certain one, a probable
+    mandate, a probable card payment of a steady amount. The rest asks, being
+    what a habit looks like too: a transfer (rent, pocket money and savings
+    elsewhere alike), a card payment whose amount moves (a monthly shop). Counted
+    unasked, either would be spending nobody sees was never recurring."""
+    if level is Confidence.CERTAIN:
+        return True
+    if level is not Confidence.PROBABLE:
+        return False
+    return f.family == "direct_debit" or (f.family == "card" and not series.variable)
 
 
 # A refund comes back within this long of the series' last debit.
