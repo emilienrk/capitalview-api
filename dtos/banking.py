@@ -819,6 +819,9 @@ class RealCashflowTotals(BaseModel):
     # The part of `expenses` spent on counted recurring payments, their refunds
     # taken off: already in `expenses`, never added to anything else.
     recurring: Decimal = Decimal("0")
+    # The rest of `expenses`. Taken month by month, so a median month's is a
+    # month's, never the difference of two medians.
+    one_off: Decimal = Decimal("0")
     # Percent of the income: what was not spent, and the part of it set aside
     # or invested. None without income to divide by.
     savings_rate: Decimal | None = None
@@ -927,7 +930,7 @@ class RealCashflowYear(BaseModel):
     safety_net: RealCashflowSafetyNet | None = None
     coverage_gaps: list[RealCashflowCoverageGap] = []
     # The current year only: what the active recurring payments cost a month.
-    fixed_charges: Decimal | None = None
+    running_recurring: Decimal | None = None
 
 
 class RealCashflowMonthDetail(BaseModel):

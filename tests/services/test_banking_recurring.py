@@ -327,7 +327,7 @@ def test_what_is_fixed_and_what_is_still_due_this_month(session: Session, master
     _store(session, master_key, CURRENT, _raw("39.00", "DBIT", "2026-04-08", ref="pending-fit", status="PDNG", label=BASIC_FIT))
     _synced(session, master_key, CURRENT, today)
 
-    assert real_cashflow_year(session, USER, master_key, 2026, today=today).fixed_charges == Decimal("99.00")
+    assert real_cashflow_year(session, USER, master_key, 2026, today=today).running_recurring == Decimal("99.00")
     current = real_cashflow_current(session, USER, master_key, today=today)
     assert [(due.name, due.date, due.amount) for due in current.upcoming] == [
         ("EDF clients particuliers", date(2026, 4, 5), Decimal("60.00")),
@@ -340,7 +340,7 @@ def test_an_account_not_synced_since_expects_nothing(session: Session, master_ke
     _ops(session, master_key, *_months(CURRENT, "2025-08", 8, 5, "60.00", EDF))
     _synced(session, master_key, CURRENT, date(2026, 3, 20))
 
-    assert real_cashflow_year(session, USER, master_key, 2026, today=today).fixed_charges == Decimal("0")
+    assert real_cashflow_year(session, USER, master_key, 2026, today=today).running_recurring == Decimal("0")
     assert real_cashflow_current(session, USER, master_key, today=today).upcoming == []
 
 

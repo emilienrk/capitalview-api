@@ -84,7 +84,7 @@ _FIELD_OF = {
     CashflowType.INVESTMENT: "investment",
     CashflowType.NEUTRAL: "neutral",
 }
-_AMOUNTS = ("income", "expenses", "saving", "investment", "neutral", "net", "recurring")
+_AMOUNTS = ("income", "expenses", "saving", "investment", "neutral", "net", "recurring", "one_off")
 _PERCENT = Decimal("0.1")
 
 
@@ -150,7 +150,7 @@ def real_cashflow_year(
             session, user_uuid, master_key, accounts, reading.patterns,
             date.fromisoformat(f"{periods[0]}-01"), _last_day(periods[-1]),
         ),
-        fixed_charges=sum(
+        running_recurring=sum(
             (item.monthly_equivalent for _, item in active_counted(
                 session, user_uuid, master_key, accounts, reading.patterns, today,
             ) if item.currency == reading.currency),
@@ -560,8 +560,12 @@ def _with_rates(amounts: dict[str, Decimal]) -> RealCashflowTotals:
 
 def _totals(tally: _Tally) -> RealCashflowTotals:
     t = tally.totals
-    amounts = {name: t[name] for name in _AMOUNTS if name != "net"}
-    return _with_rates({**amounts, "net": t["income"] - t["expenses"] - t["saving"] - t["investment"]})
+    amounts = {name: t[name] for name in _AMOUNTS if name not in ("net", "one_off")}
+    return _with_rates({
+        **amounts,
+        "net": t["income"] - t["expenses"] - t["saving"] - t["investment"],
+        "one_off": t["expenses"] - t["recurring"],
+    })
 
 
 def _sum(months: list[RealCashflowTotals]) -> RealCashflowTotals:
