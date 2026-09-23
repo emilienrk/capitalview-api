@@ -1,5 +1,6 @@
 """
-What a recurring payment is for: what the user said, and nothing else.
+What a recurring payment is for, or where a recurring income comes from: what
+the user said, and nothing else.
 
 Nothing is guessed here. A merchant dictionary was tried and dropped: naming
 what a payment is for is a judgement (a phone plan is not a roof), and the app
@@ -9,7 +10,13 @@ the screen says so.
 
 from __future__ import annotations
 
-from dtos.banking import RecurringNature
+from dtos.banking import RecurringDirection, RecurringNature
+
+INCOME_NATURES = frozenset({
+    RecurringNature.SALARY, RecurringNature.ALLOWANCE, RecurringNature.PENSION, RecurringNature.RENTAL,
+    RecurringNature.SUPPORT, RecurringNature.INTEREST, RecurringNature.OTHER,
+})
+EXPENSE_NATURES = frozenset(RecurringNature) - INCOME_NATURES | {RecurringNature.OTHER}
 
 
 def of(nature: str | None) -> RecurringNature | None:
@@ -23,3 +30,9 @@ def of(nature: str | None) -> RecurringNature | None:
         return RecurringNature(nature)
     except ValueError:
         return None
+
+
+def fits(nature: RecurringNature, direction: RecurringDirection) -> bool:
+    """Whether a nature files a recurring of this direction: a salary is never
+    a payment, a phone plan never an income."""
+    return nature in (INCOME_NATURES if direction is RecurringDirection.INCOME else EXPENSE_NATURES)

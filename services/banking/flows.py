@@ -44,6 +44,7 @@ from dtos.banking import (
     BankReviewYear,
     BankRecurringQuestion,
     BankRecurringTag,
+    RecurringDirection,
     BankTransactionItem,
     BankTransactionsResponse,
     BankTransferDecisionKind,
@@ -1091,6 +1092,7 @@ def _item_builder(
         stored, member = filing.patterns.recurring_of(row.uuid) or (None, None)
         refunds_recurring = (
             stored is not None and stored.counted and member.role == stored_patterns.REFUND
+            and stored.direction == RecurringDirection.EXPENSE.value
         )
         return BankTransactionItem(
             id=row.uuid,
@@ -1121,7 +1123,7 @@ def _item_builder(
             ) if asks else None,
             contribution=_contribution_item(filing.contributions.get(index)),
             recurring=BankRecurringTag(
-                id=stored.decision, key=stored.key, name=stored.name,
+                id=stored.decision, key=stored.key, direction=RecurringDirection(stored.direction), name=stored.name,
                 cadence=stored.cadence, role=member.role, state=stored.state,
             ) if stored is not None and stored.counted else None,
             recurring_question=(
@@ -1135,6 +1137,7 @@ def _item_builder(
 
 def _recurring_question(stored: stored_patterns.StoredRecurring) -> BankRecurringQuestion:
     return BankRecurringQuestion(
+        direction=RecurringDirection(stored.direction),
         cadence=stored.cadence,
         amount=stored.amount,
         variable=stored.variable,

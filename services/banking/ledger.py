@@ -28,8 +28,8 @@ from dtos.banking import (
     BankLedgerRecurring,
     BankReviewKind,
     BankTransferStatus,
-    CashflowType,
     OperationType,
+    RecurringDirection,
     TypeSource,
 )
 from models.banking import BankAccountLink
@@ -52,7 +52,7 @@ from services.encryption import decrypt_data, hash_index
 
 # Part of the ETag: a change to how rows are read or grouped must reach a
 # browser holding the previous ledger, even though no data moved.
-LEDGER_VERSION = "4"
+LEDGER_VERSION = "5"
 
 
 def ledger_etag(session: Session, user_uuid: str, master_key: str) -> str:
@@ -140,14 +140,15 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
             question = BankReviewKind.TRANSFER
         elif movement.row.uuid in asking:
             question = BankReviewKind.RECURRING
-        # The rows adding up to "dont … qui reviennent": counted, spent, and a
-        # counted recurring payment's.
+        # The rows adding up to "dont … qui reviennent": counted, typed as the
+        # kind of the counted recurring payment or income they belong to.
         stored = patterns.counted_recurring(movement.row.uuid)
-        if stored is not None and counted and resolution.type is CashflowType.EXPENSE:
+        if stored is not None and counted and resolution.type is stored.kind:
             if stored.key not in recurring_index:
                 recurring_index[stored.key] = len(recurring)
                 recurring.append(BankLedgerRecurring(
-                    id=stored.decision, key=stored.key, name=stored.name, cadence=stored.cadence,
+                    id=stored.decision, key=stored.key, direction=RecurringDirection(stored.direction),
+                    name=stored.name, cadence=stored.cadence,
                 ))
             in_recurring = recurring_index[stored.key]
         else:

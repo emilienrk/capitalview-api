@@ -1,6 +1,7 @@
 """
-The recurring payments a user reads and corrects: the list, the operations of one,
-and every decision and correction the routes take.
+The recurring payments and recurring income a user reads and corrects: the list,
+the operations of one, and every decision and correction the routes take. Both
+directions go through the same calls; an operation's side says which it is.
 
 The recurring payments themselves are derived on each rebuild of the transfer
 patterns (services/banking/recurring_series.py). Nothing here writes one:
@@ -32,6 +33,7 @@ from dtos.banking import (
     OperationType,
     RecurringCadence,
     RecurringDecisionKind,
+    RecurringDirection,
     RecurringOperationAction,
     RecurringState,
     RecurringStatus,
@@ -82,8 +84,17 @@ class NoRecurringError(LookupError):
     """The operation belongs to no recurring payment."""
 
 
-class NotAnExpenseError(ValueError):
-    """Only a final debit counted as an expense, outside a pair, can be marked."""
+class NotMarkableError(ValueError):
+    """Only a final operation outside a pair can be marked: a debit counted as
+    an expense, or a credit counted as income."""
+
+
+class NatureMismatchError(ValueError):
+    """A nature of the other direction: a salary filed on a payment."""
+
+
+class DirectionMismatchError(ValueError):
+    """A payment and an income are never one recurring."""
 
 
 # ---------------------------------------------------------------------------
@@ -92,18 +103,19 @@ class NotAnExpenseError(ValueError):
 
 
 def list_recurring(
-    session: Session, user_uuid: str, master_key: str, today: date | None = None
+    session: Session, user_uuid: str, master_key: str, today: date | None = None,
+    direction: RecurringDirection = RecurringDirection.EXPENSE,
 ) -> BankRecurringResponse:
-    """Every recurring payment found or decided: the active ones first, the most
-    costly first among them, then the late ones, the candidates, the ended
-    ones (the latest first) and the refused ones.
+    """Every recurring payment — or income — found or decided: the active ones
+    first, the heaviest first among them, then the late ones, the candidates,
+    the ended ones (the latest first) and the refused ones.
 
     Read off the stored patterns alone: no operation is loaded."""
     today = today or date.today()
     accounts = _user_accounts(session, user_uuid, master_key)
     patterns = transfer_patterns(session, user_uuid, master_key, accounts)
     reader = _Reader(session, user_uuid, master_key, accounts, patterns, today)
-    items = [reader.item(stored) for stored in patterns.recurring]
+    items = [reader.item(stored) for stored in patterns.recurring if stored.direction == direction.value]
 
     counted = [
         item for item in items
@@ -114,6 +126,7 @@ def list_recurring(
     currency = max(sorted(set(currencies)), key=currencies.count) if currencies else "EUR"
     monthly = sum((item.monthly_equivalent for item in counted if item.currency == currency), Decimal("0"))
     return BankRecurringResponse(
+        direction=direction,
         currency=currency,
         monthly_total=monthly,
         annual_total=sum((item.annual_estimate for item in counted if item.currency == currency), Decimal("0")),
@@ -124,8 +137,9 @@ def list_recurring(
 def active_counted(
     session: Session, user_uuid: str, master_key: str, accounts: _Accounts, patterns: TransferPatterns, today: date
 ) -> list[tuple[StoredRecurring, BankRecurringItem]]:
-    """The counted recurring payments still running on `today`: what the real
-    cashflow calls fixed, and whose next due dates it expects."""
+    """The counted recurring payments and income still running on `today`:
+    what the real cashflow calls fixed, and whose next due dates it expects.
+    Both directions: the caller reads `stored.direction`."""
     reader = _Reader(session, user_uuid, master_key, accounts, patterns, today)
     return [
         (stored, item)
@@ -191,6 +205,7 @@ class _Reader:
         return BankRecurringItem(
             id=stored.decision,
             key=stored.key,
+            direction=RecurringDirection(stored.direction),
             transaction_id=stored.carrier or max(due, key=lambda m: m.day).uuid,
             name=stored.name,
             nature=nature,
@@ -295,17 +310,20 @@ def mark(
     session: Session, user_uuid: str, master_key: str, transaction_id: str,
     cadence: RecurringCadence | None = None, name: str | None = None,
 ) -> BankRecurringItem | None:
-    """Make a recurring payment of an operation the detection left out. The rebuild
-    grows its series from it: the debits of its merchant and account at each
-    due date, however few — one is enough for a yearly charge seen once."""
+    """Make a recurring payment of a debit the detection left out, or a
+    recurring income of a credit. The rebuild grows its series from it: the
+    operations of its merchant and account at each due date, however few —
+    one is enough for a yearly charge seen once."""
     accounts = _user_accounts(session, user_uuid, master_key)
     row = _readable_row(session, accounts, transaction_id)
     current = _transaction_item(session, user_uuid, master_key, accounts, row)
+    expected = CashflowType.INCOME if current.is_credit else CashflowType.EXPENSE
     if (
-        current.is_credit or current.is_pending or current.cashflow_type is not CashflowType.EXPENSE
+        current.is_pending or current.cashflow_type is not expected
         or current.transfer_status not in (None, BankTransferStatus.SUGGESTED)
     ):
-        raise NotAnExpenseError(transaction_id)
+        raise NotMarkableError(transaction_id)
+    direction = RecurringDirection.INCOME if current.is_credit else RecurringDirection.EXPENSE
 
     patterns = transfer_patterns(session, user_uuid, master_key, accounts)
     found = patterns.recurring_of(transaction_id)
@@ -318,7 +336,7 @@ def mark(
             uuid=str(uuid.uuid4()), status=CONFIRMED, anchors=frozenset({ref}), includes=frozenset({ref}),
             identity=Identity(
                 merchant_words(current.label), (current.account_id,), (cadence or RecurringCadence.MONTHLY).value,
-                current.amount, current.operation_type.value,
+                current.amount, current.operation_type.value, direction.value,
             ),
         )
     if cadence is not None:
@@ -335,6 +353,9 @@ def update(
     """Rename it, force its cadence, say what it is for or when it was ended:
     `changes` holds only the fields sent, None clearing one."""
     _, decision = get_decision(session, user_uuid, master_key, decision_id)
+    nature = changes.get("nature")
+    if nature is not None and not natures.fits(nature, RecurringDirection(decision.identity.direction)):
+        raise NatureMismatchError(nature)
     if "name" in changes:
         decision.name = changes["name"] or None
     if "cadence" in changes:
@@ -372,8 +393,9 @@ def merge(
     session: Session, user_uuid: str, master_key: str, decision_id: str,
     other_id: str | None = None, other_transaction_id: str | None = None,
 ) -> BankRecurringItem | None:
-    """One recurring payment of two: a contract that changed hands (Orange then
-    Bouygues), a series the detection cut. The other's decision goes."""
+    """One recurring of two: a contract that changed hands (Orange then
+    Bouygues), an allowance that moved with the user (one CAF then another), a
+    series the detection cut. The other's decision goes."""
     _, decision = get_decision(session, user_uuid, master_key, decision_id)
     if other_id is None:
         accounts = _user_accounts(session, user_uuid, master_key)
@@ -382,12 +404,16 @@ def merge(
         if found is None:
             raise NoRecurringError(other_transaction_id)
         other_recurring = found[0]
+        if other_recurring.direction != decision.identity.direction:
+            raise DirectionMismatchError(other_transaction_id)
         if other_recurring.decision is None:
             decision.anchors = decision.anchors | _occurrences(other_recurring, master_key)
         else:
             other_id = other_recurring.decision
     if other_id is not None and other_id != decision.uuid:
         _, other = get_decision(session, user_uuid, master_key, other_id)
+        if other.identity.direction != decision.identity.direction:
+            raise DirectionMismatchError(other_id)
         decision.anchors = decision.anchors | other.anchors
         decision.includes = decision.includes | other.includes
         decision.excludes = (decision.excludes | other.excludes) - decision.includes
@@ -413,7 +439,7 @@ def _decided(session: Session, user_uuid: str, master_key: str, stored: StoredRe
         uuid=str(uuid.uuid4()), status=CONFIRMED, anchors=anchors,
         identity=Identity(
             tuple(stored.words), tuple(stored.accounts), stored.cadence,
-            stored.amount, stored.method,
+            stored.amount, stored.method, stored.direction,
         ),
     )
 

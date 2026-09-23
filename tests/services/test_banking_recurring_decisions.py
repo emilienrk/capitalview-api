@@ -104,3 +104,11 @@ def test_writing_a_decision_outdates_the_stored_patterns(session: Session, maste
     # No decision left: the same sources as the first build.
     delete_decision(session, USER, master_key, "sub-1")
     assert digest() == built
+
+
+def test_a_decision_stored_before_income_was_detected_is_about_a_payment():
+    identity = Identity.from_json({
+        "words": ["edf"], "accounts": [CURRENT], "cadence": "monthly", "amount": "60.00", "method": "DIRECT_DEBIT",
+    })
+    assert identity.direction == "expense"
+    assert Identity.from_json(identity.to_json()) == identity
