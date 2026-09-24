@@ -807,6 +807,7 @@ def transfer_patterns(
         carrier = movements[members[-1]]
         patterns.flow_carriers[carrier.row.uuid] = FlowCarrier(
             len(members), sum((movements[i].amount for i in members), Decimal("0")),
+            sum(1 for i in members if i in filing.contributions),
         )
         flow_questions[carrier.period] += 1
         for index in members:
@@ -1126,6 +1127,7 @@ def _item_builder(
                 choices=CREDIT_CHOICES if movement.is_credit else DEBIT_CHOICES,
                 operation_count=settles.count,
                 amount=settles.amount,
+                hints=settles.hints,
             ) if asks else None,
             contribution=_contribution_item(filing.contributions.get(index)),
             recurring=BankRecurringTag(
