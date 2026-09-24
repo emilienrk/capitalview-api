@@ -282,11 +282,11 @@ class TypeSource(str, Enum):
     """What gave an operation its cashflow type, strongest first."""
     PAIR = "pair"
     OVERRIDE = "override"
-    RULE = "rule"
     # A deposit or a withdrawal the user declared on one of their investment
-    # accounts, on the very day and for the very amount
+    # accounts, on the very day and for the very amount, or a fee apart
     # (services/banking/contributions.py).
     CONTRIBUTION = "contribution"
+    RULE = "rule"
     # A member of a recurring payment or income the user has not refused
     # (services/banking/recurring_series.py): it is reviewed there, not asked.
     RECURRING = "recurring"

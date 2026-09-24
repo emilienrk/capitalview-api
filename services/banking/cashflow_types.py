@@ -7,9 +7,11 @@ Pure: every input is already decrypted and loaded by `flows.py`.
 The order is fixed, strongest first. A pair the pairing trusts is a transfer or
 a cancellation whatever the user said of either leg — it is undone through the
 transfer decisions, not here. Then what the user forced on this very
-operation, then the rule of its label, then the deposit found facing it on one
-of the user's investment accounts, then the recurring payment or income it
-belongs to, and only then the direction.
+operation, then the deposit found facing it on one of the user's investment
+accounts, then the rule of its label, then the recurring payment or income it
+belongs to, and only then the direction. The deposit comes before the rule: a
+rule speaks for every operation of a label, and one label ("VIR INST JEAN
+MARTIN") may send money to an investment account one day and anywhere the next.
 
 A type is never guessed from a label's vocabulary: NEUTRAL only comes from a
 pair or from the user, and saving or investing from a pair, from the user, or
@@ -54,8 +56,9 @@ def resolve_type(
     the rule its label reaches, exact or nearby. A pair only offered to the user
     is not a pair yet. `contributed` is set when a deposit the user declared on
     an investment account proves this very operation
-    (`services/banking/contributions.py`) — it comes after the user's own
-    answers, which correct a deduction rather than being corrected by it.
+    (`services/banking/contributions.py`) — it comes after what the user forced
+    on the operation itself, which corrects a deduction rather than being
+    corrected by it, but before a rule, which only reads its label.
     `recurring` is the kind of the recurring series holding the operation,
     unless the user refused it.
     """
@@ -68,12 +71,12 @@ def resolve_type(
         return Resolution(kind, TypeSource.PAIR)
     if override is not None:
         return Resolution(override, TypeSource.OVERRIDE)
-    if rule is not None:
-        rule_id, kind = rule
-        return Resolution(kind, TypeSource.RULE, rule_id)
     if contributed:
         # A debit went to the investment account, a credit came back from it.
         return Resolution(CashflowType.INVESTMENT, TypeSource.CONTRIBUTION)
+    if rule is not None:
+        rule_id, kind = rule
+        return Resolution(kind, TypeSource.RULE, rule_id)
     if recurring is not None:
         return Resolution(recurring, TypeSource.RECURRING)
     return Resolution(CashflowType.INCOME if is_credit else CashflowType.EXPENSE, TypeSource.DEFAULT)
