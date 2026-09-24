@@ -132,9 +132,46 @@ class TestMatching:
         candidates = [Candidate(0, date(2026, 3, 5), Decimal("200"), True)]
         assert match_candidates(candidates, _contributions(("2026-03-05", "200"))) == {}
 
-    def test_another_amount_is_never_matched(self):
-        candidates = [Candidate(0, date(2026, 3, 5), Decimal("200"), False)]
-        assert match_candidates(candidates, _contributions(("2026-03-05", "199.99"))) == {}
+    def test_a_deposit_above_the_debit_is_never_matched(self):
+        candidates = [Candidate(0, date(2026, 3, 5), Decimal("199.99"), False)]
+        assert match_candidates(candidates, _contributions(("2026-03-05", "200"))) == {}
+
+    def test_a_fee_kept_on_the_way_still_proves_the_deposit(self):
+        candidates = [Candidate(0, date(2026, 6, 2), Decimal("100"), False)]
+        [match] = match_candidates(candidates, _contributions(("2026-06-02", "99"))).values()
+        assert match.exact and match.contribution.amount == Decimal("99")
+
+    def test_past_the_largest_fee_nothing_is_matched(self):
+        # 2 % of 1 000 € is 20 €: 21 € kept is another movement.
+        candidates = [Candidate(0, date(2026, 6, 2), Decimal("1021"), False)]
+        assert match_candidates(candidates, _contributions(("2026-06-02", "1000"))) == {}
+        candidates = [Candidate(0, date(2026, 6, 2), Decimal("1020"), False)]
+        assert match_candidates(candidates, _contributions(("2026-06-02", "1000")))[0].exact
+
+    def test_a_fee_apart_proves_nothing_the_day_after(self):
+        candidates = [Candidate(0, date(2026, 6, 3), Decimal("100"), False)]
+        assert match_candidates(candidates, _contributions(("2026-06-02", "99"))) == {}
+
+    def test_two_debits_a_fee_above_one_deposit_prove_nothing(self):
+        candidates = [
+            Candidate(0, date(2026, 6, 2), Decimal("100"), False),
+            Candidate(1, date(2026, 6, 2), Decimal("99.50"), False),
+        ]
+        assert match_candidates(candidates, _contributions(("2026-06-02", "99"))) == {}
+
+    def test_an_exact_amount_wins_over_a_fee_apart(self):
+        candidates = [
+            Candidate(0, date(2026, 6, 2), Decimal("100"), False),
+            Candidate(1, date(2026, 6, 2), Decimal("99"), False),
+        ]
+        matches = match_candidates(candidates, _contributions(("2026-06-02", "99")))
+        assert matches == {1: matches[1]} and matches[1].exact
+
+    def test_a_withdrawal_arrives_short_of_itself(self):
+        candidates = [Candidate(0, date(2026, 6, 2), Decimal("99"), True)]
+        withdrawal = Contribution("PEA", date(2026, 6, 2), Decimal("100"), is_deposit=False)
+        contributions = Contributions(by_amount={(False, Decimal("100")): [withdrawal]})
+        assert match_candidates(candidates, contributions)[0].exact
 
 
 # ---------------------------------------------------------------------------
