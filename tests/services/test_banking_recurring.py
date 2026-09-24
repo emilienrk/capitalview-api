@@ -240,20 +240,33 @@ def test_the_queue_ranks_a_recurring_payment_by_its_yearly_cost_without_adding_i
     assert [(y.year, y.amount, y.count) for y in queue.years] == [(2026, Decimal("650.00"), 3)]
 
 
-def test_a_refund_from_a_counted_recurring_payment_asks_whatever_its_amount(session: Session, master_key: str):
+def test_a_refund_from_a_counted_recurring_payment_comes_off_its_spending_unasked(session: Session, master_key: str):
     _ops(
         session, master_key,
         *_months(CURRENT, "2025-06", 8, 5, "60.00", EDF),
-        (CURRENT, "2026-02-20", "44.15", "CRDT", "VIR SEPA EDF clients particuliers REGULARISATION"),
-        # The same amount from nobody's recurring payment asks nothing.
-        (CURRENT, "2026-02-21", "44.15", "CRDT", "VIR SEPA JEAN TIERS"),
+        (CURRENT, "2026-02-20", "144.15", "CRDT", "VIR SEPA EDF clients particuliers REGULARISATION"),
     )
-    credits = {tx.label: tx for tx in _month_items(session, master_key, "2026-02") if tx.is_credit}
-    refund = credits["VIR SEPA EDF clients particuliers REGULARISATION"]
-    assert (refund.flow_question.suggested, refund.flow_question.recurring_name) == ("EXPENSE", "EDF clients particuliers")
+    [refund] = [tx for tx in _month_items(session, master_key, "2026-02") if tx.is_credit]
     assert refund.recurring.role == "refund"
-    assert credits["VIR SEPA JEAN TIERS"].flow_question is None
-    assert [tx.id for tx in list_flow_group(session, USER, master_key, refund.id)] == [refund.id]
+    assert (refund.cashflow_type, refund.type_source, refund.flow_question) == (Type.EXPENSE, TypeSource.RECURRING, None)
+    assert review_queue(session, USER, master_key).questions == []
+
+
+def test_a_payment_made_by_transfer_takes_no_refund_on_its_own(session: Session, master_key: str):
+    """Its payee may be someone the user owes: a credit from them is theirs to sort."""
+    rent = "VIR SEPA TRANSALP'DOME S.A.S."
+    _ops(
+        session, master_key,
+        *_months(CURRENT, "2025-06", 8, 3, "530.00", rent),
+        (CURRENT, "2026-02-20", "150.00", "CRDT", "VIR SEPA TRANSALP'DOME S.A.S. REGULARISATION"),
+    )
+    [stored] = _recurring(session, master_key)
+    decide(session, USER, master_key, stored.carrier, RecurringDecisionKind.CONFIRM)
+
+    [credit] = [tx for tx in _month_items(session, master_key, "2026-02") if tx.is_credit]
+    assert credit.recurring is None
+    assert (credit.cashflow_type, credit.type_source) == (Type.INCOME, TypeSource.DEFAULT)
+    assert credit.flow_question is not None
 
 
 def test_recurring_payments_are_part_of_the_expenses_month_by_month_as_the_ledger_adds_them(session: Session, master_key: str):
@@ -262,13 +275,12 @@ def test_recurring_payments_are_part_of_the_expenses_month_by_month_as_the_ledge
         *_months(CURRENT, "2025-06", 8, 5, "60.00", EDF),
         (CURRENT, "2025-10-09", "60.00", "CRDT", "REJ PRLV SEPA EDF clients particuliers"),
         (CURRENT, "2026-01-20", "44.15", "CRDT", "VIR SEPA EDF clients particuliers REGULARISATION"),
-        # A refund nobody answered for yet: income until then.
+        # A refund nobody answered for: it comes off all the same.
         (CURRENT, "2025-12-15", "39.26", "CRDT", "VIR SEPA EDF clients particuliers"),
         *_months(CURRENT, "2025-06", 8, 12, lambda k: f"{30 + 7 * k}.10", "CARTE CARREFOUR ANNECY CB*0837"),
     )
     _bounced(session, master_key, "2025-10")
     refund = next(tx for tx in _month_items(session, master_key, "2026-01") if tx.is_credit)
-    unanswered = next(tx for tx in _month_items(session, master_key, "2025-12") if tx.is_credit)
     set_transaction_type(session, USER, master_key, refund.id, Type.EXPENSE, TypeScope.OPERATION)
 
     year = real_cashflow_year(session, USER, master_key, 2025, today=TODAY)
@@ -276,12 +288,11 @@ def test_recurring_payments_are_part_of_the_expenses_month_by_month_as_the_ledge
     # Paid, bounced and refunded: October counts nothing, January less the refund.
     assert months["2025-09"].recurring == Decimal("60.00")
     assert months["2025-10"].recurring == Decimal("0")
-    assert months["2025-12"].recurring == Decimal("60.00")
+    assert months["2025-12"].recurring == Decimal("20.74")
     assert real_cashflow_month(session, USER, master_key, "2026-01", today=TODAY).totals.recurring == Decimal("15.85")
     assert all(m.recurring <= m.expenses for m in year.months)
 
     ledger = build_ledger(session, USER, master_key)
-    assert next(row for row in ledger.rows if row.id == unanswered.id).recurring is None
     by_month: dict[str, Decimal] = {}
     for row in ledger.rows:
         if row.recurring is not None:

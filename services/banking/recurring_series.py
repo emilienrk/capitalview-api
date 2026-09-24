@@ -79,9 +79,6 @@ class Derived:
     recurring: list[StoredRecurring] = field(default_factory=list)
     # "YYYY-MM" -> recurring payment questions carried by an operation of that month.
     questions: dict[str, int] = field(default_factory=dict)
-    # Movement indexes of the credits refunding a counted recurring payment: their
-    # flow question is asked whatever their amount.
-    refunds: set[int] = field(default_factory=set)
 
 
 @dataclass
@@ -141,8 +138,6 @@ def derive(
         if stored.question:
             period = by_uuid[stored.carrier].period
             derived.questions[period] = derived.questions.get(period, 0) + 1
-        if stored.counted:
-            derived.refunds.update(by_uuid[m.uuid].index for m in stored.members if m.role == REFUND)
     derived.recurring.sort(key=lambda s: (s.first, s.key))
     derived.questions = dict(sorted(derived.questions.items()))
     return derived
@@ -367,9 +362,11 @@ def _stored(
         state = CONFIRMED if decision.status == CONFIRMED else REFUSED
     counted = state in (AUTO, CONFIRMED)
 
+    method = Counter(op.method for op in series.regular).most_common(1)[0][0]
     # An income is never refunded on its own: a payer the user also pays
-    # (a parent, a friend) would read as taking it back.
-    linked = [] if income else [
+    # (a parent, a friend) would read as taking it back. Nor is a payment made
+    # by transfer: its payee may well be someone the user owes, and pays back.
+    linked = [] if income or method is OperationType.TRANSFER else [
         op for op in recurrence.linked_refunds(series, credit_ops, _refunding(series, heads))
         if op.id not in taken_refunds and op.id not in entry.excluded
     ]
@@ -385,7 +382,6 @@ def _stored(
     carrier = recurrence.carrier(series)
     question = state == CANDIDATE and carrier is not None
     name, renamed = _names(series, by_uuid)
-    method = Counter(op.method for op in series.regular).most_common(1)[0][0]
     return StoredRecurring(
         key=decision.uuid if decision else series.first.id,
         decision=decision.uuid if decision else None,
