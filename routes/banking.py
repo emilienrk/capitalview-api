@@ -883,9 +883,9 @@ def post_recurring_merge(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
-    """Make one recurring payment of two."""
+    """Make one recurring payment or income of two."""
     if (body.other_id is None) == (body.other_transaction_id is None):
-        raise HTTPException(status_code=400, detail="Indiquez l'autre paiement récurrent, par son id ou par une opération.")
+        raise HTTPException(status_code=400, detail="Indiquez l'autre récurrent, par son id ou par une opération.")
     try:
         return recurring_service.merge(
             session, current_user.uuid, master_key, recurring_id, body.other_id, body.other_transaction_id,
