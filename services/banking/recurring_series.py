@@ -101,13 +101,8 @@ def derive(
     movements: list[Movement],
     decisions: list[Decision],
     account_uuids: dict[str, str],
-    asking: set[int],
     master_key: str,
 ) -> Derived:
-    """`asking` holds the movement indexes whose flow question is still open:
-    a series whose last debit is one of them asks nothing yet — its type may
-    still change, and a transfer to oneself stops being a candidate once filed
-    as saving."""
     debits, credits = _eligible(movements)
     keys = {m.index: merchant_words(m.label) for m in debits + credits}
     merchants = group_merchants(keys.values())
@@ -139,7 +134,7 @@ def derive(
         for op in entry.series.regular + entry.series.extras
     }
     for entry in grouped:
-        stored = _stored(entry, keys, heads, by_uuid, account_uuids, credit_ops, taken_refunds, asking)
+        stored = _stored(entry, keys, heads, by_uuid, account_uuids, credit_ops, taken_refunds)
         if stored is None:
             continue
         derived.recurring.append(stored)
@@ -354,7 +349,6 @@ def _stored(
     account_uuids: dict[str, str],
     credit_ops: list[RecurrenceOp],
     taken_refunds: set[str],
-    asking: set[int],
 ) -> StoredRecurring | None:
     series, decision = entry.series, entry.decision
     income = series.kind is CashflowType.INCOME
@@ -389,9 +383,7 @@ def _stored(
     ] + [_member(by_uuid[op.id], REFUND, series.kind) for op in refunds]
 
     carrier = recurrence.carrier(series)
-    question = (
-        state == CANDIDATE and carrier is not None and by_uuid[carrier.id].index not in asking
-    )
+    question = state == CANDIDATE and carrier is not None
     name, renamed = _names(series, by_uuid)
     method = Counter(op.method for op in series.regular).most_common(1)[0][0]
     return StoredRecurring(

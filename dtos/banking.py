@@ -287,6 +287,9 @@ class TypeSource(str, Enum):
     # accounts, on the very day and for the very amount
     # (services/banking/contributions.py).
     CONTRIBUTION = "contribution"
+    # A member of a recurring payment or income the user has not refused
+    # (services/banking/recurring_series.py): it is reviewed there, not asked.
+    RECURRING = "recurring"
     DEFAULT = "default"
 
 

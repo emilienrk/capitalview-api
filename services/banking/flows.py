@@ -779,8 +779,6 @@ def transfer_patterns(
     resolutions = [
         _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
     ]
-    asking_groups = _asking_groups(movements, transfer_legs, labels, resolutions)
-    heavy = [members for members in asking_groups if _heavy(movements, members)]
     derived = recurring_series.derive(
         [
             _recurring_movement(index, movement, labels[index], transfer_legs.get(index), resolutions[index],
@@ -789,11 +787,17 @@ def transfer_patterns(
         ],
         load_recurring_decisions(session, user_uuid, master_key),
         {bidx: account.uuid for bidx, account in accounts.by_bidx.items()},
-        {index for members in heavy for index in members},
         master_key,
     )
-    patterns.recurring = derived.recurring
+    patterns.set_recurring(derived.recurring)
     patterns.recurring_questions = derived.questions
+    # Read again once the recurring series are known: their members are
+    # reviewed there, and only come back to be filed once refused.
+    resolutions = [
+        _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
+    ]
+    asking_groups = _asking_groups(movements, transfer_legs, labels, resolutions)
+    heavy = [members for members in asking_groups if _heavy(movements, members)]
     # A refund of a counted recurring payment asks whatever it weighs: its answer
     # moves the recurring payment's own figure.
     forced = [
@@ -1063,6 +1067,7 @@ def _filed(
         CashflowType(decrypt_data(override, filing.master_key)) if override else None,
         (rule.uuid, rule.type) if rule else None,
         contributed=match is not None and match.exact,
+        recurring=filing.patterns.held_by_recurring(movement.row.uuid),
     )
 
 
