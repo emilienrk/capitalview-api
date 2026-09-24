@@ -17,6 +17,7 @@ from dtos.banking import (
     RecurringNature,
     RecurringState,
     TypeScope,
+    TypeSource,
 )
 from dtos.banking import CashflowType as Type
 from models.banking import BankAccountLink
@@ -103,19 +104,21 @@ def test_three_transfers_ask_on_the_last_one(session: Session, master_key: str):
     assert transfer_patterns(session, USER, master_key).recurring_questions == {"2026-03": 1}
 
 
-def test_rent_by_transfer_asks_its_flow_question_first(session: Session, master_key: str):
+def test_rent_by_transfer_is_asked_as_recurring_only(session: Session, master_key: str):
+    """One place at a time: « Récurrents » asks, « À trier » waits for a refusal."""
     _ops(session, master_key, *_months(CURRENT, "2026-01", 4, 3, "530.00", "VIR SEPA TRANSALP'DOME S.A.S."))
 
     [stored] = _recurring(session, master_key)
-    assert stored.state == "candidate" and not stored.question
-    assert transfer_patterns(session, USER, master_key).recurring_questions == {}
-
-    last = list_month_transactions(session, USER, master_key, "2026-04").transactions[0]
-    set_transaction_type(session, USER, master_key, last.id, Type.EXPENSE, TypeScope.LABEL)
-
-    [stored] = _recurring(session, master_key)
-    assert stored.question
+    assert stored.state == "candidate" and stored.question
     assert transfer_patterns(session, USER, master_key).recurring_questions == {"2026-04": 1}
+    assert all(q.kind.value == "recurring" for q in review_queue(session, USER, master_key).questions)
+    rows = list_month_transactions(session, USER, master_key, "2026-04").transactions
+    assert [(tx.type_source, tx.flow_question) for tx in rows] == [(TypeSource.RECURRING, None)]
+
+    decide(session, USER, master_key, stored.carrier, RecurringDecisionKind.REFUSE)
+
+    flows = [q for q in review_queue(session, USER, master_key).questions if q.kind.value == "flow"]
+    assert [q.operation_count for q in flows] == [4]
 
 
 def test_rent_the_user_typed_neutral_is_not_offered(session: Session, master_key: str):
@@ -524,23 +527,19 @@ def test_income_splits_into_recurring_and_one_off_as_the_ledger_adds_them(sessio
     assert all(m.recurring_income + m.one_off_income == m.income for m in year.months)
 
 
-def test_a_parent_s_allowance_asks_once_its_flow_question_is_answered(session: Session, master_key: str):
+def test_a_parent_s_allowance_is_asked_as_recurring_income(session: Session, master_key: str):
     _allowance(session, master_key)
 
     [stored] = _recurring(session, master_key)
-    assert (stored.direction, stored.state, stored.question) == ("income", "candidate", False)
-
-    last = next(tx for tx in _month_items(session, master_key, "2026-03") if tx.label == ALLOWANCE)
-    set_transaction_type(session, USER, master_key, last.id, Type.INCOME, TypeScope.LABEL)
-
-    [stored] = _recurring(session, master_key)
-    assert stored.question
+    assert (stored.direction, stored.state, stored.question) == ("income", "candidate", True)
     carrier = next(tx for tx in _month_items(session, master_key, "2026-03") if tx.id == stored.carrier)
+    assert carrier.flow_question is None
     assert carrier.recurring_question.direction is RecurringDirection.INCOME
     decided = decide(session, USER, master_key, stored.carrier, RecurringDecisionKind.CONFIRM)
     assert (decided.direction, decided.state) == (RecurringDirection.INCOME, RecurringState.CONFIRMED)
     tagged = next(tx for tx in _month_items(session, master_key, "2026-03") if tx.id == stored.carrier)
     assert tagged.recurring.direction is RecurringDirection.INCOME
+    assert (tagged.cashflow_type, tagged.type_source) == (Type.INCOME, TypeSource.RECURRING)
 
 
 def test_what_the_income_brings_and_what_is_still_expected_this_month(session: Session, master_key: str):

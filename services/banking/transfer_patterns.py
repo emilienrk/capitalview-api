@@ -48,6 +48,7 @@ from models.banking import (
 )
 from models.crypto import CryptoAccount, CryptoTransaction
 from models.stock import StockAccount, StockTransaction
+from services.banking.recurring_decisions import REFUSED
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 # A shape that occurred this many times is trusted without asking. Measured:
@@ -56,7 +57,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "15"
+_VERSION = "16"
 
 
 class FlowCarrier(NamedTuple):
@@ -202,6 +203,21 @@ class TransferPatterns:
     # "YYYY-MM" -> recurring payment and income questions carried by an operation of that month
     recurring_questions: dict[str, int] = field(default_factory=dict)
     _members: dict[str, tuple[StoredRecurring, RecurringMember]] | None = field(default=None, repr=False)
+
+    def set_recurring(self, recurring: list[StoredRecurring]) -> None:
+        self.recurring = recurring
+        self._members = None
+
+    def held_by_recurring(self, uuid: str) -> CashflowType | None:
+        """The kind of the recurring payment or income an operation is one of,
+        refunds aside, unless the user refused it."""
+        found = self.recurring_of(uuid)
+        if found is None:
+            return None
+        stored, member = found
+        if member.role == REFUND or stored.state == REFUSED:
+            return None
+        return stored.kind
 
     def recurring_of(self, uuid: str) -> tuple[StoredRecurring, RecurringMember] | None:
         """The recurring payment an operation belongs to, and as what."""

@@ -8,7 +8,8 @@ The order is fixed, strongest first. A pair the pairing trusts is a transfer or
 a cancellation whatever the user said of either leg — it is undone through the
 transfer decisions, not here. Then what the user forced on this very
 operation, then the rule of its label, then the deposit found facing it on one
-of the user's investment accounts, and only then the direction.
+of the user's investment accounts, then the recurring payment or income it
+belongs to, and only then the direction.
 
 A type is never guessed from a label's vocabulary: NEUTRAL only comes from a
 pair or from the user, and saving or investing from a pair, from the user, or
@@ -44,6 +45,7 @@ def resolve_type(
     override: CashflowType | None,
     rule: tuple[str, CashflowType] | None,
     contributed: bool = False,
+    recurring: CashflowType | None = None,
 ) -> Resolution:
     """One operation's type.
 
@@ -54,6 +56,8 @@ def resolve_type(
     an investment account proves this very operation
     (`services/banking/contributions.py`) — it comes after the user's own
     answers, which correct a deduction rather than being corrected by it.
+    `recurring` is the kind of the recurring series holding the operation,
+    unless the user refused it.
     """
     if transfer_status in CANCELLATIONS:
         return Resolution(CashflowType.NEUTRAL, TypeSource.PAIR)
@@ -70,6 +74,8 @@ def resolve_type(
     if contributed:
         # A debit went to the investment account, a credit came back from it.
         return Resolution(CashflowType.INVESTMENT, TypeSource.CONTRIBUTION)
+    if recurring is not None:
+        return Resolution(recurring, TypeSource.RECURRING)
     return Resolution(CashflowType.INCOME if is_credit else CashflowType.EXPENSE, TypeSource.DEFAULT)
 
 
