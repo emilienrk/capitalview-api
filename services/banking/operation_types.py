@@ -5,9 +5,11 @@ debit, a cash withdrawal, interest.
 The one place a label is read with banking vocabulary. `flows.py` refuses to,
 and rightly: a bank's label format is its own invention, and no total may rest
 on guessing it. The type is the assumed exception, and stays harmless by
-construction — it only feeds display and filtering. No total, no pairing and
-no nature reads it, so a bank format this lexicon misses yields an incomplete
-filter, never a wrong figure.
+construction — it feeds display and filtering, and otherwise only ever holds
+a question back: the pairing never offers a card payment or a direct debit
+against a transfer received. No total and no nature reads it, so a bank format
+this lexicon misses yields an incomplete filter or one more question, never a
+wrong figure.
 
 It answers only when the label is unambiguous, keyword first, and says UNKNOWN
 otherwise — not "other", which would claim the operation was identified. A

@@ -294,7 +294,9 @@ def _internal_transfer_legs(
     2. it touches a regulated savings account;
     3. its shape recurs across the history (services/banking/transfer_patterns.py);
     4. both labels read like pairs the user confirmed;
-    5. otherwise it is only suggested, and both legs keep counting.
+    5. a card payment or direct debit against a transfer received is not
+       even offered: a third party paying the user back;
+    6. otherwise it is only suggested, and both legs keep counting.
 
     Refunds on one account come between the last two: same amount, the credit
     within a month of the debit, and a word the two labels share that the
@@ -433,6 +435,9 @@ def _closest_complete_matching(
     return [(debit, credit, status[(debit, credit)]) for debit, credit in credit_of.items()]
 
 
+_PAID_TO_A_THIRD_PARTY = frozenset({OperationType.CARD, OperationType.DIRECT_DEBIT})
+
+
 def _transfer_status(
     pairing: _Pairing, d: _Movement, c: _Movement, debit: int, credit: int, verdict
 ) -> BankTransferStatus | None:
@@ -452,6 +457,14 @@ def _transfer_status(
         return BankTransferStatus.RECURRING
     if legs == (Verdict.OWN, Verdict.OWN):
         return BankTransferStatus.LEARNED
+    # A card payment or a direct debit answered by a transfer received on
+    # another account is someone paying the user back, not the user moving
+    # money: every such pair seen in real histories was a reimbursement.
+    if (
+        _operation_type(d, pairing.master_key) in _PAID_TO_A_THIRD_PARTY
+        and _operation_type(c, pairing.master_key) is OperationType.TRANSFER
+    ):
+        return None
     return BankTransferStatus.SUGGESTED
 
 
