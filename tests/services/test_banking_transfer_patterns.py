@@ -79,14 +79,14 @@ class TestRecurrence:
         assert _month(session, master_key, "2025-03").internal_transfers_excluded == 1
 
     def test_refunds_from_one_third_party_never_recur_as_a_shape(self, session: Session, master_key: str):
-        """The same person refunds, but a different merchant each time: no shape repeats."""
+        """The same person pays back, a different friend each time: no shape repeats."""
         _ops(
             session, master_key,
-            (CURRENT, "2023-04-18", "85.00", "DBIT", "CARTE 17/04/23 DECATHLON 4 CB*88"),
+            (CURRENT, "2023-04-18", "85.00", "DBIT", "VIR INST vers Marie Tiers"),
             (NEOBANK, "2023-04-19", "85.00", "CRDT", "Virement de : Jean Tiers"),
-            (CURRENT, "2023-05-16", "136.86", "DBIT", "CARTE 15/05/23 MARIN MINASIAN 2 CB*88"),
+            (CURRENT, "2023-05-16", "136.86", "DBIT", "VIR INST vers Luc Tiers"),
             (NEOBANK, "2023-05-15", "136.86", "CRDT", "Virement de : Jean Tiers"),
-            (CURRENT, "2023-08-10", "35.04", "DBIT", "CARTE 08/08/23 GRAND FRAIS 4 CB*88"),
+            (CURRENT, "2023-08-10", "35.04", "DBIT", "VIR INST vers Paul Tiers"),
             (NEOBANK, "2023-08-08", "35.04", "CRDT", "Virement de : Jean Tiers"),
         )
         for period in ("2023-04", "2023-05", "2023-08"):
@@ -170,9 +170,9 @@ class TestStoredPatterns:
     def test_the_questions_are_counted_per_month(self, session: Session, master_key: str):
         _ops(
             session, master_key,
-            (CURRENT, "2023-04-18", "85.00", "DBIT", "CARTE 17/04/23 DECATHLON 4 CB*88"),
+            (CURRENT, "2023-04-18", "85.00", "DBIT", "VIR INST vers Marie Tiers"),
             (NEOBANK, "2023-04-19", "85.00", "CRDT", "Virement de : Jean Tiers"),
-            (CURRENT, "2023-08-10", "35.04", "DBIT", "CARTE 08/08/23 GRAND FRAIS 4 CB*88"),
+            (CURRENT, "2023-08-10", "35.04", "DBIT", "VIR INST vers Paul Tiers"),
             (NEOBANK, "2023-08-08", "35.04", "CRDT", "Virement de : Jean Tiers"),
         )
         assert transfer_patterns(session, USER, master_key).questions == {"2023-04": 1, "2023-08": 1}
