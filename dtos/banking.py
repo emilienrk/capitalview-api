@@ -327,6 +327,8 @@ class BankFlowQuestion(BaseModel):
     operation_count: int
     # What those operations add up to: what the answer can move.
     amount: Decimal
+    # How many of them a deposit declared a few days away could be.
+    hints: int = 0
 
 
 # ---------------------------------------------------------------------------

@@ -22,7 +22,7 @@ from services.banking.contributions import (
     load_contributions,
     match_candidates,
 )
-from services.banking.flows import clear_transaction_type, set_transaction_type
+from services.banking.flows import clear_transaction_type, list_month_transactions, set_transaction_type
 from services.banking.real_cashflow import real_cashflow_month
 from services.crypto_transaction import create_composite_crypto_transaction
 from services.encryption import encrypt_data, hash_index
@@ -291,3 +291,33 @@ class TestOperations:
 
         month = real_cashflow_month(session, USER, master_key, "2026-03", today=TODAY)
         assert (month.totals.investment, month.totals.expenses) == (Decimal("200"), Decimal("0"))
+
+    def test_the_question_of_a_label_counts_the_hints_its_other_operations_carry(
+        self, session: Session, master_key: str
+    ):
+        """Asked on the last operation, the hint of an earlier one would go unseen."""
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR INST JEAN MARTIN"),
+            (CURRENT, "2026-03-20", "150.00", "DBIT", "VIR INST JEAN MARTIN"),
+        )
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-07", "200")
+
+        [tx] = [tx for tx in list_month_transactions(session, USER, master_key, "2026-03").transactions if tx.flow_question]
+        assert (tx.amount, tx.contribution, tx.flow_question.hints) == (Decimal("150.00"), None, 1)
+
+    def test_a_rule_answered_on_its_label_leaves_a_proved_deposit_invested(self, session: Session, master_key: str):
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR INST JEAN MARTIN"),
+            (CURRENT, "2026-03-20", "150.00", "DBIT", "VIR INST JEAN MARTIN"),
+        )
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "200")
+        asked = next(tx for tx in list_month_transactions(session, USER, master_key, "2026-03").transactions if tx.flow_question)
+        set_transaction_type(session, USER, master_key, asked.id, Type.EXPENSE, TypeScope.LABEL)
+
+        rows = {tx.amount: tx for tx in list_month_transactions(session, USER, master_key, "2026-03").transactions}
+        assert (rows[Decimal("200.00")].cashflow_type, rows[Decimal("200.00")].type_source) == (Type.INVESTMENT, Source.CONTRIBUTION)
+        assert (rows[Decimal("150.00")].cashflow_type, rows[Decimal("150.00")].type_source) == (Type.EXPENSE, Source.RULE)

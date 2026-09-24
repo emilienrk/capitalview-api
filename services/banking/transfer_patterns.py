@@ -57,13 +57,16 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "19"
+_VERSION = "20"
 
 
 class FlowCarrier(NamedTuple):
     # The operations of its label the question settles, and what they add up to.
     count: int
     amount: Decimal
+    # Those a deposit declared a few days away could be: a hint that would
+    # otherwise sit on an operation the question is not asked on.
+    hints: int = 0
 
 
 # What a member is to its recurring payment or income. Only the first three and a
@@ -349,7 +352,8 @@ def read_patterns(
         questions=content["questions"],
         questions_amount=_amounts(content["questions_amount"]),
         flow_carriers={
-            uuid: FlowCarrier(count, Decimal(amount)) for uuid, (count, amount) in content["flow_carriers"].items()
+            uuid: FlowCarrier(count, Decimal(amount), hints)
+            for uuid, (count, amount, hints) in content["flow_carriers"].items()
         },
         flow_questions=content["flow_questions"],
         flow_open=content["flow_open"],
@@ -374,7 +378,7 @@ def write_patterns(
             "questions": patterns.questions,
             "questions_amount": {period: str(amount) for period, amount in patterns.questions_amount.items()},
             "flow_carriers": {
-                uuid: [carrier.count, str(carrier.amount)] for uuid, carrier in patterns.flow_carriers.items()
+                uuid: [carrier.count, str(carrier.amount), carrier.hints] for uuid, carrier in patterns.flow_carriers.items()
             },
             "flow_questions": patterns.flow_questions,
             "flow_open": patterns.flow_open,
