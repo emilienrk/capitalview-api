@@ -327,10 +327,6 @@ class BankFlowQuestion(BaseModel):
     operation_count: int
     # What those operations add up to: what the answer can move.
     amount: Decimal
-    # Offered first, never applied: a credit from a recurring payment's merchant
-    # reads as a refund, typed EXPENSE to come off the spending.
-    suggested: CashflowType | None = None
-    recurring_name: str | None = None
 
 
 # ---------------------------------------------------------------------------

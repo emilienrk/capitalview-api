@@ -798,17 +798,11 @@ def transfer_patterns(
     ]
     asking_groups = _asking_groups(movements, transfer_legs, labels, resolutions)
     heavy = [members for members in asking_groups if _heavy(movements, members)]
-    # A refund of a counted recurring payment asks whatever it weighs: its answer
-    # moves the recurring payment's own figure.
-    forced = [
-        members for members in asking_groups
-        if not _heavy(movements, members) and derived.refunds.intersection(members)
-    ]
 
     flow_questions: dict[str, int] = defaultdict(int)
     flow_open: dict[str, int] = defaultdict(int)
     flow_open_amount: dict[str, Decimal] = defaultdict(Decimal)
-    for members in heavy + forced:
+    for members in heavy:
         # Movements come sorted by day: the last one is the most recent.
         carrier = movements[members[-1]]
         patterns.flow_carriers[carrier.row.uuid] = FlowCarrier(
@@ -1108,10 +1102,6 @@ def _item_builder(
         settles = filing.patterns.flow_carriers.get(row.uuid)
         asks = settles is not None and _asks_flow(movement, leg, label, resolution)
         stored, member = filing.patterns.recurring_of(row.uuid) or (None, None)
-        refunds_recurring = (
-            stored is not None and stored.counted and member.role == stored_patterns.REFUND
-            and stored.direction == RecurringDirection.EXPENSE.value
-        )
         return BankTransactionItem(
             id=row.uuid,
             account_id=accounts.by_bidx[movement.account_bidx].uuid,
@@ -1136,8 +1126,6 @@ def _item_builder(
                 choices=CREDIT_CHOICES if movement.is_credit else DEBIT_CHOICES,
                 operation_count=settles.count,
                 amount=settles.amount,
-                suggested=CashflowType.EXPENSE if refunds_recurring else None,
-                recurring_name=stored.name if refunds_recurring else None,
             ) if asks else None,
             contribution=_contribution_item(filing.contributions.get(index)),
             recurring=BankRecurringTag(

@@ -57,7 +57,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "16"
+_VERSION = "17"
 
 
 class FlowCarrier(NamedTuple):
@@ -210,12 +210,12 @@ class TransferPatterns:
 
     def held_by_recurring(self, uuid: str) -> CashflowType | None:
         """The kind of the recurring payment or income an operation is one of,
-        refunds aside, unless the user refused it."""
+        unless the user refused it; a refund only once its payment counts."""
         found = self.recurring_of(uuid)
         if found is None:
             return None
         stored, member = found
-        if member.role == REFUND or stored.state == REFUSED:
+        if stored.state == REFUSED or (member.role == REFUND and not stored.counted):
             return None
         return stored.kind
 
