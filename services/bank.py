@@ -14,9 +14,15 @@ from models import BankAccount, BankAccountType
 from models.account_history import AccountHistory
 from models.banking import BankAccountLink, BankSession, BankTransaction, BankTransferDecision
 from models.currency import BASE_CURRENCY
-from models.enums import AccountCategory, FlowType
+from models.enums import AccountCategory, FlowType, InterestMethod
 from dtos import BankAccountCreate, BankAccountUpdate, BankAccountResponse, BankSummaryResponse
-from dtos.bank import BankHistoryEntry, LinkStatus, ReconciliationStatus
+from dtos.bank import (
+    INTEREST_BEARING_TYPES,
+    BankHistoryEntry,
+    LinkStatus,
+    ReconciliationStatus,
+    check_interest_terms,
+)
 from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotResponse
 from services.banking.health import is_session_active
 from services.banking.linking import is_card_account
@@ -156,6 +162,27 @@ def account_currency(account: BankAccount, master_key: str) -> str:
     return decrypt_data(account.currency_enc, master_key)
 
 
+def _decrypt_rate(value: str | None, master_key: str) -> Decimal | None:
+    return Decimal(decrypt_data(value, master_key)) if value else None
+
+
+def _encrypt_rate(value: Decimal | None, master_key: str) -> str | None:
+    return encrypt_data(str(value), master_key) if value is not None else None
+
+
+def interest_method(account: BankAccount, account_type: BankAccountType, master_key: str) -> InterestMethod | None:
+    """How the account earns interest, or None when it earns none.
+
+    A savings account with no method stored reads as fortnightly: most banks
+    apply the regulated livrets' rule to their own savings accounts too.
+    """
+    if account_type not in INTEREST_BEARING_TYPES:
+        return None
+    if account.interest_method_enc:
+        return InterestMethod(decrypt_data(account.interest_method_enc, master_key))
+    return InterestMethod.FORTNIGHTLY
+
+
 def _map_to_response(
     account: BankAccount, master_key: str, link: LinkMetadata | None = None
 ) -> BankAccountResponse:
@@ -172,15 +199,20 @@ def _map_to_response(
     if account.identifier_enc:
         identifier = decrypt_data(account.identifier_enc, master_key)
 
+    account_type = BankAccountType(type_str)
     return BankAccountResponse(
         id=account.uuid,
         name=name,
         balance=Decimal(balance_str),
-        account_type=BankAccountType(type_str),
+        account_type=account_type,
         currency=account_currency(account, master_key),
         institution_name=inst_name,
         identifier=identifier,
         opened_at=account.opened_at,
+        interest_rate=_decrypt_rate(account.interest_rate_enc, master_key),
+        boosted_rate=_decrypt_rate(account.boosted_rate_enc, master_key),
+        boosted_until=account.boosted_until,
+        interest_method=interest_method(account, account_type, master_key),
         balance_updated_at=account.balance_updated_at,
         created_at=account.created_at,
         updated_at=account.updated_at,
@@ -227,6 +259,12 @@ def create_bank_account(
         identifier_enc=ident_enc,
         currency_enc=encrypt_data(data.currency, master_key),
         opened_at=data.opened_at,
+        interest_rate_enc=_encrypt_rate(data.interest_rate, master_key),
+        boosted_rate_enc=_encrypt_rate(data.boosted_rate, master_key),
+        boosted_until=data.boosted_until,
+        interest_method_enc=(
+            encrypt_data(data.interest_method.value, master_key) if data.interest_method else None
+        ),
     )
     
     session.add(account)
@@ -247,6 +285,8 @@ def update_bank_account(
     link = _account_link(session, account, master_key)
     if link is not None:
         _refuse_bank_owned_changes(account, data, master_key)
+    # First, so a refused rate leaves nothing half-written.
+    _apply_interest_terms(account, data, master_key)
 
     if data.name is not None:
         account.name_enc = encrypt_data(data.name, master_key)
@@ -276,6 +316,35 @@ def update_bank_account(
     session.refresh(account)
 
     return _map_to_response(account, master_key, link)
+
+
+def _apply_interest_terms(account: BankAccount, data: BankAccountUpdate, master_key: str) -> None:
+    """Write the interest fields the update names, once the result is checked whole.
+
+    Checked on the terms the account would end up with rather than on the
+    payload alone: clearing the base rate must not leave a boosted one behind.
+    """
+    fields = data.model_fields_set
+    account_type = BankAccountType(decrypt_data(account.account_type_enc, master_key))
+    stored_method = (
+        InterestMethod(decrypt_data(account.interest_method_enc, master_key))
+        if account.interest_method_enc
+        else None
+    )
+
+    def pick(name: str, stored):
+        return getattr(data, name) if name in fields else stored
+
+    rate = pick("interest_rate", _decrypt_rate(account.interest_rate_enc, master_key))
+    boosted = pick("boosted_rate", _decrypt_rate(account.boosted_rate_enc, master_key))
+    boosted_until = pick("boosted_until", account.boosted_until)
+    method = pick("interest_method", stored_method)
+    check_interest_terms(account_type, rate, boosted, boosted_until, method)
+
+    account.interest_rate_enc = _encrypt_rate(rate, master_key)
+    account.boosted_rate_enc = _encrypt_rate(boosted, master_key)
+    account.boosted_until = boosted_until
+    account.interest_method_enc = encrypt_data(method.value, master_key) if method else None
 
 
 def _refuse_bank_owned_changes(

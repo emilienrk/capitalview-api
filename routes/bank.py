@@ -14,6 +14,7 @@ from dtos import (
     BankAccountResponse,
     BankSummaryResponse,
     BankHistoryImportRequest,
+    SavingsInterestResponse,
 )
 from services.bank import (
     LinkedAccountFieldLockedError,
@@ -29,6 +30,7 @@ from services.bank import (
     import_bank_account_history,
 )
 from dtos.transaction import AccountHistorySnapshotResponse
+from services.savings_interest import get_user_savings_interest
 
 router = APIRouter(prefix="/bank", tags=["Bank Accounts"])
 
@@ -69,6 +71,16 @@ def get_accounts(
 ):
     """Get all bank accounts with total balance for current user."""
     return get_user_bank_accounts(session, current_user.uuid, master_key)
+
+
+@router.get("/interest", response_model=list[SavingsInterestResponse])
+def get_interest(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """This year's interest on every savings account that has a rate."""
+    return get_user_savings_interest(session, current_user.uuid, master_key)
 
 
 @router.get("/history", response_model=list[AccountHistorySnapshotResponse])
@@ -171,6 +183,9 @@ def update_account(
         raise HTTPException(status_code=400, detail=str(exc))
     except LinkedAccountFieldLockedError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        # Interest terms the account cannot carry once merged with its own.
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.delete("/accounts/{account_id}", status_code=204)

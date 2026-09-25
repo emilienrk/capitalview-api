@@ -47,3 +47,13 @@ class BankAccount(SQLModel, table=True):
         default=None,
         sa_column=Column(sa.Date, nullable=True),
     )
+
+    # Savings only, all user-supplied: the annual gross rate, and a boosted one
+    # the bank pays until a date before falling back to it.
+    interest_rate_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    boosted_rate_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    boosted_until: date | None = Field(
+        default=None,
+        sa_column=Column(sa.Date, nullable=True),
+    )
+    interest_method_enc: str | None = Field(default=None, sa_column=Column(TEXT))

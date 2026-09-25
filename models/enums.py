@@ -10,6 +10,7 @@ class AccountCategory(str, Enum):
     CRYPTO = "CRYPTO"
     BANK = "BANK"
     ASSET = "ASSET"
+    PLACEMENT = "PLACEMENT"
 
 class AssetType(str, Enum):
     """Type of asset for market data."""
@@ -43,11 +44,32 @@ class BankAccountType(str, Enum):
     PEL = "PEL"
     CEL = "CEL"
 
+class InterestMethod(str, Enum):
+    """How a savings account turns its balance into interest."""
+    FORTNIGHTLY = "FORTNIGHTLY"  # by quinzaine, the rule of every regulated livret
+    DAILY = "DAILY"
+
 class StockAccountType(str, Enum):
     """Type of stock investment account."""
     PEA = "PEA"
     CTO = "CTO"
     PEA_PME = "PEA_PME"
+
+class PlacementType(str, Enum):
+    """Kind of placement followed by hand, from its statements."""
+    AV = "AV"
+    PER = "PER"
+    EPARGNE_SALARIALE = "EPARGNE_SALARIALE"  # PEE, PERCO, collective PER
+    SCPI = "SCPI"
+    CROWDFUNDING = "CROWDFUNDING"
+    CAPITALISATION = "CAPITALISATION"
+    OTHER = "OTHER"
+
+class PlacementEntryType(str, Enum):
+    """A manual entry on a placement: a statement balance, or money in or out."""
+    VALUATION = "VALUATION"
+    DEPOSIT = "DEPOSIT"
+    WITHDRAW = "WITHDRAW"
 
 class StockTransactionType(str, Enum):
     """Type of stock transaction."""

@@ -4,10 +4,21 @@ from datetime import datetime, date
 from decimal import Decimal
 from enum import Enum
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from models.currency import BASE_CURRENCY, NO_CURRENCY
-from models.enums import BankAccountType
+from models.enums import BankAccountType, InterestMethod
+
+# Regulated livrets compute their interest by quinzaine, by law. The PEL is left
+# out: its rate is fixed at opening and its interest follows rules of its own.
+FORTNIGHTLY_ONLY_TYPES = frozenset({
+    BankAccountType.LIVRET_A,
+    BankAccountType.LIVRET_DEVE,
+    BankAccountType.LEP,
+    BankAccountType.LDD,
+    BankAccountType.CEL,
+})
+INTEREST_BEARING_TYPES = FORTNIGHTLY_ONLY_TYPES | {BankAccountType.SAVINGS}
 
 
 class LinkStatus(str, Enum):
@@ -64,20 +75,60 @@ class BankAccountCreate(BaseModel):
     balance: Decimal = Decimal("0")
     currency: str = BASE_CURRENCY
     opened_at: date | None = None
+    # Rates are decimals (0.025 = 2.5 %/year), gross of tax.
+    interest_rate: Decimal | None = Field(default=None, ge=0, le=1)
+    boosted_rate: Decimal | None = Field(default=None, ge=0, le=1)
+    boosted_until: date | None = None
+    interest_method: InterestMethod | None = None
 
     _check_currency = field_validator("currency")(_normalise_currency)
 
+    @model_validator(mode="after")
+    def interest_fits_the_type(self) -> "BankAccountCreate":
+        check_interest_terms(
+            self.account_type,
+            self.interest_rate,
+            self.boosted_rate,
+            self.boosted_until,
+            self.interest_method,
+        )
+        return self
+
 
 class BankAccountUpdate(BaseModel):
-    """Update a bank account."""
+    """Update a bank account. An interest field left out is kept; null clears it."""
     name: str | None = None
     institution_name: str | None = None
     identifier: str | None = None
     balance: Decimal | None = None
     currency: str | None = None
     opened_at: date | None = None
+    interest_rate: Decimal | None = Field(default=None, ge=0, le=1)
+    boosted_rate: Decimal | None = Field(default=None, ge=0, le=1)
+    boosted_until: date | None = None
+    interest_method: InterestMethod | None = None
 
     _check_currency = field_validator("currency")(_normalise_currency)
+
+
+def check_interest_terms(
+    account_type: BankAccountType,
+    interest_rate: Decimal | None,
+    boosted_rate: Decimal | None,
+    boosted_until: date | None,
+    interest_method: InterestMethod | None,
+) -> None:
+    """Refuse interest terms the account cannot carry, whole or in part."""
+    if account_type not in INTEREST_BEARING_TYPES:
+        if any(v is not None for v in (interest_rate, boosted_rate, boosted_until, interest_method)):
+            raise ValueError("Seuls les comptes d'épargne et les livrets portent un taux d'intérêt.")
+        return
+    if (boosted_rate is None) != (boosted_until is None):
+        raise ValueError("Un taux boosté va avec la date jusqu'à laquelle il s'applique.")
+    if boosted_rate is not None and interest_rate is None:
+        raise ValueError("Saisissez aussi le taux de base, celui qui s'applique après le taux boosté.")
+    if account_type in FORTNIGHTLY_ONLY_TYPES and interest_method == InterestMethod.DAILY:
+        raise ValueError("Les livrets réglementés calculent leurs intérêts par quinzaine.")
 
 
 class BankAccountResponse(BaseModel):
@@ -90,6 +141,11 @@ class BankAccountResponse(BaseModel):
     account_type: BankAccountType
     identifier: str | None = None
     opened_at: date | None = None
+    interest_rate: Decimal | None = None
+    boosted_rate: Decimal | None = None
+    boosted_until: date | None = None
+    # Null on an account that bears no interest.
+    interest_method: InterestMethod | None = None
     created_at: datetime
     updated_at: datetime
     balance_updated_at: date | None = None  # Last auto-sync date from cashflows
@@ -123,6 +179,26 @@ class BankSummaryResponse(BaseModel):
     # added it one-for-one would be wrong with nothing marking it as wrong.
     total_balance: Decimal | None
     accounts: list[BankAccountResponse]
+
+
+class SavingsInterestResponse(BaseModel):
+    """A savings account's interest for the current year, gross of tax.
+
+    Derived from the balance history and the rates the user entered, never
+    stored. Interest is paid on 31 December, so both figures are what that day
+    will add, not money already on the account.
+    """
+    account_id: str
+    year: int
+    rate: Decimal  # the rate in force today
+    method: InterestMethod
+    # Accrued over the quinzaines (or days) already over.
+    earned: Decimal
+    # The year's total if the balance stays at today's until 31 December.
+    estimated: Decimal
+    # First day of the year the history knows a balance for; interest before it
+    # is not counted. None when the whole year is covered.
+    tracked_from: date | None = None
 
 
 class BankHistoryEntry(BaseModel):
