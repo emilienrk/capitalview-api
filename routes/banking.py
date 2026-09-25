@@ -677,16 +677,18 @@ def get_transfer_questions(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
-    """How many pairs, flow and recurring payment questions wait for the user, and
-    in which months. Ungated, like /transactions."""
+    """How many pairs and flow questions wait for the user, and in which months,
+    and how many recurring payments or income wait in their own tab. Ungated,
+    like /transactions."""
     patterns = transfer_patterns(session, current_user.uuid, master_key)
     questions = defaultdict(int, patterns.questions)
-    for period, count in [*patterns.flow_questions.items(), *patterns.recurring_questions.items()]:
+    for period, count in patterns.flow_questions.items():
         questions[period] += count
     questions = dict(sorted(questions.items()))
     return BankTransferQuestionsResponse(
         total=sum(questions.values()),
         months=[BankTransferQuestionMonth(period=p, count=n) for p, n in questions.items()],
+        recurring=sum(patterns.recurring_questions.values()),
     )
 
 

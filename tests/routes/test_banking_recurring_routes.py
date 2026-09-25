@@ -53,8 +53,8 @@ def _one(client: TestClient) -> dict:
     return item
 
 
-def _questions(client: TestClient) -> int:
-    return client.get("/banking/transfer-questions").json()["total"]
+def _to_confirm(client: TestClient) -> int:
+    return client.get("/banking/transfer-questions").json()["recurring"]
 
 
 def _decide(client: TestClient, transaction_id: str, decision: str, **extra) -> dict | None:
@@ -98,10 +98,10 @@ def test_an_unknown_recurring_payment_is_not_found(client):
 def test_confirmed_the_next_debit_counts_without_asking_again(client, session, master_key):
     _ops(session, master_key, *_months(CURRENT, "2026-01", 3, 2, "21.60", POCKET_MONEY))
     candidate = _one(client)
-    assert (candidate["state"], _questions(client)) == ("candidate", 1)
+    assert (candidate["state"], _to_confirm(client)) == ("candidate", 1)
 
     confirmed = _decide(client, candidate["transaction_id"], "confirm", name="Argent de poche")
-    assert (confirmed["state"], confirmed["name"], _questions(client)) == ("confirmed", "Argent de poche", 0)
+    assert (confirmed["state"], confirmed["name"], _to_confirm(client)) == ("confirmed", "Argent de poche", 0)
 
     _ops(session, master_key, (CURRENT, "2026-04-02", "21.60", "DBIT", POCKET_MONEY))
     item = _one(client)
@@ -117,7 +117,7 @@ def test_refused_it_asks_no_more_and_counts_nothing_even_a_month_later(client, s
 
     _ops(session, master_key, (CURRENT, "2026-04-02", "21.60", "DBIT", CLAUDE))
     item = _one(client)
-    assert (item["state"], item["occurrence_count"], _questions(client)) == ("refused", 4, 0)
+    assert (item["state"], item["occurrence_count"], _to_confirm(client)) == ("refused", 4, 0)
     april = client.get("/banking/transactions?period=2026-04").json()["transactions"][0]
     assert april["recurring"] is None and april["recurring_question"] is None
 
@@ -247,7 +247,7 @@ def test_forgetting_a_decision_asks_again(client, session, master_key):
 
     assert client.delete(f"/banking/recurring/{refused['id']}").status_code == 204
 
-    assert (_one(client)["state"], _one(client)["id"], _questions(client)) == ("candidate", None, 1)
+    assert (_one(client)["state"], _one(client)["id"], _to_confirm(client)) == ("candidate", None, 1)
 
 
 def test_renamed_and_ended_on(client, session, master_key):

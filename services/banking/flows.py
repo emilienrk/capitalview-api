@@ -1215,9 +1215,7 @@ def list_month_transactions(
         net=month.net,
         internal_transfers_excluded=totals.transfers_count,
         internal_transfers_amount=totals.transfers_amount,
-        transfer_questions=totals.questions_count + sum(
-            1 for tx in transactions if tx.flow_question or tx.recurring_question
-        ),
+        transfer_questions=totals.questions_count + sum(1 for tx in transactions if tx.flow_question),
         reversals_excluded=totals.reversals_count,
         reversals_amount=totals.reversals_amount,
         pending_count=totals.pending_count,
@@ -1232,7 +1230,9 @@ def review_queue(
     session: Session, user_uuid: str, master_key: str, year: int | None = None
 ) -> BankReviewQueue:
     """Every question left to the user across the history, the one an answer
-    moves most money with first.
+    moves most money with first. A recurring payment or income to confirm is
+    asked in the Récurrent tab only, and merely counted here: an answer moves
+    no total.
 
     Read over the whole history in one pass, as the questions were counted:
     building each carrier from its own month would load a month per question.
@@ -1246,18 +1246,10 @@ def review_queue(
     )
 
     questions: list[BankReviewItem] = []
-    recurring = {s.carrier: s for s in pairing.patterns.recurring if s.question}
     for index, movement in enumerate(movements):
         leg = transfer_legs.get(index)
         carrier = pairing.patterns.flow_carriers.get(movement.row.uuid)
-        stored = recurring.get(movement.row.uuid)
-        if stored is not None:
-            questions.append(BankReviewItem(
-                kind=BankReviewKind.RECURRING, transaction=item(index),
-                amount=recurring_series.annual_estimate(stored),
-                operation_count=recurring_series.occurrence_count(stored),
-            ))
-        elif carrier is not None:
+        if carrier is not None:
             built = item(index)
             if built.flow_question:
                 questions.append(BankReviewItem(
@@ -1268,25 +1260,21 @@ def review_queue(
                 kind=BankReviewKind.TRANSFER, transaction=item(index), amount=movement.amount, operation_count=2,
             ))
 
-    # A recurring payment's answer moves no total: counted in, never added up.
-    def moves(question: BankReviewItem) -> Decimal:
-        return Decimal("0") if question.kind is BankReviewKind.RECURRING else question.amount
-
     years: dict[int, BankReviewYear] = {}
     for question in questions:
         day = question.transaction.operation_date
         if day is None:
             continue
         entry = years.setdefault(day.year, BankReviewYear(year=day.year, amount=Decimal("0"), count=0))
-        entry.amount += moves(question)
+        entry.amount += question.amount
         entry.count += 1
     if year is not None:
         questions = [q for q in questions if q.transaction.operation_date and q.transaction.operation_date.year == year]
     questions.sort(key=lambda q: (-q.amount, -(q.transaction.operation_date or date.min).toordinal()))
     return BankReviewQueue(
-        total_amount=sum((moves(q) for q in questions), Decimal("0")),
+        total_amount=sum((q.amount for q in questions), Decimal("0")),
         total_count=len(questions),
-        recurring_count=sum(1 for q in questions if q.kind is BankReviewKind.RECURRING),
+        recurring_count=sum(1 for stored in pairing.patterns.recurring if stored.question),
         years=sorted(years.values(), key=lambda entry: -entry.year),
         questions=questions,
     )

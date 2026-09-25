@@ -146,13 +146,13 @@ def test_rules_are_listed_with_what_they_type_and_can_be_deleted(client, session
 
 def test_flow_questions_count_with_the_transfer_questions_until_answered(client, session, master_key):
     _seed(session, master_key)
-    assert client.get("/banking/transfer-questions").json() == {"total": 1, "months": [{"period": "2026-03", "count": 1}]}
+    assert client.get("/banking/transfer-questions").json() == {"total": 1, "months": [{"period": "2026-03", "count": 1}], "recurring": 0}
     [target] = [tx for tx in client.get("/banking/transactions?period=2026-03").json()["transactions"] if tx["flow_question"]]
     assert (target["label"], target["flow_question"]["operation_count"]) == ("VIR INST ROUKINE EMILIEN", 2)
 
     client.put(f"/banking/transactions/{target['id']}/type", json={"type": "SAVING", "scope": "label"})
 
-    assert client.get("/banking/transfer-questions").json() == {"total": 0, "months": []}
+    assert client.get("/banking/transfer-questions").json() == {"total": 0, "months": [], "recurring": 0}
 
 
 def test_the_flow_group_route_lists_what_one_answer_would_type(client, session, master_key):

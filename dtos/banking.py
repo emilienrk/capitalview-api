@@ -543,6 +543,8 @@ class BankTransferQuestionsResponse(BaseModel):
     questions across the whole history, month by month."""
     total: int
     months: list[BankTransferQuestionMonth]
+    # Recurring payments and income to confirm, asked in their own tab.
+    recurring: int = 0
 
 
 class BankReviewKind(str, Enum):
@@ -575,6 +577,7 @@ class BankReviewQueue(BaseModel):
     # What the flow and transfer questions can still move.
     total_amount: Decimal
     total_count: int
+    # Recurring payments and income to confirm: asked in their own tab.
     recurring_count: int = 0
     # Over the whole history, whatever the year asked for.
     years: list[BankReviewYear]

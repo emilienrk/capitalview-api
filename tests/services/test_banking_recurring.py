@@ -210,7 +210,7 @@ def test_a_member_carries_its_recurring_payment_and_a_cancelled_one_counts_for_n
     assert rows[october[False].id].recurring is None
 
 
-def test_the_question_sits_on_the_last_debit_alone_and_counts_in_the_month(session: Session, master_key: str):
+def test_the_question_sits_on_the_last_debit_alone_and_is_left_to_its_tab(session: Session, master_key: str):
     _ops(session, master_key, *_months(CURRENT, "2026-01", 3, 2, "21.60", POCKET_MONEY))
     [february] = _month_items(session, master_key, "2026-02")
     [march] = _month_items(session, master_key, "2026-03")
@@ -220,12 +220,12 @@ def test_the_question_sits_on_the_last_debit_alone_and_counts_in_the_month(sessi
         "monthly", Decimal("21.60"), 3, date(2026, 1, 2),
     )
     assert question.annual_estimate == Decimal("259.20")
-    assert list_month_transactions(session, USER, master_key, "2026-03").transfer_questions == 1
+    assert list_month_transactions(session, USER, master_key, "2026-03").transfer_questions == 0
     rows = {row.id: row for row in build_ledger(session, USER, master_key).rows}
     assert (rows[march.id].question, rows[february.id].question) == ("recurring", None)
 
 
-def test_the_queue_ranks_a_recurring_payment_by_its_yearly_cost_without_adding_it_up(session: Session, master_key: str):
+def test_the_queue_leaves_a_recurring_payment_to_its_tab_and_only_counts_it(session: Session, master_key: str):
     _ops(
         session, master_key,
         *_months(CURRENT, "2026-01", 3, 2, "21.60", POCKET_MONEY),
@@ -233,11 +233,9 @@ def test_the_queue_ranks_a_recurring_payment_by_its_yearly_cost_without_adding_i
         (CURRENT, "2026-02-12", "150.00", "CRDT", "VIR SEPA PAUL AUTRE"),
     )
     queue = review_queue(session, USER, master_key)
-    assert [(q.kind, q.amount) for q in queue.questions] == [
-        ("flow", Decimal("500.00")), ("recurring", Decimal("259.20")), ("flow", Decimal("150.00")),
-    ]
-    assert (queue.total_amount, queue.total_count, queue.recurring_count) == (Decimal("650.00"), 3, 1)
-    assert [(y.year, y.amount, y.count) for y in queue.years] == [(2026, Decimal("650.00"), 3)]
+    assert [(q.kind, q.amount) for q in queue.questions] == [("flow", Decimal("500.00")), ("flow", Decimal("150.00"))]
+    assert (queue.total_amount, queue.total_count, queue.recurring_count) == (Decimal("650.00"), 2, 1)
+    assert [(y.year, y.amount, y.count) for y in queue.years] == [(2026, Decimal("650.00"), 2)]
 
 
 def test_a_refund_from_a_counted_recurring_payment_comes_off_its_spending_unasked(session: Session, master_key: str):
