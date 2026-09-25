@@ -45,7 +45,6 @@ rate is ever supplied); readers must check `currency_enc` before summing.
 from __future__ import annotations
 
 import logging
-import re
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -60,6 +59,7 @@ from models.banking import BankTransaction
 # Currency the rest of CapitalView reasons in; anything else is stored as-is.
 # Re-exported from here because the banking modules already read it from this one.
 from models.currency import BASE_CURRENCY
+from services.banking.labels import label_signature
 from services.banking.operation_types import operation_type
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
@@ -362,24 +362,6 @@ def _apply(
     signature = label_signature(tx.remittance)
     row.label_signature_bidx = hash_index(signature, master_key) if signature else None
     row.operation_type_enc = encrypt_data(operation_type(tx.remittance).value, master_key)
-
-
-_WORD = re.compile(r"[^\W\d_]{2,}")
-
-
-def label_words(label: str | None) -> frozenset[str]:
-    """The words of a label, lowercased, digits and punctuation dropped: what
-    stays the same from one occurrence of an operation to the next, while its
-    date, card number or reference change."""
-    return frozenset(word.lower() for word in _WORD.findall(label or ""))
-
-
-def label_signature(label: str | None) -> str | None:
-    """One rendering of a label's words, for grouping operations that read
-    alike. Knows no bank's format: two labels share a signature when they
-    share every word, whatever they are."""
-    words = label_words(label)
-    return " ".join(sorted(words)) if words else None
 
 
 def _encrypt_date(value: date | None, master_key: str) -> str | None:

@@ -18,36 +18,26 @@ Pure: labels in, groups out.
 from __future__ import annotations
 
 import math
-import re
-import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 
 from services.banking.label_groups import NOISE_WORDS, display_label
+from services.banking.labels import SIMILARITY_THRESHOLD, fold, words_in_order
 
 MerchantKey = tuple[str, ...]
-
-
-def fold(text: str) -> str:
-    """Lower case, accents dropped."""
-    decomposed = unicodedata.normalize("NFKD", text.casefold())
-    return "".join(char for char in decomposed if not unicodedata.combining(char))
 
 
 # Beyond the bank plumbing `label_groups` drops: the words of the long format
 # Boursorama writes since 2026-06 ("PRELEV", "Numero de client", "SCT"), legal
 # forms, HTML entities a bank left escaped ("OLNESS.apos"), web noise and French
 # stop words. Not "com" nor "fr": "COM AIR" is named by its first word.
-NOISE = frozenset(fold(word) for word in NOISE_WORDS) | frozenset({
+NOISE = NOISE_WORDS | frozenset({
     "prelev", "numero", "client", "sct", "vers", "ech",
     "sarl", "sas", "sasu", "eurl", "sa", "sca", "cie", "ltd", "gmbh", "inc", "llc", "srl", "bv", "ag", "plc",
     "apos", "amp", "quot",
     "www", "http", "https", "et", "en", "au", "aux",
 })
 
-# The threshold nearby labels already merge at (label_groups.merge_similar),
-# where 0.5 let "Carrefour Annecy" swallow "Annecy".
-JACCARD_THRESHOLD = 0.6
 # A label that grew keeps most of the weight of the one it grew from.
 CONTAINMENT_THRESHOLD = 0.75
 # A prefix is the same word only when long enough and most of the other one:
@@ -56,7 +46,6 @@ PREFIX_MIN_LETTERS = 4
 PREFIX_MIN_SHARE = 0.5
 TYPO_MIN_LETTERS = 5
 
-_RUN = re.compile(r"[^\W_]+")
 _FALLBACK = "#"
 
 
@@ -64,12 +53,9 @@ def merchant_words(label: str | None) -> MerchantKey:
     """The words naming who is paid, in label order: runs of letters of two or
     more, a run holding a digit dropped whole, noise and repeats dropped. A
     label with no such word keys on its cleaned text, compared as is."""
-    words: list[str] = []
-    for run in _RUN.findall(fold(label or "")):
-        if len(run) >= 2 and not any(char.isdigit() for char in run) and run not in NOISE and run not in words:
-            words.append(run)
+    words = tuple(dict.fromkeys(word for word in words_in_order(label) if word not in NOISE))
     if words:
-        return tuple(words)
+        return words
     return (_FALLBACK + fold(display_label(label)),)
 
 
@@ -132,7 +118,7 @@ def same_merchant(a: MerchantKey, b: MerchantKey, idf: Idf) -> bool:
         sum(idf(word) for n, word in enumerate(b) if _found(word, n, b, a)),
     )
     union = weight_a + weight_b - shared
-    if union > 0 and shared / union >= JACCARD_THRESHOLD:
+    if union > 0 and shared / union >= SIMILARITY_THRESHOLD:
         return True
     return shared / min(weight_a, weight_b) >= CONTAINMENT_THRESHOLD and words_alike(a[0], b[0])
 

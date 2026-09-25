@@ -4,18 +4,19 @@ the rules of labels that set it (services/banking/type_rules.py).
 
 Labels are shaped like the real ones, names replaced.
 """
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from dtos.banking import BankTransferStatus as Status, CashflowType as Type, TypeSource as Source
-from models.banking import BankTransaction
+from models.banking import BankTransaction, BankTypeRule
 from services.banking.flows import list_month_transactions
 from services.banking.cashflow_types import Resolution, counted_leg, resolve_type, signed_amount
-from services.banking.type_rules import TypeRule, TypeRules, save_rule
-from services.encryption import encrypt_data
+from services.banking.type_rules import TypeRule, TypeRules, rule_bidx, save_rule
+from services.encryption import encrypt_data, hash_index
 from tests.services.test_banking_flows import USER, _link
 from tests.services.test_banking_real_cashflow import CURRENT, LDDS, LIVRET, _as_ldds, _month, _ops
 from tests.services.test_banking_transfer_patterns import NEOBANK, _top_up
@@ -197,3 +198,41 @@ class TestTheList:
 
         assert (month["VIR INST ROUKINE EMILIEN"].cashflow_type, month["VIR INST ROUKINE EMILIEN"].type_source) == (Type.SAVING, Source.RULE)
         assert (month["VIR INST ROUKINE EMILIEN REF 2"].cashflow_type, month["VIR INST ROUKINE EMILIEN REF 2"].type_source) == (Type.NEUTRAL, Source.OVERRIDE)
+
+
+class TestRulesSavedUnderAnOlderReading:
+    """Rules saved before labels were read with accents folded and a run holding
+    a digit dropped whole (services/banking/labels.py)."""
+
+    LABEL = "Paiement envoyé par Mme Dormia Laure SCT4412"
+
+    def _older_rule(self, session: Session, master_key: str) -> None:
+        signature = "dormia envoyé laure mme paiement par sct"
+        session.add(BankTypeRule(
+            user_uuid_bidx=hash_index(USER, master_key),
+            rule_bidx=rule_bidx(CURRENT, True, signature, master_key),
+            signature_enc=encrypt_data(signature, master_key),
+            account_ref_enc=encrypt_data(CURRENT, master_key),
+            credit_enc=encrypt_data("true", master_key),
+            words_enc=encrypt_data(json.dumps(["dormia", "envoyé", "laure", "mme", "paiement", "par"]), master_key),
+            type_enc=encrypt_data(Type.NEUTRAL.value, master_key),
+            created_at=datetime(2026, 1, 5, tzinfo=timezone.utc),
+        ))
+        session.commit()
+
+    def test_one_still_types_its_label(self, session: Session, master_key: str):
+        _ops(session, master_key, (CURRENT, "2026-03-05", "250.00", "CRDT", self.LABEL))
+        self._older_rule(session, master_key)
+
+        operation = _month(session, master_key)[self.LABEL]
+
+        assert (operation.cashflow_type, operation.type_source) == (Type.NEUTRAL, Source.RULE)
+
+    def test_answering_its_label_again_replaces_it(self, session: Session, master_key: str):
+        _ops(session, master_key, (CURRENT, "2026-03-05", "250.00", "CRDT", self.LABEL))
+        self._older_rule(session, master_key)
+
+        save_rule(session, USER, master_key, CURRENT, True, self.LABEL, Type.INCOME)
+
+        assert len(session.exec(select(BankTypeRule)).all()) == 1
+        assert _month(session, master_key)[self.LABEL].cashflow_type is Type.INCOME

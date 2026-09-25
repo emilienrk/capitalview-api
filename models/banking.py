@@ -234,9 +234,10 @@ class BankTransaction(SQLModel, table=True):
     value_date_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     transaction_date_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     remittance_enc: str | None = Field(default=None, sa_column=Column(TEXT))
-    # Blind index of the label's words (transactions.label_signature): groups
-    # the operations that read alike without the label ever leaving its cipher.
-    # NULL on rows stored before it existed, until transfer patterns backfill it.
+    # Blind index of the label's words (labels.label_signature): groups the
+    # operations that read alike without the label ever leaving its cipher.
+    # Re-derived on every row by the transfer-pattern rebuild; NULL for a label
+    # without words.
     label_signature_bidx: str | None = Field(default=None, sa_column=Column(TEXT, index=True))
     # An OperationType (services/banking/operation_types.py). NULL on rows
     # stored before it existed, until transfer patterns backfill it.
@@ -341,6 +342,8 @@ class BankTypeRule(SQLModel, table=True):
     )
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
     rule_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    # The key it was saved under, for the data export: a rule is read by its
+    # words, which give its key (services/banking/type_rules.py).
     signature_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     account_ref_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     credit_enc: str = Field(sa_column=Column(TEXT, nullable=False))

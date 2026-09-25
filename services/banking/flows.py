@@ -70,16 +70,11 @@ from services.banking.contributions import (
     load_contributions,
     match_candidates,
 )
+from services.banking.labels import label_signature, label_words
 from services.banking.linking import readable_account_bidxs
 from services.banking.operation_types import operation_type
 from services.banking.recurring_decisions import load_decisions as load_recurring_decisions
-from services.banking.transactions import (
-    CREDIT,
-    FINAL_STATUSES,
-    label_signature,
-    label_words,
-    row_date,
-)
+from services.banking.transactions import CREDIT, FINAL_STATUSES, row_date
 from services.banking.transfer_decisions import (
     MAX_DECISION_DAYS,
     Decisions,
@@ -88,7 +83,7 @@ from services.banking.transfer_decisions import (
     load_decisions,
 )
 from services.banking.transfer_patterns import FlowCarrier, TransferPatterns
-from services.banking.type_rules import TypeRules, load_rules, save_rule, telling_words
+from services.banking.type_rules import TypeRules, load_rules, save_rule
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 logger = logging.getLogger(__name__)
@@ -697,9 +692,12 @@ def transfer_patterns(
     for i, movement in enumerate(movements):
         row = movement.row
         changed = False
+        # Every row, as for its type below: a change to how labels are read
+        # (services/banking/labels.py) reaches the history this way.
         signature = label_signature(labels[i])
-        if row.label_signature_bidx is None and signature is not None:
-            row.label_signature_bidx = hash_index(signature, master_key)
+        signature_bidx = hash_index(signature, master_key) if signature is not None else None
+        if row.label_signature_bidx != signature_bidx:
+            row.label_signature_bidx = signature_bidx
             changed = True
         # Every row, not only those stored before types existed: this is how a
         # change to the lexicon reaches the history.
@@ -731,11 +729,11 @@ def transfer_patterns(
     for i, movement in enumerate(movements):
         side = stored_patterns.side_key(movement.account_bidx, movement.is_credit)
         side_rows[side] += 1
-        for word in label_words(labels[i]):
+        words = label_words(labels[i])
+        for word in words:
             side_words[side][word] += 1
-        telling = telling_words(labels[i])
-        if telling:
-            side_labels[side].add(telling)
+        if words:
+            side_labels[side].add(words)
     patterns.common_words = {
         side: frozenset(
             w for w, n in counts.items()

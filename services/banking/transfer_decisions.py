@@ -33,15 +33,10 @@ from sqlmodel import Session, select
 
 from dtos.banking import BankTransferDecisionKind
 from models.banking import BankTransaction, BankTransferDecision
+from services.banking.labels import SIMILARITY_THRESHOLD, fold, label_words, similarity
 from services.banking.linking import readable_account_bidxs
-from services.banking.transactions import CREDIT, label_words, row_date
+from services.banking.transactions import CREDIT, row_date
 from services.encryption import decrypt_data, encrypt_data, hash_index
-
-# A leg reads like an exemplar when this share of their informative words match.
-# Measured by replaying four years of decisions month by month: lower, a
-# "VIR INST <someone else>" passed for the user's own "VIR INST <user>" and true
-# transfers were rejected by association; higher, only more questions.
-SIMILARITY_THRESHOLD = 0.6
 
 # Two legs further apart than this cannot be bound by hand: every reader loads
 # the month either side of the one it shows, and a pair must never have a leg
@@ -87,7 +82,7 @@ class _Exemplars:
             for exemplar in exemplars:
                 words = exemplar - shared
                 if words:
-                    best[verdict] = max(best[verdict], len(informative & words) / len(informative | words))
+                    best[verdict] = max(best[verdict], similarity(informative, words))
         own_score, other_score = best[Verdict.OWN], best[Verdict.OTHER]
         if own_score >= SIMILARITY_THRESHOLD and own_score > other_score:
             return Verdict.OWN
@@ -170,7 +165,8 @@ def load_decisions(session: Session, user_uuid: str, master_key: str) -> Decisio
 
 
 def _tokens(value: str, master_key: str) -> frozenset[str]:
-    return frozenset(json.loads(decrypt_data(value, master_key)))
+    # Folded again: decisions taken before labels were read with accents folded.
+    return frozenset(fold(word) for word in json.loads(decrypt_data(value, master_key)))
 
 
 @dataclass(frozen=True)

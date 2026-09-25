@@ -5,13 +5,15 @@ A rule belongs to one account and one direction: "VIR INST <user>" leaving the
 current account is not the same answer as the same words arriving on it. It
 reaches the operations of that exact label, and those of a nearby one — a
 salary whose reference changes every month would otherwise ask again each
-month. Nearby is measured the way transfer decisions measure it
-(`transfer_decisions.SIMILARITY_THRESHOLD`): the words both labels share over
-the words either holds, once the words found in too many distinct labels on
-that side of the account ("CARTE", "VIR") are set aside, since they tell
-nothing apart. Only whole words count here: a run of letters and digits such
-as a transfer reference ("ZZ1L2ZJSYU78NB5") changes every month and would
-otherwise leave its letters behind as words no two months share.
+month. Nearby is measured on the words of `labels.py`, as everywhere a label
+is compared (`labels.SIMILARITY_THRESHOLD`), once the words found in too many
+distinct labels on that side of the account ("CARTE", "VIR") are set aside,
+since they tell nothing apart.
+
+A rule is read by its words, its key made of them as `labels.label_signature`
+makes it: a rule saved before labels were read with accents folded and
+references dropped whole still finds its label, and the answer given again on
+that label replaces it.
 
 Rules are applied as operations are read, never written onto them, so a rule
 also types the operations imported after it.
@@ -20,7 +22,6 @@ also types the operations imported after it.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -29,21 +30,8 @@ from sqlmodel import Session, select
 
 from dtos.banking import CashflowType
 from models.banking import BankTypeRule
-from services.banking.transactions import label_signature
-from services.banking.transfer_decisions import SIMILARITY_THRESHOLD
+from services.banking.labels import SIMILARITY_THRESHOLD, fold, label_signature, label_words, similarity
 from services.encryption import decrypt_data, encrypt_data, hash_index
-
-
-_RUN = re.compile(r"[^\W_]+")
-
-
-def telling_words(label: str | None) -> frozenset[str]:
-    """The words a nearby label is measured on: runs of letters only, a run
-    holding a digit dropped whole."""
-    return frozenset(
-        run.lower() for run in _RUN.findall(label or "")
-        if len(run) >= 2 and not any(char.isdigit() for char in run)
-    )
 
 
 class RuleNotFoundError(LookupError):
@@ -85,7 +73,7 @@ class TypeRules:
 
 
 def _nearest(rules: list[TypeRule], label: str | None, common: frozenset[str]) -> TypeRule | None:
-    informative = telling_words(label) - common
+    informative = label_words(label) - common
     if not informative:
         return None
     best: tuple[float, datetime] | None = None
@@ -94,7 +82,7 @@ def _nearest(rules: list[TypeRule], label: str | None, common: frozenset[str]) -
         words = rule.words - common
         if not words:
             continue
-        score = len(informative & words) / len(informative | words)
+        score = similarity(informative, words)
         if score >= SIMILARITY_THRESHOLD and (best is None or (score, rule.created_at) > best):
             best, nearest = (score, rule.created_at), rule
     return nearest
@@ -106,20 +94,28 @@ def rule_bidx(account_id: str, is_credit: bool, signature: str, master_key: str)
 
 def load_rules(session: Session, user_uuid: str, master_key: str) -> TypeRules:
     rules = TypeRules()
-    for row in session.exec(
-        select(BankTypeRule).where(BankTypeRule.user_uuid_bidx == hash_index(user_uuid, master_key))
-    ).all():
-        rule = TypeRule(
+    for rule in _stored(session, hash_index(user_uuid, master_key), master_key):
+        key = (rule.account_bidx, rule.is_credit, rule.signature)
+        if key not in rules.exact or rule.created_at > rules.exact[key].created_at:
+            rules.exact[key] = rule
+    for rule in rules.exact.values():
+        rules.by_side.setdefault((rule.account_bidx, rule.is_credit), []).append(rule)
+    return rules
+
+
+def _stored(session: Session, user_bidx: str, master_key: str) -> list[TypeRule]:
+    rules = []
+    for row in session.exec(select(BankTypeRule).where(BankTypeRule.user_uuid_bidx == user_bidx)).all():
+        words = frozenset(fold(word) for word in json.loads(decrypt_data(row.words_enc, master_key)))
+        rules.append(TypeRule(
             uuid=row.uuid,
             account_bidx=hash_index(decrypt_data(row.account_ref_enc, master_key), master_key),
             is_credit=decrypt_data(row.credit_enc, master_key) == _flag(True),
-            signature=decrypt_data(row.signature_enc, master_key),
-            words=frozenset(json.loads(decrypt_data(row.words_enc, master_key))),
+            signature=" ".join(sorted(words)),
+            words=words,
             type=CashflowType(decrypt_data(row.type_enc, master_key)),
             created_at=row.created_at,
-        )
-        rules.exact[(rule.account_bidx, rule.is_credit, rule.signature)] = rule
-        rules.by_side.setdefault((rule.account_bidx, rule.is_credit), []).append(rule)
+        ))
     return rules
 
 
@@ -142,8 +138,14 @@ def save_rule(
         raise ValueError("A rule needs a label with words.")
     user_bidx = hash_index(user_uuid, master_key)
     bidx = rule_bidx(account_id, is_credit, signature, master_key)
+    side = (hash_index(account_id, master_key), is_credit, signature)
+    replaced = [
+        rule.uuid for rule in _stored(session, user_bidx, master_key)
+        if (rule.account_bidx, rule.is_credit, rule.signature) == side
+    ]
     session.exec(sa.delete(BankTypeRule).where(
-        BankTypeRule.user_uuid_bidx == user_bidx, BankTypeRule.rule_bidx == bidx,
+        BankTypeRule.user_uuid_bidx == user_bidx,
+        sa.or_(BankTypeRule.rule_bidx == bidx, BankTypeRule.uuid.in_(replaced)),
     ))
     row = BankTypeRule(
         user_uuid_bidx=user_bidx,
@@ -151,7 +153,7 @@ def save_rule(
         signature_enc=encrypt_data(signature, master_key),
         account_ref_enc=encrypt_data(account_id, master_key),
         credit_enc=encrypt_data(_flag(is_credit), master_key),
-        words_enc=encrypt_data(json.dumps(sorted(telling_words(label))), master_key),
+        words_enc=encrypt_data(json.dumps(sorted(label_words(label))), master_key),
         type_enc=encrypt_data(kind.value, master_key),
         created_at=datetime.now(timezone.utc),
     )

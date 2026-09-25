@@ -9,8 +9,8 @@ shows a rougher name, never a wrong figure.
 
 The key knows no bank: it is the label's whole words once the words too common
 on that side of the user's accounts ("carte", "cb", "vir") are set aside — the
-words a nearby-label rule is measured on (`type_rules.telling_words`), so a
-salary whose reference changes every month stays one group. The name does read
+words every label comparison reads (`labels.label_words`), so a salary whose
+reference changes every month stays one group. The name does read
 bank formats, since a card date or a card number is noise to a reader.
 """
 
@@ -20,8 +20,7 @@ import re
 from collections import Counter, defaultdict
 from datetime import date
 
-from services.banking.transfer_decisions import SIMILARITY_THRESHOLD
-from services.banking.type_rules import telling_words
+from services.banking.labels import SIMILARITY_THRESHOLD, label_words, similarity
 
 # The plumbing a bank writes around a counterpart's name. `label_common` already
 # drops what is too frequent on one side of a user's accounts, but a format seen
@@ -29,9 +28,9 @@ from services.banking.type_rules import telling_words
 # then read as one. Kept short on purpose: only words no counterpart is named
 # after, and French stop words a name carries no meaning through.
 NOISE_WORDS = frozenset({
-    "achat", "avoir", "carte", "cb", "courant", "dab", "emis", "envoye", "envoyé", "inst",
-    "mandat", "paiement", "payment", "prelevement", "prlv", "recu", "reçu", "ref", "réf",
-    "rej", "retrait", "rum", "sent", "sepa", "tdf", "transfer", "via", "vir", "virement",
+    "achat", "avoir", "carte", "cb", "courant", "dab", "emis", "envoye", "inst", "mandat",
+    "paiement", "payment", "prelevement", "prlv", "recu", "ref", "rej", "retrait", "rum",
+    "sent", "sepa", "tdf", "transfer", "via", "vir", "virement",
     "de", "des", "du", "from", "la", "le", "les", "par", "pour", "to",
 })
 
@@ -54,7 +53,7 @@ _SPACES = re.compile(r"\s+")
 
 def group_words(label: str | None, common: frozenset[str]) -> frozenset[str]:
     """What names the counterpart in a label: its words, bank plumbing aside."""
-    return telling_words(label) - common - NOISE_WORDS
+    return label_words(label) - common - NOISE_WORDS
 
 
 def group_key(label: str | None, common: frozenset[str]) -> str:
@@ -101,7 +100,7 @@ def merge_similar(groups: list[tuple[str, frozenset[str], int]]) -> dict[str, st
     A bank writes the same counterpart several ways ("VILMORIN & CIE", "VILMORIN
     & CIE SALAIRE DE 2026-08"), and each spelling would take a line of its own.
     Two groups sharing enough of their words are the same counterpart, measured
-    as a nearby label is (`transfer_decisions.SIMILARITY_THRESHOLD`). The group
+    as a nearby label is (`labels.SIMILARITY_THRESHOLD`). The group
     carrying the most operations gives the merged key, so the name a reader
     knows wins; ties go to the first key in order.
 
@@ -138,4 +137,4 @@ def merge_similar(groups: list[tuple[str, frozenset[str], int]]) -> dict[str, st
 def _alike(words: frozenset[str], others: frozenset[str]) -> bool:
     # Both hold the word they were found by, so neither is empty: a group no
     # word names is never compared, and stays on its own.
-    return len(words & others) / len(words | others) >= SIMILARITY_THRESHOLD
+    return similarity(words, others) >= SIMILARITY_THRESHOLD

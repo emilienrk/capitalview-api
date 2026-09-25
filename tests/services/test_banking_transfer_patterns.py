@@ -4,6 +4,7 @@ the stored patterns they read (services/banking/transfer_patterns.py).
 
 Labels are shaped like the real ones the cases came from, names replaced.
 """
+import pytest
 from sqlmodel import Session, select
 
 from dtos.banking import BankTransferStatus as Status
@@ -157,15 +158,17 @@ class TestStoredPatterns:
         assert (month.transfer_questions, month.internal_transfers_excluded) == (0, 1)
         assert transfer_patterns(session, USER, master_key).questions == {}
 
-    def test_rows_stored_before_signatures_get_one(self, session: Session, master_key: str):
+    @pytest.mark.parametrize("stored", [None, "an older reading"], ids=["missing", "stale"])
+    def test_every_row_gets_the_signature_of_its_label(self, session: Session, master_key: str, stored):
         _ops(session, master_key, *_top_up("03", "05", "20.00"), *_top_up("04", "10", "35.50"), *_top_up("05", "14", "12.00"))
         for row in session.exec(select(BankTransaction)).all():
-            row.label_signature_bidx = None
+            row.label_signature_bidx = stored
             session.add(row)
         session.commit()
 
         assert _month(session, master_key, "2025-05").internal_transfers_excluded == 1
-        assert all(row.label_signature_bidx for row in session.exec(select(BankTransaction)).all())
+        signatures = {row.label_signature_bidx for row in session.exec(select(BankTransaction)).all()}
+        assert None not in signatures and stored not in signatures
 
     def test_the_questions_are_counted_per_month(self, session: Session, master_key: str):
         _ops(
