@@ -300,7 +300,9 @@ class ExtractTxAgent:
             self.messages.append(self._provider.build_assistant_message(response))
 
             stop_reason = self._provider.extract_stop_reason(response)
-            if stop_reason == "end_turn":
+            # Anything but a tool call ends the turn: looping on a truncated
+            # (max_tokens) answer would resend a conversation ending on the model.
+            if stop_reason != "tool_use":
                 break
 
             tool_uses = self._provider.extract_tool_uses(response)
@@ -336,7 +338,8 @@ class ExtractTxAgent:
 
         # Gemini Content object (stored by build_assistant_message): iterate over .parts
         if hasattr(content, "parts"):
-            for part in content.parts:
+            # None when the output budget went entirely to thinking
+            for part in content.parts or []:
                 if hasattr(part, "text") and part.text:
                     return part.text
             return ""

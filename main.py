@@ -23,6 +23,7 @@ from config import get_settings
 from database import get_session, get_engine
 from logging_config import request_id_var, setup_logging
 from mcp_server import build_mcp_route, build_mcp_server
+from services.ai.errors import register_ai_error_handlers
 from services.health import build_health_report, build_provenance
 from models import User
 from routes import (
@@ -115,6 +116,28 @@ app = FastAPI(
     version=__version__,
     lifespan=lifespan,
 )
+
+
+class UnhandledErrorMiddleware(BaseHTTPMiddleware):
+    """Answer an unhandled error with a 500 the browser is allowed to read.
+
+    Starlette turns an uncaught exception into a 500 in ServerErrorMiddleware,
+    which wraps every middleware added here, CORS included. That 500 carries
+    no Access-Control-Allow-Origin, so the browser reports a CORS failure and
+    the frontend only sees "Failed to fetch". Added before CORSMiddleware, this
+    one sits inside it.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        try:
+            return await call_next(request)
+        except Exception:
+            logger.exception("unhandled error on %s %s", request.method, request.url.path)
+            return JSONResponse(status_code=500, content={"detail": "Erreur interne du serveur"})
+
+
+app.add_middleware(UnhandledErrorMiddleware)
+register_ai_error_handlers(app)
 
 app.add_middleware(
     CORSMiddleware,
