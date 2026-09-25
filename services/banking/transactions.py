@@ -413,8 +413,8 @@ def row_date(row: BankTransaction, master_key: str) -> date | None:
     """The date a stored row is placed on, read back with the very fallback
     order `normalize_transaction` applied when it was written.
 
-    One reader for every consumer — the curve, the observed flows, cashflow
-    matching. Three copies of this loop used to agree only by comment: one of
+    One reader for every consumer — the curve, the observed flows, the
+    recurring payments. Three copies of this loop used to agree only by comment: one of
     them drifting would file the same operation on different days in the curve
     and in "Ce qui a réellement bougé", with nothing to say so.
     """
