@@ -44,6 +44,7 @@ from dtos.banking import (
     BankReviewYear,
     BankRecurringQuestion,
     BankRecurringTag,
+    RecurringDirection,
     BankTransactionItem,
     BankTransactionsResponse,
     BankTransferDecisionKind,
@@ -293,7 +294,9 @@ def _internal_transfer_legs(
     2. it touches a regulated savings account;
     3. its shape recurs across the history (services/banking/transfer_patterns.py);
     4. both labels read like pairs the user confirmed;
-    5. otherwise it is only suggested, and both legs keep counting.
+    5. a card payment or direct debit against a transfer received is not
+       even offered: a third party paying the user back;
+    6. otherwise it is only suggested, and both legs keep counting.
 
     Refunds on one account come between the last two: same amount, the credit
     within a month of the debit, and a word the two labels share that the
@@ -432,6 +435,9 @@ def _closest_complete_matching(
     return [(debit, credit, status[(debit, credit)]) for debit, credit in credit_of.items()]
 
 
+_PAID_TO_A_THIRD_PARTY = frozenset({OperationType.CARD, OperationType.DIRECT_DEBIT})
+
+
 def _transfer_status(
     pairing: _Pairing, d: _Movement, c: _Movement, debit: int, credit: int, verdict
 ) -> BankTransferStatus | None:
@@ -451,6 +457,14 @@ def _transfer_status(
         return BankTransferStatus.RECURRING
     if legs == (Verdict.OWN, Verdict.OWN):
         return BankTransferStatus.LEARNED
+    # A card payment or a direct debit answered by a transfer received on
+    # another account is someone paying the user back, not the user moving
+    # money: every such pair seen in real histories was a reimbursement.
+    if (
+        _operation_type(d, pairing.master_key) in _PAID_TO_A_THIRD_PARTY
+        and _operation_type(c, pairing.master_key) is OperationType.TRANSFER
+    ):
+        return None
     return BankTransferStatus.SUGGESTED
 
 
@@ -765,8 +779,6 @@ def transfer_patterns(
     resolutions = [
         _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
     ]
-    asking_groups = _asking_groups(movements, transfer_legs, labels, resolutions)
-    heavy = [members for members in asking_groups if _heavy(movements, members)]
     derived = recurring_series.derive(
         [
             _recurring_movement(index, movement, labels[index], transfer_legs.get(index), resolutions[index],
@@ -775,26 +787,27 @@ def transfer_patterns(
         ],
         load_recurring_decisions(session, user_uuid, master_key),
         {bidx: account.uuid for bidx, account in accounts.by_bidx.items()},
-        {index for members in heavy for index in members},
         master_key,
     )
-    patterns.recurring = derived.recurring
+    patterns.set_recurring(derived.recurring)
     patterns.recurring_questions = derived.questions
-    # A refund of a counted recurring payment asks whatever it weighs: its answer
-    # moves the recurring payment's own figure.
-    forced = [
-        members for members in asking_groups
-        if not _heavy(movements, members) and derived.refunds.intersection(members)
+    # Read again once the recurring series are known: their members are
+    # reviewed there, and only come back to be filed once refused.
+    resolutions = [
+        _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
     ]
+    asking_groups = _asking_groups(movements, transfer_legs, labels, resolutions)
+    heavy = [members for members in asking_groups if _heavy(movements, members)]
 
     flow_questions: dict[str, int] = defaultdict(int)
     flow_open: dict[str, int] = defaultdict(int)
     flow_open_amount: dict[str, Decimal] = defaultdict(Decimal)
-    for members in heavy + forced:
+    for members in heavy:
         # Movements come sorted by day: the last one is the most recent.
         carrier = movements[members[-1]]
         patterns.flow_carriers[carrier.row.uuid] = FlowCarrier(
             len(members), sum((movements[i].amount for i in members), Decimal("0")),
+            sum(1 for i in members if i in filing.contributions),
         )
         flow_questions[carrier.period] += 1
         for index in members:
@@ -1049,6 +1062,7 @@ def _filed(
         CashflowType(decrypt_data(override, filing.master_key)) if override else None,
         (rule.uuid, rule.type) if rule else None,
         contributed=match is not None and match.exact,
+        recurring=filing.patterns.held_by_recurring(movement.row.uuid),
     )
 
 
@@ -1089,9 +1103,6 @@ def _item_builder(
         settles = filing.patterns.flow_carriers.get(row.uuid)
         asks = settles is not None and _asks_flow(movement, leg, label, resolution)
         stored, member = filing.patterns.recurring_of(row.uuid) or (None, None)
-        refunds_recurring = (
-            stored is not None and stored.counted and member.role == stored_patterns.REFUND
-        )
         return BankTransactionItem(
             id=row.uuid,
             account_id=accounts.by_bidx[movement.account_bidx].uuid,
@@ -1116,12 +1127,11 @@ def _item_builder(
                 choices=CREDIT_CHOICES if movement.is_credit else DEBIT_CHOICES,
                 operation_count=settles.count,
                 amount=settles.amount,
-                suggested=CashflowType.EXPENSE if refunds_recurring else None,
-                recurring_name=stored.name if refunds_recurring else None,
+                hints=settles.hints,
             ) if asks else None,
             contribution=_contribution_item(filing.contributions.get(index)),
             recurring=BankRecurringTag(
-                id=stored.decision, key=stored.key, name=stored.name,
+                id=stored.decision, key=stored.key, direction=RecurringDirection(stored.direction), name=stored.name,
                 cadence=stored.cadence, role=member.role, state=stored.state,
             ) if stored is not None and stored.counted else None,
             recurring_question=(
@@ -1135,6 +1145,7 @@ def _item_builder(
 
 def _recurring_question(stored: stored_patterns.StoredRecurring) -> BankRecurringQuestion:
     return BankRecurringQuestion(
+        direction=RecurringDirection(stored.direction),
         cadence=stored.cadence,
         amount=stored.amount,
         variable=stored.variable,

@@ -1,10 +1,13 @@
 """
-Charges that come back: the recurring payments in a user's debits, whatever moves
-under them — a price, a missed month, a pause, a refund, a rejected debit, a
-new label, a new account, a new means of payment.
+Money that comes back: the recurring payments in a user's debits and the
+recurring income in their credits, whatever moves under them — a price, a
+missed month, a pause, a refund, a rejected debit, a new label, a new account,
+a new means of payment.
 
-Pure: debits in, series out. Nothing here reads a label (the merchant comes
-from `merchants.py`) nor a type rule (each debit carries its resolved type).
+Pure: operations in, series out. Nothing here reads a label (the merchant comes
+from `merchants.py`) nor a type rule (each operation carries its resolved type).
+Debits and credits run through the same layers, apart: a series is one or the
+other (its `kind`), and only how sure it is reads differently.
 
 Layers, each catching what the one before lets through:
 
@@ -19,7 +22,9 @@ Layers, each catching what the one before lets through:
 5. reading: how sure, what it costs now, whether it still runs.
 
 Measured on the real dump of 2026-09-18 (15 recurring payments, no false one) and
-on 29 synthetic edge cases, all kept as tests.
+on 29 synthetic edge cases, all kept as tests. Income measured on the dump of
+2026-09-23: 440 credits, 56 chains, the salaries, allowances and family
+transfers kept, the friends paying back left out.
 """
 
 from __future__ import annotations
@@ -102,7 +107,7 @@ def month_coordinate(day: date) -> float:
 
 @dataclass(eq=False)
 class RecurrenceOp:
-    """One final debit, or one credit when looking for refunds."""
+    """One final debit or credit."""
     id: str
     account: str
     # The card payment's own date when the bank gives it, else the booking one.
@@ -139,6 +144,9 @@ class Series:
     variable: bool = False
     merchants: set[int] = field(default_factory=set)
     links: list[Link] = field(default_factory=list)
+    # EXPENSE for recurring payments, INCOME for recurring income: the type its
+    # operations must carry to count.
+    kind: CashflowType = CashflowType.EXPENSE
 
     @property
     def first(self) -> RecurrenceOp:
@@ -339,11 +347,11 @@ def _dedicated(series: Series, merchant_ops: list[RecurrenceOp]) -> bool:
     return len(series.regular) >= DEDICATED_SHARE * around
 
 
-def _merchant_series(merchant: int, points: list[RecurrenceOp]) -> list[Series]:
-    streams = [Series(c, chain, merchants={merchant}) for c, chain in _extract(points, True, 3)]
+def _merchant_series(merchant: int, points: list[RecurrenceOp], kind: CashflowType) -> list[Series]:
+    streams = [Series(c, chain, merchants={merchant}, kind=kind) for c, chain in _extract(points, True, 3)]
     taken = {op.id for s in streams for op in s.regular}
     for cadence, chain in _extract([op for op in points if op.id not in taken], False, 2):
-        streams.append(Series(cadence, chain, merchants={merchant}, variable=_is_variable(chain)))
+        streams.append(Series(cadence, chain, merchants={merchant}, variable=_is_variable(chain), kind=kind))
 
     # One after the other: a price change, a gap, a pause.
     streams.sort(key=lambda s: (s.first.day, s.first.id))
@@ -389,7 +397,7 @@ def _merchant_series(merchant: int, points: list[RecurrenceOp]) -> list[Series]:
             (k for k in kept if k.first.day <= stream.last.day and stream.first.day <= k.last.day), None
         )
         if host is not None and not (clean and len(stream.regular) >= 2) and _dedicated(host, points):
-            host.extras += [op for op in stream.regular if op.type is CashflowType.EXPENSE]
+            host.extras += [op for op in stream.regular if op.type is kind]
             continue
         kept.append(stream)
     return kept
@@ -420,17 +428,18 @@ class Detection:
         return [op for m in sorted(series.merchants) for op in self.by_merchant.get((series.currency, m), [])]
 
 
-def detect(debits: Iterable[RecurrenceOp]) -> Detection:
-    """Every series among the debits, in a fixed order whatever order they
-    come in. Currencies never mix: two amounts in two currencies do not compare."""
+def detect(ops: Iterable[RecurrenceOp], kind: CashflowType = CashflowType.EXPENSE) -> Detection:
+    """Every series among the operations — debits for EXPENSE, credits for
+    INCOME — in a fixed order whatever order they come in. Currencies never
+    mix: two amounts in two currencies do not compare."""
     by_currency: dict[str, list[RecurrenceOp]] = defaultdict(list)
-    for op in debits:
+    for op in ops:
         by_currency[op.currency].append(op)
     series: list[Series] = []
     by_merchant: dict[tuple[str, int], list[RecurrenceOp]] = {}
     for currency in sorted(by_currency):
-        ops = sorted(by_currency[currency], key=lambda o: (o.day, o.account, o.amount, o.id))
-        found, merchants = _detect_currency(ops)
+        ordered = sorted(by_currency[currency], key=lambda o: (o.day, o.account, o.amount, o.id))
+        found, merchants = _detect_currency(ordered, kind)
         series += found
         by_merchant.update({(currency, m): points for m, points in merchants.items()})
     series.sort(key=lambda s: (s.first.day, s.first.id))
@@ -439,7 +448,9 @@ def detect(debits: Iterable[RecurrenceOp]) -> Detection:
     return detection
 
 
-def _detect_currency(debits: list[RecurrenceOp]) -> tuple[list[Series], dict[int, list[RecurrenceOp]]]:
+def _detect_currency(
+    debits: list[RecurrenceOp], kind: CashflowType,
+) -> tuple[list[Series], dict[int, list[RecurrenceOp]]]:
     by_merchant: dict[int, list[RecurrenceOp]] = defaultdict(list)
     for op in debits:
         by_merchant[op.merchant].append(op)
@@ -448,9 +459,11 @@ def _detect_currency(debits: list[RecurrenceOp]) -> tuple[list[Series], dict[int
     for merchant in sorted(by_merchant):
         points = by_merchant[merchant]
         if len(points) >= 2:
-            series += _merchant_series(merchant, points)
+            series += _merchant_series(merchant, points, kind)
     for s in series:
         s.sort()
+        if kind is CashflowType.INCOME:
+            _drop_scattered_start(s, by_merchant[s.first.merchant])
         s.cadence = fourweekly_or(s.cadence, s.regular)
 
     _hand_offs(series)
@@ -458,6 +471,47 @@ def _detect_currency(debits: list[RecurrenceOp]) -> tuple[list[Series], dict[int
     _renamed_once(series, debits, by_merchant, used)
     _extras(series, by_merchant, used)
     return series, dict(by_merchant)
+
+
+def _drop_scattered_start(series: Series, merchant_ops: list[RecurrenceOp]) -> None:
+    """An income from a payer who also sends other amounts starts at its first
+    steady amount: before it, the chain only strung that payer's one-off
+    transfers together, dating a parent's monthly allowance years too early.
+    A payer the series has to itself keeps its first payments, however
+    uneven: a first salary paid for part of a month."""
+    regular = series.regular
+    start = _steady_start(regular, series.cadence)
+    if not start:
+        return
+    head = regular[:start]
+    around = sum(1 for op in merchant_ops if head[0].ordinal <= op.ordinal < regular[start].ordinal)
+    if len(head) >= DEDICATED_SHARE * around:
+        return
+    series.regular = regular[start:]
+    series.variable = _is_variable(series.regular)
+
+
+def _steady_start(regular: list[RecurrenceOp], cadence: Cadence) -> int:
+    """Where the first run of three amounts equal to the cent starts from
+    which the rest stays steady, taking in the amounts of its level before it
+    and a pair equal to the cent one due date before that (two months at 400
+    before a rise to 650). Within 3 %, a
+    few dozen random amounts hold a pair by chance, and a run of three or
+    four now and then; to the cent, never — and an allowance repeats to the
+    cent. 0 when no run holds."""
+    alike = [flat(a.value, b.value) for a, b in zip(regular, regular[1:])]
+    same = [exact(a.amount, b.amount) for a, b in zip(regular, regular[1:])]
+    start = next((
+        n for n in range(len(same) - 1)
+        if same[n] and same[n + 1] and sum(alike[n:]) >= INCOME_FLAT_SHARE * len(alike[n:])
+    ), 0)
+    # Amounts before it within 3 % are its level, rounded otherwise (a salary
+    # at 1 380,99 then 1 380,71).
+    while start and alike[start - 1]:
+        start -= 1
+    if start >= 2 and same[start - 2] and _slots(cadence, regular[start - 1].day, regular[start].day) <= 1.5:
+        start -= 2
+    return start
 
 
 def _near(amount: Decimal) -> tuple[Decimal, ...]:
@@ -559,7 +613,7 @@ def _extras(series: list[Series], by_merchant: dict[int, list[RecurrenceOp]], us
         low = s.first.day - timedelta(days=int(c.nominal + c.tolerance))
         high = s.last.day + timedelta(days=int((1 + c.max_missed) * c.nominal + c.tolerance))
         for op in merchant_ops:
-            if op.id in used or op.type is not CashflowType.EXPENSE:
+            if op.id in used or op.type is not s.kind:
                 continue
             if low <= op.day <= high and EXTRA_MIN_SHARE * usual <= op.amount <= EXTRA_MAX_SHARE * usual:
                 s.extras.append(op)
@@ -627,7 +681,8 @@ class Features:
     round: bool
     # Regular debits over the merchant's debits across the series' span.
     exclusive: float
-    expense: float
+    # The share typed as the series' kind.
+    typed: float
     cancelled: float
 
 
@@ -750,7 +805,7 @@ def features(series: Series, detection: Detection) -> Features:
         amount=amount,
         round=is_round(amount),
         exclusive=len(regular) / max(len(span), 1),
-        expense=types[CashflowType.EXPENSE] / sum(types.values()),
+        typed=types[series.kind] / sum(types.values()),
         cancelled=sum(op.cancelled for op in regular) / len(regular),
     )
 
@@ -762,12 +817,14 @@ TRANSFER_MIN_EXCLUSIVE = 0.5
 
 
 def confidence(series: Series, f: Features) -> Confidence | None:
-    """How sure the series is a recurring payment, by what the means of payment can
-    prove; None when it is not offered at all."""
+    """How sure the series is a recurring payment, or a recurring income, by
+    what the means of payment can prove; None when it is not offered at all."""
+    if series.kind is CashflowType.INCOME:
+        return _income_confidence(series, f)
     c, n = series.cadence, f.count
     last = carrier(series)
     # Only an expense is a recurring payment; a debit refunded every time is not one.
-    if f.cancelled >= 0.5 or f.expense < 0.5 or last is None or last.type is not CashflowType.EXPENSE:
+    if f.cancelled >= 0.5 or f.typed < 0.5 or last is None or last.type is not CashflowType.EXPENSE:
         return None
     if c.name in ("annual", "semiannual") and n == 2:
         a, b = series.regular[0].amount, series.regular[1].amount
@@ -821,15 +878,75 @@ def confidence(series: Series, f: Features) -> Confidence | None:
     return Confidence.PROBABLE
 
 
+# Income from a payer who also sends other amounts: chains of alike transfers
+# from friends paying back held a third of their credits over the span, a
+# parent's monthly allowance two thirds.
+INCOME_MIN_EXCLUSIVE = 0.5
+# Three steps in four alike: an income of one amount, whatever its raises.
+INCOME_FLAT_SHARE = 0.75
+# Fewer steady payments than this must repeat to the cent.
+INCOME_SHORT = 5
+# A salary moving with hours, bonuses or a first partial month is told from a
+# friend paying back by its payer, who pays nothing else, by its steps — most
+# within a quarter of the one before (8 in 10 on the real one), where a
+# friend's amounts jump by half or double (none in 5) — and by its length:
+# five of a friend's in a row fell within a quarter once in 200 draws.
+INCOME_VARIABLE_MIN_COUNT = 6
+INCOME_VARIABLE_MIN_EXCLUSIVE = 0.75
+INCOME_STEP_SHARE, INCOME_STEP_RATIO = 0.7, 1.25
+
+
+def _income_confidence(series: Series, f: Features) -> Confidence | None:
+    """Income is nearly always a transfer, which a mandate never vouches for:
+    a salary, an allowance and a friend paying back a loan all look alike. So
+    it rests on the amounts and on the payer paying nothing else; certain only
+    over half a year, hardly a due date missed."""
+    c, n = series.cadence, f.count
+    last = carrier(series)
+    if f.cancelled >= 0.5 or f.typed < 0.5 or last is None or last.type is not CashflowType.INCOME:
+        return None
+    if f.method is OperationType.INTEREST:
+        # The bank's own interest: no habit looks like it.
+        return Confidence.CERTAIN if f.deviation <= 7 else None
+    if c.name in ("weekly", "biweekly"):
+        return None
+    if n < 3 or f.coverage < 0.6 or f.exclusive < INCOME_MIN_EXCLUSIVE:
+        return None
+    if f.amount < 10 and n < 6:
+        return None
+    # Judged on the steps rather than `series.variable`, which a stitched
+    # series keeps from any stream it took in.
+    if f.flat >= INCOME_FLAT_SHARE:
+        if f.deviation > 5:
+            return None
+        # Within 3 %, a few of a friend's amounts fall in step by chance; to
+        # the cent they never do, and a salary, an allowance or a parent's
+        # transfer repeats to the cent.
+        if n < INCOME_SHORT and f.exact < 0.5:
+            return None
+        if n >= 6 and f.coverage >= 0.9 and f.deviation <= 3 and f.exclusive >= 0.9:
+            return Confidence.CERTAIN
+        return Confidence.PROBABLE
+    paid = [op.value for op in series.regular if not op.cancelled]
+    steps = list(zip(paid, paid[1:]))
+    small = sum(max(a, b) <= INCOME_STEP_RATIO * min(a, b) for a, b in steps)
+    ok = (
+        c in (MONTHLY, FOURWEEKLY) and n >= INCOME_VARIABLE_MIN_COUNT and f.coverage >= 0.75 and f.deviation <= 3
+        and f.exclusive >= INCOME_VARIABLE_MIN_EXCLUSIVE and small >= INCOME_STEP_SHARE * len(steps)
+    )
+    return Confidence.PROBABLE if ok else None
+
+
 def counted_unasked(series: Series, level: Confidence | None, f: Features) -> bool:
     """Whether a series is counted without a question: a certain one, a probable
     mandate, a probable card payment of a steady amount. The rest asks, being
     what a habit looks like too: a transfer (rent, pocket money and savings
     elsewhere alike), a card payment whose amount moves (a monthly shop). Counted
-    unasked, either would be spending nobody sees was never recurring."""
+    unasked, either would be spending nobody sees was never recurring. Income
+    asks unless certain: a friend paying back monthly is no salary."""
     if level is Confidence.CERTAIN:
         return True
-    if level is not Confidence.PROBABLE:
+    if level is not Confidence.PROBABLE or series.kind is CashflowType.INCOME:
         return False
     return f.family == "direct_debit" or (f.family == "card" and not series.variable)
 
@@ -857,9 +974,12 @@ def linked_refunds(
     )
 
 
-def seed_series(seed: RecurrenceOp, pool: Iterable[RecurrenceOp], cadence: Cadence | None = None) -> Series:
-    """The series a user marked by hand, grown from one of its debits: the
-    nearest debit at each due date either side, of its merchant and account,
+def seed_series(
+    seed: RecurrenceOp, pool: Iterable[RecurrenceOp], cadence: Cadence | None = None,
+    kind: CashflowType = CashflowType.EXPENSE,
+) -> Series:
+    """The series a user marked by hand, grown from one of its operations: the
+    nearest one at each due date either side, of its merchant and account,
     with no minimum. The cadence growing the longest one wins, monthly on a tie."""
     points = sorted(
         (op for op in pool if op.merchant == seed.merchant and op.account == seed.account and op.currency == seed.currency),
@@ -872,7 +992,7 @@ def seed_series(seed: RecurrenceOp, pool: Iterable[RecurrenceOp], cadence: Caden
     for c in candidates:
         chain = _grown(seed, points, c)
         if best is None or len(chain) > len(best.regular):
-            best = Series(c, chain, merchants={seed.merchant}, variable=_is_variable(chain))
+            best = Series(c, chain, merchants={seed.merchant}, variable=_is_variable(chain), kind=kind)
     return best
 
 

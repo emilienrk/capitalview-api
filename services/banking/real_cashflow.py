@@ -41,6 +41,7 @@ from dtos.banking import (
     RealCashflowTotals,
     RealCashflowUpcoming,
     RealCashflowYear,
+    RecurringDirection,
 )
 from models.banking import BankTransaction
 from services.banking.cashflow_types import counted_leg, signed_amount
@@ -84,7 +85,12 @@ _FIELD_OF = {
     CashflowType.INVESTMENT: "investment",
     CashflowType.NEUTRAL: "neutral",
 }
-_AMOUNTS = ("income", "expenses", "saving", "investment", "neutral", "net", "recurring", "one_off")
+_AMOUNTS = (
+    "income", "expenses", "saving", "investment", "neutral", "net", "recurring", "one_off",
+    "recurring_income", "one_off_income",
+)
+# The figures `_totals` derives from the others.
+_DERIVED = ("net", "one_off", "one_off_income")
 _PERCENT = Decimal("0.1")
 
 
@@ -150,13 +156,23 @@ def real_cashflow_year(
             session, user_uuid, master_key, accounts, reading.patterns,
             date.fromisoformat(f"{periods[0]}-01"), _last_day(periods[-1]),
         ),
-        running_recurring=sum(
-            (item.monthly_equivalent for _, item in active_counted(
-                session, user_uuid, master_key, accounts, reading.patterns, today,
-            ) if item.currency == reading.currency),
-            Decimal("0"),
-        ) if current else None,
+        **_running(session, user_uuid, master_key, accounts, reading, today) if current else {},
     )
+
+
+def _running(
+    session: Session, user_uuid: str, master_key: str, accounts: _Accounts, reading: _Reading, today: date,
+) -> dict[str, Decimal]:
+    """What the active recurring payments cost a month, and what the active
+    recurring income brings."""
+    running = {RecurringDirection.EXPENSE: Decimal("0"), RecurringDirection.INCOME: Decimal("0")}
+    for _, item in active_counted(session, user_uuid, master_key, accounts, reading.patterns, today):
+        if item.currency == reading.currency:
+            running[item.direction] += item.monthly_equivalent
+    return {
+        "running_recurring": running[RecurringDirection.EXPENSE],
+        "running_recurring_income": running[RecurringDirection.INCOME],
+    }
 
 
 def real_cashflow_month(
@@ -195,6 +211,7 @@ def real_cashflow_month(
             date.fromisoformat(f"{period}-01"), _last_day(period),
         ),
         recurring=reading.month_recurring(period),
+        recurring_income=reading.month_recurring(period, income=True),
     )
 
 
@@ -227,9 +244,14 @@ def real_cashflow_current(
 
     cumulated = _cumulated(reading.daily[period], length)
     spent_to_date = cumulated[today.day - 1]
+    active = active_counted(session, user_uuid, master_key, accounts, reading.patterns, today)
     upcoming = _upcoming(
-        active_counted(session, user_uuid, master_key, accounts, reading.patterns, today),
-        reading, today, _last_day(period),
+        [(stored, item) for stored, item in active if stored.kind is CashflowType.EXPENSE],
+        reading.pending_debits, reading.currency, today, _last_day(period),
+    )
+    upcoming_income = _upcoming(
+        [(stored, item) for stored, item in active if stored.kind is CashflowType.INCOME],
+        reading.pending_credits, reading.currency, today, _last_day(period),
     )
     median_to_date = median_at(today.day)
     median_month = Decimal(median(curve[-1] for curve in curves)) if curves else None
@@ -254,21 +276,23 @@ def real_cashflow_current(
         ],
         upcoming=upcoming,
         upcoming_amount=sum((due.amount for due in upcoming), Decimal("0")),
+        upcoming_income=upcoming_income,
+        upcoming_income_amount=sum((due.amount for due in upcoming_income), Decimal("0")),
     )
 
 
 def _upcoming(
-    active: list, reading: _Reading, today: date, month_end: date,
+    active: list, pending_ops: list[tuple[str, date, Decimal]], currency: str, today: date, month_end: date,
 ) -> list[RealCashflowUpcoming]:
-    """The due dates of the active recurring payments left this month: from the
-    last debit on, one cadence at a time, up to the month's end — less the
-    ones a pending debit already answers, of about the amount, near the date,
-    on the account the recurring payment is paid from."""
+    """The due dates of the active recurring payments — or income — left this
+    month: from the last operation on, one cadence at a time, up to the
+    month's end, less the ones a pending operation already answers, of about
+    the amount, near the date, on the account the recurring is paid on."""
     start = today.replace(day=1)
-    pending = list(reading.pending_debits)
+    pending = list(pending_ops)
     upcoming = []
     for stored, item in active:
-        if stored.currency != reading.currency:
+        if stored.currency != currency:
             continue
         cadence = CADENCE[stored.cadence]
         due = recurrence.advance(cadence, stored.last)
@@ -291,7 +315,7 @@ def _upcoming(
 
 
 def _about(amount: Decimal, stored: StoredRecurring) -> bool:
-    """An amount a pending debit of this recurring payment may carry: its price, or
+    """An amount a pending operation of this recurring may carry: its price, or
     anywhere near it for one whose amount varies."""
     if stored.variable:
         return abs(amount - stored.amount) <= stored.amount / 2
@@ -318,15 +342,21 @@ class _Reading:
     # Expenses by period and day of the month, when asked for.
     daily: dict[str, dict[int, Decimal]]
     pending: dict[str, dict[int, Decimal]]
-    # (account, day, amount) of the pending debits read.
+    # (account, day, amount) of the pending debits and credits read.
     pending_debits: list[tuple[str, date, Decimal]] = field(default_factory=list)
+    pending_credits: list[tuple[str, date, Decimal]] = field(default_factory=list)
     # Period -> recurring payment key -> what it weighed that month.
     recurring: dict[str, dict[str, RealCashflowRecurring]] = field(
         default_factory=lambda: defaultdict(dict)
     )
+    # Period -> recurring income key -> what it brought that month.
+    recurring_income: dict[str, dict[str, RealCashflowRecurring]] = field(
+        default_factory=lambda: defaultdict(dict)
+    )
 
-    def month_recurring(self, period: str) -> list[RealCashflowRecurring]:
-        return sorted(self.recurring[period].values(), key=lambda s: (-s.amount, s.name, s.key))
+    def month_recurring(self, period: str, income: bool = False) -> list[RealCashflowRecurring]:
+        month = (self.recurring_income if income else self.recurring)[period]
+        return sorted(month.values(), key=lambda s: (-s.amount, s.name, s.key))
 
     def open_questions(self, period: str) -> int:
         # From the whole history: a label's question sits on its last operation,
@@ -448,16 +478,18 @@ def _read(
             if not movement.is_final:
                 reading.pending[movement.period][movement.day.day] += signed
         if not movement.is_final:
-            if not movement.is_credit and movement.day is not None:
-                reading.pending_debits.append((movement.account_bidx, movement.day, movement.amount))
+            if movement.day is not None:
+                pending = reading.pending_credits if movement.is_credit else reading.pending_debits
+                pending.append((movement.account_bidx, movement.day, movement.amount))
             continue
         tally = reading.months[movement.period]
         tally.totals[_FIELD_OF[kind]] += signed
         tally.count += 1
         stored = reading.patterns.counted_recurring(movement.row.uuid)
-        if stored is not None and kind is CashflowType.EXPENSE:
-            tally.totals["recurring"] += signed
-            month = reading.recurring[movement.period]
+        if stored is not None and kind is stored.kind:
+            income = kind is CashflowType.INCOME
+            tally.totals["recurring_income" if income else "recurring"] += signed
+            month = (reading.recurring_income if income else reading.recurring)[movement.period]
             entry = month.setdefault(stored.key, RealCashflowRecurring(
                 id=stored.decision, key=stored.key, name=stored.name, nature=natures.of(stored.nature),
                 amount=Decimal("0"), count=0,
@@ -560,11 +592,12 @@ def _with_rates(amounts: dict[str, Decimal]) -> RealCashflowTotals:
 
 def _totals(tally: _Tally) -> RealCashflowTotals:
     t = tally.totals
-    amounts = {name: t[name] for name in _AMOUNTS if name not in ("net", "one_off")}
+    amounts = {name: t[name] for name in _AMOUNTS if name not in _DERIVED}
     return _with_rates({
         **amounts,
         "net": t["income"] - t["expenses"] - t["saving"] - t["investment"],
         "one_off": t["expenses"] - t["recurring"],
+        "one_off_income": t["income"] - t["recurring_income"],
     })
 
 

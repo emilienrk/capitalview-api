@@ -55,6 +55,7 @@ from dtos.banking import (
     RealCashflowCurrent,
     RealCashflowMonthDetail,
     RealCashflowYear,
+    RecurringDirection,
     SyncStatus,
 )
 from models import User
@@ -742,7 +743,8 @@ def post_transfer_decision(
 
 
 _NO_OPERATION = "Opération introuvable."
-_NO_RECURRING = "Paiement récurrent introuvable."
+_NO_RECURRING = "Récurrent introuvable."
+_NO_SERIES = "Cette opération n'appartient à aucun paiement ni revenu récurrent."
 
 
 @router.get("/recurring", response_model=BankRecurringResponse)
@@ -750,10 +752,12 @@ def get_recurring(
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
+    direction: RecurringDirection = RecurringDirection.EXPENSE,
 ):
-    """Every recurring payment found or decided, from the stored operations.
-    Ungated, like /transactions."""
-    return recurring_service.list_recurring(session, current_user.uuid, master_key)
+    """Every recurring payment — or, with `direction=income`, every recurring
+    income — found or decided, from the stored operations. Ungated, like
+    /transactions."""
+    return recurring_service.list_recurring(session, current_user.uuid, master_key, direction=direction)
 
 
 @router.get("/recurring/operations", response_model=list[BankTransactionItem])
@@ -771,7 +775,7 @@ def get_undecided_recurring_operations(
     except TransactionNotFoundError:
         raise HTTPException(status_code=404, detail=_NO_OPERATION)
     except recurring_service.NoRecurringError:
-        raise HTTPException(status_code=404, detail="Cette opération n'appartient à aucun paiement récurrent.")
+        raise HTTPException(status_code=404, detail=_NO_SERIES)
 
 
 @router.get("/recurring/{recurring_id}/operations", response_model=list[BankTransactionItem])
@@ -804,7 +808,7 @@ def post_recurring_decision(
     except TransactionNotFoundError:
         raise HTTPException(status_code=404, detail=_NO_OPERATION)
     except recurring_service.NoRecurringError:
-        raise HTTPException(status_code=404, detail="Cette opération n'appartient à aucun paiement récurrent.")
+        raise HTTPException(status_code=404, detail=_NO_SERIES)
 
 
 @router.post("/recurring", response_model=BankRecurringItem | None, status_code=201)
@@ -814,18 +818,19 @@ def post_recurring(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
-    """Mark an operation the detection missed as a recurring payment."""
+    """Mark an operation the detection missed as a recurring payment, or as a
+    recurring income for a credit."""
     try:
         return recurring_service.mark(
             session, current_user.uuid, master_key, body.transaction_id, body.cadence, body.name,
         )
     except TransactionNotFoundError:
         raise HTTPException(status_code=404, detail=_NO_OPERATION)
-    except recurring_service.NotAnExpenseError:
+    except recurring_service.NotMarkableError:
         raise HTTPException(
             status_code=409,
-            detail="Seul un débit passé, compté en dépense et hors virement entre vos comptes, "
-                   "peut être marqué comme récurrent.",
+            detail="Seule une opération passée, hors virement entre vos comptes, peut être marquée comme "
+                   "récurrente : un débit compté en dépense ou un crédit compté en revenu.",
         )
 
 
@@ -845,6 +850,10 @@ def patch_recurring(
         )
     except RecurringNotFoundError:
         raise HTTPException(status_code=404, detail=_NO_RECURRING)
+    except recurring_service.NatureMismatchError:
+        raise HTTPException(
+            status_code=422, detail="Cette nature ne correspond pas au sens de ce récurrent (dépense ou revenu).",
+        )
 
 
 @router.post("/recurring/{recurring_id}/operations", response_model=BankRecurringItem | None)
@@ -874,9 +883,9 @@ def post_recurring_merge(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
-    """Make one recurring payment of two."""
+    """Make one recurring payment or income of two."""
     if (body.other_id is None) == (body.other_transaction_id is None):
-        raise HTTPException(status_code=400, detail="Indiquez l'autre paiement récurrent, par son id ou par une opération.")
+        raise HTTPException(status_code=400, detail="Indiquez l'autre récurrent, par son id ou par une opération.")
     try:
         return recurring_service.merge(
             session, current_user.uuid, master_key, recurring_id, body.other_id, body.other_transaction_id,
@@ -886,7 +895,9 @@ def post_recurring_merge(
     except RecurringNotFoundError:
         raise HTTPException(status_code=404, detail=_NO_RECURRING)
     except recurring_service.NoRecurringError:
-        raise HTTPException(status_code=404, detail="Cette opération n'appartient à aucun paiement récurrent.")
+        raise HTTPException(status_code=404, detail=_NO_SERIES)
+    except recurring_service.DirectionMismatchError:
+        raise HTTPException(status_code=409, detail="Un paiement et un revenu ne se fusionnent pas.")
 
 
 @router.delete("/recurring/{recurring_id}", status_code=204)

@@ -282,11 +282,14 @@ class TypeSource(str, Enum):
     """What gave an operation its cashflow type, strongest first."""
     PAIR = "pair"
     OVERRIDE = "override"
-    RULE = "rule"
     # A deposit or a withdrawal the user declared on one of their investment
-    # accounts, on the very day and for the very amount
+    # accounts, on the very day and for the very amount, or a fee apart
     # (services/banking/contributions.py).
     CONTRIBUTION = "contribution"
+    RULE = "rule"
+    # A member of a recurring payment or income the user has not refused
+    # (services/banking/recurring_series.py): it is reviewed there, not asked.
+    RECURRING = "recurring"
     DEFAULT = "default"
 
 
@@ -324,15 +327,19 @@ class BankFlowQuestion(BaseModel):
     operation_count: int
     # What those operations add up to: what the answer can move.
     amount: Decimal
-    # Offered first, never applied: a credit from a recurring payment's merchant
-    # reads as a refund, typed EXPENSE to come off the spending.
-    suggested: CashflowType | None = None
-    recurring_name: str | None = None
+    # How many of them a deposit declared a few days away could be.
+    hints: int = 0
 
 
 # ---------------------------------------------------------------------------
-# Recurring payments (services/banking/recurring.py)
+# Recurring payments and income (services/banking/recurring.py)
 # ---------------------------------------------------------------------------
+
+
+class RecurringDirection(str, Enum):
+    """What comes back: a payment in the debits, an income in the credits."""
+    EXPENSE = "expense"
+    INCOME = "income"
 
 
 class RecurringCadence(str, Enum):
@@ -364,21 +371,25 @@ class RecurringStatus(str, Enum):
 
 
 class RecurringRole(str, Enum):
-    # Debited at a due date.
+    # Paid at a due date.
     REGULAR = "regular"
-    # Debited off a due date: a prorata, a regularisation, a debit billed twice.
+    # Paid off a due date: a prorata, a regularisation, a debit billed twice, a
+    # salary paid early for the holidays.
     EXTRA = "extra"
     # Its refund or its rejection was paired with it: it counts for nothing.
     CANCELLED = "cancelled"
-    # A credit from the recurring payment's merchant.
+    # A credit from the recurring payment's merchant; for an income, a debit
+    # the user attached as taken back.
     REFUND = "refund"
     # Attached by the user.
     MANUAL = "manual"
 
 
 class RecurringNature(str, Enum):
-    """What a payment is for, as the user filed it. Never guessed: it groups
-    what is paid, it does not judge what could be stopped."""
+    """What a payment is for, or where an income comes from, as the user filed
+    it. Never guessed: it groups what is paid, it does not judge what could be
+    stopped. Each direction takes its own natures, OTHER both
+    (services/banking/natures.py)."""
     HOUSING = "housing"
     ENERGY = "energy"
     INSURANCE = "insurance"
@@ -388,15 +399,25 @@ class RecurringNature(str, Enum):
     SPORT = "sport"
     LEISURE = "leisure"
     SOFTWARE = "software"
+    SALARY = "salary"
+    # State or social aid: family allowance, housing benefit, unemployment.
+    ALLOWANCE = "allowance"
+    PENSION = "pension"
+    # A rent received.
+    RENTAL = "rental"
+    # Money a relative sends.
+    SUPPORT = "support"
+    INTEREST = "interest"
     OTHER = "other"
 
 
 class BankRecurringTag(BaseModel):
-    """The counted recurring payment an operation belongs to."""
+    """The counted recurring payment or income an operation belongs to."""
     # The user's decision; None for one counted without asking and never decided.
     id: str | None
-    # Stable while the series keeps its first debit, decided or not.
+    # Stable while the series keeps its first operation, decided or not.
     key: str
+    direction: RecurringDirection
     name: str
     cadence: RecurringCadence
     role: RecurringRole
@@ -404,8 +425,10 @@ class BankRecurringTag(BaseModel):
 
 
 class BankRecurringQuestion(BaseModel):
-    """Asked on the last debit of a series found but not sure enough to count:
-    is this a recurring payment? Answered by POST /banking/recurring/decisions."""
+    """Asked on the last operation of a series found but not sure enough to
+    count: is this a recurring payment, or a recurring income? Answered by
+    POST /banking/recurring/decisions."""
+    direction: RecurringDirection
     cadence: RecurringCadence
     amount: Decimal
     variable: bool
@@ -604,14 +627,16 @@ class BankLedgerRow(BaseModel):
     # change how it counts.
     question: BankReviewKind | None
     open: bool
-    # Index into `recurring`: set on counted rows whose spending is a
-    # counted recurring payment's, so their `signed` add up to its figure.
+    # Index into `recurring`: set on counted rows whose spending is a counted
+    # recurring payment's, or whose income a counted recurring income's, so
+    # their `signed` add up to its figure.
     recurring: int | None = None
 
 
 class BankLedgerRecurring(BaseModel):
     id: str | None
     key: str
+    direction: RecurringDirection
     name: str
     cadence: RecurringCadence
 
@@ -739,19 +764,15 @@ class BankRecurringRefunds(BaseModel):
     items: list[BankRecurringRefund]
 
 
-class BankRecurringYearPaid(BaseModel):
-    year: int
-    amount: Decimal
-
-
 class BankRecurringItem(BaseModel):
     # The user's decision; None for a series never decided.
     id: str | None
     key: str
-    # Its last debit, to act on it: answer, decide, list its operations.
+    direction: RecurringDirection
+    # Its last operation, to act on it: answer, decide, list its operations.
     transaction_id: str
     name: str
-    # What it is for; None until the user files it.
+    # What it is for, or where it comes from; None until the user files it.
     nature: RecurringNature | None = None
     state: RecurringState
     confidence: str | None
@@ -764,11 +785,11 @@ class BankRecurringItem(BaseModel):
     currency: str
     monthly_equivalent: Decimal
     annual_estimate: Decimal
-    # What was actually paid over the last twelve months, extras included,
-    # cancelled debits left out.
+    # What was actually paid, or received, over the last twelve months, extras
+    # included, cancelled operations left out.
     paid_last_12_months: Decimal
     first_date: date
-    # Set when the first debit is within a due date of the account's first
+    # Set when the first operation is within a due date of the account's first
     # operation: it may have started before the history does.
     since_at_least: bool = False
     last_date: date
@@ -777,9 +798,6 @@ class BankRecurringItem(BaseModel):
     extra_count: int
     accounts: list[str]
     payment_method: OperationType
-    # What it took each year, extras in, cancelled debits out: the years a
-    # rent was paid, whatever the landlord was called then.
-    paid_by_year: list[BankRecurringYearPaid] = []
     price_changes: list[BankRecurringPriceChange] = []
     episodes: list[BankRecurringEpisode] = []
     renamed: list[BankRecurringRename] = []
@@ -788,9 +806,10 @@ class BankRecurringItem(BaseModel):
 
 
 class BankRecurringResponse(BaseModel):
-    """GET /banking/recurring."""
+    """GET /banking/recurring — one direction at a time."""
+    direction: RecurringDirection
     currency: str
-    # The active recurring payments counted, in `currency`: what is fixed.
+    # The active ones counted, in `currency`: what is fixed.
     monthly_total: Decimal
     annual_total: Decimal
     items: list[BankRecurringItem]
@@ -822,6 +841,10 @@ class RealCashflowTotals(BaseModel):
     # The rest of `expenses`. Taken month by month, so a median month's is a
     # month's, never the difference of two medians.
     one_off: Decimal = Decimal("0")
+    # The same split of `income`: what counted recurring income brought, and
+    # the rest.
+    recurring_income: Decimal = Decimal("0")
+    one_off_income: Decimal = Decimal("0")
     # Percent of the income: what was not spent, and the part of it set aside
     # or invested. None without income to divide by.
     savings_rate: Decimal | None = None
@@ -841,7 +864,7 @@ class RealCashflowMonth(RealCashflowTotals):
 
 
 class RealCashflowRecurring(BaseModel):
-    """What one recurring payment weighed in a month."""
+    """What one recurring payment, or income, weighed in a month."""
     id: str | None
     key: str
     name: str
@@ -851,7 +874,8 @@ class RealCashflowRecurring(BaseModel):
 
 
 class RealCashflowUpcoming(BaseModel):
-    """A due date of an active recurring payment still to come this month."""
+    """A due date of an active recurring payment, or income, still to come
+    this month."""
     id: str | None
     key: str
     name: str
@@ -929,8 +953,10 @@ class RealCashflowYear(BaseModel):
     projection: RealCashflowTotals | None = None
     safety_net: RealCashflowSafetyNet | None = None
     coverage_gaps: list[RealCashflowCoverageGap] = []
-    # The current year only: what the active recurring payments cost a month.
+    # The current year only: what the active recurring payments cost a month,
+    # and what the active recurring income brings.
     running_recurring: Decimal | None = None
+    running_recurring_income: Decimal | None = None
 
 
 class RealCashflowMonthDetail(BaseModel):
@@ -950,6 +976,7 @@ class RealCashflowMonthDetail(BaseModel):
     top_destinations: list[RealCashflowCounterpart] = []
     coverage_gaps: list[RealCashflowCoverageGap] = []
     recurring: list[RealCashflowRecurring] = []
+    recurring_income: list[RealCashflowRecurring] = []
 
 
 class RealCashflowPacePoint(BaseModel):
@@ -976,3 +1003,6 @@ class RealCashflowCurrent(BaseModel):
     curve: list[RealCashflowPacePoint]
     upcoming: list[RealCashflowUpcoming] = []
     upcoming_amount: Decimal = Decimal("0")
+    # The income still expected this month, apart: it moves no spending.
+    upcoming_income: list[RealCashflowUpcoming] = []
+    upcoming_income_amount: Decimal = Decimal("0")

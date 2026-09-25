@@ -38,6 +38,7 @@ from typing import NamedTuple
 import sqlalchemy as sa
 from sqlmodel import Session, select
 
+from dtos.banking import CashflowType, RecurringDirection
 from models.banking import (
     BankRecurringSeries,
     BankTransaction,
@@ -47,6 +48,7 @@ from models.banking import (
 )
 from models.crypto import CryptoAccount, CryptoTransaction
 from models.stock import StockAccount, StockTransaction
+from services.banking.recurring_decisions import REFUSED
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 # A shape that occurred this many times is trusted without asking. Measured:
@@ -55,17 +57,20 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "13"
+_VERSION = "20"
 
 
 class FlowCarrier(NamedTuple):
     # The operations of its label the question settles, and what they add up to.
     count: int
     amount: Decimal
+    # Those a deposit declared a few days away could be: a hint that would
+    # otherwise sit on an operation the question is not asked on.
+    hints: int = 0
 
 
-# What a member is to its recurring payment. Only the first three and a refund
-# count towards "dont … qui reviennent", and only when typed EXPENSE.
+# What a member is to its recurring payment or income. Only the first three and a
+# refund count towards "dont … qui reviennent", and only when typed as its kind.
 REGULAR, EXTRA, MANUAL, CANCELLED, REFUND = "regular", "extra", "manual", "cancelled", "refund"
 COUNTED_ROLES = frozenset({REGULAR, EXTRA, MANUAL, REFUND})
 
@@ -76,15 +81,16 @@ class RecurringMember(NamedTuple):
     day: date
     amount: Decimal
     is_credit: bool
-    # Typed EXPENSE when the patterns were built.
-    expense: bool
+    # Typed as its recurring's kind (EXPENSE or INCOME) when the patterns were built.
+    typed: bool
     # Kept for a refund only, which the recurring payment shows by its label.
     label: str | None = None
 
 
 @dataclass
 class StoredRecurring:
-    """One recurring payment as the rebuild found it (services/banking/recurring_series.py).
+    """One recurring payment or income as the rebuild found it
+    (services/banking/recurring_series.py).
 
     `key` is the decision's id when the user decided, else the id of its first
     debit: stable while the series keeps that debit, which is all a reader
@@ -92,6 +98,8 @@ class StoredRecurring:
     """
     key: str
     decision: str | None
+    # expense | income
+    direction: str
     # auto | confirmed | candidate | refused
     state: str
     confidence: str | None
@@ -111,22 +119,28 @@ class StoredRecurring:
     # The account of the last regular debit: whose coverage says whether it still runs.
     last_account: str
     method: str
-    # The debit a question sits on, and whether it asks.
+    # The operation a question sits on, and whether it asks.
     carrier: str | None
     question: bool
     counted: bool
-    # The merchant's words, to record as a decision's identity.
+    # The merchant's (or payer's) words, to record as a decision's identity.
     words: list[str]
     # What the user filed it as; None until they say.
     nature: str | None = None
     ended_on: date | None = None
 
+    @property
+    def kind(self) -> CashflowType:
+        """The type its operations count as."""
+        return CashflowType.INCOME if self.direction == RecurringDirection.INCOME.value else CashflowType.EXPENSE
+
     def to_json(self) -> dict:
         return {
-            "key": self.key, "decision": self.decision, "state": self.state, "confidence": self.confidence,
+            "key": self.key, "decision": self.decision, "direction": self.direction,
+            "state": self.state, "confidence": self.confidence,
             "cadence": self.cadence, "variable": self.variable, "currency": self.currency,
             "members": [
-                [m.uuid, m.role, m.day.isoformat(), str(m.amount), m.is_credit, m.expense, m.label]
+                [m.uuid, m.role, m.day.isoformat(), str(m.amount), m.is_credit, m.typed, m.label]
                 for m in self.members
             ],
             "levels": [[a.isoformat(), b.isoformat(), str(amount), count] for a, b, amount, count in self.levels],
@@ -142,12 +156,12 @@ class StoredRecurring:
     @classmethod
     def from_json(cls, content: dict) -> StoredRecurring:
         return cls(
-            key=content["key"], decision=content["decision"], state=content["state"],
+            key=content["key"], decision=content["decision"], direction=content["direction"], state=content["state"],
             confidence=content["confidence"], cadence=content["cadence"], variable=content["variable"],
             currency=content["currency"],
             members=[
-                RecurringMember(uuid, role, date.fromisoformat(day), Decimal(amount), is_credit, expense, label)
-                for uuid, role, day, amount, is_credit, expense, label in content["members"]
+                RecurringMember(uuid, role, date.fromisoformat(day), Decimal(amount), is_credit, typed, label)
+                for uuid, role, day, amount, is_credit, typed, label in content["members"]
             ],
             levels=[
                 (date.fromisoformat(a), date.fromisoformat(b), Decimal(amount), count)
@@ -189,9 +203,24 @@ class TransferPatterns:
     coverage: dict[str, tuple[date, date]] = field(default_factory=dict)
     # Every series offered, counted or decided (services/banking/recurring_series.py).
     recurring: list[StoredRecurring] = field(default_factory=list)
-    # "YYYY-MM" -> recurring payment questions carried by an operation of that month
+    # "YYYY-MM" -> recurring payment and income questions carried by an operation of that month
     recurring_questions: dict[str, int] = field(default_factory=dict)
     _members: dict[str, tuple[StoredRecurring, RecurringMember]] | None = field(default=None, repr=False)
+
+    def set_recurring(self, recurring: list[StoredRecurring]) -> None:
+        self.recurring = recurring
+        self._members = None
+
+    def held_by_recurring(self, uuid: str) -> CashflowType | None:
+        """The kind of the recurring payment or income an operation is one of,
+        unless the user refused it; a refund only once its payment counts."""
+        found = self.recurring_of(uuid)
+        if found is None:
+            return None
+        stored, member = found
+        if stored.state == REFUSED or (member.role == REFUND and not stored.counted):
+            return None
+        return stored.kind
 
     def recurring_of(self, uuid: str) -> tuple[StoredRecurring, RecurringMember] | None:
         """The recurring payment an operation belongs to, and as what."""
@@ -203,8 +232,8 @@ class TransferPatterns:
         return self._members.get(uuid)
 
     def counted_recurring(self, uuid: str) -> StoredRecurring | None:
-        """The recurring payment whose spending this operation counts in, whatever
-        its type: the reader still checks it is an expense."""
+        """The recurring payment or income this operation counts in, whatever
+        its type: the reader still checks it carries the recurring's kind."""
         found = self.recurring_of(uuid)
         if found is None:
             return None
@@ -323,7 +352,8 @@ def read_patterns(
         questions=content["questions"],
         questions_amount=_amounts(content["questions_amount"]),
         flow_carriers={
-            uuid: FlowCarrier(count, Decimal(amount)) for uuid, (count, amount) in content["flow_carriers"].items()
+            uuid: FlowCarrier(count, Decimal(amount), hints)
+            for uuid, (count, amount, hints) in content["flow_carriers"].items()
         },
         flow_questions=content["flow_questions"],
         flow_open=content["flow_open"],
@@ -348,7 +378,7 @@ def write_patterns(
             "questions": patterns.questions,
             "questions_amount": {period: str(amount) for period, amount in patterns.questions_amount.items()},
             "flow_carriers": {
-                uuid: [carrier.count, str(carrier.amount)] for uuid, carrier in patterns.flow_carriers.items()
+                uuid: [carrier.count, str(carrier.amount), carrier.hints] for uuid, carrier in patterns.flow_carriers.items()
             },
             "flow_questions": patterns.flow_questions,
             "flow_open": patterns.flow_open,

@@ -57,7 +57,11 @@ class TestResolution:
 
     def test_the_user_beats_a_declared_deposit(self):
         assert resolve_type(False, None, 0, Type.EXPENSE, None, contributed=True).source is Source.OVERRIDE
-        assert resolve_type(False, None, 0, None, ("r1", Type.EXPENSE), contributed=True).source is Source.RULE
+
+    def test_a_declared_deposit_beats_the_rule_of_its_label(self):
+        """One label may go to an investment account one day and elsewhere the next."""
+        resolution = resolve_type(False, None, 0, None, ("r1", Type.EXPENSE), contributed=True)
+        assert (resolution.type, resolution.source) == (Type.INVESTMENT, Source.CONTRIBUTION)
 
     def test_a_suggested_pair_is_not_a_pair_yet(self):
         assert resolve_type(False, Status.SUGGESTED, 1, None, None) == Resolution(Type.EXPENSE, Source.DEFAULT, None)

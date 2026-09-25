@@ -66,7 +66,7 @@ class TestReview:
     ):
         _ops(
             session, master_key,
-            (CURRENT, "2023-04-18", "85.00", "DBIT", "CARTE 17/04/23 DECATHLON 4 CB*88"),
+            (CURRENT, "2023-04-18", "85.00", "DBIT", "VIR INST vers Marie Tiers"),
             (NEOBANK, "2023-04-19", "85.00", "CRDT", "Virement de : Jean Tiers"),
         )
         month = _month(session, master_key, "2023-04")
@@ -74,6 +74,29 @@ class TestReview:
         assert month.inflow == month.outflow == 85
         assert month.transfer_questions == 1
         assert _status(month, "Virement de : Jean Tiers") is Status.SUGGESTED
+
+    @pytest.mark.parametrize("payment", ["CARTE 17/04/23 DECATHLON 4 CB*88", "PRLV SEPA Salle de sport"])
+    def test_a_payment_answered_by_a_transfer_received_is_not_even_offered(
+        self, session: Session, master_key: str, payment: str
+    ):
+        """Someone paying the user back for a purchase, not the user moving money."""
+        _ops(
+            session, master_key,
+            (CURRENT, "2023-04-18", "85.00", "DBIT", payment),
+            (NEOBANK, "2023-04-19", "85.00", "CRDT", "Virement de : Jean Tiers"),
+        )
+        month = _month(session, master_key, "2023-04")
+        assert month.transfer_questions == 0
+        assert _status(month, "Virement de : Jean Tiers") is None
+        assert month.inflow == month.outflow == 85
+
+    def test_a_card_top_up_of_another_account_is_still_offered(self, session: Session, master_key: str):
+        _ops(
+            session, master_key,
+            (CURRENT, "2024-09-19", "10.00", "DBIT", "CARTE 18/09/24 NEOBANK**7500 CB*08"),
+            (NEOBANK, "2024-09-18", "10.00", "CRDT", "Recharge sur Apple Pay via *6969"),
+        )
+        assert _status(_month(session, master_key, "2024-09"), "Recharge sur Apple Pay via *6969") is Status.SUGGESTED
 
     def test_a_rejected_pair_counts_on_both_sides(self, session: Session, master_key: str):
         """A refund to the cent from a third party is income, and the purchase spending."""
@@ -155,13 +178,13 @@ class TestLearning:
         """The rejection, replaced, no longer keeps the next refund apart."""
         _ops(
             session, master_key,
-            (CURRENT, "2023-04-18", "85.00", "DBIT", "CARTE 17/04/23 DECATHLON 4 CB*88"),
+            (CURRENT, "2023-04-18", "85.00", "DBIT", "VIR INST vers Marie Tiers"),
             (NEOBANK, "2023-04-19", "85.00", "CRDT", "Virement de : Jean Tiers"),
-            (CURRENT, "2023-08-10", "35.04", "DBIT", "CARTE 08/08/23 GRAND FRAIS 4 CB*88"),
+            (CURRENT, "2023-08-10", "35.04", "DBIT", "VIREMENT LOCATION CHALET"),
             (NEOBANK, "2023-08-08", "35.04", "CRDT", "VIREMENT DE : JEAN TIERS"),
         )
-        _decide(session, master_key, "CARTE 17/04/23 DECATHLON 4 CB*88", "Virement de : Jean Tiers", Kind.NOT_TRANSFER)
-        _decide(session, master_key, "CARTE 17/04/23 DECATHLON 4 CB*88", "Virement de : Jean Tiers", Kind.TRANSFER)
+        _decide(session, master_key, "VIR INST vers Marie Tiers", "Virement de : Jean Tiers", Kind.NOT_TRANSFER)
+        _decide(session, master_key, "VIR INST vers Marie Tiers", "Virement de : Jean Tiers", Kind.TRANSFER)
 
         assert _status(_month(session, master_key, "2023-08"), "VIREMENT DE : JEAN TIERS") is Status.SUGGESTED
 

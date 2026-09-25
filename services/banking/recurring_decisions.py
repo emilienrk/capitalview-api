@@ -1,5 +1,6 @@
 """
-What the user said of their recurring payments, as stored: one row per decision.
+What the user said of their recurring payments and income, as stored: one row
+per decision.
 
 A decision is about a series the rebuild finds again every time, never stored
 itself. So a decision keeps what it takes to find its series again: anchors,
@@ -22,6 +23,7 @@ from decimal import Decimal
 
 from sqlmodel import Session, select
 
+from dtos.banking import CashflowType, RecurringDirection
 from models.banking import BankRecurringSeries
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
@@ -35,17 +37,20 @@ class RecurringNotFoundError(LookupError):
 
 @dataclass(frozen=True)
 class Identity:
-    """Who was paid, how and how much, when the decision was made."""
+    """Who was paid or who paid, how and how much, when the decision was made."""
     words: tuple[str, ...]
     accounts: tuple[str, ...]
     cadence: str
     amount: Decimal
     method: str
+    # expense | income. Decisions stored before income was detected hold none,
+    # and were all about payments.
+    direction: str = RecurringDirection.EXPENSE.value
 
     def to_json(self) -> dict:
         return {
             "words": list(self.words), "accounts": list(self.accounts), "cadence": self.cadence,
-            "amount": str(self.amount), "method": self.method,
+            "amount": str(self.amount), "method": self.method, "direction": self.direction,
         }
 
     @classmethod
@@ -53,6 +58,7 @@ class Identity:
         return cls(
             tuple(content["words"]), tuple(content["accounts"]), content["cadence"],
             Decimal(content["amount"]), content["method"],
+            content.get("direction", RecurringDirection.EXPENSE.value),
         )
 
 
@@ -70,6 +76,13 @@ class Decision:
     ended_on: date | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+def kind_of(decision: Decision) -> CashflowType:
+    """The type the operations of a decision's series count as."""
+    if decision.identity.direction == RecurringDirection.INCOME.value:
+        return CashflowType.INCOME
+    return CashflowType.EXPENSE
 
 
 def load_decisions(session: Session, user_uuid: str, master_key: str) -> list[Decision]:
@@ -131,7 +144,7 @@ def forget_account(session: Session, user_bidx: str, account_uuid: str, master_k
         if not remaining:
             session.delete(row)
             continue
-        kept = Identity(identity.words, remaining, identity.cadence, identity.amount, identity.method)
+        kept = Identity(identity.words, remaining, identity.cadence, identity.amount, identity.method, identity.direction)
         row.identity_enc = encrypt_data(json.dumps(kept.to_json()), master_key)
         row.updated_at = datetime.now(timezone.utc)
         session.add(row)
@@ -149,6 +162,7 @@ def export_decisions(session: Session, user_bidx: str, master_key: str) -> list[
         exported.append({
             "uuid": decision.uuid,
             "status": decision.status,
+            "direction": decision.identity.direction,
             "name": decision.name,
             "cadence": decision.cadence or decision.identity.cadence,
             "nature": decision.nature,
