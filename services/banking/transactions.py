@@ -391,6 +391,11 @@ def _drop_from_indexes(
         by_dedup[row.dedup_bidx] = [other for other in siblings if other is not row]
 
 
+def first_operation_day(session: Session, account_bidx: str, master_key: str) -> date | None:
+    rows = session.exec(select(BankTransaction).where(BankTransaction.account_id_bidx == account_bidx)).all()
+    return min((day for day in (row_date(row, master_key) for row in rows) if day), default=None)
+
+
 def row_date(row: BankTransaction, master_key: str) -> date | None:
     """The date a stored row is placed on, read back with the very fallback
     order `normalize_transaction` applied when it was written.

@@ -57,7 +57,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "21"
+_VERSION = "22"
 
 
 class FlowCarrier(NamedTuple):

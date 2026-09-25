@@ -821,6 +821,12 @@ def transfer_patterns(
             continue
         first, _ = patterns.coverage.get(movement.account_bidx, (movement.day, movement.day))
         patterns.coverage[movement.account_bidx] = (first, movement.day)
+    # An account was open by its first operation, whatever date was given.
+    for bidx, (first, _) in patterns.coverage.items():
+        account = accounts.by_bidx.get(bidx)
+        if account is not None and (account.opened_at is None or account.opened_at > first):
+            account.opened_at = first
+            session.add(account)
 
     stored_patterns.write_patterns(session, user_bidx, source, patterns, master_key)
     return patterns

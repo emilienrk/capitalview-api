@@ -21,6 +21,7 @@ from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotRespo
 from services.banking.health import is_session_active
 from services.banking.linking import is_card_account
 from services.banking.recurring_decisions import forget_account
+from services.banking.transactions import first_operation_day
 from services.encryption import encrypt_data, decrypt_data, hash_index
 from services.market import (
     get_exchange_rate,
@@ -266,7 +267,9 @@ def update_bank_account(
         account.currency_enc = encrypt_data(data.currency, master_key)
 
     if data.opened_at is not None:
-        account.opened_at = data.opened_at
+        # Never after its first operation: the account was open by then.
+        first = first_operation_day(session, hash_index(account.uuid, master_key), master_key)
+        account.opened_at = min(data.opened_at, first) if first else data.opened_at
         
     session.add(account)
     session.commit()

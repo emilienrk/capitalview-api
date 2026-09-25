@@ -4,12 +4,16 @@ the stored patterns they read (services/banking/transfer_patterns.py).
 
 Labels are shaped like the real ones the cases came from, names replaced.
 """
+from datetime import date
+
 import pytest
 from sqlmodel import Session, select
 
+from dtos.bank import BankAccountUpdate
 from dtos.banking import BankTransferStatus as Status
 from models.bank import BankAccount
 from models.banking import BankTransaction, BankTransferPatterns
+from services.bank import update_bank_account
 from services.banking.flows import list_month_transactions, transfer_patterns
 from services.encryption import encrypt_data
 from tests.services.test_banking_flows import USER, _link, _raw, _store
@@ -179,3 +183,37 @@ class TestStoredPatterns:
             (NEOBANK, "2023-08-08", "35.04", "CRDT", "Virement de : Jean Tiers"),
         )
         assert transfer_patterns(session, USER, master_key).questions == {"2023-04": 1, "2023-08": 1}
+
+
+class TestOpeningDate:
+    """An account was open by its first operation, whatever date was given."""
+
+    @pytest.mark.parametrize("given", [None, date(2025, 6, 1)], ids=["missing", "after"])
+    def test_the_rebuild_moves_it_back_to_the_first_operation(self, session: Session, master_key: str, given):
+        _ops(session, master_key, *_top_up("03", "05", "20.00"), *_top_up("04", "10", "35.50"))
+        account = session.get(BankAccount, CURRENT)
+        account.opened_at = given
+        session.add(account)
+        session.commit()
+
+        transfer_patterns(session, USER, master_key, rebuild=True)
+
+        assert session.get(BankAccount, CURRENT).opened_at == date(2025, 3, 6)
+
+    def test_an_earlier_date_is_kept(self, session: Session, master_key: str):
+        _ops(session, master_key, *_top_up("03", "05", "20.00"))
+        account = session.get(BankAccount, CURRENT)
+        account.opened_at = date(2019, 9, 1)
+        session.add(account)
+        session.commit()
+
+        transfer_patterns(session, USER, master_key, rebuild=True)
+
+        assert session.get(BankAccount, CURRENT).opened_at == date(2019, 9, 1)
+
+    def test_a_date_given_after_the_first_operation_is_moved_back_to_it(self, session: Session, master_key: str):
+        _ops(session, master_key, *_top_up("03", "05", "20.00"))
+
+        update_bank_account(session, session.get(BankAccount, CURRENT), BankAccountUpdate(opened_at=date(2025, 8, 1)), master_key)
+
+        assert session.get(BankAccount, CURRENT).opened_at == date(2025, 3, 6)
