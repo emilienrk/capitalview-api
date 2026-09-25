@@ -19,6 +19,7 @@ from dtos import (
 from dtos.crypto import CryptoCompositeTransactionCreate, CrossAccountTransferCreate, FIAT_ASSET_KEYS
 from services.encryption import encrypt_data, decrypt_data, hash_index
 from services.market import get_crypto_info, get_crypto_price, get_exchange_rate
+from services.crypto_group_cost import split_group_cost
 
 
 def _decrypt_transaction(
@@ -427,15 +428,14 @@ def _compute_asset_key_pru(
                 fiat_spend_by_group.setdefault(tx.group_uuid, Decimal("0"))
                 fiat_spend_by_group[tx.group_uuid] += tx.amount * tx.price_per_unit
 
-    buy_group_cost: dict[str, Decimal] = {}
-    for tx in transactions:
-        if tx.type == CryptoTransactionType.BUY.value and tx.group_uuid:
-            if tx.group_uuid in anchor_by_group:
-                buy_group_cost[tx.id] = anchor_by_group[tx.group_uuid]
-            elif tx.group_uuid in fiat_spend_by_group:
-                buy_group_cost[tx.id] = fiat_spend_by_group[tx.group_uuid]
-            else:
-                buy_group_cost[tx.id] = Decimal("0")
+    buy_group_cost = split_group_cost(
+        (
+            (tx.id, tx.group_uuid, tx.asset_key, tx.amount)
+            for tx in transactions
+            if tx.type == CryptoTransactionType.BUY.value and tx.group_uuid
+        ),
+        {**fiat_spend_by_group, **anchor_by_group},
+    )
 
     total_amount = Decimal("0")
     cost_basis = Decimal("0")
@@ -729,7 +729,6 @@ def get_crypto_account_summary(
     transactions.sort(key=lambda x: x.executed_at)
     transactions = [tx for tx in transactions if tx.executed_at.date() <= as_of]
 
-    buy_group_cost: dict[str, Decimal] = {}
     anchor_by_group: dict[str, Decimal] = {}
     fiat_spend_by_group: dict[str, Decimal] = {}
     fiat_deposit_by_group: dict[str, Decimal] = {}
@@ -750,14 +749,14 @@ def get_crypto_account_summary(
                 fiat_deposit_by_group.setdefault(tx.group_uuid, Decimal("0"))
                 fiat_deposit_by_group[tx.group_uuid] += tx.amount * tx.price_per_unit
 
-    for tx in transactions:
-        if tx.type == "BUY" and tx.group_uuid:
-            if tx.group_uuid in anchor_by_group:
-                buy_group_cost[tx.id] = anchor_by_group[tx.group_uuid]
-            elif tx.group_uuid in fiat_spend_by_group:
-                buy_group_cost[tx.id] = fiat_spend_by_group[tx.group_uuid]
-            else:
-                buy_group_cost[tx.id] = Decimal("0")
+    buy_group_cost = split_group_cost(
+        (
+            (tx.id, tx.group_uuid, tx.asset_key, tx.amount)
+            for tx in transactions
+            if tx.type == "BUY" and tx.group_uuid
+        ),
+        {**fiat_spend_by_group, **anchor_by_group},
+    )
 
     positions_map: dict[str, dict] = {}
 

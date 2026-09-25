@@ -680,6 +680,46 @@ def test_group_based_pru(mock_info, session: Session, master_key: str):
     assert pos_btc.total_invested == Decimal("30002")
 
 
+@patch("services.crypto_transaction.get_crypto_info")
+def test_group_cost_split_across_partial_fills(mock_info, session: Session, master_key: str):
+    """An order filled in two parts lands as two BUY rows sharing one ANCHOR.
+
+    The anchor is what the whole order cost: each fill carries its share by
+    quantity, so the position is invested 20.92, not 20.92 per fill.
+    """
+    mock_info.return_value = ("Solana", Decimal("100"))
+
+    account = CryptoAccount(
+        uuid="acc_split_fills",
+        user_uuid_bidx=hash_index("u_sf", master_key),
+        name_enc=encrypt_data("SF", master_key),
+    )
+    session.add(account)
+    session.commit()
+
+    group = "group-two-fills"
+    rows = [
+        ("SOL", CryptoTransactionType.BUY, "0.145", "0"),
+        ("USDC", CryptoTransactionType.SPEND, "5.3816", "0"),
+        ("EUR", CryptoTransactionType.ANCHOR, "20.92", "1"),
+        ("SOL", CryptoTransactionType.BUY, "0.04", "0"),
+        ("USDC", CryptoTransactionType.SPEND, "19.5083", "0"),
+    ]
+    for asset, tx_type, amount, price in rows:
+        create_crypto_transaction(session, CryptoTransactionCreate(
+            account_id="acc_split_fills", asset_key=asset, type=tx_type,
+            amount=Decimal(amount), price_per_unit=Decimal(price),
+            executed_at=datetime(2025, 12, 8, 19, 54, 32),
+        ), master_key, group_uuid=group)
+
+    summary = _crypto_summary(session, account.uuid, master_key)
+    pos_sol = next(p for p in summary.positions if p.symbol == "SOL")
+
+    assert pos_sol.total_amount == Decimal("0.185")
+    assert pos_sol.total_invested == Decimal("20.92")
+    assert round(pos_sol.average_buy_price, 2) == Decimal("113.08")
+
+
 def test_crypto_deposit_creates_fiat_anchor_and_buy(session: Session, master_key: str):
     """CRYPTO_DEPOSIT creates a DEPOSIT(EUR) + BUY + SPEND(EUR) sharing the same group."""
     account = CryptoAccount(

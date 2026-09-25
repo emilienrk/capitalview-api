@@ -21,6 +21,7 @@ from models.market import MarketAsset, MarketPriceHistory
 from services.market_data import market_data_manager
 from services.market_data.providers.coinmarketcap import CoinMarketCapProvider
 from services.market_data.providers.yahoo import YahooProvider
+from services.crypto_group_cost import split_group_cost
 from services.encryption import decrypt_data, hash_index
 from models import StockAccount, StockTransaction, CryptoAccount, CryptoTransaction
 
@@ -1324,25 +1325,32 @@ def _crypto_timeline_events(
     Fees stay out of the basis here, the opposite of the stock ledger, because
     that is how the crypto summary computes the PRU shown everywhere else.
     """
+    from dtos.crypto import FIAT_ASSET_KEYS
+
     anchors, fiat_spent, fiat_received = _crypto_group_flows(transactions)
 
-    buy_cost: dict[str, Decimal] = {}
-    for tx in transactions:
-        if tx.type == "BUY" and tx.group_uuid:
-            if tx.group_uuid in anchors:
-                buy_cost[tx.id] = anchors[tx.group_uuid]
-            elif tx.group_uuid in fiat_spent:
-                buy_cost[tx.id] = fiat_spent[tx.group_uuid]
-            else:
-                buy_cost[tx.id] = _ZERO_EUR
+    buy_cost = split_group_cost(
+        (
+            (tx.id, tx.group_uuid, tx.asset_key, tx.amount)
+            for tx in transactions
+            if tx.type == "BUY" and tx.group_uuid
+        ),
+        {**fiat_spent, **anchors},
+    )
 
-    def proceeds_of(group: str) -> Decimal | None:
-        """Euros a disposal brought in: fiat received, else the trade's anchor."""
-        if group in fiat_received:
-            return fiat_received[group]
-        if group in anchors:
-            return anchors[group]
-        return None
+    # Euros a disposal brought in: fiat received, else the trade's anchor —
+    # shared, like the cost, between the fills of one order.
+    sale_proceeds = split_group_cost(
+        (
+            (tx.id, tx.group_uuid, tx.asset_key, tx.amount)
+            for tx in transactions
+            if tx.type == "SPEND"
+            and tx.group_uuid
+            and (tx.group_uuid in fiat_received or tx.group_uuid in anchors)
+            and (tx.asset_key or "").upper() not in FIAT_ASSET_KEYS
+        ),
+        {**anchors, **fiat_received},
+    )
 
     key = asset_key.upper()
     quantity = _ZERO_EUR
@@ -1380,7 +1388,7 @@ def _crypto_timeline_events(
             # Only a SPEND inside a group is a disposal with euros behind it; a
             # TRANSFER moves the asset to another wallet at no price at all.
             if tx_type == "SPEND" and tx.group_uuid and amount > 0:
-                proceeds = proceeds_of(tx.group_uuid)
+                proceeds = sale_proceeds.get(tx.id)
                 if proceeds is not None and proceeds > 0:
                     marker = ("SELL", proceeds / amount, proceeds)
 

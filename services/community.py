@@ -35,6 +35,7 @@ from dtos.community import (
     PickResponse,
     PickUpdate,
 )
+from services.crypto_group_cost import split_group_cost
 from services.encryption import community_decrypt, community_encrypt
 from services.market import get_stock_info, get_crypto_info
 
@@ -474,16 +475,14 @@ def _compute_crypto_pru_for_asset_keys(
                 fiat_spend_by_group.setdefault(g, Decimal("0"))
                 fiat_spend_by_group[g] += tx["amount"] * tx["price"]
 
-    buy_group_cost: dict[str, Decimal] = {}
-    for tx in all_decrypted:
-        if tx["type"] == "BUY" and tx["group_uuid"]:
-            g = tx["group_uuid"]
-            if g in anchor_by_group:
-                buy_group_cost[tx["id"]] = anchor_by_group[g]
-            elif g in fiat_spend_by_group:
-                buy_group_cost[tx["id"]] = fiat_spend_by_group[g]
-            else:
-                buy_group_cost[tx["id"]] = Decimal("0")
+    buy_group_cost = split_group_cost(
+        (
+            (tx["id"], tx["group_uuid"], tx["asset_key"], tx["amount"])
+            for tx in all_decrypted
+            if tx["type"] == "BUY" and tx["group_uuid"]
+        ),
+        {**fiat_spend_by_group, **anchor_by_group},
+    )
 
     # Replay per asset_key
     positions: dict[str, dict] = {}  # asset_key → {amount, cost_basis}

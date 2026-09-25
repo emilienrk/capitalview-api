@@ -301,6 +301,42 @@ def test_crypto_timeline_prices_a_disposal_from_its_group(_ensure, session, mast
 
 
 @patch("services.market.ensure_price_history")
+def test_crypto_timeline_shares_a_group_between_its_fills(_ensure, session, master_key):
+    """An order filled in two parts is two rows under one ANCHOR: each fill is
+    priced at the order's price, and the order is counted once, not per fill."""
+    _seed_btc_prices(session, {date(2024, 1, 1): Decimal("30000")})
+    client = TestClient(app)
+    account_id = _open_wallet(client)
+
+    _bulk(client, account_id, [
+        {"asset_key": "BTC", "type": "BUY", "amount": "0.03", "price_per_unit": "0",
+         "executed_at": "2024-01-01T12:00:00", "group_uuid": "g1"},
+        {"asset_key": "BTC", "type": "BUY", "amount": "0.07", "price_per_unit": "0",
+         "executed_at": "2024-01-01T12:00:00", "group_uuid": "g1"},
+        {"asset_key": "USDC", "type": "SPEND", "amount": "3300", "price_per_unit": "0",
+         "executed_at": "2024-01-01T12:00:00", "group_uuid": "g1"},
+        {"asset_key": "EUR", "type": "ANCHOR", "amount": "3000", "price_per_unit": "1",
+         "executed_at": "2024-01-01T12:00:00", "group_uuid": "g1"},
+        {"asset_key": "BTC", "type": "SPEND", "amount": "0.01", "price_per_unit": "0",
+         "executed_at": "2024-02-01T12:00:00", "group_uuid": "g2"},
+        {"asset_key": "BTC", "type": "SPEND", "amount": "0.03", "price_per_unit": "0",
+         "executed_at": "2024-02-01T12:00:00", "group_uuid": "g2"},
+        {"asset_key": "EUR", "type": "DEPOSIT", "amount": "1400", "price_per_unit": "1",
+         "executed_at": "2024-02-01T12:00:00", "group_uuid": "g2"},
+    ])
+
+    data = client.get(f"/market/assets/BTC/price-timeline?account_id={account_id}").json()
+
+    buys = [e for e in data["events"] if e["type"] == "BUY"]
+    sales = [e for e in data["events"] if e["type"] == "SELL"]
+    assert [Decimal(e["price"]) for e in buys] == [Decimal("30000"), Decimal("30000")]
+    assert sum(Decimal(e["total"]) for e in buys) == Decimal("-3000")
+    assert [Decimal(e["price"]) for e in sales] == [Decimal("35000"), Decimal("35000")]
+    assert sum(Decimal(e["total"]) for e in sales) == Decimal("1400")
+    assert Decimal(data["average_buy_price"]) == Decimal("30000")
+
+
+@patch("services.market.ensure_price_history")
 def test_crypto_timeline_fee_in_kind_raises_the_unit_cost(_ensure, session, master_key):
     """A fee paid in the asset takes quantity without refunding any cost."""
     _seed_btc_prices(session, {date(2024, 1, 1): Decimal("30000")})
