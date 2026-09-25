@@ -20,6 +20,7 @@ from dtos.projection import (
 )
 
 from services.encryption import hash_index
+from services.placement import get_user_placements
 from services.stock_transaction import (
     get_stock_account_summary,
     get_account_transactions as get_stock_transactions,
@@ -34,6 +35,7 @@ PROJECTED_CATEGORIES: tuple[AccountCategory, ...] = (
     AccountCategory.BANK,
     AccountCategory.STOCK,
     AccountCategory.CRYPTO,
+    AccountCategory.PLACEMENT,
 )
 
 ZERO_DECIMAL = Decimal("0")
@@ -181,6 +183,7 @@ def generate_wealth_projection(
         AccountCategory.CRYPTO: _get_history_stats(session, user_bidx, master_key, AccountCategory.CRYPTO),
         AccountCategory.BANK: (ZERO_DECIMAL, ZERO_DECIMAL, 0),
     }
+    placements = get_user_placements(session, user.uuid, master_key)
 
     if basis is None:
         basis = derive_projection_defaults(session, user.uuid, master_key)
@@ -192,8 +195,15 @@ def generate_wealth_projection(
     for category in PROJECTED_CATEGORIES:
         if category == AccountCategory.BANK:
             # Bank balances move with salary and spending, so there is nothing
-            # here it would be honest to measure. See the basis module.
-            default_injection, default_rate = ZERO_DECIMAL, 0.02
+            # here it would be honest to measure: only the rates the user
+            # entered on savings accounts, else a conservative 2 %.
+            declared = basis.get(category.value)
+            default_injection = ZERO_DECIMAL
+            default_rate = (
+                float(declared.annual_return_rate)
+                if declared is not None and declared.annual_return_rate is not None
+                else 0.02
+            )
         else:
             measured = basis.get(category.value)
             default_injection = (
@@ -223,6 +233,7 @@ def generate_wealth_projection(
         AccountCategory.BANK: ZERO_DECIMAL,
         AccountCategory.STOCK: history_stats[AccountCategory.STOCK][0],
         AccountCategory.CRYPTO: history_stats[AccountCategory.CRYPTO][0],
+        AccountCategory.PLACEMENT: placements.total_value,
     }
     current_date = date.today()
 

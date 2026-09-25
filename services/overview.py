@@ -46,6 +46,7 @@ from services.crypto_transaction import (
     get_crypto_account_summary,
 )
 from services.encryption import decrypt_data, hash_index
+from services.placement import build_timeline, get_all_placements_history, get_user_placements
 from services.settings import get_or_create_settings
 from services.stock_account import get_all_stock_accounts_history, get_user_stock_accounts
 from services.stock_transaction import (
@@ -92,8 +93,17 @@ def build_wealth_history(session: Session, user_uuid: str, master_key: str) -> l
             for s in get_asset_portfolio_history(session, user_uuid, master_key)
         }
 
+    placements_snaps = {
+        s.snapshot_date: s.total_value
+        for s in get_all_placements_history(session, user_uuid, master_key)
+    }
+
     all_dates = sorted(
-        stock_snaps.keys() | crypto_snaps.keys() | bank_snaps.keys() | assets_snaps.keys()
+        stock_snaps.keys()
+        | crypto_snaps.keys()
+        | bank_snaps.keys()
+        | assets_snaps.keys()
+        | placements_snaps.keys()
     )
 
     history = []
@@ -102,14 +112,16 @@ def build_wealth_history(session: Session, user_uuid: str, master_key: str) -> l
         crypto_v = crypto_snaps.get(day, Decimal("0"))
         bank_v = bank_snaps.get(day, Decimal("0"))
         assets_v = assets_snaps.get(day, Decimal("0"))
+        placements_v = placements_snaps.get(day, Decimal("0"))
         history.append(
             {
                 "snapshot_date": day,
-                "total_wealth": stock_v + crypto_v + bank_v + assets_v,
+                "total_wealth": stock_v + crypto_v + bank_v + assets_v + placements_v,
                 "stock_value": stock_v,
                 "crypto_value": crypto_v,
                 "bank_value": bank_v,
                 "assets_value": assets_v,
+                "placements_value": placements_v,
             }
         )
 
@@ -328,6 +340,46 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
                     detail["category"] = a.category
                 assets_details.append(detail)
 
+    # --- Placements (AV, PER, SCPI…) ---
+    placements_total = Decimal(0)
+    placements_invested = Decimal(0)
+    placements_details = []
+    if date:
+        from datetime import datetime
+        target_date = datetime.strptime(date, "%Y-%m-%d").date()
+        summary = get_user_placements(session, user_uuid, master_key)
+        for placement in summary.accounts:
+            timeline = build_timeline(session, placement.id, master_key)
+            value = timeline.value_on(target_date)
+            invested = timeline.deposits_until(target_date) - timeline.withdrawals_until(target_date)
+            placements_total += value
+            placements_invested += invested
+            if details:
+                placements_details.append({
+                    "name": placement.name,
+                    "placement_type": placement.placement_type.value,
+                    "total_value": float(value),
+                    "net_invested": float(invested),
+                })
+    else:
+        summary = get_user_placements(session, user_uuid, master_key)
+        placements_total = summary.total_value
+        placements_invested = summary.net_invested
+        if details:
+            for placement in summary.accounts:
+                placements_details.append({
+                    "name": placement.name,
+                    "placement_type": placement.placement_type.value,
+                    "total_value": float(placement.current_value),
+                    "net_invested": float(placement.net_invested),
+                    "gain": _opt_float(placement.gain),
+                    # The value is the last statement plus the flows since: say
+                    # how old that statement is rather than let it pass for today's.
+                    "last_valuation_date": (
+                        placement.last_valuation_date.isoformat() if placement.last_valuation_date else None
+                    ),
+                })
+
     invested_total = stock_invested + crypto_invested
 
     # Summed from the accounts rather than derived as value minus cost: the
@@ -342,11 +394,15 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
         "crypto_total": float(crypto_current_value),
         "cash_total": float(cash_total),
         "assets_total": float(assets_total),
-        "global_wealth": float(stock_current_value + crypto_current_value + cash_total + assets_total),
+        "placements_total": float(placements_total),
+        "global_wealth": float(
+            stock_current_value + crypto_current_value + cash_total + assets_total + placements_total
+        ),
         # Cost basis and the gain it implies. Without these a reader knows the
         # size of the portfolio but not whether it has made or lost money.
         "stocks_invested": float(stock_invested),
         "crypto_invested": float(crypto_invested),
+        "placements_invested": float(placements_invested),
         "invested_total": float(invested_total),
         "unrealized_profit_loss": _opt_float(unrealized),
     })
@@ -356,7 +412,8 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
             "stock_accounts_details": stock_accounts_details,
             "crypto_accounts_details": crypto_accounts_details,
             "bank_accounts_details": bank_accounts_details,
-            "assets_details": assets_details
+            "assets_details": assets_details,
+            "placements_details": placements_details,
         })
 
     return result
@@ -439,6 +496,8 @@ def build_projection(
     annual_return_stock: float | None = None,
     annual_return_crypto: float | None = None,
     annual_return_bank: float | None = None,
+    monthly_placements: float | None = None,
+    annual_return_placements: float | None = None,
 ):
     """
     Project the wealth forward from measured assumptions the caller can override.
@@ -479,6 +538,7 @@ def build_projection(
         AccountCategory.STOCK: (monthly_stock, annual_return_stock),
         AccountCategory.CRYPTO: (monthly_crypto, annual_return_crypto),
         AccountCategory.BANK: (monthly_bank, annual_return_bank),
+        AccountCategory.PLACEMENT: (monthly_placements, annual_return_placements),
     }
     assets = {
         category: ProjectionAssetParameters(monthly_injection=contribution, return_rate=rate)

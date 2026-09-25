@@ -1613,3 +1613,42 @@ def test_a_euro_bank_snapshot_never_looks_a_rate_up(session: Session, master_key
         )
 
     assert snapshots[0].frozen_positions[0].quantity == Decimal("1000")
+
+
+def test_generate_missing_snapshots_placement_keeps_deposits_out_of_the_pnl(
+    session: Session, master_key: str
+):
+    """A placement's deposit raises its value without reading as a gain."""
+    from models.enums import PlacementEntryType as Kind
+    from services.placement import EntryPoint, PlacementTimeline
+
+    timeline = PlacementTimeline([
+        EntryPoint(date(2024, 1, 1), Kind.DEPOSIT, Decimal("1000")),
+        EntryPoint(date(2024, 1, 3), Kind.VALUATION, Decimal("1010")),
+        EntryPoint(date(2024, 1, 4), Kind.DEPOSIT, Decimal("500")),
+    ])
+
+    rows = _generate_missing_snapshots(
+        session=session,
+        user_uuid_bidx=hash_index("user_placement_test", master_key),
+        account_id_bidx=hash_index("placement_test", master_key),
+        account_snapshot=_AccountSnapshot(
+            account_id="placement_test",
+            account_type=AccountCategory.PLACEMENT,
+            placement=timeline,
+        ),
+        price_matrix={},
+        missing_dates=[date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)],
+        prev_value=Decimal("0"),
+        master_key=master_key,
+        has_previous_snapshot=False,
+    )
+
+    values = [decrypt_data(r["total_value_enc"], master_key) for r in rows]
+    pnl = [decrypt_data(r["daily_pnl_enc"], master_key) for r in rows]
+    # The 10 € the statement reveals accrue over the three days since the eve of the first entry.
+    assert values == ["1003.33", "1006.67", "1010.00", "1510.00"]
+    assert pnl == ["0.00", "3.33", "3.33", "0.00"]
+    assert decrypt_data(rows[-1]["total_deposits_enc"], master_key) == "1500.00"
+    assert decrypt_data(rows[-1]["cumulative_pnl_enc"], master_key) == "10.00"
+    assert rows[0]["account_type"] == "PLACEMENT"

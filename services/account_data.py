@@ -39,6 +39,7 @@ from models.community import (
     CommunityProfile,
 )
 from models.crypto import CryptoAccount, CryptoTransaction
+from models.placement import PlacementAccount, PlacementEntry
 from models.note import Note
 from models.notification import Notification
 from models.stock import StockAccount, StockTransaction
@@ -87,7 +88,7 @@ def _account_labels(session: Session, user_bidx: str, master_key: str) -> dict[s
     """
     labels: dict[str, str] = {}
 
-    for model in (BankAccount, StockAccount, CryptoAccount):
+    for model in (BankAccount, StockAccount, CryptoAccount, PlacementAccount):
         accounts = session.exec(
             select(model).where(model.user_uuid_bidx == user_bidx)
         ).all()
@@ -178,6 +179,7 @@ def export_account_data(session: Session, user: User, master_key: str) -> dict:
     from services.community import get_community_settings, get_user_picks
     from services.crypto_account import get_user_crypto_accounts
     from services.crypto_transaction import get_account_transactions as get_crypto_transactions
+    from services.placement import get_owned_account, get_user_placements, list_entries
     from services.note import get_user_notes
     from services.settings import get_settings
     from services.stock_account import get_user_stock_accounts
@@ -210,6 +212,16 @@ def export_account_data(session: Session, user: User, master_key: str) -> dict:
             "valuations": get_asset_valuations(session, asset.id, master_key),
         }
         for asset in asset_summary.assets
+    ]
+
+    placements = [
+        {
+            **placement.model_dump(),
+            "entries": list_entries(
+                session, get_owned_account(session, placement.id, user.uuid, master_key), master_key
+            ),
+        }
+        for placement in get_user_placements(session, user.uuid, master_key).accounts
     ]
 
     bank_accounts = []
@@ -260,6 +272,7 @@ def export_account_data(session: Session, user: User, master_key: str) -> dict:
         "bank_recurring_series": export_decisions(session, user_bidx, master_key),
         "stock_accounts": stock_accounts,
         "crypto_accounts": crypto_accounts,
+        "placements": placements,
         "cashflows": get_all_user_cashflows(session, user.uuid, master_key),
         "assets": assets,
         "notes": get_user_notes(session, user.uuid, master_key),
@@ -354,11 +367,19 @@ def purge_account(session: Session, user: User, master_key: str) -> dict[str, in
     if asset_uuids:
         wipe(AssetValuation, AssetValuation.asset_uuid.in_(asset_uuids))
 
+    # Same for the entries of placements.
+    placement_uuids = session.exec(
+        select(PlacementAccount.uuid).where(PlacementAccount.user_uuid_bidx == user_bidx)
+    ).all()
+    if placement_uuids:
+        wipe(PlacementEntry, PlacementEntry.account_uuid.in_(placement_uuids))
+
     # 3. Everything keyed directly by the user's blind index.
     for model in (
         BankAccount,
         StockAccount,
         CryptoAccount,
+        PlacementAccount,
         Cashflow,
         Note,
         Card,

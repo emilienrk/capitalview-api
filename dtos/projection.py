@@ -23,7 +23,7 @@ class ProjectionParameters(BaseModel):
     )
     assets: dict[AccountCategory, ProjectionAssetParameters] = Field(
         default_factory=dict,
-        description="Parametres par type d'actif (STOCK, CRYPTO, BANK).",
+        description="Parametres par type d'actif (STOCK, CRYPTO, BANK, PLACEMENT).",
     )
 
 
@@ -49,7 +49,7 @@ class ProjectionAssetBasis(BaseModel):
     return_: str = Field(
         default="unavailable",
         alias="return",
-        description="'annualised_twr' ou 'unavailable'",
+        description="'annualised_twr', 'observed_twr' (placements, entre relevés), 'expected_rate', 'declared_rates' (banque, taux saisis) ou 'unavailable'",
     )
     return_days: int = 0
     warnings: list[ProjectionBasisWarning] = Field(default_factory=list)

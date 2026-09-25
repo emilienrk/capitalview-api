@@ -1,43 +1,16 @@
 """Defaults a wealth projection should start from, measured rather than guessed.
 
-A projection is only as honest as the two numbers it assumes: what the investor
-puts in each month, and what the portfolio returns. ``services/projection`` has
-to invent both when the caller supplies neither, and it does so with a shortcut
-that is wrong in a specific, quantifiable way:
+Without them `services/projection` falls back on invested / months and value /
+invested: the first counts rotated positions as deposits, the second treats a
+euro deposited last week as compounding since day one.
 
-    injection = total_invested / months_since_first_transaction
-    rate      = (value / invested) ** (1 / years) - 1
+- Return: annualised TWR, which neutralises the timing of deposits. XIRR would
+  bake a lucky or unlucky entry sequence into every projected month.
+- Contribution: net external flows from the ledger, auto-provisions included —
+  their date is synthetic, which a solver minds and an average over years does
+  not.
 
-``total_invested`` is the cost basis of what is *currently held*, not the money
-that came in — rotate a position and it grows without a euro being deposited.
-And the rate divides the value by the cost basis, which treats a euro deposited
-last week as though it had been compounding since the first day. That is not a
-return: it understates a portfolio fed by regular contributions, the more so the
-younger the contributions are, and it is exactly the error time-weighting exists
-to remove.
-
-This module derives both figures with the measures the rest of the analytics
-subsystem already implements:
-
-**Return — annualised TWR.** Time-weighted return chains daily performance with
-external flows neutralised, so it measures the portfolio rather than the timing
-of the deposits (GIPS' basis for reporting performance, and what a retail app
-shows as "performance"). Money-weighted return (XIRR) answers a different
-question — how *this investor* did, timing included — which is the right lens on
-the past and the wrong one to project forward with, since it would bake a lucky
-or unlucky entry sequence into every future month.
-
-**Contribution — real external flows.** Deposits net of withdrawals, straight
-from the ledger, averaged over the period they span. Auto-provisions count: the
-application writes one when a buy exceeds the cash on hand, which means the
-money came from outside the portfolio, whatever the row is called. The
-money-weighted return excludes them because their *date* is synthetic and a
-solver is sensitive to it; an average over years is not.
-
-Nothing here is capped or smoothed silently. Where a figure is too fragile to
-stand on its own — an annualised return from ten months of history, a rate no
-portfolio sustains for a decade — it comes back with a warning attached, for the
-caller to pass on rather than bury.
+Fragile or extreme figures come back with a warning, never silently altered.
 """
 
 import datetime
@@ -52,42 +25,32 @@ from services.analytics.returns import annualize, time_weighted_return
 # 365.25 / 12, so a month means the same thing here as it does in `annualize`.
 DAYS_PER_MONTH = Decimal("30.4375")
 
-# Below a year, an annualised return is an extrapolation of noise: three months
-# of +8% becomes +36%/year by construction. Refused rather than reported.
+# Below a year, annualising extrapolates noise: three months at +8% reads as
+# +36%/year. Refused rather than reported.
 MIN_DAYS_FOR_A_RATE = 365
 
-# The analytics spec calls an annualised figure under three years statistically
-# weak and requires it be labelled, not hidden. Same threshold, same treatment.
+# Below three years an annualised figure is statistically weak: labelled, not hidden.
 WEAK_RATE_DAYS = 1096
 
-# No asset class sustains this for a decade. Projecting it compounds a bull run
-# into a fortune, so it is flagged — but never quietly rewritten.
+# No asset class sustains this for a decade: flagged, never rewritten.
 EXTREME_ANNUAL_RATE = Decimal("0.30")
 
-# Time-weighting only removes a flow that lands on a day the series prices. A
-# deposit on a day with no snapshot is read as performance instead, and the
-# error runs one way: upward. Tolerated below this share of the final value —
-# a stray weekend deposit moves the rate by less than the rounding — and fatal
-# above it, because there is no way to tell how much of the return is real.
+# TWR only neutralises a flow landing on a priced day; any other reads as
+# performance, always upward. Below this share of the final value the error is
+# rounding, above it the rate cannot be trusted.
 MAX_UNALIGNED_FLOW_SHARE = Decimal("0.02")
 
 
 @dataclass(frozen=True)
 class BasisWarning:
-    """A reservation about a derived figure, as a code plus what it hinges on.
-
-    A code rather than a sentence: the web app writes its own wording, and a
-    translation or a rewrite must not depend on matching a string produced by
-    the server. The values travel alongside because every one of these
-    reservations is about a quantity — "too short" means nothing without the
-    number of days it was too short by.
-    """
+    """A reservation about a derived figure: a code, so the front owns the wording,
+    and the quantity it hinges on."""
 
     code: str
     values: dict = field(default_factory=dict)
 
 
-#: The reservations a derived figure can carry, in French, for a model to relay.
+#: The same reservations in French, for callers that relay prose (the MCP agent).
 WARNING_MESSAGES = {
     "no_contribution_found": "Aucun versement identifié dans le journal : projeté sans apport.",
     "insufficient_history": (
@@ -102,22 +65,32 @@ WARNING_MESSAGES = {
         "Rendement historique de {annual_rate:.1%} par an : peu susceptible de tenir sur la "
         "durée projetée."
     ),
+    "expected_rate_used": (
+        "Rendement des placements pris sur le taux attendu saisi, faute d'un an de "
+        "relevés : c'est une hypothèse, pas une mesure."
+    ),
+    "no_statement": (
+        "Aucun relevé de solde saisi sur les placements : aucun rendement n'est déduit."
+    ),
     "not_measured": (
         "Aucun rendement ni versement déduit pour la banque : les soldes bougent avec les "
         "revenus et les dépenses, pas avec une performance."
+    ),
+    "contribution_not_measured": (
+        "Rendement de la banque pris sur les taux saisis sur vos livrets ; aucun versement "
+        "n'est déduit, les soldes bougeant avec les revenus et les dépenses."
     ),
 }
 
 
 def describe(warning: BasisWarning) -> str:
-    """Render a warning in French, for callers that need prose rather than a code."""
+    """Render a warning in French; a message missing its values still beats a crash."""
     template = WARNING_MESSAGES.get(warning.code)
     if template is None:
         return warning.code
     try:
         return template.format(**warning.values)
     except (KeyError, ValueError):
-        # A message missing its values is still worth showing; a crash is not.
         return template
 
 
@@ -138,24 +111,17 @@ class CategoryBasis:
 def average_monthly_contribution(flows: dict[datetime.date, Decimal]) -> tuple[Decimal | None, int, Decimal]:
     """Net external flow per month, averaged over the span the flows cover.
 
-    Net, not gross: someone who pays 500 in and takes 200 back out is saving 300
-    a month, and projecting the gross figure would invent the difference.
-
-    The span runs from the first flow to the last, not to today — a ledger that
-    stops six months ago describes a rhythm over the months it actually covers.
-    Whether that rhythm still holds is the caller's question to raise, and the
-    span is returned so it can.
+    Net, not gross: 500 in and 200 out is saving 300. The span stops at the last
+    flow, not today; whether the rhythm still holds is the caller's question.
 
     Returns:
-        (average, months spanned, net total). Average is None when there is
-        nothing to average.
+        (average, months spanned, net total). Average is None when there are no flows.
     """
     if not flows:
         return None, 0, Decimal("0")
 
     days = (max(flows) - min(flows)).days
-    # A single day, or several inside one month, still represents one month of
-    # contribution — dividing by zero days would report an infinite rhythm.
+    # Flows within one month still make one month of contribution.
     months = max(Decimal(days) / DAYS_PER_MONTH, Decimal("1"))
     total = sum(flows.values(), Decimal("0"))
 
@@ -166,12 +132,9 @@ def _unaligned_flow_share(
     series: list[tuple[datetime.date, Decimal]],
     flows: dict[datetime.date, Decimal],
 ) -> Decimal:
-    """How much of the flow lands on days the series does not price, in shares.
-
-    Measured against the final value rather than counted, because one large
-    deposit outside the series distorts the return and a hundred small ones may
-    not. Returns zero when there is nothing to compare against.
-    """
+    """How much of the flow lands on days the series does not price, as a share
+    of the final value: one large deposit distorts the rate, a hundred small
+    ones may not."""
     if not flows or not series:
         return Decimal("0")
 
@@ -193,10 +156,9 @@ def _category_basis(
     """Derive one category's contribution and return from its own history."""
     basis = CategoryBasis()
 
-    # Auto-provisions included: see the module docstring. Both measures read the
-    # same ledger, so a deposit cannot count for one and not the other.
+    # Both measures read the same ledger, so a deposit cannot count for one and
+    # not the other.
     flows = stock_external_flows(transactions)
-
     average, months, total = average_monthly_contribution(flows)
     if average is not None:
         basis.monthly_contribution = average
@@ -204,9 +166,8 @@ def _category_basis(
         basis.contribution_months = months
         basis.contribution_total = total
     elif transactions:
-        # Holdings but no deposit anywhere: an imported ledger of buys, most
-        # likely. Projecting no contribution is what the data supports, and
-        # saying so is what stops it reading as "you save nothing".
+        # Most likely an imported ledger of buys: saying so stops "no
+        # contribution" reading as "you save nothing".
         basis.warnings.append(BasisWarning("no_contribution_found"))
 
     series = sorted(series, key=lambda point: point[0])
@@ -249,16 +210,12 @@ def _category_basis(
 def derive_projection_defaults(
     session: Session, user_uuid: str, master_key: str
 ) -> dict[str, CategoryBasis]:
-    """
-    Measure each category's contribution rhythm and realised return.
+    """Measure each category's contribution rhythm and realised return.
 
-    BANK is deliberately left underived on both counts. Its snapshots move with
-    salary and spending, so a time-weighted return over them would read a payday
-    as performance; and the obvious contribution proxy — the cashflow's monthly
-    balance — is the very money that already shows up as deposits into the stock
-    and crypto accounts, so adopting it would count the same euro twice. The
-    projection service's own conservative default stands instead, and the caller
-    is told as much.
+    BANK measures nothing: its balance moves with salary and spending, not
+    performance, and its monthly surplus is the money already counted as
+    deposits into the stock and crypto accounts. Its return is at most the
+    rates the user entered on their savings accounts.
     """
     from services.crypto_account import get_all_crypto_accounts_history, get_user_crypto_accounts
     from services.crypto_transaction import get_account_transactions as get_crypto_transactions
@@ -282,11 +239,89 @@ def derive_projection_defaults(
         for snapshot in get_all_crypto_accounts_history(session, user_uuid, master_key)
     ]
 
-    bank = CategoryBasis()
-    bank.warnings.append(BasisWarning("not_measured"))
-
     return {
         "STOCK": _category_basis(stock_series, stock_transactions),
         "CRYPTO": _category_basis(crypto_series, crypto_transactions),
-        "BANK": bank,
+        "BANK": _bank_basis(session, user_uuid, master_key),
+        "PLACEMENT": _placements_basis(session, user_uuid, master_key),
     }
+
+
+def _bank_basis(session: Session, user_uuid: str, master_key: str) -> CategoryBasis:
+    """The rates the user entered on their savings accounts, when there are any.
+
+    Declared, not measured: the balances move with income and spending, so no
+    return can be read from them, and no contribution either.
+    """
+    from services.savings_interest import declared_savings_rate
+
+    bank = CategoryBasis()
+    rate = declared_savings_rate(session, user_uuid, master_key)
+    if rate is None:
+        bank.warnings.append(BasisWarning("not_measured"))
+        return bank
+    bank.annual_return_rate = rate
+    bank.return_source = "declared_rates"
+    bank.warnings.append(BasisWarning("contribution_not_measured"))
+    return bank
+
+
+
+def _placements_basis(session: Session, user_uuid: str, master_key: str) -> CategoryBasis:
+    """Derive contribution and return for placements, their rates weighted by
+    value. Without a year of statements, a placement's rate is the one the user
+    expects."""
+    from services.placement import build_timeline, get_user_placements
+
+    basis = CategoryBasis()
+    summary = get_user_placements(session, user_uuid, master_key)
+    if not summary.accounts:
+        return basis
+
+    flows: dict[datetime.date, Decimal] = {}
+    weighted = Decimal("0")
+    weight = Decimal("0")
+    sources: set[str] = set()
+    for placement in summary.accounts:
+        timeline = build_timeline(session, placement.id, master_key)
+        for day, amount in timeline.flows.items():
+            flows[day] = flows.get(day, Decimal("0")) + amount
+        basis.return_days = max(basis.return_days, placement.return_days)
+
+        if placement.annual_return_rate is not None:
+            rate, source = placement.annual_return_rate, "observed_twr"
+        elif placement.expected_return_rate is not None:
+            rate, source = placement.expected_return_rate, "expected_rate"
+        else:
+            continue
+        # An empty placement still counts, so its rate is not dropped.
+        share = max(placement.current_value, Decimal("1"))
+        weighted += rate * share
+        weight += share
+        sources.add(source)
+
+    # Span up to today so a single lump sum is not projected as a recurring monthly flow.
+    if flows:
+        today = datetime.date.today()
+        flows.setdefault(today, Decimal("0"))
+    average, months, total = average_monthly_contribution(flows)
+    if average is not None and total != 0:
+        basis.monthly_contribution = average
+        basis.contribution_source = "net_external_flows"
+        basis.contribution_months = months
+        basis.contribution_total = total
+    else:
+        basis.warnings.append(BasisWarning("no_contribution_found"))
+
+    if weight > 0:
+        basis.annual_return_rate = weighted / weight
+        basis.return_source = "observed_twr" if sources == {"observed_twr"} else "expected_rate"
+        if "expected_rate" in sources:
+            basis.warnings.append(BasisWarning("expected_rate_used"))
+        elif basis.return_days < WEAK_RATE_DAYS:
+            basis.warnings.append(BasisWarning("weak_annualisation", {"days": basis.return_days}))
+    elif not any(c.last_valuation_date for c in summary.accounts):
+        basis.warnings.append(BasisWarning("no_statement"))
+    else:
+        basis.warnings.append(BasisWarning("insufficient_history", {"days": basis.return_days}))
+    return basis

@@ -319,7 +319,10 @@ def register_tools(mcp) -> None:
         title="Vue d'ensemble du patrimoine",
         description=(
             "Répartition du patrimoine de l'utilisateur : actions, crypto, liquidités "
-            "bancaires, autres actifs, et valeur totale en euros. À appeler en premier "
+            "bancaires, autres actifs, placements (AV, PER, SCPI…) et "
+            "valeur totale en euros. La valeur d'un placement est son dernier relevé "
+            "saisi plus les versements et rachats depuis : `placements_details` en "
+            "donne la date. À appeler en premier "
             "pour situer la conversation. `details` ajoute le détail compte par compte "
             "et position par position. `date` (YYYY-MM-DD) donne l'état du patrimoine "
             "à une date passée au lieu d'aujourd'hui."
@@ -417,7 +420,7 @@ def register_tools(mcp) -> None:
         title="Courbe du patrimoine",
         description=(
             "Évolution du patrimoine jour par jour sur les `days` derniers jours, "
-            "ventilée entre actions, crypto, banque et autres actifs. C'est la série "
+            "ventilée entre actions, crypto, banque, autres actifs et placements. C'est la série "
             "à utiliser pour décrire une trajectoire ou repérer un décrochage — "
             "get_performance ne donne que les bornes. `granularity` vaut 'auto' "
             "(défaut), 'day', 'week' ou 'month' ; 'auto' choisit le pas pour rester "
@@ -481,9 +484,11 @@ def register_tools(mcp) -> None:
             "Sans paramètre, chaque poche part de ce que l'historique mesure : "
             "le versement mensuel moyen (flux réels entrants nets du journal) et "
             "le rendement time-weighted annualisé. `monthly_stock`, "
-            "`monthly_crypto`, `monthly_bank` fixent l'apport mensuel en euros ; "
-            "`annual_return_stock`, `annual_return_crypto`, `annual_return_bank` "
-            "fixent le rendement annuel en décimal (0.05 = 5 %/an). "
+            "`monthly_crypto`, `monthly_bank`, `monthly_placements` fixent "
+            "l'apport mensuel en euros ; `annual_return_stock`, "
+            "`annual_return_crypto`, `annual_return_bank`, "
+            "`annual_return_placements` fixent le rendement annuel en décimal "
+            "(0.05 = 5 %/an). "
             "`outcome` décompose l'arrivée : `starting_value` (patrimoine "
             "actuel), `contributed` (versé sur la période), `growth` (gagné par "
             "le rendement) et `growth_share` (part des gains dans le total) — de "
@@ -502,6 +507,8 @@ def register_tools(mcp) -> None:
         annual_return_stock: float | None = None,
         annual_return_crypto: float | None = None,
         annual_return_bank: float | None = None,
+        monthly_placements: float | None = None,
+        annual_return_placements: float | None = None,
     ) -> dict:
         principal = require_scope(READ_SCOPE)
         horizon = _as_months(months)
@@ -517,6 +524,8 @@ def register_tools(mcp) -> None:
                 annual_return_stock=annual_return_stock,
                 annual_return_crypto=annual_return_crypto,
                 annual_return_bank=annual_return_bank,
+                monthly_placements=monthly_placements,
+                annual_return_placements=annual_return_placements,
             )
 
         # The service answers a losing trajectory with an empty curve. Left as

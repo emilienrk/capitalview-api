@@ -26,6 +26,10 @@ Deposits are matched one for one: a single 200 € deposit cannot prove two 200 
 debits of the same day, and none of the two is typed — the user is shown the
 deposit and settles it. Nothing is ever deduced from an amount alone.
 
+A placement has no cash of its own: every deposit and withdrawal the user
+writes on it is money crossing its boundary, so all of them count. Its
+statement balances are not movements at all and are never read here.
+
 A platform may keep a fee on the way: 100 € leave the bank, 99 € reach the
 account. On the same day, a debit a little above a deposit (or a credit a
 little below a withdrawal) proves it too, when each is the other's only fit.
@@ -46,6 +50,7 @@ from typing import NamedTuple
 from sqlmodel import Session, select
 
 from models.crypto import CryptoAccount, CryptoTransaction
+from models.placement import PlacementAccount, PlacementEntry
 from models.stock import StockAccount, StockTransaction
 from services.analytics.flows import AUTO_PROVISION_NOTE
 from services.encryption import decrypt_data, hash_index
@@ -152,6 +157,33 @@ def load_contributions(session: Session, user_uuid: str, master_key: str) -> Con
                 marked = True
                 continue
             _collect(found, row, crypto_names[row.account_id_bidx], kind == _DEPOSIT, master_key)
+
+    placements = session.exec(
+        select(PlacementAccount).where(PlacementAccount.user_uuid_bidx == user_bidx)
+    ).all()
+    placement_names = {c.uuid: decrypt_data(c.name_enc, master_key) for c in placements}
+    if placement_names:
+        rows = session.exec(
+            select(PlacementEntry).where(
+                PlacementEntry.account_uuid.in_(placement_names)  # type: ignore[attr-defined]
+            )
+        ).all()
+        for row in rows:
+            kind = decrypt_data(row.type_enc, master_key)
+            if kind not in (_DEPOSIT, _WITHDRAW):
+                continue
+            day = _day(decrypt_data(row.occurred_at_enc, master_key))
+            amount = _amount(decrypt_data(row.amount_enc, master_key))
+            if day is None or amount is None or amount <= 0:
+                continue
+            found[(kind == _DEPOSIT, amount)].append(
+                Contribution(
+                    account_name=placement_names[row.account_uuid],
+                    day=day,
+                    amount=amount,
+                    is_deposit=kind == _DEPOSIT,
+                )
+            )
 
     if marked:
         session.commit()

@@ -31,12 +31,13 @@ from models.asset import Asset, AssetValuation
 from models.enums import AccountCategory, AssetType
 from models.currency import BASE_CURRENCY
 from models.market import MarketAsset, MarketPriceHistory
-from models import BankAccount, CryptoAccount, StockAccount
+from models import BankAccount, CryptoAccount, PlacementAccount, StockAccount
 from dtos.crypto import FIAT_ASSET_KEYS
 from services.analytics.flows import stock_external_flow_for_day
 from services.analytics.prices import fill_price_gaps, get_price_matrix
 from services.bank import account_currency
 from services.encryption import decrypt_data, encrypt_data, hash_index
+from services.placement import PlacementTimeline, build_timeline
 from services.market import get_exchange_rate
 from services.settings import get_or_create_settings
 from models.enums import CryptoTransactionType, StockTransactionType
@@ -62,6 +63,7 @@ CURRENT_CALC_VERSION: dict[AccountCategory, int] = {
     AccountCategory.STOCK: 2,    # bumped: cumulative_pnl now total P/L (latent + realized + dividends)
     AccountCategory.BANK: 0,
     AccountCategory.ASSET: 0,
+    AccountCategory.PLACEMENT: 0,
 }
 
 
@@ -107,6 +109,8 @@ class _AccountSnapshot:
     show_negative_positions: bool = False
 
     physical_assets: list[IndividualAsset] = field(default_factory=list)
+
+    placement: PlacementTimeline | None = None
 
 
 def _parse_iso_date(value: str) -> date | None:
@@ -250,6 +254,9 @@ def _compute_daily_net_flow(
                     asset.invested, asset.acquired_at, asset.valuations, d
                 )
         return net_flow
+
+    if account_snapshot.account_type == AccountCategory.PLACEMENT:
+        return account_snapshot.placement.flow_on(d) if account_snapshot.placement else _ZERO
 
     if account_snapshot.account_type not in (AccountCategory.STOCK, AccountCategory.CRYPTO):
         return _ZERO
@@ -504,6 +511,15 @@ def _generate_missing_snapshots(
                 })
 
             positions_json = json.dumps(snapshot_positions) if snapshot_positions else None
+        elif account_snapshot.account_type == AccountCategory.PLACEMENT:
+            timeline = account_snapshot.placement or PlacementTimeline([])
+            total_value = timeline.value_on(d)
+            current_deposits = timeline.deposits_until(d)
+            current_withdrawals = timeline.withdrawals_until(d)
+            current_invested = current_deposits - current_withdrawals
+            current_cumulative_pnl = total_value - current_invested
+            # Nothing inside the placement is itemised in this mode.
+            positions_json = None
         elif account_snapshot.account_type == AccountCategory.STOCK:
             preloaded_prices: dict[str, Decimal] = {}
             for tx in account_snapshot.transactions:
@@ -779,6 +795,35 @@ def _build_asset_snapshots(
     ]
 
 
+def _build_placement_snapshots(
+    session: Session,
+    master_key: str,
+    user_uuid_bidx: str,
+) -> list[_AccountSnapshot]:
+    """Return one _AccountSnapshot per placement."""
+    accounts = session.exec(
+        select(PlacementAccount).where(PlacementAccount.user_uuid_bidx == user_uuid_bidx)
+    ).all()
+
+    result: list[_AccountSnapshot] = []
+    for acc in accounts:
+        timeline = build_timeline(session, acc.uuid, master_key)
+        candidates = [acc.created_at.date()]
+        if acc.opened_at is not None:
+            candidates.append(acc.opened_at)
+        if timeline.start is not None:
+            candidates.append(timeline.start)
+        result.append(
+            _AccountSnapshot(
+                account_id=acc.uuid,
+                account_type=AccountCategory.PLACEMENT,
+                account_created_at=min(candidates),
+                placement=timeline,
+            )
+        )
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Phase 4 — Entry point (called as BackgroundTask from /login)
 # ---------------------------------------------------------------------------
@@ -832,6 +877,12 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
             all_accounts += asset_accounts
         except Exception as exc:
             logger.warning("account_history: asset snapshot error: %s", exc)
+            session.rollback()
+
+        try:
+            all_accounts += _build_placement_snapshots(session, master_key, user_uuid_bidx)
+        except Exception as exc:
+            logger.warning("account_history: placement snapshot error: %s", exc)
             session.rollback()
 
         if not all_accounts:

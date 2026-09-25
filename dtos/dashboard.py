@@ -18,6 +18,9 @@ class InvestmentDistribution(BaseModel):
     crypto_invested: Decimal
     crypto_current_value: Decimal | None = None
     crypto_percentage: Decimal | None = None
+    placements_invested: Decimal = Decimal("0")
+    placements_current_value: Decimal = Decimal("0")
+    placements_percentage: Decimal | None = None
     total_deposits: Decimal = Decimal("0")
     total_withdrawals: Decimal = Decimal("0")
 
@@ -60,6 +63,7 @@ class GlobalHistorySnapshotResponse(BaseModel):
     crypto_value: Decimal
     bank_value: Decimal
     assets_value: Decimal
+    placements_value: Decimal = Decimal("0")
 
 class CardResponse(BaseModel):
     uuid: str

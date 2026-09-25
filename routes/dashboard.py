@@ -27,6 +27,7 @@ from services.stock_transaction import get_stock_account_summary, get_account_tr
 from services.crypto_transaction import get_crypto_account_summary, get_account_transactions as get_crypto_transactions
 from services.bank import get_user_bank_accounts
 from services.asset import get_user_assets
+from services.placement import get_user_placements
 from services.cashflow import get_user_cashflow_balance
 from services.projection import generate_wealth_projection
 from dtos.projection import ProjectionParameters
@@ -241,15 +242,24 @@ def get_dashboard_statistics(
         if summary.current_value:
             crypto_current_value += summary.current_value
 
-    investment_net_deposits = (stock_deposits + crypto_deposits) - (stock_withdrawals + crypto_withdrawals)
+    # ── Placements ─────────────────────────────────────────
+    placements = get_user_placements(session, current_user.uuid, master_key)
+    placements_value = placements.total_value
+
+    investment_net_deposits = (
+        stock_deposits + crypto_deposits + placements.total_deposits
+    ) - (stock_withdrawals + crypto_withdrawals + placements.total_withdrawals)
+    investment_withdrawals = stock_withdrawals + crypto_withdrawals + placements.total_withdrawals
 
     # ── Investment distribution percentages ─────────────────
-    total_investment_value = stock_current_value + crypto_current_value
+    total_investment_value = stock_current_value + crypto_current_value + placements_value
     stock_pct = None
     crypto_pct = None
+    placements_pct = None
     if total_investment_value > 0:
         stock_pct = round(stock_current_value / total_investment_value * 100, 2)
         crypto_pct = round(crypto_current_value / total_investment_value * 100, 2)
+        placements_pct = round(placements_value / total_investment_value * 100, 2)
 
     distribution = InvestmentDistribution(
         stock_invested=round(stock_invested, 2),
@@ -258,8 +268,11 @@ def get_dashboard_statistics(
         crypto_invested=round(crypto_invested, 2),
         crypto_current_value=round(crypto_current_value, 2),
         crypto_percentage=crypto_pct,
+        placements_invested=round(placements.net_invested, 2),
+        placements_current_value=round(placements_value, 2),
+        placements_percentage=placements_pct,
         total_deposits=round(investment_net_deposits, 2),
-        total_withdrawals=round(stock_withdrawals + crypto_withdrawals, 2),
+        total_withdrawals=round(investment_withdrawals, 2),
     )
 
     # ── Cash (bank balances) ────────────────────────────────
@@ -300,7 +313,7 @@ def get_dashboard_statistics(
         assets=round(assets_total, 2),
         assets_percentage=assets_pct,
         total_deposits=round(total_deposits, 2),
-        total_withdrawals=round(stock_withdrawals + crypto_withdrawals, 2),
+        total_withdrawals=round(investment_withdrawals, 2),
         total_wealth=round(total_wealth, 2),
     )
 

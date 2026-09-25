@@ -31,6 +31,7 @@ from models.community import (
     CommunityProfile,
 )
 from models.crypto import CryptoAccount, CryptoTransaction
+from models.placement import PlacementAccount, PlacementEntry
 from models.note import Note
 from models.notification import Notification
 from models.stock import StockAccount, StockTransaction
@@ -70,6 +71,7 @@ BIDX_MODELS = (
     BankAccount,
     StockAccount,
     CryptoAccount,
+    PlacementAccount,
     Cashflow,
     Note,
     Card,
@@ -184,6 +186,19 @@ def _seed_account(client: TestClient, headers: dict[str, str]) -> None:
     )
     assert note.status_code == 201
 
+    placement = client.post(
+        "/placements",
+        json={"name": "Linxea Spirit", "placement_type": "AV"},
+        headers=headers,
+    )
+    assert placement.status_code == 201
+    entry = client.post(
+        f"/placements/{placement.json()['id']}/entries",
+        json={"type": "DEPOSIT", "amount": "1000", "occurred_at": "2025-01-10"},
+        headers=headers,
+    )
+    assert entry.status_code == 201
+
 
 def _remaining_rows(session, user_uuid: str, master_key: str) -> dict[str, int]:
     """Count every row still attached to a user, table by table."""
@@ -231,6 +246,19 @@ def _remaining_rows(session, user_uuid: str, master_key: str) -> dict[str, int]:
     )
     counts[AssetValuation.__tablename__] = len(valuations)
 
+    placement_uuids = session.exec(
+        select(PlacementAccount.uuid).where(PlacementAccount.user_uuid_bidx == user_bidx)
+    ).all()
+    counts[PlacementEntry.__tablename__] = (
+        len(
+            session.exec(
+                select(PlacementEntry).where(PlacementEntry.account_uuid.in_(placement_uuids))
+            ).all()
+        )
+        if placement_uuids
+        else 0
+    )
+
     counts[CommunityPosition.__tablename__] = len(
         session.exec(
             select(CommunityPosition).where(CommunityPosition.profile_user_id == user_uuid)
@@ -271,6 +299,8 @@ def test_export_contains_every_domain_the_user_filled_in(session):
     assert "2025-06-01" in [v["valued_at"] for v in data["assets"][0]["valuations"]]
     assert data["cashflows"][0]["name"] == "Salaire"
     assert data["notes"][0]["name"] == "Ma stratégie"
+    assert data["placements"][0]["name"] == "Linxea Spirit"
+    assert data["placements"][0]["entries"][0]["amount"] == "1000"
     assert data["settings"]["theme"]
 
 

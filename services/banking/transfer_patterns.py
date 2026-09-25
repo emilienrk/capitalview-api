@@ -47,6 +47,7 @@ from models.banking import (
     BankTypeRule,
 )
 from models.crypto import CryptoAccount, CryptoTransaction
+from models.placement import PlacementAccount, PlacementEntry
 from models.stock import StockAccount, StockTransaction
 from services.banking.recurring_decisions import REFUSED
 from services.encryption import decrypt_data, encrypt_data, hash_index
@@ -313,7 +314,7 @@ def source_digest(
 
 
 def _investment_rows(session: Session, user_bidx: str, master_key: str) -> list[list]:
-    """Counts and timestamps of the user's stock and crypto transactions."""
+    """Counts and timestamps of the user's stock, crypto and placement movements."""
     signature: list[list] = []
     for account_model, row_model in ((StockAccount, StockTransaction), (CryptoAccount, CryptoTransaction)):
         bidxs = [
@@ -333,6 +334,21 @@ def _investment_rows(session: Session, user_bidx: str, master_key: str) -> list[
             ).where(row_model.account_id_bidx.in_(bidxs))  # type: ignore[attr-defined]
         ).one()
         signature.append(list(counted))
+
+    placement_uuids = session.exec(
+        select(PlacementAccount.uuid).where(PlacementAccount.user_uuid_bidx == user_bidx)
+    ).all()
+    if placement_uuids:
+        counted = session.exec(
+            select(
+                sa.func.count(),
+                sa.func.max(PlacementEntry.updated_at),
+                sa.func.max(PlacementEntry.created_at),
+            ).where(PlacementEntry.account_uuid.in_(placement_uuids))  # type: ignore[attr-defined]
+        ).one()
+        signature.append(list(counted))
+    else:
+        signature.append([0, None, None])
     return signature
 
 
