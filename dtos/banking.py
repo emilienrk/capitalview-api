@@ -458,6 +458,10 @@ class BankTransactionItem(BaseModel):
     # The movement on the other side, and how the pair was made.
     transfer_id: str | None = None
     transfer_status: BankTransferStatus | None = None
+    # Only on a pair offered to the user, who judges it by the other side: its
+    # label and day, the amount being the same.
+    transfer_label: str | None = None
+    transfer_date: date | None = None
     operation_type: OperationType = OperationType.UNKNOWN
     cashflow_type: CashflowType = CashflowType.EXPENSE
     type_source: TypeSource = TypeSource.DEFAULT

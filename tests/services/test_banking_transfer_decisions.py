@@ -75,6 +75,15 @@ class TestReview:
         assert month.transfer_questions == 1
         assert _status(month, "Virement de : Jean Tiers") is Status.SUGGESTED
 
+    def test_a_suggested_pair_shows_the_other_side_to_judge_it_by(self, session: Session, master_key: str):
+        _ops(
+            session, master_key,
+            (CURRENT, "2023-04-18", "85.00", "DBIT", "VIR INST vers Marie Tiers"),
+            (NEOBANK, "2023-04-19", "85.00", "CRDT", "Virement de : Jean Tiers"),
+        )
+        [debit] = [tx for tx in _month(session, master_key, "2023-04").transactions if not tx.is_credit]
+        assert (debit.transfer_label, debit.transfer_date) == ("Virement de : Jean Tiers", date(2023, 4, 19))
+
     @pytest.mark.parametrize("payment", ["CARTE 17/04/23 DECATHLON 4 CB*88", "PRLV SEPA Salle de sport"])
     def test_a_payment_answered_by_a_transfer_received_is_not_even_offered(
         self, session: Session, master_key: str, payment: str

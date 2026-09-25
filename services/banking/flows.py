@@ -1107,6 +1107,7 @@ def _item_builder(
         settles = filing.patterns.flow_carriers.get(row.uuid)
         asks = settles is not None and _asks_flow(movement, leg, label, resolution)
         stored, member = filing.patterns.recurring_of(row.uuid) or (None, None)
+        offered = counterpart if leg and leg.status is BankTransferStatus.SUGGESTED else None
         return BankTransactionItem(
             id=row.uuid,
             account_id=accounts.by_bidx[movement.account_bidx].uuid,
@@ -1123,6 +1124,8 @@ def _item_builder(
             transfer_account_name=names[counterpart.account_bidx] if counterpart else None,
             transfer_id=counterpart.row.uuid if counterpart else None,
             transfer_status=leg.status if leg else None,
+            transfer_label=_label(offered, master_key) if offered else None,
+            transfer_date=offered.day if offered else None,
             operation_type=_operation_type(movement, master_key),
             cashflow_type=resolution.type,
             type_source=resolution.source,
