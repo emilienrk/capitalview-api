@@ -7,6 +7,8 @@ Import models from here to ensure all relationships are properly loaded.
 from .enums import (
     BankAccountType,
     CryptoTransactionType,
+    PlacementType,
+    PlacementEntryType,
     FlowType,
     Frequency,
     StockAccountType,
@@ -34,6 +36,7 @@ from .market import MarketAsset, MarketPriceHistory, MarketPrice
 from .note import Note
 from .card import Card
 from .asset import Asset, AssetValuation
+from .placement import PlacementAccount, PlacementEntry
 from .community import CommunityProfile, CommunityPosition, CommunityFollow, CommunityPick
 from .account_history import AccountHistory
 from .notification import Notification, NotificationType
@@ -48,6 +51,8 @@ __all__ = [
     "StockAccountType",
     "StockTransactionType",
     "CryptoTransactionType",
+    "PlacementType",
+    "PlacementEntryType",
     "AccountCategory",
     # Models
     "User",
@@ -77,6 +82,8 @@ __all__ = [
     "Card",
     "Asset",
     "AssetValuation",
+    "PlacementAccount",
+    "PlacementEntry",
     "CommunityProfile",
     "CommunityPosition",
     "CommunityFollow",

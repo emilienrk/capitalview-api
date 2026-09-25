@@ -12,6 +12,7 @@ from .notes import router as notes_router
 from .settings import router as settings_router
 from .notifications import router as notifications_router
 from .asset import router as asset_router
+from .placement import router as placement_router
 from .community import router as community_router
 from .market import router as market_router
 from .projection import router as projection_router
@@ -31,6 +32,7 @@ __all__ = [
     "settings_router",
     "notifications_router",
     "asset_router",
+    "placement_router",
     "community_router",
     "market_router",
     "projection_router",

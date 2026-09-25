@@ -39,6 +39,7 @@ from routes import (
     settings_router,
     notifications_router,
     asset_router,
+    placement_router,
     community_router,
     market_router,
     projection_router,
@@ -202,6 +203,7 @@ app.include_router(notes_router)
 app.include_router(settings_router)
 app.include_router(notifications_router)
 app.include_router(asset_router)
+app.include_router(placement_router)
 app.include_router(community_router)
 app.include_router(market_router)
 app.include_router(projection_router)

@@ -21,6 +21,7 @@ from .bank import (
     BankSummaryResponse,
     BankHistoryEntry,
     BankHistoryImportRequest,
+    SavingsInterestResponse,
 )
 
 # Cashflow schemas
@@ -164,6 +165,7 @@ __all__ = [
     "BankSummaryResponse",
     "BankHistoryEntry",
     "BankHistoryImportRequest",
+    "SavingsInterestResponse",
     # Cashflow
     "CashflowBalanceResponse",
     "CashflowCategoryResponse",
