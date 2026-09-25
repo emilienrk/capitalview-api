@@ -1,5 +1,5 @@
 """
-Tests for Enable Banking session health, consent lifecycle, and expiration checks (Task 7).
+Tests for Enable Banking session health, consent lifecycle, and expiration checks.
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -215,9 +215,7 @@ class TestExpiringConsentNotifications:
     def test_the_keyless_job_marks_expiry_but_never_notifies(
         self, session: Session, master_key: str
     ):
-        """Ruling R20, written down as a test.
-
-        The nightly job has no Master Key, so it cannot recover the clear-text
+        """The nightly job has no Master Key, so it cannot recover the clear-text
         `user_uuid` a Notification is keyed by from a session that carries only
         `user_uuid_bidx`. It marks; the sync path warns.
         """

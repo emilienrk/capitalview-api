@@ -1,15 +1,12 @@
 """
-End-to-end offline integration test for Enable Banking integration (Task 12).
+End-to-end offline integration test for Enable Banking integration.
 
 Replays the real 4-year dataset (vendor-docs/spike/export-boursorama-2022-2026.json)
 behind an offline transport double, verifying:
 - The full linking -> first sync -> second sync -> reconnection lifecycle.
 - The first import recipe (strategy=longest + ancient date_from -> 2,776 transactions).
 - Both accounts keep their own feed in full: 2,776 and 1,464 rows, whatever
-  order they are linked in. Cross-account deduplication used to drop 1,436 of
-  the card's rows (98.1 % of its feed also exists on the current account, with
-  zero shared `entry_reference`) onto whichever account was stored first — the
-  measurement was right, the ordering invariant was not.
+  order they are linked in.
 - Batch-size independence across paginated responses.
 """
 
@@ -367,9 +364,8 @@ class TestBankingEndToEnd:
         )
         assert link_cacc.status_code == 200
 
-        # 8. First sync. The card was linked *before* the current account, which
-        # is exactly the sequence that used to cost the current account 1 442 of
-        # its 2 776 movements. Both now keep their own feed in full.
+        # 8. First sync. The card is linked *before* the current account: both
+        # must still keep their own feed in full.
         sync_resp = client.post("/banking/sync", headers=auth_headers)
         assert sync_resp.status_code == 200
         sync_data = sync_resp.json()
@@ -389,7 +385,7 @@ class TestBankingEndToEnd:
         assert card_result["snapshots_written"] == 0
         assert card_result["reconciliation_status"] == "not_reconcilable"
 
-        # 9. Second sync on the same day is skipped by daily cap (R16)
+        # 9. Second sync on the same day is skipped by daily cap
         sync_again = client.post("/banking/sync", headers=auth_headers)
         assert sync_again.status_code == 200
         assert all(r["status"] == "skipped_daily_cap" for r in sync_again.json()["results"])

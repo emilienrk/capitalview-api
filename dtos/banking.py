@@ -29,12 +29,12 @@ class BankConnectionStatus(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Linking flow DTOs (spec §C)
+# Linking flow DTOs
 # ---------------------------------------------------------------------------
 
 
 class BankConfigCheck(BaseModel):
-    """GET /banking/check — the pre-flight diagnostic (spec §C1).
+    """GET /banking/check — the pre-flight diagnostic.
 
     One GET /application call tells us, in one shot, whether the key is
     valid, the application is active, and CapitalView's callback URL is
@@ -144,7 +144,7 @@ class BankAccountUnlinkResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Synchronisation DTOs (spec §D)
+# Synchronisation DTOs
 # ---------------------------------------------------------------------------
 
 
@@ -152,7 +152,7 @@ class SyncStatus(str, Enum):
     """The branch one account's sync took."""
     SYNCED = "synced"
     # The once-a-day cap, a no-op and never an error. A failed attempt spends
-    # the day too (ruling R25).
+    # the day too.
     SKIPPED_DAILY_CAP = "skipped_daily_cap"
     # The consent is gone; the link is preserved.
     RECONNECT_REQUIRED = "reconnect_required"
@@ -189,7 +189,7 @@ class BankAccountSyncResult(BaseModel):
 
 class BankSyncResponse(BaseModel):
     """Response of POST /banking/sync. The front re-reads the accounts payload
-    afterwards rather than depending on this shape (ruling R16)."""
+    afterwards rather than depending on this shape."""
     synced: int
     results: list[BankAccountSyncResult]
 

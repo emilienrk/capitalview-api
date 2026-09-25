@@ -44,7 +44,7 @@ def _reconciles(bridge) -> bool:
 
 
 def test_the_chain_reconciles_exactly():
-    """Blocking guarantee from spec section 11."""
+    """The counterfactual chain must reconcile to the cent."""
     txs = [
         _Tx("DEPOSIT", "EUR", START, amount="5000", price="1"),
         _Tx("BUY", "AAA", date(2024, 3, 5), amount="10", price="105", fees="2"),

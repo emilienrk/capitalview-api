@@ -103,8 +103,8 @@ def annualize(total_return: Decimal, days: int) -> Decimal | None:
     """Geometric annualisation. None for a window too short to mean anything.
 
     The caller is responsible for gating this: under three years an annualised
-    figure is arithmetically valid and statistically weak, and the spec requires
-    it be labelled as such rather than hidden.
+    figure is arithmetically valid and statistically weak, and must be labelled
+    as such rather than hidden.
     """
     if days <= 0 or total_return is None or total_return <= Decimal("-1"):
         return None

@@ -1,6 +1,6 @@
 """
-Route tests for POST /banking/sync (ruling R16: global trigger, no body, the
-server decides the order; a second call the same day is a 200, never an error).
+Route tests for POST /banking/sync (global trigger, no body, the server
+decides the order; a second call the same day is a 200, never an error).
 
 No real network: the sync service is exercised through a `build_client` double,
 as in tests/routes/test_banking_linking.py.
@@ -105,7 +105,7 @@ class FakeClient:
 @pytest.fixture
 def linked_account(session, master_key) -> BankAccount:
     # `notifications.user_uuid` is a real foreign key to `users.uuid`, and every
-    # sync now walks the consent-expiry notifier (ruling R20). Seeded here rather
+    # sync now walks the consent-expiry notifier. Seeded here rather
     # than per-test: a test that shortens `consent_valid_until` without a users
     # row would otherwise hit an FK violation swallowed inside the sync and
     # resurface as an unrelated PendingRollbackError.
@@ -243,7 +243,7 @@ def _consent_notifications(session):
 def test_sync_warns_about_a_consent_about_to_expire(
     session, master_key, monkeypatch, linked_account, sqlite_pg_insert
 ):
-    """Ruling R20: the warning is produced on the authenticated path, since that
+    """The warning is produced on the authenticated path, since that
     is the only place a Master Key exists to write the notification with."""
     monkeypatch.setattr("services.banking.sync.build_client", lambda *a, **kw: FakeClient())
     _expire_consent_in(session, master_key, days=3)

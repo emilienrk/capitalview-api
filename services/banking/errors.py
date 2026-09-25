@@ -2,15 +2,15 @@
 Error taxonomy for the Enable Banking API client.
 
 Enable Banking's HTTP status codes are not a reliable signal: session expiry
-surfaces as 401, but 401 covers other causes too (spec §B5). Callers must
-branch on the business `error` code in the response body instead, so every
-exception here is keyed by that code and grouped into the reaction families
-the spec lists — reconnect, restart the auth journey, reframe the date
-window, wait out a quota, retry with backoff, or reload the ASPSP catalogue.
+surfaces as 401, but 401 covers other causes too. Callers must branch on the
+business `error` code in the response body instead, so every exception here is
+keyed by that code and grouped by reaction — reconnect, restart the auth
+journey, reframe the date window, wait out a quota, retry with backoff, or
+reload the ASPSP catalogue.
 
-The grouping below is our own reading of the ErrorCode enum
-(`vendor-docs/enablebanking-api.yaml`) against the families in §B5 — the API
-does not label codes with a family itself.
+The grouping is our own reading of the ErrorCode enum
+(`vendor-docs/enablebanking-api.yaml`): the API does not label codes with a
+family itself.
 """
 
 from __future__ import annotations
@@ -137,5 +137,5 @@ class PaginationLimitExceededError(Exception):
     """
     Client-side guard, not an API error: raised when a transaction feed exceeds
     the page bound without ever exhausting its continuation key, so a repeating
-    key can't loop forever (spec §B3).
+    key can't loop forever.
     """

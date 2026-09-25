@@ -373,7 +373,7 @@ class TestGlobalAutoSyncSwitch:
 
 
 class TestLinkedAccountProjection:
-    """Spec §D5: a linked account carries a real bank balance, so projecting
+    """A linked account carries a real bank balance, so projecting
     cashflows onto it would double-count a salary already inside that balance."""
 
     def _link_account(self, session, master_key, account, user_uuid):

@@ -1,5 +1,5 @@
 """
-Tests for Enable Banking JSON export import / history catch-up (Task 11).
+Tests for Enable Banking JSON export import / history catch-up.
 """
 
 import json
@@ -306,15 +306,8 @@ class TestRealExportReplay:
     def test_the_file_order_no_longer_changes_what_is_stored(
         self, session: Session, master_key: str, sqlite_pg_insert
     ):
-        """The invariant that replaced ruling R12, and a stronger one.
-
-        R12 forced current-before-card because cross-account deduplication made
-        the second account lose whatever the first had claimed — storing the card
-        first ended with 2 798 rows instead of 2 804, six real operations gone
-        and 209,70 € of difference, silently. With that level removed, the file
-        order is simply irrelevant: this asserts the *same* numbers as the
-        forward replay above, which the old test could never do.
-        """
+        """The file order is irrelevant: the *same* numbers as the forward
+        replay above."""
         with open(SPIKE_DIR / "export-boursorama-2022-2026.json") as f:
             raw_export = json.load(f)
 
@@ -340,7 +333,7 @@ class TestRealExportReplay:
 
 
 # ---------------------------------------------------------------------------
-# A catch-up export is history, not "where we are now" (§D5, R7)
+# A catch-up export is history, not "where we are now"
 # ---------------------------------------------------------------------------
 
 
@@ -379,10 +372,9 @@ class TestAnchorIsNeverWalkedBackwards:
     ):
         """The catch-up case the fixtures never covered: a link already synced.
 
-        Regressing `anchor_date` re-labels reconciled days as estimated (R7
-        derives "estimated" from it), and regressing `balance_updated_at`
-        restores a stale balance as the account's current one — the precise
-        pattern §D5 warns about.
+        Regressing `anchor_date` re-labels reconciled days as estimated
+        ("estimated" is derived from it), and regressing `balance_updated_at`
+        restores a stale balance as the account's current one.
         """
         ident = "ih-anchor-guard"
         account, link = _setup_account_and_link(session, master_key, ident)
@@ -461,7 +453,7 @@ class TestWhichBalanceTheImportReads:
     def test_the_real_time_balance_is_never_taken_for_the_accounting_one(
         self, session: Session, master_key: str, sqlite_pg_insert
     ):
-        """Constraint 9 / §F: XPCD is published alongside CLBD and comes first
+        """XPCD is published alongside CLBD and comes first
         as often as not. `raw_balances[0]` is wrong one time in two."""
         ident = "ih-balance-order"
         account, link = _setup_account_and_link(session, master_key, ident)

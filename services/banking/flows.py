@@ -11,12 +11,11 @@ so the monthly totals and the list of a month's operations can never disagree:
 
 Deliberately bank-agnostic. It reads only the three fields the Enable Banking
 contract marks required on every transaction — amount, currency and
-`credit_debit_indicator` — plus the status. It never parses a label: the
-`remittance_information` format is the bank's own invention (Boursorama writes
-`CARTE 03/08/25 AIRBNB * HMFYWK533K`, another writes something else), and the
-structured fields that would replace it — `merchant_category_code`,
-`bank_transaction_code`, `creditor` — are empty on all 4 240 real rows captured
-so far. The label is only ever handed back as-is, for the user to read.
+`credit_debit_indicator` — plus the status. It never parses a label's format,
+which is each bank's own invention (Boursorama writes `CARTE 03/08/25 AIRBNB *
+HMFYWK533K`); a label is only read as a set of words (`labels.py`). The
+structured fields — `merchant_category_code`, `bank_transaction_code`,
+`creditor` — are empty on all 4 240 real rows captured so far.
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 Model-level tests for BankAuthorization, BankSession, BankAccountLink.
 
 Focus: uniqueness constraints enforced at the DB level, and the clear/encrypted
-split — the columns the design spec calls out as deliberately plaintext must
+split — the columns deliberately kept plaintext must
 be readable as-is straight out of the database, while everything else must
 not be.
 """
@@ -241,7 +241,7 @@ def test_bank_account_link_reconciliation_gap_defaults_to_null(session: Session,
 
 
 def test_deleting_bank_session_with_referencing_link_is_restricted(master_key: str):
-    """A session is disposable credential state, not the link's owner (§B5):
+    """A session is disposable credential state, not the link's owner:
     the link must survive session loss, so deleting a still-referenced session
     must be blocked rather than take the link down with it (ON DELETE RESTRICT).
 

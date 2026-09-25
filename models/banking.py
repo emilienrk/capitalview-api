@@ -116,7 +116,7 @@ class BankAccountLink(SQLModel, table=True):
     user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
     bank_account_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, unique=True, index=True))
     # RESTRICT, not CASCADE: a session is a rotating, disposable credential, not
-    # the link's owner. §B5 requires the link to survive session loss (reconnect
+    # the link's owner. The link must survive session loss (reconnect
     # updates session_uuid in place); CASCADE would silently destroy anchor_date/
     # anchor_balance/identification_hash_bidx the moment a session row is deleted.
     session_uuid: str = Field(
@@ -147,7 +147,7 @@ class BankAccountLink(SQLModel, table=True):
     # has resolved: a balance counts an operation up to a day or two before the
     # transaction feed lists it, so comparing against yesterday's reading
     # reports a gap on a healthy account, then the opposite gap once the
-    # operation lands. Encrypted: balances and dates never sit in clear (§A5).
+    # operation lands. Encrypted: balances and dates never sit in clear.
     balance_checkpoints_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     # Which balance type the last sync could read (CLBD, OTHR or ITAV). Clear
     # text, like anchor_date: it is a property of the bank's API, not of the
@@ -169,7 +169,7 @@ class BankAccountLink(SQLModel, table=True):
     # bank actually serves this account's history, measured rather than assumed.
     # Some banks cap it — Revolut at ninety days once the consent is minutes
     # old — and without it the front could only promise a fuller history the
-    # bank will never send. Encrypted: an operation date, never in clear (§A5).
+    # bank will never send. Encrypted: an operation date, never in clear.
     # Seeding passes only, and only ever widened: an incremental window says
     # nothing about how far back the bank goes. NULL = never measured.
     history_served_from_enc: str | None = Field(default=None, sa_column=Column(TEXT))
@@ -196,8 +196,7 @@ class BankTransaction(SQLModel, table=True):
     how the blind indexes are built): period_bidx carries the "YYYY-MM" of the
     retained date so a month can be fetched by equality, dedup_bidx carries the
     (date, amount, currency, direction) fingerprint that catches the card /
-    current-account duplication — §A5 spells out a triple, the currency was
-    added to it by ruling R11 — and entry_ref_bidx carries the ASPSP's own
+    current-account duplication — and entry_ref_bidx carries the ASPSP's own
     entry_reference.
 
     The composite unique key is (account_id_bidx, entry_ref_bidx), never the

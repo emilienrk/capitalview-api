@@ -6,7 +6,7 @@ wrong in both directions: too short and the oldest decisions vanish, too long an
 we hammer the market API for years nobody owned anything.
 
 The window opens on the first BUY rather than the first deposit. Depositing money
-and investing it are different decisions (spec section 0 bis), and the
+and investing it are different decisions, and the
 counterfactual compares investment decisions. Deposits re-enter only through the
 cash drag term.
 
@@ -34,7 +34,7 @@ _BUY = "BUY"
 _EUR = "EUR"
 
 # Extra benchmark history fetched before the window, so a one-year trailing high
-# exists from its very first day (spec section 2.2).
+# exists from its very first day.
 LOOKBACK_DAYS = 365
 
 

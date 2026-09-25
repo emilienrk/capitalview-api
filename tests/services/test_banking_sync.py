@@ -1,6 +1,6 @@
 """
 Tests for the sync sequence, the anchors, the reconciliation check and the
-date-bounded history replacement (spec §D).
+date-bounded history replacement.
 
 No real network: `build_client` is always replaced by a double, as in
 tests/routes/test_banking_linking.py. Dates are all relative to the real
@@ -119,7 +119,7 @@ class FakeClient:
 
 
 def _balances(accounting: str, real_time: str | None = "0.00", currency: str = "EUR") -> dict:
-    """Two balances coexist (§F). The real-time one is listed *first* on purpose:
+    """Two balances coexist. The real-time one is listed *first* on purpose:
     taking the first element of the list is exactly the documented mistake."""
     balances = []
     if real_time is not None:
@@ -441,11 +441,11 @@ class TestBalanceSelection:
         assert link.anchor_date == TODAY - timedelta(days=3)
 
     def test_the_card_fallback_is_othr_only_and_never_the_real_time_balance(self):
-        """Ruling R19 needs *a* balance on a card account — the real capture
-        publishes one single OTHR there and no CLBD at all. It does not license
+        """A card account needs *a* balance — the real capture publishes one
+        single OTHR there and no CLBD at all. It does not license
         "any EUR balance": XPCD is the real-time balance, and folding pending
         operations into an anchor is the substitution
-        `AccountingBalanceUnavailableError` exists to forbid (§F)."""
+        `AccountingBalanceUnavailableError` exists to forbid."""
         othr_only = {
             "balances": [
                 {"balance_amount": {"currency": "EUR", "amount": "0"}, "balance_type": "OTHR"}
@@ -556,7 +556,7 @@ class TestBalanceSelection:
 
     def test_a_multi_currency_account_picks_its_own_currency_not_the_first_row(self):
         """One balance per currency under the same type. Reading the first would
-        record francs as euros — the exact substitution §F forbids."""
+        record francs as euros."""
         payload = {
             "balances": [
                 {"balance_amount": {"currency": "CHF", "amount": "999.99"}, "balance_type": "CLBD"},
@@ -1190,10 +1190,8 @@ class TestCurve:
 
 
 class TestSyncOrder:
-    """Ruling R12 forced current-before-card because cross-account deduplication
-    kept a row on whichever account was stored first. That level is gone, so the
-    order carries no meaning — but it still has to be *stable*, because the link
-    query has no ORDER BY and Postgres guarantees nothing without one."""
+    """The order carries no meaning, but it has to be *stable*: the link query
+    has no ORDER BY and Postgres guarantees nothing without one."""
 
     def test_the_order_is_deterministic(self, session: Session, master_key: str):
         from services.banking.sync import _in_stable_order
@@ -1239,7 +1237,7 @@ class TestSyncOrder:
 
 
 class TestNotReconcilableAccounts:
-    """Ruling R19: a card account publishes a single OTHR balance and no CLBD.
+    """A card account publishes a single OTHR balance and no CLBD.
     A curve is walked back *from* a balance and the reconciliation compares *to*
     one; with none that can be named, neither says anything. Measured, walking
     back from the OTHR of 0 of a debit-immédiat card invents +27 887 € eighteen
@@ -1273,7 +1271,7 @@ class TestNotReconcilableAccounts:
 
         results = sync_user_accounts(session, USER, master_key)
 
-        # Not an error and not a gap: a third outcome (ruling R18).
+        # Not an error and not a gap: a third outcome.
         assert results[0].status == "synced"
         assert results[0].reconciliation_status == "not_reconcilable"
         assert results[0].reconciliation_gap is None
@@ -2193,7 +2191,7 @@ class TestForeignCurrencyAccount:
         # The anchor stays in dollars: 900 read from the bank, not 810.
         assert Decimal(decrypt_data(link.anchor_balance_enc, master_key)) == Decimal("900.00")
         # 1000 - 100 = 900 in dollars, so no gap. Converting either side first
-        # would have invented one out of the exchange rate alone (ruling R18).
+        # would have invented one out of the exchange rate alone.
         assert link.last_reconciliation_gap_enc is None
 
     def test_the_curve_is_stored_in_euros(

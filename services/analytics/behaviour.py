@@ -1,7 +1,7 @@
 """What the investor actually does, measured on purchases.
 
 Depositing money and investing it are different decisions, and confusing them
-produces a false verdict (spec section 0 bis): erratic deposits with immediate
+produces a false verdict: erratic deposits with immediate
 buying is a disciplined investor, regular deposits with opportunistic buying is
 market timing dressed as a plan. Everything that judges investing behaviour is
 therefore computed on BUY rows. Deposits appear in one place only — the lag

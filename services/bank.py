@@ -34,7 +34,7 @@ AVAILABLE_BALANCE_TYPE = "ITAV"
 
 
 class LinkMetadata:
-    """The link-side fields of BankAccountResponse (ruling R6), read once per request."""
+    """The link-side fields of BankAccountResponse, read once per request."""
 
     def __init__(
         self,
@@ -380,7 +380,7 @@ def _apply_pending_cashflows(
     today = date.today()
 
     if is_linked:
-        # Spec §D5: a linked account carries a real balance read from the bank,
+        # A linked account carries a real balance read from the bank,
         # so projecting a salary already inside it would double-count.
         if account.balance_updated_at != today:
             account.balance_updated_at = today
@@ -786,11 +786,10 @@ def replace_history_window(
     and touch nothing outside it. Returns the number of rows written.
 
     This exists because neither mode of `import_bank_account_history` fits the
-    bank sync (spec §D4): `overwrite=True` deletes the account's *entire*
+    bank sync: `overwrite=True` deletes the account's *entire*
     history — years of manual entry with it — and the default mode
     (`on_conflict_do_nothing`) overwrites nothing at all, so bank data could
-    never take precedence over a manual snapshot on the seeding window
-    (decision 8).
+    never take precedence over a manual snapshot on the seeding window.
 
     The window is emptied first, so a day the bank no longer accounts for
     disappears instead of lingering; only the supplied entries are written back.

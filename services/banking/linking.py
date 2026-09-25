@@ -2,13 +2,13 @@
 Enable Banking linking flow: configuration check, authorization, callback, rattachement.
 
 Separate from client.py (raw API access) and credentials.py (BYO key storage).
-This module orchestrates the two into the user-facing journey (spec §C):
+This module orchestrates the two into the user-facing journey:
 pre-flight config check, opening a bank authorization, handling its return,
 and attaching discovered accounts to CapitalView bank accounts.
 
 The callback route is the one caller here that never has a Bearer-authenticated
-user: it authenticates the browser purely via `state` + the Master Key cookie
-(spec §C3), so its entry point (handle_callback) takes user_uuid_bidx from the
+user: it authenticates the browser purely via `state` + the Master Key cookie,
+so its entry point (handle_callback) takes user_uuid_bidx from the
 BankAuthorization row rather than a raw user_uuid.
 """
 
@@ -80,7 +80,7 @@ class NotConfiguredError(LinkingError):
 
 
 class AspspNotFoundError(LinkingError):
-    """The requested bank isn't in the catalogue for that country (spec §B5: reload it, it may have renamed)."""
+    """The requested bank isn't in the catalogue for that country (reload it, it may have renamed)."""
 
 
 class BankSessionNotFoundError(LinkingError):
@@ -121,7 +121,7 @@ class TargetAccountAlreadyLinkedError(LinkingError):
 
 
 # ---------------------------------------------------------------------------
-# C1 — Configuration check
+# Configuration check
 # ---------------------------------------------------------------------------
 
 
@@ -206,7 +206,7 @@ def list_aspsps_for_country(
 
 
 # ---------------------------------------------------------------------------
-# C2 — Opening the authorization
+# Opening the authorization
 # ---------------------------------------------------------------------------
 
 
@@ -219,8 +219,8 @@ def start_authorization_flow(
     callback_url: str,
 ) -> str:
     """POST /auth: random state persisted as a blind index, valid_until requested
-    at the bank's own maximum (spec §C2 — asking for less imposes re-authentication
-    far more often than the bank would actually require)."""
+    at the bank's own maximum: asking for less imposes re-authentication far more
+    often than the bank would require."""
     creds = get_decrypted_credentials(session, user_uuid, master_key)
     if creds is None:
         raise NotConfiguredError()
@@ -264,7 +264,7 @@ def start_authorization_flow(
 
 
 # ---------------------------------------------------------------------------
-# C3 — The return
+# The return
 # ---------------------------------------------------------------------------
 
 
@@ -286,7 +286,7 @@ def handle_callback(
     state: str | None,
     error: str | None,
 ) -> CallbackResult:
-    """Three outcomes, not two (spec §C3): success (code+state), refusal
+    """Three outcomes, not two: success (code+state), refusal
     (error=access_denied), or a technical failure. `state` is the only proof
     this browser is the one that opened the flow — the API never mentions
     this requirement, it's ours."""
@@ -329,8 +329,8 @@ def handle_callback(
         try:
             response = client.create_session(code)
         except AuthorizationInvalidError:
-            # Replayed/expired code (spec §B5): "idempotence covers the replay" —
-            # never surface as a crash, just ask the user to restart the journey.
+            # Replayed/expired code: never a crash, just ask the user to restart
+            # the journey.
             # The BankAuthorization row is left in place; it ages out via expires_at.
             return CallbackResult(
                 outcome="error",
@@ -349,7 +349,7 @@ def handle_callback(
         status=STATUS_AUTHORIZED,
         consent_valid_until=_parse_datetime(response["access"]["valid_until"]),
         authorized_at=now,
-        # §C4: the accounts payload is delivered exactly once. GET /sessions/{id}
+        # The accounts payload is delivered exactly once. GET /sessions/{id}
         # later returns SessionAccount (uid + identification hashes only), so
         # name, IBAN, currency, product and the rest exist nowhere else. Stored
         # verbatim rather than trimmed: what a later task needs isn't knowable now.
@@ -359,7 +359,7 @@ def handle_callback(
 
     # Reconnections: an account already linked (by identification_hash, the
     # durable key — uid is disposable) is repointed at the new session in
-    # place. New accounts are presented, not linked yet (ruling R5): a link
+    # place. New accounts are presented, not linked yet: a link
     # needs a CapitalView bank_accounts.uuid, chosen at the rattachement step.
     for account in accounts:
         identification_hash = account.get("identification_hash")
@@ -390,7 +390,7 @@ def _retire_superseded_sessions(
 
     Every reconnection inserts a new row; without this the old one keeps
     status=AUTHORIZED and its stale consent_valid_until forever, and the
-    Master-Key-less expiry job (spec §A3) would notify on a dead consent. Only
+    Master-Key-less expiry job would notify on a dead consent. Only
     sessions no link references are retired — a link still pointing at one means
     that account wasn't re-discovered, and its consent is genuinely still live.
     Retiring means updating status: bank_account_links.session_uuid is RESTRICT.
@@ -443,7 +443,7 @@ def _expire_authorization(session: Session, master_key: str, state: str) -> None
 
 
 # ---------------------------------------------------------------------------
-# Rattachement (Step 6, ruling R5): BankAccountLink rows are created here, not
+# Rattachement: BankAccountLink rows are created here, not
 # in the callback, because bank_account_uuid_bidx is unique and points at a
 # CapitalView account that must already exist.
 # ---------------------------------------------------------------------------
@@ -489,7 +489,7 @@ def _find_link_by_ident(
 
 
 def _stored_accounts(bank_session: BankSession, master_key: str) -> list[dict[str, Any]]:
-    """The POST /sessions accounts payload captured at the callback (§C4)."""
+    """The POST /sessions accounts payload captured at the callback."""
     if not bank_session.accounts_enc:
         return []
     return json.loads(decrypt_data(bank_session.accounts_enc, master_key))
@@ -502,8 +502,8 @@ def find_discovered_account(
 
     identification_hash_bidx is one-way, so the match is made by re-hashing each
     of the session's own accounts — the same inversion `_accounts_bank_account_
-    uuid_by_bidx` performs. Shared with the sync (R12's ordering and R19's
-    "not reconcilable" both read `cash_account_type` from here).
+    uuid_by_bidx` performs. Shared with the sync, whose "not reconcilable"
+    reads `cash_account_type` from here.
     """
     bank_session = session.get(BankSession, link.session_uuid)
     if bank_session is None:
@@ -522,18 +522,17 @@ def is_card_account(session: Session, link: BankAccountLink, master_key: str) ->
     """Whether the bank described this account as a card account.
 
     CashAccountType member, matched by NAME (the contract's enum descriptions
-    are misaligned with their values). A card account mirrors the current
-    account it debits: it syncs last (R12) and its curve is not reconcilable
-    (R19).
+    are misaligned with their values). A card account's curve is not
+    reconcilable.
 
     Confirmed on real Boursorama data: the current account carries `CACC`, the
     card account `CARD` (vendor-docs/spike/export-boursorama-2022-2026.json,
     `.accounts[].info`). The field is `required` on `AccountResource`, which is
     what `POST /sessions` returns, so the marker cannot simply be absent.
 
-    A card account can no longer be attached at all (`list_session_accounts`),
-    so this only ever describes links predating that rule: it decides R19 and
-    the `OTHR` balance fallback, and nothing else.
+    A card account can no longer be attached (`list_session_accounts`), so this
+    only describes older links: it decides "not reconcilable" and the `OTHR`
+    fallback, nothing else.
     """
     return find_discovered_account(session, link, master_key).get("cash_account_type") == CARD_ACCOUNT_TYPE
 
@@ -544,9 +543,7 @@ def reseed_account_history(
     """Ask for this account's full history again on the next sync.
 
     Clears `history_seeded`, nothing else: the curve and the operations already
-    stored stay put, and the seeding pass rewrites what it can reach. The repair
-    for an account whose first sync came back empty — before the flag existed,
-    that state was indistinguishable from a healthy one.
+    stored stay put, and the seeding pass rewrites what it can reach.
 
     Returns the link's `last_synced_at`, or None when no link owns the account.
     """
@@ -572,10 +569,7 @@ def retry_account_sync(
 ) -> bool | None:
     """Give a failed account its daily attempt back, so the next sync calls the bank.
 
-    A failure spends the day's attempt: without that, every render of the Banque
-    page asked the bank again for an answer that had not changed. Retrying
-    earlier is therefore an explicit user action, and only on an account whose
-    last attempt did fail — a healthy one keeps its cap.
+    Only on an account whose last attempt failed: a healthy one keeps its cap.
 
     Returns whether an attempt was given back, or None when no link owns the
     account.
@@ -614,10 +608,8 @@ def readable_account_bidxs(session: Session, user_bidx: str, master_key: str) ->
     rows, so a manual account nobody imported anything into stays out of the
     totals it would otherwise name without contributing to.
 
-    No account is filtered out on its type. A card account would be — it republishes the
-    movements of the current account it debits, and cross-account deduplication
-    is gone (R22) — but one can no longer be attached at all (R21), so the
-    duplicated shape cannot be created any more.
+    No account is filtered out on its type: a card account, which would double
+    its current account's movements, cannot be attached.
     """
     # Only accounts that still exist. A link or a batch of movements left over
     # from a deleted account would otherwise keep feeding the observed-flows
@@ -832,12 +824,9 @@ def link_account(
             session_uuid=bank_session.uuid,
             identification_hash_bidx=ident_bidx,
             account_uid_enc=encrypt_data(matching_uid, master_key),
-            # Bootstrap anchor from the manually-entered CapitalView balance
-            # (decision 8: bank data overwrites it on the account's window once
-            # Task 6's sync runs). last_synced_at is set before today so the
-            # front's daily-sync trigger fires the real fetch right away, and
-            # `history_seeded` stays false until that fetch answers with
-            # something.
+            # Bootstrap anchor from the manually-entered balance, overwritten by
+            # the first sync. last_synced_at is set before today so that sync
+            # fires right away.
             anchor_date=today,
             anchor_balance_enc=encrypt_data(current_balance, master_key),
             last_synced_at=today - timedelta(days=1),
@@ -855,8 +844,7 @@ def link_account(
 
 
 # ---------------------------------------------------------------------------
-# DELETE /banking/sessions/{uuid} (ruling R3: never exercised against the real
-# service in tests — always behind an injected client double)
+# Detaching and disconnecting
 # ---------------------------------------------------------------------------
 
 
@@ -876,18 +864,12 @@ def unlink_account(
 
     Two consequences the caller does not have to know about:
 
-    * **Re-seeding the mirrored accounts.** Cross-account deduplication used to
-      drop a row on whichever account of a card/current pair was stored second.
-      It is gone, but everything it shadowed *before* it was removed is still
-      missing from the counterpart, and nothing would ever fetch it again: an
-      incremental sync only reaches back to the anchor. The counterparts are put
-      back into the seeding state, which is what makes the next sync ask the
-      bank for its full window. On data ingested since the removal this is a
-      costly no-op, never a risk.
-    * **Deleting its rows, on request.** They came from a bank this account is
-      no longer connected to. Kept, they would shadow the counterpart again the
-      day it is re-attached — which is the failure this whole function exists
-      to undo.
+    * **Re-seeding the mirrored accounts.** The former cross-account
+      deduplication left rows missing from a card/current counterpart that an
+      incremental sync would never fetch again, so the counterparts go back
+      into seeding. On recent data, a costly no-op.
+    * **Deleting its rows, on request.** Kept, they would shadow the
+      counterpart again the day it is re-attached.
     """
     user_bidx = hash_index(user_uuid, master_key)
     account_bidx = hash_index(bank_account_uuid, master_key)

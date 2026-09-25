@@ -40,7 +40,7 @@ def _client(
 
 
 # ---------------------------------------------------------------------------
-# Token shape (spec §B1)
+# Token shape
 # ---------------------------------------------------------------------------
 
 
@@ -164,7 +164,7 @@ def test_start_authorization_and_create_session_never_send_psu_headers(rsa_priva
 
 
 # ---------------------------------------------------------------------------
-# Pagination (spec §B3)
+# Pagination
 # ---------------------------------------------------------------------------
 
 
@@ -232,7 +232,7 @@ def test_pagination_is_bounded(rsa_private_key_pem, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Errors (spec §B5) — branch on business code, never HTTP status
+# Errors — branch on business code, never HTTP status
 # ---------------------------------------------------------------------------
 
 
@@ -287,7 +287,7 @@ def test_wrong_transactions_period_surfaces_earliest_allowed_date(rsa_private_ke
 
 
 # ---------------------------------------------------------------------------
-# PSU context headers (spec §B2) — all or nothing
+# PSU context headers — all or nothing
 # ---------------------------------------------------------------------------
 
 
@@ -331,7 +331,7 @@ def test_no_psu_headers_sent_when_context_absent(rsa_private_key_pem):
 
 
 # ---------------------------------------------------------------------------
-# Factory (ruling R2)
+# Factory
 # ---------------------------------------------------------------------------
 
 

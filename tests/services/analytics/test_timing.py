@@ -51,7 +51,7 @@ def test_the_seed_makes_results_reproducible():
 
 
 def test_p_values_are_uniform_on_data_with_no_bias():
-    """Calibration check required by spec section 11.
+    """Calibration check.
 
     On synthetic data where the null is true, p-values must be roughly uniform on
     [0,1]. A test that reports significance more often than chance would turn

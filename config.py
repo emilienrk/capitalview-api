@@ -79,7 +79,7 @@ class Settings:
         self.coingecko_api_key: str = os.getenv("CG_API_KEY", "")
 
         # ── Enable Banking ─────────────────────────────────────
-        # Fixed, query-parameter-free path (spec §C3): the portal refuses to
+        # Fixed, query-parameter-free path: the portal refuses to
         # register a redirect URL carrying one. Declared verbatim in each
         # user's own Enable Banking application.
         self.banking_callback_url: str = os.getenv(

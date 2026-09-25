@@ -1,5 +1,5 @@
 """
-Route tests for the Enable Banking linking flow (spec §C).
+Route tests for the Enable Banking linking flow.
 
 No real network: the Enable Banking client is always a FakeClient double,
 monkeypatched onto services.banking.linking.build_client (the name as
@@ -130,7 +130,7 @@ BOURSORAMA_ASPSP = {
 
 
 # ---------------------------------------------------------------------------
-# Step 1 — GET /banking/check: config diagnostic (spec §C1)
+# Step 1 — GET /banking/check: config diagnostic
 # ---------------------------------------------------------------------------
 
 
@@ -228,7 +228,7 @@ def test_check_ignores_an_environment_it_does_not_recognise(session, master_key,
 
 
 # ---------------------------------------------------------------------------
-# Step 1 — POST /banking/authorize: valid_until requested at the bank's max (spec §C2)
+# Step 1 — POST /banking/authorize: valid_until requested at the bank's max
 # ---------------------------------------------------------------------------
 
 
@@ -277,7 +277,7 @@ def test_authorize_unknown_aspsp_is_rejected(session, master_key, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Step 1 — GET /banking/callback: state validation, three outcomes (spec §C3)
+# Step 1 — GET /banking/callback: state validation, three outcomes
 # ---------------------------------------------------------------------------
 
 
@@ -435,7 +435,7 @@ def test_callback_already_authorized_code_is_handled_gracefully(session, master_
     """Direct service-level test of the AuthorizationInvalidError branch: the
     exact 'this code was already exchanged' business error from Enable Banking
     must produce a soft failure, never an unhandled exception, and must leave
-    no partial state behind (spec §B5: 'idempotence covers the replay')."""
+    no partial state behind."""
     state = "a-state-value"
     session.add(
         BankAuthorization(
@@ -485,7 +485,7 @@ def test_callback_persists_the_accounts_payload_delivered_only_once(
     """POST /sessions returns AccountResource (name, IBAN, currency, product…);
     GET /sessions/{id} later returns SessionAccount, which is uid +
     identification hashes and nothing else. Anything not captured here is lost
-    for good, so the whole payload is stored, encrypted (spec §C4)."""
+    for good, so the whole payload is stored, encrypted."""
     client = TestClient(app)
     client.cookies.set("master_key", master_key)
 
@@ -540,7 +540,7 @@ def test_callback_repoints_an_existing_link_at_the_new_session(session, master_k
 
 def test_callback_retires_the_superseded_session(session, master_key, monkeypatch):
     """Without this the abandoned row keeps status=AUTHORIZED and its stale
-    consent_valid_until, and the Master-Key-less expiry job (spec §A3) would
+    consent_valid_until, and the Master-Key-less expiry job would
     notify on a dead consent. Retired by status, never deleted: the links FK is
     ON DELETE RESTRICT."""
     client = TestClient(app)
@@ -1000,7 +1000,7 @@ def test_aspsps_without_credentials_is_a_400_not_a_crash(session, master_key):
 
 
 # ---------------------------------------------------------------------------
-# POST /banking/import-export — Task 11's only route, and it had no test either
+# POST /banking/import-export
 # ---------------------------------------------------------------------------
 
 

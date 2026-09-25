@@ -25,7 +25,7 @@ DEFAULT_SEED = 0
 DEFAULT_DRAWS = 5000
 
 # Above this the effect is indistinguishable from chance and the UI must say
-# "nothing detectable" rather than crediting or blaming the user (spec section 2).
+# "nothing detectable" rather than crediting or blaming the user.
 DETECTABLE_P = 0.10
 
 

@@ -348,7 +348,7 @@ def test_import_bank_account_history_overwrite(session: Session, master_key: str
 
 
 # ---------------------------------------------------------------------------
-# replace_history_window — the date-bounded replacement (spec §D4)
+# replace_history_window — the date-bounded replacement
 # ---------------------------------------------------------------------------
 
 

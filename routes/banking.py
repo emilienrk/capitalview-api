@@ -1,4 +1,4 @@
-"""Enable Banking linking flow routes (spec §C).
+"""Enable Banking linking flow routes.
 
 GET /banking/callback is the one exception to the usual auth pattern: it's a
 raw browser top-level GET navigation coming back from the bank, not an XHR
@@ -174,7 +174,7 @@ def check_config(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
-    """Pre-flight diagnostic (spec §C1): key valid, application active, callback declared."""
+    """Pre-flight diagnostic: key valid, application active, callback declared."""
     settings = get_settings()
     return check_configuration(session, current_user.uuid, master_key, settings.banking_callback_url)
 
@@ -210,7 +210,7 @@ def authorize(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
-    """Open the authorization journey (spec §C2): the browser must navigate to auth_url next."""
+    """Open the authorization journey: the browser must navigate to auth_url next."""
     settings = get_settings()
     try:
         auth_url = start_authorization_flow(
@@ -263,7 +263,7 @@ def callback(
     error: str | None = None,
     session: Session = Depends(get_session),
 ):
-    """The bank's return (spec §C3). No Authorization header ever reaches this
+    """The bank's return. No Authorization header ever reaches this
     route — only cookies do. Authenticated via `state`, never a Bearer token."""
     master_key = request.cookies.get("master_key")
     if not master_key:
@@ -393,7 +393,7 @@ def _psu_context(request: Request) -> dict[str, str] | None:
     """PSU context headers, taken from the real request that triggered the sync.
 
     They describe the human behind the call, so they are read off that request
-    and never fabricated. The API treats them as all-or-nothing (§B2), hence a
+    and never fabricated. The API treats them as all-or-nothing, hence a
     partial context is sent as no context at all.
     """
     ip_address = request.client.host if request.client else None
@@ -414,10 +414,10 @@ def sync(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
-    """Synchronise every linked account (spec §D, ruling R16).
+    """Synchronise every linked account.
 
     No body and no account identifier: the sync order is a server-side decision
-    (ruling R12), not the caller's. The once-a-day cap is re-checked here —
+   , not the caller's. The once-a-day cap is re-checked here —
     the front triggers this after every render, so a capped call is a 200 with
     an unchanged summary, never an error.
     """
@@ -521,7 +521,7 @@ def delete_session(
     session: Session = Depends(get_session),
 ):
     """Disconnect a bank session: unlinks its accounts, closes the consent at
-    Enable Banking (ruling R3: only ever exercised behind an injected double)."""
+    Enable Banking."""
     try:
         delete_bank_session(session, current_user.uuid, master_key, bank_session_uuid)
     except BankSessionNotFoundError:
@@ -962,7 +962,7 @@ def import_export(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
-    """Import an Enable Banking JSON export file for history catch-up (Task 11)."""
+    """Import an Enable Banking JSON export file for history catch-up."""
     try:
         return import_enablebanking_export(session, current_user.uuid, master_key, payload)
     except ValueError as e:

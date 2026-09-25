@@ -200,10 +200,8 @@ class WeightOut(AssetLabelOut):
 class AnalysedAssetOut(AssetLabelOut):
     """A line the user has traded, offered as a choice rather than typed.
 
-    The settings forms used to ask for an ISIN. Nobody knows their ISINs, and a
-    typo there is invisible: the plan simply scores against a line that does not
-    exist. This is the list to pick from — everything ever bought, whether still
-    held or long sold, so a plan can also be written about a line being exited.
+    Everything ever bought, whether still held or long sold, so a plan can also
+    be written about a line being exited.
     """
 
     held: bool

@@ -75,7 +75,7 @@ def test_three_years_of_history_yields_a_three_year_window():
 
 
 def test_the_window_opens_on_the_first_buy_not_the_first_deposit():
-    """A deposit is not an investment decision (spec section 0 bis)."""
+    """A deposit is not an investment decision."""
     txs = [
         _Tx("DEPOSIT", "EUR", date(2024, 1, 2)),
         _Tx("BUY", "IE00B4L5Y983", date(2024, 6, 15)),

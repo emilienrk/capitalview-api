@@ -7,7 +7,7 @@ the API payloads directly:
   {"accounts": [{"info": {...}, "transactions": [...], "balances": [...]}]}
 
 Transactions are normalized via `normalize_transaction` and stored via
-`store_transactions` from Task 5, using durable `identification_hash` matching.
+`store_transactions`, using durable `identification_hash` matching.
 """
 
 from __future__ import annotations
@@ -100,8 +100,6 @@ def import_enablebanking_export(
     results: list[BankExportImportResult] = []
     imported_count = 0
 
-    # File order, unsorted: cross-account deduplication is gone, so no account's
-    # outcome depends on another's any more and there is nothing left to order.
     for item in accounts_data:
         matched_link = _resolve_link(item, link_by_ident_bidx, master_key)
         item = item if isinstance(item, dict) else {}
@@ -219,8 +217,7 @@ def _write_export_curve(
 
     Returns the number of snapshots written and a detail line, if any.
     """
-    # The same reading the sync uses (§F, constraint 9): the accounting balance,
-    # matched by type. Falling back to `balances[0]` would take the real-time
+    # The same reading the sync uses: the accounting balance, matched by type. Falling back to `balances[0]` would take the real-time
     # balance one time in two.
     currency = account_currency(account, master_key)
     balance_row = accounting_balance_row({"balances": raw_balances}, currency)
@@ -248,9 +245,9 @@ def _write_export_curve(
     # the link already knows. The curve above is bounded to [covered_from,
     # ref_date] and is history, so it is written either way — but the anchor,
     # `last_synced_at` and the account's current balance say "where we are now".
-    # Walking them backwards restores a stale balance as the current one (the
-    # trap §D5 names) and, because R7 derives "estimated" from `anchor_date`,
-    # silently re-labels already reconciled days as estimated.
+    # Walking them backwards restores a stale balance as the current one and,
+    # since "estimated" is derived from `anchor_date`, re-labels already
+    # reconciled days as estimated.
     detail: str | None = None
     if ref_date < link.anchor_date:
         detail = (
@@ -265,8 +262,7 @@ def _write_export_curve(
         # `last_synced_at` is deliberately left alone: an import is not a sync,
         # and `history_seeded` stays off for the same reason — an export says
         # nothing about what the bank would still answer, so the seeding pass
-        # remains owed. An export dated today, imported right after linking,
-        # used to consume that entitlement outright.
+        # remains owed.
         session.add(link)
 
     if account.balance_updated_at is None or ref_date >= account.balance_updated_at:

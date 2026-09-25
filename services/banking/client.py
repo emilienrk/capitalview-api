@@ -30,7 +30,7 @@ BASE_URL = "https://api.enablebanking.com"
 # Capped at 86400s by the API (see faq.md); an hour comfortably outlives a single sync run.
 TOKEN_TTL_SECONDS = 3600
 
-# Guards against a continuation_key that never terminates (spec §B3). 2 776 real
+# Guards against a continuation_key that never terminates. 2 776 real
 # transactions paginated at ~100/page; this leaves generous headroom.
 MAX_TRANSACTION_PAGES = 1000
 
@@ -133,8 +133,8 @@ class EnableBankingClient:
 
     def close_session(self, session_id: str) -> None:
         """DELETE /sessions/{id} — closes the session, and the PSU's bank consent
-        with it when the ASPSP allows it. R3: never exercised against the real
-        service outside an explicit user-initiated disconnect."""
+        with it when the ASPSP allows it. Only ever called on an explicit
+        user-initiated disconnect."""
         response = self._http.request("DELETE", f"/sessions/{session_id}")
         if response.status_code >= 400:
             raise error_from_response(response)
@@ -156,7 +156,7 @@ class EnableBankingClient:
         """
         Walk the paginated transaction feed for an account, yielding raw transaction dicts.
 
-        Three rules, all measured against Boursorama (spec §B3): an empty page is
+        Three rules, all measured against Boursorama: an empty page is
         not the end — only the absence of `continuation_key` is; the key must
         travel alongside the original params, never alone; and the walk is
         bounded so a repeating key can't loop forever.
@@ -201,5 +201,5 @@ def build_client(
     private_key: str,
     psu_context: dict[str, str] | None = None,
 ) -> EnableBankingClient:
-    """Module-level factory (ruling R2) — later tasks call this, tests monkeypatch it."""
+    """Module-level factory, so tests can monkeypatch it."""
     return EnableBankingClient(application_id, private_key, psu_context=psu_context)

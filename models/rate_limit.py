@@ -1,10 +1,9 @@
 """
 Rate limit model.
 
-One row per accepted request, in a sliding window. Shared state on purpose: the
-counters used to live in a per-process dict, so with `uvicorn --workers 4` the
-advertised limit of five logins a minute allowed up to twenty in aggregate — an
-attacker landing on a different worker each time — and every redeploy reset them.
+One row per accepted request, in a sliding window. Shared state on purpose: a
+per-process counter lets `uvicorn --workers 4` accept four times the limit, and
+resets on every redeploy.
 
 The bucket is an opaque HMAC of "<ip>:<action>", never the address itself: the
 limiter only ever needs equality, and an IP is personal data this table has no

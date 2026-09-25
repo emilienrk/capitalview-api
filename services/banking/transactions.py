@@ -1,13 +1,13 @@
 """
-Normalisation and storage of the movements read from Enable Banking (spec §E/§F).
+Normalisation and storage of the movements read from Enable Banking.
 
 `normalize_transaction` is a pure reading of one raw API payload; it owns every
-quirk §F measured against a real bank: `booking_date` is sometimes absent, a
+quirk measured against a real bank: `booking_date` is sometimes absent, a
 foreign currency arrives without any exchange rate, amounts are decimal strings,
 and `transaction_id` must never be used to identify anything.
 
-`store_transactions` owns the two deduplication levels of §E, from the most
-reliable to the most approximate:
+`store_transactions` owns the two deduplication levels, from the most reliable
+to the most approximate:
 
 1. intra-account, by `entry_reference` — survives a reconnection, but the key
    is composite `(account_id_bidx, entry_ref_bidx)` because a reference is not
@@ -16,24 +16,9 @@ reliable to the most approximate:
    reference, and the only way to follow a pending operation whose reference
    changes when it books.
 
-A third level once existed: cross-account, scoped to the user, dropping a row
-whose fingerprint already sat on a card/current sibling. Its measurement was
-right — 98 % of a real card feed republishes the current account it debits, with
-no shared reference. Its *invariant* was wrong. It kept the row on whichever
-account was stored first, and "current account first" (ruling R12,
-`sync._in_stable_order`) only ever held **inside one run**; nothing held it
-between two. A card account that seeded on the day its current account's sync
-was failing cost that account **1 442 of its 2 776 movements**, and dragged its
-rebuilt curve from +541,81 € to −5 288,06 €.
-
-It was removed rather than repaired, because it protected nothing: every read of
-`BankTransaction` filters on a single `account_id_bidx` (`account_data.py`,
-`sync.py`, `linking.py`), balances come from the bank's own published figure and
-never from a sum of rows, and each curve is built from its own account's rows
-alone. Card accounts are no longer attachable either (`linking.
-list_session_accounts`), so the shape it guarded against cannot be created any
-more. The one visible cost: on a card link predating that rule, a purchase now
-exists on both accounts — which is what the bank itself publishes.
+There is deliberately no cross-account level: a card feed republishes the
+current account it debits, but every read filters on one `account_id_bidx`, so a
+purchase on both accounts of an old card link is what the bank publishes.
 
 Cancelled and rejected operations are never stored: they invalidate a row
 already ingested, and are dropped outright when they were never seen.
@@ -72,11 +57,11 @@ STATUS_BOOKED = "BOOK"
 STATUS_CANCELLED = "CNCL"
 STATUS_REJECTED = "RJCT"
 
-# The two statuses that invalidate an already ingested transaction (§E).
+# The two statuses that invalidate an already ingested transaction.
 INVALIDATING_STATUSES = frozenset({STATUS_CANCELLED, STATUS_REJECTED})
 
 # Only a booked operation is final. Anything else may still change amount, date
-# or entry reference, so its row stays claimable for correction (§E).
+# or entry reference, so its row stays claimable for correction.
 FINAL_STATUSES = frozenset({STATUS_BOOKED})
 
 # CreditDebitIndicator members. The indicator carries the sign; the amount is
@@ -87,8 +72,8 @@ DEBIT = "DBIT"
 
 @dataclass(frozen=True)
 class NormalizedTransaction:
-    """One raw API transaction, read according to §F. Nothing here is derived
-    from `transaction_id`, whose value changes between calls."""
+    """One raw API transaction. Nothing here is derived from `transaction_id`,
+    whose value changes between calls."""
 
     entry_reference: str | None
     amount: Decimal
@@ -98,7 +83,7 @@ class NormalizedTransaction:
     booking_date: date | None
     value_date: date | None
     transaction_date: date | None
-    # Date the transaction is placed on, with §F's fallback applied. None when
+    # Date the transaction is placed on, with the fallback applied. None when
     # the bank supplied none of the three — such a movement cannot be dated and
     # is therefore unusable for a balance curve.
     effective_date: date | None
@@ -117,13 +102,10 @@ class NormalizedTransaction:
         """The fingerprint behind dedup_bidx — the only reliable signal for the
         card / current-account duplication.
 
-        It carries the currency on top of §A5's (date, amount, direction)
-        triple (ruling R11): the captured data holds an unconverted CHF 12.63
-        debit, which would otherwise share a fingerprint with a EUR 12.63 debit
-        on the same day and silently lose one of the two. §A5 describes the
-        intent — recognising the same operation seen twice — not an
-        interoperability format, and cross-account duplicates always carry the
-        same currency on both sides.
+        It carries the currency on top of (date, amount, direction): the
+        captured data holds an unconverted CHF 12.63 debit, which would
+        otherwise share a fingerprint with a EUR 12.63 debit on the same day
+        and silently lose one of the two.
         """
         return self._fingerprint(self.effective_date) if self.effective_date else None
 
@@ -138,7 +120,7 @@ class NormalizedTransaction:
         the retained date and therefore the fingerprint. The booked payload
         still carries the original transaction_date, so looking the other dates
         up as well is what lets level 2 recognise the pending row instead of
-        leaving a ghost behind it (§E: a pending operation is never final).
+        leaving a ghost behind it.
         """
         seen = {self.effective_date}
         keys = []
@@ -149,15 +131,9 @@ class NormalizedTransaction:
         return keys
 
     def _fingerprint(self, day: date) -> str:
-        # `self.amount` is the *normalised* amount, so anything that changes how
-        # an amount is read changes the identity of rows already stored under
-        # the old reading — they stop matching and are inserted a second time.
-        # The sign rule in `normalize_transaction` is exactly such a change: a
-        # row ingested as -12.63 fingerprints differently from the same row
-        # re-read as 12.63. Harmless here (the feature is pre-production and
-        # both real negative rows carry an entry_reference, which level 1 matches
-        # on regardless of amount), but any future change to the reading needs
-        # this checked, not assumed.
+        # Built on the *normalised* amount: any change to how an amount is read
+        # changes the identity of rows already stored, which then get inserted
+        # a second time.
         return "|".join(
             (day.isoformat(), canonical_amount(self.amount), self.currency, self.credit_debit)
         )
@@ -181,18 +157,10 @@ def normalize_transaction(raw: dict[str, Any]) -> NormalizedTransaction:
     if not status:
         raise ValueError("status is required")
 
-    # The direction indicator carries the sign; the amount carries the
-    # magnitude. Measured on the real export: two rows of the *card* account
-    # publish a negative amount alongside an explicit DBIT, and the API
-    # publishes the same operation as a positive amount with the same DBIT —
-    # the sign is noise on one access path only. Kept as-is it would invert the
-    # movement, since `booked_movements` subtracts a debit and subtracting a
-    # negative credits.
-    #
-    # The rule is stated for both directions, deliberately wider than the
-    # evidence: a negative amount with an explicit CRDT is read as a positive
-    # credit. No such row exists in the captures, so that half is a rule rather
-    # than a measurement — hence the warning on every occurrence.
+    # The indicator carries the sign, the amount the magnitude: the real export
+    # holds card rows with a negative amount and an explicit DBIT, which the API
+    # publishes positive. The CRDT half is a rule, not a measurement — hence the
+    # warning.
     if amount < 0:
         logger.warning(
             "negative transaction amount %s alongside an explicit %s indicator; "
@@ -401,9 +369,7 @@ def row_date(row: BankTransaction, master_key: str) -> date | None:
     order `normalize_transaction` applied when it was written.
 
     One reader for every consumer — the curve, the observed flows, the
-    recurring payments. Three copies of this loop used to agree only by comment: one of
-    them drifting would file the same operation on different days in the curve
-    and in "Ce qui a réellement bougé", with nothing to say so.
+    recurring payments — so none files an operation on a different day.
     """
     for column in (row.booking_date_enc, row.transaction_date_enc, row.value_date_enc):
         if column:

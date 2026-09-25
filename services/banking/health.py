@@ -8,20 +8,13 @@ Operational metadata (`status` and `consent_valid_until`) are stored in clear te
 on `BankSession` so that scheduled background checks can update expired sessions
 without requiring a Master Key.
 
-**Two halves, and only one of them is a background job (ruling R20).**
-`check_session_health` runs keyless in the nightly scheduler: it reads clear-text
-columns and writes clear-text columns. `notify_user_expiring_consents` cannot,
-because a `Notification` row is keyed by a clear-text `user_uuid` and a
-`BankSession` carries only `user_uuid_bidx` — a keyless job cannot recover the
-one from the other. Adding the clear-text `user_uuid` to `bank_sessions` would
-recover it, and was rejected: it would make the database itself reveal which
-users hold a bank connection.
-
-**Accepted limitation, deliberately traded:** the warning is therefore produced
-from the sync path, where a Master Key exists — so the user is warned when they
-next open CapitalView, not while they are away. On a ninety-day consent with a
-seven-day window that is a wide enough net, and confidentiality wins over
-reaching a user who is not looking.
+Only `check_session_health` runs keyless, in the nightly scheduler.
+`notify_user_expiring_consents` cannot: a `Notification` is keyed by a
+clear-text `user_uuid` and a `BankSession` carries only `user_uuid_bidx`.
+Storing the clear-text uuid was rejected — the database would reveal who holds
+a bank connection. The warning is therefore produced from the sync path, where a
+Master Key exists: the user is warned on their next visit, which a seven-day
+window on a ninety-day consent covers.
 """
 
 from __future__ import annotations
@@ -203,8 +196,8 @@ def notify_user_expiring_consents(
 def check_all_consents_daily() -> None:
     """Daily cron task: mark consents that have passed their cutoff as EXPIRED.
 
-    It does **not** notify. Notifying needs a Master Key this job does not have
-    (ruling R20); `sync_user_accounts` carries that half.
+    It does **not** notify: that needs a Master Key, so `sync_user_accounts`
+    carries it.
     """
     from database import get_engine
 

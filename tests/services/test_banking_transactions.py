@@ -1,5 +1,5 @@
 """
-Tests for bank transaction storage and its two deduplication levels (spec §E/§F).
+Tests for bank transaction storage and its two deduplication levels.
 
 Two of the three levels can only be exercised with the *shapes* the bank really
 returns, so the cross-account cases replay the captured Boursorama payloads
@@ -60,9 +60,8 @@ def _raw(**overrides) -> dict:
 def linked_accounts(session: Session, master_key: str) -> None:
     """The user's current account and the card account that debits it.
 
-    The session carries its accounts payload, as a real one always does (ruling
-    R10): `cash_account_type` is what tells level 3 the two mirror each other,
-    and without it the fixture would exercise a shape the bank never produces.
+    The session carries its accounts payload, as a real one always does:
+    without it the fixture would exercise a shape the bank never produces.
     """
     bank_session = BankSession(
         user_uuid_bidx=hash_index(USER, master_key),
@@ -153,7 +152,7 @@ def test_rows_without_a_reference_escape_the_unique_index(session: Session, mast
 
 
 # ---------------------------------------------------------------------------
-# normalize_transaction — §F
+# normalize_transaction
 # ---------------------------------------------------------------------------
 
 
@@ -455,7 +454,7 @@ def test_foreign_currency_keeps_its_own_currency_on_the_stored_row(
 
 
 # ---------------------------------------------------------------------------
-# No account's outcome depends on another's (the removed level 3)
+# No account's outcome depends on another's
 # ---------------------------------------------------------------------------
 
 
@@ -466,14 +465,7 @@ def test_foreign_currency_keeps_its_own_currency_on_the_stored_row(
 def test_no_pair_of_accounts_ever_swallows_the_other(
     session: Session, master_key: str, first_type: str, second_type: str
 ):
-    """Whatever the two roles, both accounts keep their own row.
-
-    Cross-account deduplication used to drop the second account's copy of a
-    card/current echo. It kept the row on whichever account was stored first,
-    and nothing enforced that order between two runs — a card seeding on the day
-    its current account's sync was failing cost that account 1 442 of its 2 776
-    movements. The level is gone; the roles no longer decide anything here.
-    """
+    """Whatever the two roles, both accounts keep their own row."""
     bank_session = BankSession(
         user_uuid_bidx=hash_index(USER, master_key),
         session_id_enc=encrypt_data("eb-session-id", master_key),
@@ -532,7 +524,7 @@ def test_the_storage_order_of_the_two_accounts_no_longer_matters(
 
 
 def test_two_currencies_on_the_same_day_are_not_confused(session: Session, master_key: str, linked_accounts):
-    """Ruling R11: the fingerprint carries the currency.
+    """The fingerprint carries the currency.
 
     Measured on the real capture, which holds an unconverted CHF 12.63 debit. A
     EUR 12.63 debit on the same day and direction is a different operation.
@@ -632,7 +624,7 @@ def test_real_payload_pending_and_dateless_booking_are_handled(
 
 
 # ---------------------------------------------------------------------------
-# The same operation, two access paths, three fields disagreeing (§F)
+# The same operation, two access paths, three fields disagreeing
 #
 # `avis-7575adaa5ee1609c529260924ef7f489` is one single Denner purchase. Read
 # through the API it is `CHF 12.63 / DBIT / PDNG` with a positive amount; read

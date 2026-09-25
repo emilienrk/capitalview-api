@@ -11,26 +11,25 @@ from models.enums import BankAccountType
 
 
 class LinkStatus(str, Enum):
-    """State of a linked account's consent (ruling R16).
+    """State of a linked account's consent.
 
-    Machine values, never wording: the front picks the label. It used to be the
-    French label itself, recognised on the other side by a regex on "reconnect",
-    so rewording the badge silently changed its colour. Anything but an
-    authorised session reads as needing a fresh connection.
+    Machine values, never wording: the front picks the label, so rewording a
+    badge cannot change its colour. Anything but an authorised session reads as
+    needing a fresh connection.
     """
     CONNECTED = "connected"
     RECONNECT_REQUIRED = "reconnect_required"
 
 
 class ReconciliationStatus(str, Enum):
-    """Outcome of the reconciliation check (ruling R18). Distinct from
+    """Outcome of the reconciliation check. Distinct from
     LinkStatus, which describes the consent, not the curve."""
     RECONCILED = "reconciled"
     GAP = "gap"
-    # A card account (ruling R19): no balance a curve could be walked back from.
+    # A card account: no balance a curve could be walked back from.
     NOT_RECONCILABLE = "not_reconcilable"
     # A curve anchored on an available balance (ITAV) rather than an accounting
-    # one (ruling R23). The check still runs and its gap is still stored — it is
+    # one. The check still runs and its gap is still stored — it is
     # the only measurement of how far the two drift apart — but a gap here is the
     # expected signature of a blocked-then-booked card payment, not a missing
     # movement. Presenting it as one would teach the user to ignore gaps.
@@ -94,7 +93,7 @@ class BankAccountResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     balance_updated_at: date | None = None  # Last auto-sync date from cashflows
-    # Bank link metadata (ruling R6), read by the Banque page to decide whether
+    # Bank link metadata, read by the Banque page to decide whether
     # to trigger POST /banking/sync after the render.
     is_linked: bool = False
     last_synced_at: date | None = None  # null = never synced

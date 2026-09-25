@@ -108,12 +108,7 @@ def _decrypt_row(row: UserBankConnection | None, master_key: str) -> tuple[str, 
 def get_decrypted_credentials(
     session: Session, user_uuid: str, master_key: str
 ) -> tuple[str, str] | None:
-    """Return (application_id, private_key) decrypted, or None if not fully configured.
-
-    Extracted per Task 1's review ruling once more than one caller needed the
-    same application_id_enc/private_key_enc decryption (linking.py's config
-    check, ASPSP catalogue, authorization and rattachement flows).
-    """
+    """Return (application_id, private_key) decrypted, or None if not fully configured."""
     return _decrypt_row(get_connection(session, user_uuid, master_key), master_key)
 
 

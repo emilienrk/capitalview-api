@@ -1,25 +1,13 @@
 """
-Bank synchronisation: anchors, reconciliation and the balance curve (spec §D).
+Bank synchronisation: anchors, reconciliation and the balance curve.
 
-This is what turns a bank balance from an extrapolation into a measurement.
-`_apply_pending_cashflows` (services/bank.py) projects due cashflows onto a
-stored balance, so a manually-entered account drifts until the next correction.
-From here on, a linked account carries a balance read from the bank, a curve
-rebuilt from the movements between two anchors, and a reconciliation check that
-says whether that curve is exact.
+A linked account carries a balance read from the bank, a curve rebuilt from the
+movements between two anchors, and a reconciliation check that says whether
+that curve is exact.
 
-Three things this module is deliberate about:
-
-* **It is never wired into `get_user_bank_accounts`.** The Banque page would
-  then wait on a network call to the bank at every load. The front reads
-  `last_synced_at` from the accounts payload and calls `POST /banking/sync`
-  after the render; the once-a-day cap is re-checked here, server-side, because
-  the front is not an authority (§D1).
-* **Accounts no longer depend on each other.** Cross-account deduplication was
-  removed (see `transactions.py`), so each account's curve is built from its own
-  rows alone and the sync order carries no meaning beyond reproducibility.
-* **The accounting balance is authoritative.** Two balances coexist and the
-  account-level currency is unusable; both are read the way §F prescribes.
+Never wired into `get_user_bank_accounts`: the Banque page would wait on the
+bank at every load. The front calls `POST /banking/sync` after the render, and
+the once-a-day cap is re-checked here because the front is not an authority.
 """
 
 from __future__ import annotations
@@ -76,7 +64,7 @@ logger = logging.getLogger(__name__)
 
 # The first pass needs `strategy=longest` AND a deliberately ancient date_from:
 # `longest` alone self-limits to two years despite its name, and omitting the
-# lower bound loses years with no error at all (spec §B4).
+# lower bound loses years with no error at all.
 SEED_DATE_FROM = date(2000, 1, 1)
 SEED_STRATEGY = "longest"
 # Later passes start at the anchor: the exhaustive strategy costs extra calls to
@@ -87,20 +75,15 @@ INCREMENTAL_STRATEGY = "default"
 # pending operation older than this has long since booked or vanished.
 PENDING_LOOKBACK = timedelta(days=90)
 
-# How far back the curve is redrawn on every sync, whatever window the bank was
-# asked for. A bank publishes an operation in its feed a day or two after its
-# balance already counts it, and it arrives dated *before* the last sync: the
-# days it belongs to were drawn without it and nothing would ever redraw them.
-# Walking back is done from stored rows, so widening the window costs one query.
+# How far back the curve is redrawn on every sync, whatever the fetch window: an
+# operation reaches the feed a day or two after the balance counts it, dated
+# before the last sync, and the days it belongs to would never be redrawn.
 CURVE_REDRAW = timedelta(days=30)
 
-# How long a balance reading must age before the check trusts it. A balance
-# counts an operation up to a day or two before the transaction feed publishes
-# it, so today's reading always disagrees with today's operations — and again,
-# the other way round, the day the operation lands. The check therefore never
-# looks at today's balance at all: it compares two readings this old against the
-# movements stored between them. A missing operation is found two days late,
-# which is the price of never crying wolf.
+# How long a balance reading must age before the check trusts it: a balance
+# counts an operation a day or two before the feed publishes it, so a fresh
+# reading always disagrees with the stored operations. A missing operation is
+# found two days late, the price of never crying wolf.
 SETTLE_LAG = timedelta(days=2)
 
 # How far apart the two readings must be. Wide enough that one day's noise
@@ -115,12 +98,12 @@ CHECKPOINT_RETENTION = timedelta(days=60)
 # accounting balance). Never by position in the list: the real-time balance
 # XPCD comes first as often as not.
 ACCOUNTING_BALANCE_TYPE = "CLBD"
-# The one substitution allowed on a card account (ruling R19): the real capture
+# The one substitution allowed on a card account: the real capture
 # publishes a single OTHR balance there and no CLBD at all.
 CARD_BALANCE_TYPE = "OTHR"
 
 
-# Business error codes, never HTTP statuses (§B5), mapped onto the SessionStatus
+# Business error codes, never HTTP statuses, mapped onto the SessionStatus
 # member the consent moves to. The link itself is always preserved.
 _SESSION_STATUS_BY_CODE = {
     "EXPIRED_SESSION": STATUS_EXPIRED,
@@ -148,32 +131,22 @@ def sync_user_accounts(
 ) -> list[BankAccountSyncResult]:
     """Synchronise every account this user has linked, in a stable order.
 
-    Global by design (ruling R16): one trigger, one daily cap, one place where
-    a consent expiry is announced while a Master Key is in hand.
+    Global by design: one trigger, one daily cap, one place where a consent
+    expiry is announced while a Master Key is in hand.
     """
-    # Ruling R20: this is where a consent expiry gets announced, because this is
-    # where a Master Key exists. Before the daily cap, so a capped call still
-    # warns — the front calls this after every render. Never fatal to the sync:
-    # a synchronisation that succeeded must not be reported as failed because a
-    # notification could not be written.
+    # Before the daily cap, so a capped call still warns. Never fatal: a sync
+    # that succeeded must not fail over a notification.
     try:
         notify_user_expiring_consents(session, user_uuid, master_key)
     except Exception:
-        # Rolled back, not merely logged: the failure this catches is most
-        # likely the `session.commit()` that writes the Notification, which
-        # leaves the session in a failed transaction. Without this the very next
-        # statement — the link lookup below — would raise PendingRollbackError,
-        # turning a warning that could not be written into the 500 this guard
-        # exists to prevent.
+        # A failed Notification commit leaves the session unusable: without the
+        # rollback the next statement raises PendingRollbackError, a 500.
         session.rollback()
         logger.exception("failed to notify expiring bank consents")
 
     user_bidx = hash_index(user_uuid, master_key)
-    # Two syncs of one user must not overlap: right after a rattachement the
-    # server seeds in the background while the front's post-render call arrives,
-    # and both would read `last_synced_at` as yesterday — two full paginations,
-    # two rewrites of the same curve. The second waits instead of skipping, then
-    # reads links the first has already committed and finds them capped.
+    # Right after a rattachement the background seed and the front's call race:
+    # the second waits, then finds the links already capped.
     with wait_for_lock(f"bank-sync:{user_bidx}", session.get_bind()):
         # Whatever the notification step loaded may predate the lock.
         session.expire_all()
@@ -242,7 +215,7 @@ def sync_account_link(
     account: BankAccount,
     client: Any,
 ) -> BankAccountSyncResult:
-    """The six steps of §D2, for one linked account."""
+    """The six steps of a sync, for one linked account."""
     today = date.today()
     result = BankAccountSyncResult(bank_account_uuid=account.uuid, status=SyncStatus.SYNCED)
 
@@ -253,9 +226,8 @@ def sync_account_link(
     # Read from the flag, not from a date comparison: the long fetch has either
     # brought history back or it has not, and only the fetch itself can say so.
     seeding = not link.history_seeded
-    # Ruling R19: a card account's movements live on the current account it
-    # debits, so neither the check nor the curve can be built from what
-    # deduplication leaves behind.
+    # A card account publishes no accounting balance: neither the check nor the
+    # curve has anything to stand on.
     not_reconcilable = is_card_account(session, link, master_key)
     currency = account_currency(account, master_key)
     uid = decrypt_data(link.account_uid_enc, master_key)
@@ -263,7 +235,7 @@ def sync_account_link(
 
     try:
         # 1. The accounting balance, never the real-time one. CLBD first; card
-        # accounts fall back to OTHR, any account to ITAV as a last resort (§F).
+        # accounts fall back to OTHR, any account to ITAV as a last resort.
         accounting, balance_type = _accounting_balance(
             client.get_balances(uid), currency, is_card=not_reconcilable
         )
@@ -275,9 +247,8 @@ def sync_account_link(
             SEED_STRATEGY if seeding else INCREMENTAL_STRATEGY,
         )
     except SessionInvalidError as exc:
-        # The status the consent moved to decides the wording, mapped by member
-        # name: the four ways a consent can be lost call for four different
-        # instructions, and no raw vendor string reaches the user.
+        # Each way of losing a consent calls for its own instruction; no raw
+        # vendor string reaches the user.
         result.status = SyncStatus.RECONNECT_REQUIRED
         result.detail = session_status_message(_mark_consent_lost(session, link, exc))
         _record_failure(session, link, result.detail, today, master_key)
@@ -288,9 +259,8 @@ def sync_account_link(
         _record_failure(session, link, result.detail, today, master_key)
         return result
 
-    # 3. Deduplicate and store (§E). One malformed row never aborts a sync: it
-    # is dropped and counted, and the reconciliation check below is what makes
-    # the resulting hole visible instead of leaving it silent.
+    # 3. Deduplicate and store. A malformed row is dropped and counted, never
+    # fatal: the reconciliation check makes the hole visible.
     raws: list[dict[str, Any]] = []
     parsed: list[NormalizedTransaction] = []
     for raw in feed:
@@ -309,29 +279,21 @@ def sync_account_link(
 
     result.inserted, result.updated, result.skipped = store_transactions(session, master_key, account.uuid, raws
     )
-    # Pruning is bounded by what the bank was actually asked for and answered —
-    # never by what we wanted. A bank that refuses to serve beyond ninety days
+    # Bounded by what the bank actually answered: a bank capped at ninety days
     # is silent about older rows, and silence is not withdrawal.
     result.removed = _drop_vanished_pending(
         session, account, master_key, parsed, fetched_from, today
     )
 
-    # What the bank fills in on `balance_after_transaction`, counted and never
-    # used: filled, the last row of a day *is* that day's balance, and a curve
-    # could be read straight off the feed instead of walked back from one
-    # anchor — exact even where a balance type is missing or an operation was
-    # dropped. Measured on the real Boursorama production capture it is empty on
-    # all 3 275 rows, so nothing is built on it until a bank is seen filling it.
+    # Counted, never used: filled, it would give each day's balance straight
+    # off the feed, but Boursorama leaves it empty on all 3 275 captured rows.
     result.balance_after_rows = sum(
         1 for raw in raws if (raw.get("balance_after_transaction") or {}).get("amount") is not None
     )
 
-    # The curve is redrawn further back than the fetch reached, and the check
-    # compares against a reading older still: both need the movements of that
-    # whole stretch, not only of the window the bank was asked for. Never before
-    # the oldest operation the bank ever served, which is where this account's
-    # own history starts — beyond it a redraw would flatten manual snapshots
-    # over days the bank says nothing about.
+    # The redraw and the check reach further back than the fetch, but never
+    # before the oldest operation the bank served: beyond it a redraw would
+    # flatten manual snapshots.
     check_window = _check_window(read_checkpoints(link, master_key), today)
     served_from = (
         date.fromisoformat(decrypt_data(link.history_served_from_enc, master_key))
@@ -346,12 +308,8 @@ def sync_account_link(
     curve_from = min(curve_from, covered_from)
     movements = booked_movements(session, account, master_key, curve_from, today, currency)
 
-    # An available balance is the accounting one minus what is currently
-    # withheld, so the withheld part is added back before anything anchors on
-    # it. Only what the bank actually reports as pending can be added back: a
-    # bank that publishes ITAV and shares no pending rows — Revolut does exactly
-    # that — leaves the net at zero and the figure uncorrected, which is the
-    # whole reason the verdict below stays `estimated`.
+    # An available balance has the pending rows withheld: add them back. A bank
+    # that shares none (Revolut) leaves it uncorrected, hence `estimated`.
     estimated = balance_type == AVAILABLE_BALANCE_TYPE
     pending_net = (
         _pending_net(session, account, master_key, today, currency)
@@ -360,17 +318,11 @@ def sync_account_link(
     )
     accounting -= pending_net
 
-    # 4. Reconciliation (§D3), with four outcomes rather than two (ruling R18).
-    # Skipped on the seeding pass: its anchor is the manually-entered balance,
-    # not a bank reading, so there is no comparable quantity to check against —
-    # the seeded curve is derived from today's balance and holds by construction.
+    # 4. Reconciliation, four outcomes. Skipped on the seeding pass: its anchor
+    # is the manually-entered balance, not a bank reading.
     gap = None
     if not_reconcilable:
-        # Not a failure: decision 6 already separates a verified curve from an
-        # estimated one, and an account whose movements are deduplicated onto
-        # another is exactly one whose curve can only be estimated. Reporting it
-        # as a gap would teach the user to ignore gaps, and the alert would be
-        # worthless the day one is real.
+        # Not a gap: reporting one here would teach the user to ignore gaps.
         result.reconciliation_status = ReconciliationStatus.NOT_RECONCILABLE
     elif not seeding:
         # Two settled readings or no verdict at all (see _check_window).
@@ -378,39 +330,30 @@ def sync_account_link(
             gap = _reconciliation_gap(*check_window, movements)
             result.reconciliation_gap = gap
         if estimated:
-            # The gap is still computed and still stored: on an available
-            # balance it is the only measurement of how far the two readings
-            # drift apart, and the answer decides whether this account can
-            # graduate back to a verified curve. It is the verdict, not the
-            # number, that is held back — a card authorisation blocked one day
-            # and booked the next produces a gap on a perfectly healthy account.
+            # The gap is still stored, as the only measure of the drift; only
+            # the verdict is held back, since a card authorisation booked the
+            # next day makes a gap on a healthy account.
             result.reconciliation_status = ReconciliationStatus.ESTIMATED
         elif check_window is not None:
             result.reconciliation_status = (
                 ReconciliationStatus.GAP if gap else ReconciliationStatus.RECONCILED
             )
 
-    # 5. The new anchor. Stored at a *day boundary*, not at the instant of the
-    # call: the accounting balance minus everything already booked today. A row
-    # the bank books later today carries the same booking date as one booked
-    # before it, so no date could tell the two apart — leaving today's
-    # movements out of the anchor and back into the next period is what keeps
-    # the check from reporting a gap on entirely normal behaviour.
+    # 5. The new anchor, at a day boundary: a row booked later today carries the
+    # same date as one booked before the call, so today's movements go to the
+    # next period.
     link.anchor_date = today
     anchor_balance = accounting - movements.get(today, Decimal("0"))
     link.anchor_balance_enc = encrypt_data(str(anchor_balance), master_key)
-    # The same reading, kept: it is what a later sync compares against, once the
-    # bank's publication delay has had time to resolve.
+    # What a later sync compares against, once the publication delay resolves.
     _record_checkpoint(link, _Checkpoint(today, anchor_balance), master_key, today)
     link.last_synced_at = today
     link.last_sync_attempt_at = today
     link.last_sync_error_enc = None
     link.last_balance_type = balance_type
     result.balance_type = balance_type
-    # The flag is earned, never merely spent: a seeding pass that comes back
-    # empty — a bank still settling the authorization, a feed answered blank —
-    # leaves it off, so the next sync asks for those years again instead of
-    # writing them off for good.
+    # An empty seeding pass (a bank still settling the authorization) leaves the
+    # flag off, so the next sync asks for those years again.
     if seeding:
         if parsed:
             link.history_seeded = True
@@ -434,11 +377,9 @@ def sync_account_link(
     session.add(account)
     session.commit()
 
-    # One line per sync, and the only place the three open questions about a
-    # bank's feed can be answered from a running instance: which balance type it
-    # actually publishes, how far an available balance drifts from the booked
-    # movements, and whether it fills `balance_after_transaction`. No amount and
-    # no identifier beyond the link's own uuid — this goes to the server log.
+    # Answers from a running instance which balance type a bank publishes, how
+    # far it drifts, and whether it fills `balance_after_transaction`. Server
+    # log: no identifier beyond the link's uuid.
     logger.info(
         "sync %s: balance_type=%s gap=%s pending_net=%s balance_after_rows=%d/%d",
         link.uuid,
@@ -449,15 +390,9 @@ def sync_account_link(
         len(raws),
     )
 
-    # 6. Rewrite the snapshots of the window just processed, and only those —
-    # unless nothing reconcilable can be built (ruling R19). A card account
-    # publishes a single OTHR balance and no CLBD at all, and OTHR has no defined
-    # meaning in the contract. A curve is walked back *from a balance* and the
-    # reconciliation check compares *to a balance*: with none that can be named,
-    # neither says anything. Measured on the real capture, walking back from the
-    # OTHR of 0 of a debit-immédiat card invents +27 887 € eighteen months back —
-    # the spending history read as a balance, added to the wealth curve.
-    # The day's balance is still exact, because it is the anchor.
+    # 6. Rewrite the snapshots of the window just processed. Not on a card
+    # account: walking back from its OTHR of 0 invented +27 887 € eighteen
+    # months back on the real capture.
     if not_reconcilable:
         result.detail = (
             "Courbe non écrite : votre banque ne publie pas de solde comptable pour ce "
@@ -484,17 +419,8 @@ def sync_account_link(
 
 
 def _in_stable_order(links: list[BankAccountLink]) -> list[BankAccountLink]:
-    """A deterministic order, and nothing more.
-
-    Card accounts used to be forced last (ruling R12) because cross-account
-    deduplication kept a row on whichever account was stored first. That level
-    is gone: no account's outcome depends on another's any more, so no role
-    ordering is left to enforce.
-
-    The sort stays because the link query has no ORDER BY, and Postgres
-    guarantees no order without one — an unordered sync would make any future
-    failure irreproducible.
-    """
+    """A deterministic order, so a failure can be reproduced: the link query
+    has no ORDER BY."""
     return sorted(links, key=lambda link: link.uuid)
 
 
@@ -520,10 +446,8 @@ def _balance_of_type(
 def _published_balances(balances: list[dict[str, Any]]) -> str:
     """`type/currency` of everything the bank did publish, for the refusal message.
 
-    Which balance types an ASPSP publishes is not in any contract and varies by
-    account kind, so a refusal that only names what was expected leaves nobody
-    able to say what to accept instead. Amounts are deliberately left out: this
-    string reaches the user's screen through `BankAccountSyncResult.detail`.
+    Which types an ASPSP publishes varies by account kind and no contract says.
+    No amounts: this string reaches the user's screen.
     """
     if not balances:
         return "aucun"
@@ -543,20 +467,13 @@ def accounting_balance_row(
 
     CLBD first, always, and the substitutions are enumerated rather than open:
 
-    * `OTHR`, on a card account only — it publishes **no** CLBD at all, the real
-      capture holds one single `OTHR` balance (ruling R19).
-    * `ITAV`, as a last resort — some banks publish no accounting balance on any
-      account. Revolut's PSD2 implementation returns a single `InterimAvailable`
-      and nothing else, so the choice is an estimated curve or no sync at all.
-      An available balance has pending card authorisations already withheld from
-      it, which is why the caller re-adds what it can see of them and why the
-      reconciliation verdict downgrades to `estimated`.
+    * `OTHR`, on a card account only — it publishes no CLBD at all.
+    * `ITAV`, as a last resort — Revolut publishes a single `InterimAvailable`
+      and nothing else. Pending authorisations are withheld from it, so the
+      caller re-adds what it sees of them and the verdict is `estimated`.
 
-    `XPCD` in particular is never a candidate: it is the real-time balance, with
-    no offsetting rows to correct it with, and folding pending operations into
-    an anchor is the exact silent substitution `AccountingBalanceUnavailableError`
-    exists to forbid (§F, constraint 9). Every fallback is narrow, named and
-    logged — never a "first EUR balance wins".
+    `XPCD`, the real-time balance, is never a candidate: it would silently fold
+    pending operations into the anchor.
     """
     balances = payload.get("balances", [])
     row = _balance_of_type(balances, ACCOUNTING_BALANCE_TYPE, currency)
@@ -567,7 +484,7 @@ def accounting_balance_row(
         row = _balance_of_type(balances, CARD_BALANCE_TYPE, currency)
         if row is not None:
             logger.warning(
-                "no %s balance on this card account, falling back to %s (ruling R19)",
+                "no %s balance on this card account, falling back to %s",
                 ACCOUNTING_BALANCE_TYPE,
                 CARD_BALANCE_TYPE,
             )
@@ -593,10 +510,8 @@ def _accounting_balance(
 ) -> tuple[Decimal, str]:
     """The accounting balance and the type it was read from, in `currency`.
 
-    Two balances coexist on checking accounts and the real-time one is published
-    alongside; taking the first element of the list is wrong half the time (§F).
     The type comes back with the amount because it decides how much the figure
-    can be trusted, and the balances payload is out of reach everywhere else.
+    can be trusted.
     """
     row = accounting_balance_row(payload, currency, is_card)
     amount = row.get("balance_amount") or {}
@@ -610,7 +525,7 @@ def _fetch(
 
     On WRONG_TRANSACTIONS_PERIOD the API states its earliest allowed date, so
     the seeding pass recovers instead of failing — Boursorama refuses anything
-    older than ninety days in restricted production (§B4). Returns the rows
+    older than ninety days in restricted production. Returns the rows
     along with the date the feed genuinely starts at, which is the only date
     range the answer can be read as authoritative over.
     """
@@ -647,11 +562,8 @@ def _widen_history_served_from(
 def _tried_today(link: BankAccountLink, today: date) -> bool:
     """Whether this link has already called the bank today, successfully or not.
 
-    The cap used to read `last_synced_at` alone, which only a success moves: an
-    account whose sync failed stayed due, and since the front triggers a sync
-    after every render, each visit to the Banque page called the bank again for
-    an answer that had not changed. A failure is final for the day; retrying
-    early is a user's explicit decision (`retry_account_sync`).
+    A failure is final for the day, or every render would call the bank again;
+    retrying early is the user's call (`retry_account_sync`).
     """
     return link.last_synced_at >= today or (
         link.last_sync_attempt_at is not None and link.last_sync_attempt_at >= today
@@ -661,13 +573,8 @@ def _tried_today(link: BankAccountLink, today: date) -> bool:
 def _record_failure(
     session: Session, link: BankAccountLink, detail: str | None, today: date, master_key: str
 ) -> None:
-    """Spend the day's attempt and keep the reason, so the page can still say why.
-
-    The reason used to live only in the front store, from the response of the
-    call that failed: a reload lost it, and getting it back meant calling the
-    bank again. Encrypted, like every string that reaches the user from the
-    bank's side.
-    """
+    """Spend the day's attempt and keep the reason, so the page can still say
+    why after a reload."""
     link.last_sync_attempt_at = today
     link.last_sync_error_enc = encrypt_data(detail, master_key) if detail else None
     session.add(link)
@@ -676,7 +583,7 @@ def _record_failure(
 
 def _mark_consent_lost(session: Session, link: BankAccountLink, exc: SessionInvalidError) -> str:
     """The consent is gone; the rattachement is not. Only the session's status
-    moves, so a reconnection can re-point this same link (§B5). Returns the
+    moves, so a reconnection can re-point this same link. Returns the
     status it moved to."""
     logger.info("consent lost on link %s: %s: %s", link.uuid, exc.code, exc.message)
     status = _SESSION_STATUS_BY_CODE.get(exc.code, STATUS_INVALID)
@@ -721,9 +628,8 @@ def _pending_net(
     before it is booked. Subtracting this net — negative for the usual case of a
     blocked payment — turns the available balance back into the accounting one.
 
-    Same currency filter and same window as everywhere else (§D3, ruling R18):
-    a row in another currency arrives without a rate, and a pending row older
-    than the lookback has long since booked or vanished.
+    Same currency filter and window as everywhere else: a foreign row has no
+    rate, and an older pending row has long since booked or vanished.
     """
     net = Decimal("0")
     for row, _ in _pending_rows(
@@ -758,7 +664,7 @@ def _drop_vanished_pending(
     fetched_from: date,
     today: date,
 ) -> int:
-    """Remove pending rows the bank no longer reports (§E).
+    """Remove pending rows the bank no longer reports.
 
     A pending operation can simply disappear. Storing only ever adds or
     corrects, so without this a withdrawn operation would sit in the curve
@@ -787,7 +693,7 @@ def _drop_vanished_pending(
 
 
 # ---------------------------------------------------------------------------
-# The movements, the check and the curve (§D3, §D4)
+# The movements, the check and the curve
 # ---------------------------------------------------------------------------
 
 
@@ -801,15 +707,9 @@ def booked_movements(
 ) -> dict[date, Decimal]:
     """Net signed amount per day in the account's own currency, booked only.
 
-    Two exclusions, both required for the check to compare comparable
-    quantities: pending operations, which the accounting balance does not
-    contain (§D3), and rows in any other currency, which arrive without an
-    exchange rate — adding Swiss francs to euros would make the check lie.
-
-    The comparison stays in the account's currency all the way to the
-    reconciliation. Converting first would turn every exchange-rate move into a
-    reconciliation gap on an account that is behaving perfectly, which is
-    exactly what ruling R18 exists to prevent.
+    Pending rows are out (the accounting balance does not hold them), and so
+    are foreign rows, which arrive without a rate. Nothing is converted: every
+    exchange-rate move would otherwise read as a reconciliation gap.
     """
     net: dict[date, Decimal] = defaultdict(Decimal)
     for row in _rows_in_range(session, account, master_key, start, end):
@@ -841,9 +741,7 @@ class _Checkpoint(NamedTuple):
 def read_checkpoints(link: BankAccountLink, master_key: str) -> list[_Checkpoint]:
     """The readings previous syncs recorded, oldest first.
 
-    A link that predates the column — or that has only ever synced once — falls
-    back to its own anchor, which is the reading the check used to compare
-    against on its own.
+    A link that has only ever synced once falls back to its own anchor.
     """
     if not link.balance_checkpoints_enc:
         return [_Checkpoint(link.anchor_date, Decimal(decrypt_data(link.anchor_balance_enc, master_key)))]
@@ -903,8 +801,7 @@ def _reconciliation_gap(
     settled; what is on trial is the stored operations between them. When it
     holds, that stretch of the curve is exact. Otherwise the gap is returned, to
     be stored and dated by the sync that found it: a movement is missing or
-    counted twice — the detector for the card / current-account double count,
-    and for the deduplication fallback when a reference is absent.
+    counted twice.
 
     The period opens **on** the earlier reading's day and stops before the later
     one's: a reading is the closing balance of the day before it, so its own
@@ -925,7 +822,7 @@ def curve_entries(
 
     `balance(d) = balance(today) - sum of the movements booked after d`. Today's
     own value is produced but never written: `replace_history_window` stops at
-    yesterday, leaving pending operations time to settle (§D4).
+    yesterday, leaving pending operations time to settle.
     """
     entries = []
     running = accounting
@@ -938,7 +835,7 @@ def curve_entries(
 
 
 # ---------------------------------------------------------------------------
-# Reading rows without any date in clear (§A5)
+# Reading rows without any date in clear
 # ---------------------------------------------------------------------------
 
 
@@ -948,8 +845,7 @@ def _rows_in_range(
     """This account's rows over a date range, fetched through period_bidx.
 
     A blind index only supports equality, so the months of the range are
-    enumerated and queried with IN — never the whole account, which is exactly
-    the performance trap `get_all_user_cashflows` fell into.
+    enumerated and queried with IN, never the whole account.
     """
     return list(
         session.exec(
@@ -977,16 +873,11 @@ def _capped(account: BankAccount) -> BankAccountSyncResult:
 def seed_after_linking(user_uuid: str, master_key: str, psu_context: dict[str, str] | None) -> None:
     """Fetch a freshly linked account's history right away, off the request.
 
-    Some banks only serve the full history for a few minutes after the consent
-    is authorised — Revolut restricts it to five, everything later being capped
-    at ninety days. The link is created with `last_synced_at` set to yesterday
-    precisely so a sync fires immediately, but that sync was the *front's* to
-    make: an account picker left open too long, or a closed tab, and the window
-    is gone for good, since only a new consent reopens it.
+    Revolut serves the full history only five minutes after the consent, then
+    ninety days: a closed tab must not lose it for good.
 
-    Runs on its own session — the request's is closed by the time a background
-    task runs — and never raises: this is a best-effort head start, and the
-    front's own sync call remains the guarantee that a link gets synchronised.
+    Runs on its own session and never raises: a best-effort head start, the
+    front's own sync remains the guarantee.
     """
     try:
         with Session(get_engine()) as session:

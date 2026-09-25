@@ -1,11 +1,8 @@
 """Every line the user has traded, for the pickers on the settings page.
 
-The analysis settings used to ask for ISINs, typed by hand. That is the wrong
-question to put to a human: nobody recognises IE00B4L5Y983, and a typo produces
-no error at all — the plan simply scores an allocation against a line that does
-not exist, and the drift table shows a target nobody holds.
-
-So the choice is made from a list instead. It covers assets sold as well as
+Picked from a list rather than typed as an ISIN: nobody recognises
+IE00B4L5Y983, and a typo would silently score the plan against a line that does
+not exist. It covers assets sold as well as
 assets held: a target allocation is a statement about the future, and "I am
 winding this line down to zero" is a legitimate thing to write.
 

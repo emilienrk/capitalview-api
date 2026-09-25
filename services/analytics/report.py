@@ -894,7 +894,7 @@ def _concentration_payload(concentration, labels) -> dict | None:
         )
     )
     # Capped at "indicatif" on purpose: two years of daily returns make a noisy
-    # covariance, and a PCA over a handful of assets is sensitive (spec 2.3).
+    # covariance, and a PCA over a handful of assets is sensitive.
     bets = _as_metric(
         Metric.gated(
             concentration.independent_bets,
