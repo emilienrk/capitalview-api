@@ -6,7 +6,7 @@ only ever sees as "Failed to fetch".
 """
 
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import anthropic
 import httpx
@@ -173,7 +173,9 @@ async def test_extract_stops_on_a_truncated_answer(session, master_key):
         patch("services.ai.agents.extract_tx_agent.AIProviderManager") as manager,
         patch("services.ai.agents.extract_tx_agent.get_all_assets", return_value=[]),
     ):
-        manager.from_user_settings.return_value.get_provider_for_capability.return_value = provider
+        manager.from_user_settings.return_value.get_provider_for_capability = AsyncMock(
+            return_value=provider
+        )
         agent = ExtractTxAgent("user-uuid", session, master_key)
         text = await agent.analyse("aW1n", "image/png", AssetType.STOCK)
 

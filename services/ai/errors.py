@@ -8,6 +8,7 @@ an unknown model, an exhausted quota) stays in the server logs.
 """
 
 import logging
+from urllib.parse import urlparse
 
 import anthropic
 import openai
@@ -16,6 +17,7 @@ from fastapi.responses import JSONResponse
 from google.genai import errors as genai_errors
 
 from services.ai.manager import NoProviderAvailableError
+from services.ai.providers.openrouter import OPENROUTER_BASE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,10 @@ PROVIDER_ERRORS: dict[type[Exception], str] = {
     genai_errors.APIError: "Gemini (Google)",
     openai.APIError: "DeepSeek",
 }
+
+# OpenRouter answers through the openai SDK too: the host the request went to
+# tells it apart from DeepSeek.
+_OPENROUTER_HOST = urlparse(OPENROUTER_BASE_URL).hostname
 
 _MAX_PROVIDER_MESSAGE = 300
 
@@ -44,11 +50,19 @@ def _message_of(exc: Exception) -> str:
     return message
 
 
-def describe_provider_error(exc: Exception) -> str:
-    provider = next(
+def _provider_of(exc: Exception) -> str:
+    request = getattr(exc, "request", None)
+    if isinstance(exc, openai.APIError) and request is not None:
+        if request.url.host == _OPENROUTER_HOST:
+            return "OpenRouter"
+    return next(
         (name for cls, name in PROVIDER_ERRORS.items() if isinstance(exc, cls)),
         "IA",
     )
+
+
+def describe_provider_error(exc: Exception) -> str:
+    provider = _provider_of(exc)
     status = _status_of(exc)
 
     if status in (401, 403):
@@ -78,7 +92,8 @@ async def no_provider_handler(request: Request, exc: NoProviderAvailableError) -
         content={
             "detail": (
                 "Aucun fournisseur IA compatible n'est configuré. Ajoutez une clé API "
-                "dans les paramètres (Gemini ou Claude pour l'analyse de photos)."
+                "dans les paramètres (Gemini, Claude ou OpenRouter pour l'analyse de photos). "
+                "Avec OpenRouter, choisissez un modèle qui lit les images."
             )
         },
     )

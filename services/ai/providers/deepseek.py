@@ -9,10 +9,9 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from services.ai.providers.base import AIProvider, ModelCapability
+from services.ai.providers.base import AIProvider, DetectedModel, ModelCapability
 
 
-DEFAULT_MODEL = "deepseek-chat"
 DEFAULT_MAX_TOKENS = 2000
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
@@ -25,14 +24,20 @@ class DeepseekProvider(AIProvider):
     Tool format : OpenAI-style function calling (converted from Anthropic-style input_schema).
     """
 
+    provider_id = "deepseek"
+    base_url = DEEPSEEK_BASE_URL
+    # DeepSeek has no json_schema response format: the schema rides in the
+    # system prompt and the answer is only held to JSON.
+    native_json_schema = False
+
     def __init__(
         self,
         api_key: str,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ):
-        self.client = AsyncOpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
-        self.model = model
+        super().__init__(api_key, model)
+        self.client = AsyncOpenAI(api_key=api_key, base_url=self.base_url)
         self.max_tokens = max_tokens
 
     # ------------------------------------------------------------------
@@ -40,9 +45,15 @@ class DeepseekProvider(AIProvider):
     # ------------------------------------------------------------------
 
     def capabilities(self) -> ModelCapability:
-        if "reasoner" in self.model.lower():
+        if self.model and "reasoner" in self.model.lower():
             return ModelCapability.TEXT | ModelCapability.REASONING
         return ModelCapability.TEXT
+
+    async def list_models(self) -> list[DetectedModel]:
+        return [
+            DetectedModel(id=model.id, label=model.id, vision=False)
+            async for model in self.client.models.list()
+        ]
 
     # ------------------------------------------------------------------
     # Core messaging
@@ -90,7 +101,13 @@ class DeepseekProvider(AIProvider):
         if output_config and "format" in output_config:
             fmt = output_config["format"]
             if fmt.get("type") == "json_schema":
-                kwargs["response_format"] = {"type": "json_object"}
+                if self.native_json_schema and "schema" in fmt:
+                    kwargs["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {"name": "output", "schema": fmt["schema"]},
+                    }
+                else:
+                    kwargs["response_format"] = {"type": "json_object"}
 
         return await self.client.chat.completions.create(**kwargs)
 

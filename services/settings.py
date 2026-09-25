@@ -1,6 +1,7 @@
 """User settings service."""
 
 import json
+import re
 from decimal import Decimal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -15,12 +16,21 @@ from dtos.settings import (
     AIProviderUpdate,
     AIOptionsResponse,
     AIProviderOption,
+    AIModelOption,
+    AIModelsResponse,
 )
 from services.encryption import encrypt_data, decrypt_data, hash_index
+from services.ai.catalog import detect_models, recommend
+from services.ai.manager import build_provider
 from services.ai.registry import PROVIDER_REGISTRY, CAPABILITY_PRIORITY, provider_supports
 
 # Locales the frontend knows how to render (see SettingsGeneral.vue).
 ALLOWED_DISPLAY_LOCALES = frozenset({"fr-FR", "en-GB", "en-US", "de-DE", "es-ES", "it-IT"})
+
+# The shape of a model id at any provider ("gemini-2.5-flash",
+# "meta-llama/llama-3.1-8b-instruct:free"). Whether the key reaches it is the
+# provider's to say: an unknown one fails the call with a readable 404.
+_MODEL_ID = re.compile(r"[\w.:/@-]{1,200}")
 
 
 # ---------------------------------------------------------------------------
@@ -284,21 +294,18 @@ def update_ai_provider(
 
     - api_key=None removes the key (and the row if no model is set either).
     - api_key="" also removes the key.
-    - selected_model=None resets to provider default.
+    - selected_model=None goes back to automatic.
     """
     if provider not in PROVIDER_REGISTRY:
         raise HTTPException(status_code=404, detail=f"Provider '{provider}' non supporté.")
 
     user_bidx = hash_index(user_uuid, master_key)
 
-    # Validate model if provided
-    if data.selected_model is not None:
-        valid_model_ids = [m["id"] for m in PROVIDER_REGISTRY[provider]["models"]]
-        if data.selected_model not in valid_model_ids:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Modèle '{data.selected_model}' non valide pour le provider '{provider}'.",
-            )
+    if data.selected_model is not None and not _MODEL_ID.fullmatch(data.selected_model):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Modèle '{data.selected_model}' non valide pour le provider '{provider}'.",
+        )
 
     # Find or create the provider row
     row = session.exec(
@@ -359,7 +366,6 @@ def get_ai_options(
     user_bidx = hash_index(user_uuid, master_key)
     ai_providers = _get_ai_providers(session, user_bidx)
     key_map = {p.provider: bool(p.api_key_enc) for p in ai_providers}
-    model_map = {p.provider: p.selected_model for p in ai_providers}
 
     capabilities: dict[str, list[AIProviderOption]] = {}
     for capability, priority in CAPABILITY_PRIORITY.items():
@@ -371,9 +377,44 @@ def get_ai_options(
                     provider=provider_id,
                     label=entry["label"],
                     has_key=key_map.get(provider_id, False),
-                    models=entry["models"],
                 )
             )
         capabilities[capability] = options
 
     return AIOptionsResponse(capabilities=capabilities)
+
+
+async def detect_ai_models(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    provider: str,
+) -> AIModelsResponse:
+    """
+    List the models the user's key reaches at `provider`, read from the
+    provider rather than the cache, and the one "automatic" calls.
+    """
+    if provider not in PROVIDER_REGISTRY:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider}' non supporté.")
+
+    user_bidx = hash_index(user_uuid, master_key)
+    row = session.exec(
+        select(UserAIProvider).where(
+            UserAIProvider.user_uuid_bidx == user_bidx,
+            UserAIProvider.provider == provider,
+        )
+    ).first()
+    if row is None or not row.api_key_enc:
+        raise HTTPException(
+            status_code=400,
+            detail="Enregistrez une clé API pour ce fournisseur avant de choisir un modèle.",
+        )
+
+    client = build_provider(provider, decrypt_data(row.api_key_enc, master_key))
+    # A refused key or an unreachable provider raises the SDK's error, which
+    # services.ai.errors turns into a readable 503.
+    models = await detect_models(client, fresh=True)
+    return AIModelsResponse(
+        models=[AIModelOption(id=m.id, label=m.label, vision=m.vision) for m in models],
+        recommended=recommend(provider, models),
+    )

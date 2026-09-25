@@ -1,6 +1,8 @@
+import hashlib
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import Flag, auto, Enum
-from typing import Any
+from typing import Any, ClassVar
 
 
 class ModelCapability(Flag):
@@ -15,6 +17,15 @@ class ProviderType(str, Enum):
     ANTHROPIC = "anthropic"
     GOOGLE = "google"
     DEEPSEEK = "deepseek"
+    OPENROUTER = "openrouter"
+
+
+@dataclass(frozen=True)
+class DetectedModel:
+    """A model the user's key can reach, as the provider lists it."""
+    id: str
+    label: str
+    vision: bool  # reads images, so it can serve the photo import
 
 
 class AIProvider(ABC):
@@ -23,6 +34,7 @@ class AIProvider(ABC):
 
     Subclasses must implement:
     - `capabilities()` → ModelCapability  (what this model supports)
+    - `list_models()` → the models the API key can reach
     - `_send_message(...)` → raw provider response
     - `extract_text(response)` → str  (parse text from response)
     - `extract_tool_uses(response)` → list of tool use dicts
@@ -31,9 +43,22 @@ class AIProvider(ABC):
     - `format_tools(tools)` → provider-specific tool list
     """
 
+    provider_id: ClassVar[str]
+
+    def __init__(self, api_key: str, model: str | None):
+        # None = automatic: settled against the live model list before the
+        # first call (services.ai.catalog.settle_model).
+        self.model = model
+        # Keys the detected-model cache without keeping the key itself around
+        self.key_fingerprint = hashlib.sha256(api_key.encode()).hexdigest()
+
     @abstractmethod
     def capabilities(self) -> ModelCapability:
         """Return the capabilities supported by this provider/model."""
+
+    @abstractmethod
+    async def list_models(self) -> list[DetectedModel]:
+        """Return the models the API key can reach and the agents can drive."""
 
     def supports(self, required: ModelCapability) -> bool:
         """Return True if all required capabilities are met."""

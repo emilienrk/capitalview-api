@@ -16,8 +16,15 @@ from dtos.settings import (
     AIProviderUpdate,
     AIProviderConfig,
     AIOptionsResponse,
+    AIModelsResponse,
 )
-from services.settings import get_settings, update_settings, update_ai_provider, get_ai_options
+from services.settings import (
+    detect_ai_models,
+    get_ai_options,
+    get_settings,
+    update_ai_provider,
+    update_settings,
+)
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
 
@@ -67,10 +74,28 @@ def get_ai_provider_options(
     return get_ai_options(session, current_user.uuid, master_key)
 
 
+@router.get("/ai/providers/{provider}/models", response_model=AIModelsResponse)
+async def list_ai_provider_models(
+    provider: Annotated[
+        str, Path(description="Provider ID: google | anthropic | deepseek | openrouter")
+    ],
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """
+    List the models the user's API key can reach at this provider, read live
+    from it, and the one "automatic" (selected_model=null) calls.
+    """
+    return await detect_ai_models(session, current_user.uuid, master_key, provider)
+
+
 @router.put("/ai/providers/{provider}", response_model=AIProviderConfig)
 def update_ai_provider_settings(
     data: AIProviderUpdate,
-    provider: Annotated[str, Path(description="Provider ID: google | anthropic | deepseek")],
+    provider: Annotated[
+        str, Path(description="Provider ID: google | anthropic | deepseek | openrouter")
+    ],
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -78,6 +103,6 @@ def update_ai_provider_settings(
     """
     Update the API key and/or selected model for a specific AI provider.
     Pass api_key=null to remove the key.
-    Pass selected_model=null to reset to the provider's default model.
+    Pass selected_model=null to go back to automatic model selection.
     """
     return update_ai_provider(session, current_user.uuid, master_key, provider, data)

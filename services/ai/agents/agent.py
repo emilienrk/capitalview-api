@@ -61,7 +61,7 @@ class Agent:
         system_prompt: str | None = None,
     ) -> str:
         manager = AIProviderManager.from_user_settings(session, self.user_uuid, master_key)
-        provider = manager.get_provider(required=ModelCapability.TEXT)
+        provider = await manager.get_provider(required=ModelCapability.TEXT)
 
         tool_registry = get_tool_registry()
         tools = provider.format_tools(get_tools())

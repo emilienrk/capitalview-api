@@ -9,11 +9,14 @@ from typing import Any
 from google import genai
 from google.genai import types as genai_types
 
-from services.ai.providers.base import AIProvider, ModelCapability
+from services.ai.providers.base import AIProvider, DetectedModel, ModelCapability
 
 
-DEFAULT_MODEL = "gemini-3.5-flash"
 DEFAULT_MAX_TOKENS = 4000
+
+# Gemini variants that answer generateContent but not as a chat model would:
+# speech, embeddings, image generation, the Live API, agents driving a screen.
+_NOT_CONVERSATIONAL = ("tts", "embedding", "image", "audio", "live", "computer-use", "robotics")
 
 def _clean_schema_for_gemini(schema: Any) -> Any:
     """
@@ -74,14 +77,16 @@ class GoogleProvider(AIProvider):
     Tool format : Google Function Declarations (converted from Anthropic-style input).
     """
 
+    provider_id = "google"
+
     def __init__(
         self,
         api_key: str,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ):
+        super().__init__(api_key, model)
         self.client = genai.Client(api_key=api_key)
-        self.model = model
         self.max_tokens = max_tokens
         # Internal state to reconstruct conversation
         self._last_response: Any = None
@@ -92,6 +97,21 @@ class GoogleProvider(AIProvider):
 
     def capabilities(self) -> ModelCapability:
         return ModelCapability.TEXT | ModelCapability.VISION
+
+    async def list_models(self) -> list[DetectedModel]:
+        models = []
+        async for model in await self.client.aio.models.list(config={"page_size": 100}):
+            model_id = (model.name or "").removeprefix("models/")
+            if not model_id.startswith("gemini-"):
+                continue
+            if "generateContent" not in (model.supported_actions or []):
+                continue
+            if any(word in model_id for word in _NOT_CONVERSATIONAL):
+                continue
+            models.append(
+                DetectedModel(id=model_id, label=model.display_name or model_id, vision=True)
+            )
+        return models
 
     # ------------------------------------------------------------------
     # Core messaging

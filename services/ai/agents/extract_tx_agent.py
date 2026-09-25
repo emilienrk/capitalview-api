@@ -30,7 +30,9 @@ class ExtractTxAgent:
         self.messages: list = []
 
         self._manager = AIProviderManager.from_user_settings(session, user_uuid, master_key)
-        self._provider = self._manager.get_provider_for_capability("vision")
+        # Resolved in analyse(): settling an "automatic" model lists the
+        # provider's models, which is a network call.
+        self._provider: Any = None
 
     @staticmethod
     def system_prompt() -> str:
@@ -208,6 +210,7 @@ class ExtractTxAgent:
         image_media_type: str,
         asset_type: AssetType | None = None,
     ) -> str:
+        self._provider = await self._manager.get_provider_for_capability("vision")
         output_config = self._build_output_config(asset_type)
 
         asset_list = get_all_assets(

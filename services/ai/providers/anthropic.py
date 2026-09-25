@@ -2,10 +2,9 @@ from typing import Any
 
 import anthropic
 
-from services.ai.providers.base import AIProvider, ModelCapability
+from services.ai.providers.base import AIProvider, DetectedModel, ModelCapability
 
 
-DEFAULT_MODEL = "claude-haiku-4-5"
 DEFAULT_MAX_TOKENS = 2000
 
 
@@ -17,14 +16,16 @@ class AnthropicProvider(AIProvider):
     Tool format : native Anthropic tool schema (input_schema field).
     """
 
+    provider_id = "anthropic"
+
     def __init__(
         self,
         api_key: str,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ):
+        super().__init__(api_key, model)
         self.client = anthropic.AsyncAnthropic(api_key=api_key)
-        self.model = model
         self.max_tokens = max_tokens
 
     # ------------------------------------------------------------------
@@ -33,6 +34,24 @@ class AnthropicProvider(AIProvider):
 
     def capabilities(self) -> ModelCapability:
         return ModelCapability.TEXT | ModelCapability.VISION
+
+    async def list_models(self) -> list[DetectedModel]:
+        models = []
+        # Newest first, as the API lists them
+        async for info in self.client.models.list(limit=100):
+            caps = info.capabilities
+            # Both agents pass output_config: a model without structured
+            # outputs would refuse every call.
+            if caps is not None and not caps.structured_outputs.supported:
+                continue
+            models.append(
+                DetectedModel(
+                    id=info.id,
+                    label=info.display_name or info.id,
+                    vision=caps.image_input.supported if caps is not None else True,
+                )
+            )
+        return models
 
     # ------------------------------------------------------------------
     # Core messaging

@@ -6,10 +6,11 @@ Resolves the best available AI provider for a given user and required capability
 Resolution order (per capability):
     1. Respect user's explicit preference (ai_vision_provider / ai_chat_provider)
     2. Fallback to CAPABILITY_PRIORITY order
-    3. Skip providers without a valid API key
+    3. Skip providers without a valid API key, or whose model cannot serve
 
 The manager reads provider configs from the `user_ai_providers` table and
-instantiates providers with the user's preferred model (or the registry default).
+instantiates providers with the user's chosen model, or none for "automatic":
+resolution then settles one from the models the key can reach.
 """
 
 from __future__ import annotations
@@ -17,16 +18,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from services.ai.catalog import settle_model
 from services.ai.providers.base import AIProvider, ModelCapability
 from services.ai.providers.anthropic import AnthropicProvider
 from services.ai.providers.google import GoogleProvider
 from services.ai.providers.deepseek import DeepseekProvider
-from services.ai.registry import (
-    PROVIDER_REGISTRY,
-    CAPABILITY_PRIORITY,
-    get_default_model,
-    provider_supports,
-)
+from services.ai.providers.openrouter import OpenRouterProvider
+from services.ai.registry import CAPABILITY_PRIORITY
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +35,24 @@ _CAPABILITY_FLAGS: dict[str, ModelCapability] = {
 }
 
 
+_PROVIDER_CLASSES: dict[str, type[AIProvider]] = {
+    "anthropic": AnthropicProvider,
+    "google": GoogleProvider,
+    "deepseek": DeepseekProvider,
+    "openrouter": OpenRouterProvider,
+}
+
+
 class NoProviderAvailableError(Exception):
     """Raised when no provider can satisfy the required capability."""
+
+
+def build_provider(provider_id: str, api_key: str, model: str | None = None) -> AIProvider:
+    """Instantiate a provider; `model=None` leaves it on "automatic"."""
+    provider_class = _PROVIDER_CLASSES.get(provider_id)
+    if provider_class is None:
+        raise ValueError(f"Unknown provider '{provider_id}'")
+    return provider_class(api_key=api_key, model=model)
 
 
 class AIProviderManager:
@@ -47,8 +61,8 @@ class AIProviderManager:
 
     Usage:
         manager = AIProviderManager.from_user_settings(session, user_uuid, master_key)
-        provider = manager.get_provider_for_capability("vision")
-        provider = manager.get_provider(ModelCapability.TEXT | ModelCapability.VISION)
+        provider = await manager.get_provider_for_capability("vision")
+        provider = await manager.get_provider(ModelCapability.TEXT | ModelCapability.VISION)
     """
 
     def __init__(
@@ -122,31 +136,12 @@ class AIProviderManager:
             if not api_key:
                 continue
 
-            # Resolve the model: user preference > registry default
-            model = row.selected_model or get_default_model(provider_id)
+            if provider_id not in _PROVIDER_CLASSES:
+                logger.warning("Unknown provider '%s' — skipping.", provider_id)
+                continue
 
             try:
-                if provider_id == "anthropic":
-                    kwargs = {"api_key": api_key}
-                    if model:
-                        kwargs["model"] = model
-                    providers["anthropic"] = AnthropicProvider(**kwargs)
-
-                elif provider_id == "google":
-                    kwargs = {"api_key": api_key}
-                    if model:
-                        kwargs["model"] = model
-                    providers["google"] = GoogleProvider(**kwargs)
-
-                elif provider_id == "deepseek":
-                    kwargs = {"api_key": api_key}
-                    if model:
-                        kwargs["model"] = model
-                    providers["deepseek"] = DeepseekProvider(**kwargs)
-
-                else:
-                    logger.warning("Unknown provider '%s' — skipping.", provider_id)
-
+                providers[provider_id] = build_provider(provider_id, api_key, row.selected_model)
             except Exception as exc:
                 logger.warning("Failed to init provider '%s': %s", provider_id, exc)
 
@@ -160,7 +155,7 @@ class AIProviderManager:
     # Provider resolution
     # ------------------------------------------------------------------
 
-    def get_provider_for_capability(self, capability: str) -> AIProvider:
+    async def get_provider_for_capability(self, capability: str) -> AIProvider:
         """
         Return the best available provider for the given capability string.
 
@@ -186,7 +181,7 @@ class AIProviderManager:
 
         for name in priority:
             provider = self._providers.get(name)
-            if provider and provider.supports(required_flags):
+            if provider and await settle_model(provider, required_flags):
                 logger.debug(
                     "Selected provider '%s' for capability '%s'", name, capability
                 )
@@ -197,7 +192,7 @@ class AIProviderManager:
             f"Configured providers: {list(self._providers.keys())}"
         )
 
-    def get_provider(
+    async def get_provider(
         self,
         required: ModelCapability = ModelCapability.TEXT,
         preferred: str | None = None,
@@ -221,7 +216,7 @@ class AIProviderManager:
 
         for name in all_names:
             provider = self._providers.get(name)
-            if provider and provider.supports(required):
+            if provider and await settle_model(provider, required):
                 logger.debug("Selected provider '%s' for capability %s", name, required)
                 return provider
 

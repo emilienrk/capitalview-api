@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from services.ai.manager import AIProviderManager, NoProviderAvailableError
-from services.ai.providers.base import ModelCapability, AIProvider
+from services.ai.providers.base import AIProvider
 from services.ai.tools import get_tool_registry, get_tools
 from services.encryption import decrypt_data
 
@@ -28,11 +28,10 @@ class CardAgent:
         self.main_agent_messages: list[dict[str, Any]] = []
         self.sub_agent_messages: list[dict[str, Any]] = []
 
-        # Resolve provider once at construction time
         self._manager = AIProviderManager.from_user_settings(session, user_uuid, master_key)
-        self._provider: AIProvider = self._manager.get_provider(
-            required=ModelCapability.TEXT
-        )
+        # Resolved in main(): settling an "automatic" model lists the provider's
+        # models, which is a network call.
+        self._provider: AIProvider | None = None
 
     # ------------------------------------------------------------------
     # System prompts
@@ -114,6 +113,7 @@ class CardAgent:
         is_significant: bool = False,
         perf_data: dict[str, Any] = None,
     ) -> dict[str, Any]:
+        self._provider = await self._manager.get_provider_for_capability("chat")
         past_theme_cards = []
 
         for card in recent_cards:

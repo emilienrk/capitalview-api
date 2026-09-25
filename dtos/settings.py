@@ -10,15 +10,15 @@ from datetime import datetime
 
 class AIProviderConfig(BaseModel):
     """State of a single AI provider for a user (read-only)."""
-    provider: str               # "google" | "anthropic" | "deepseek"
+    provider: str               # "google" | "anthropic" | "deepseek" | "openrouter"
     has_key: bool               # True if an API key is configured
-    selected_model: str | None  # None = provider default
+    selected_model: str | None  # None = automatic
 
 
 class AIProviderUpdate(BaseModel):
     """Update the API key and/or model for a single provider."""
     api_key: str | None = None          # None = delete the key; omit field to leave unchanged
-    selected_model: str | None = None   # None = use provider default
+    selected_model: str | None = None   # None = automatic
 
 
 class AIProviderOption(BaseModel):
@@ -26,7 +26,19 @@ class AIProviderOption(BaseModel):
     provider: str
     label: str
     has_key: bool
-    models: list[dict]  # [{"id": str, "label": str, "default"?: bool}]
+
+
+class AIModelOption(BaseModel):
+    """A model the user's key can reach, as the provider lists it."""
+    id: str
+    label: str
+    vision: bool  # reads images, so it can serve the photo import
+
+
+class AIModelsResponse(BaseModel):
+    """Response for GET /settings/ai/providers/{provider}/models."""
+    models: list[AIModelOption]
+    recommended: str | None  # what "automatic" (selected_model=None) calls
 
 
 class AIOptionsResponse(BaseModel):

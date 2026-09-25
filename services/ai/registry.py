@@ -4,7 +4,7 @@ Static registry of supported AI providers.
 This is the single source of truth for:
 - Which providers are supported
 - What capabilities each provider offers
-- Which models are available for each provider
+- How "automatic" picks a model among those the user's key can reach
 
 Adding a new provider = add an entry here + create its provider class.
 No database migration needed.
@@ -13,66 +13,66 @@ No database migration needed.
 from typing import TypedDict
 
 
-class ModelEntry(TypedDict, total=False):
-    id: str
-    label: str
-    default: bool  # True = used when no model is explicitly selected
-
-
 class ProviderEntry(TypedDict):
     label: str
     capabilities: list[str]  # subset of ["vision", "chat"]
-    models: list[ModelEntry]
+    # What "automatic" picks among the models the user's key can reach: the
+    # first pattern with a match wins, at its highest version. Matched against
+    # the provider's live list, so a new release is picked up without a deploy.
+    preferred: list[str]
+    # Called when that list cannot be fetched; the call then reports the cause.
+    fallback_model: str
 
 
 PROVIDER_REGISTRY: dict[str, ProviderEntry] = {
     "google": {
         "label": "Gemini (Google)",
         "capabilities": ["vision", "chat"],
-        "models": [
-            {"id": "gemini-3.5-flash",     "label": "Gemini 3.5 Flash", "default": True},
-            {"id": "gemini-3.1-pro",       "label": "Gemini 3.1 Pro"},
-            {"id": "gemini-3.1-flash-lite","label": "Gemini 3.1 Flash Lite"},
-            {"id": "gemini-2.5-flash",     "label": "Gemini 2.5 Flash"},
-            {"id": "gemini-2.5-pro",       "label": "Gemini 2.5 Pro"},
+        "preferred": [
+            r"^gemini-[\d.]+-flash$",
+            r"^gemini-[\d.]+-pro$",
+            r"^gemini-.*flash",
+            r"^gemini-",
         ],
+        "fallback_model": "gemini-3.5-flash",
     },
     "anthropic": {
         "label": "Claude (Anthropic)",
         "capabilities": ["vision", "chat"],
-        "models": [
-            {"id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6", "default": True},
-            {"id": "claude-opus-4-8",   "label": "Claude Opus 4.8"},
-            {"id": "claude-haiku-4-5",  "label": "Claude Haiku 4.5"},
-        ],
+        "preferred": [r"^claude-sonnet-", r"^claude-haiku-", r"^claude-opus-", r"^claude-"],
+        "fallback_model": "claude-sonnet-4-6",
     },
     "deepseek": {
         "label": "DeepSeek",
         "capabilities": ["chat"],
-        "models": [
-            {"id": "deepseek-v4-flash", "label": "DeepSeek V4 Flash", "default": True},
-            {"id": "deepseek-v4-pro",   "label": "DeepSeek V4 Pro"},
+        "preferred": [r"^deepseek-v[\d.]+-flash$", r"^deepseek-chat$", r"^deepseek-"],
+        "fallback_model": "deepseek-v4-flash",
+    },
+    "openrouter": {
+        "label": "OpenRouter",
+        "capabilities": ["vision", "chat"],
+        "preferred": [
+            r"^google/gemini-[\d.]+-flash$",
+            r"^anthropic/claude-sonnet-",
+            r"^openai/gpt-[\d.]+-mini$",
+            r"^google/gemini-",
         ],
+        # OpenRouter's own router: an id that exists whatever the catalogue holds
+        "fallback_model": "openrouter/auto",
     },
 }
 
 # Default provider priority per capability (used when user has no explicit preference)
 CAPABILITY_PRIORITY: dict[str, list[str]] = {
-    "vision": ["google", "anthropic"],
-    "chat":   ["google", "deepseek", "anthropic"],
+    "vision": ["google", "anthropic", "openrouter"],
+    "chat":   ["google", "deepseek", "anthropic", "openrouter"],
 }
 
 
-def get_default_model(provider: str) -> str | None:
-    """Return the default model ID for a provider, or None if not found."""
+def get_fallback_model(provider: str) -> str | None:
+    """Return the model called when the provider's list cannot be fetched."""
     entry = PROVIDER_REGISTRY.get(provider)
-    if not entry:
-        return None
-    for model in entry["models"]:
-        if model.get("default"):
-            return model["id"]
-    models = entry["models"]
-    return models[0]["id"] if models else None
+    return entry["fallback_model"] if entry else None
 
 
 def provider_supports(provider: str, capability: str) -> bool:
