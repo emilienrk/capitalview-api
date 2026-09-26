@@ -365,3 +365,14 @@ def test_many_recorded_fees_are_enough_even_at_low_coverage():
     assert result.coverage < Decimal("0.10")
     assert result.is_estimated is True
     assert result.is_too_partial is False
+
+
+def test_every_fee_key_is_declared_in_the_response_model():
+    """An undeclared key is stripped by FastAPI: the estimate notice never showed."""
+    from dtos.analytics import FeesResponse
+    from services.analytics.report import _fees_payload
+
+    payload = _fees_payload(analyse_fees(_ledger(charged=8), _TwoYears))
+
+    assert payload["is_estimated"] is True
+    assert set(payload) <= set(FeesResponse.model_fields)

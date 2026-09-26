@@ -533,3 +533,37 @@ def test_the_concentration_payload_carries_names_not_only_isins():
     assert payload["dropped"] == [
         {"asset_key": "FR0011550185", "symbol": "FR0011550185", "name": "FR0011550185"}
     ]
+
+
+def test_every_key_a_block_builds_is_declared_in_its_response_model():
+    """FastAPI drops undeclared keys in silence, and the page then never sees them.
+
+    That is how `is_estimated` went missing: computed, sent, stripped — and the
+    estimate notice on the fee block never showed.
+    """
+    from dtos.analytics import (
+        ConcentrationResponse,
+        CounterfactualResponse,
+        DepositLagResponse,
+        ExecutionResponse,
+        ExitsResponse,
+        InvestorAnalyticsResponse,
+        MarketConditioningResponse,
+        RegularityResponse,
+        TurnoverOut,
+    )
+    models = {
+        "regularity": RegularityResponse,
+        "deposit_lag": DepositLagResponse,
+        "market_conditioning": MarketConditioningResponse,
+        "concentration": ConcentrationResponse,
+        "execution": ExecutionResponse,
+        "counterfactual": CounterfactualResponse,
+        "exits": ExitsResponse,
+        "turnover": TurnoverOut,
+    }
+    report = _run_blocks(_monthly_buys(24))
+    assert set(report) <= set(InvestorAnalyticsResponse.model_fields)
+    for key, model in models.items():
+        if report[key] is not None:
+            assert set(report[key]) <= set(model.model_fields), key

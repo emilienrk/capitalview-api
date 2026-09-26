@@ -307,6 +307,10 @@ class FeesResponse(BaseModel):
     """Orders carrying a recorded fee — the real sample size of every figure here."""
     fee_coverage: Decimal = Decimal("0")
     """orders_with_fee / order_count. Below one, every total is a floor."""
+    recorded_fees: Decimal = Decimal("0")
+    """Fees actually keyed in, before the uncharged orders are extrapolated."""
+    is_estimated: bool = False
+    """True when the totals extrapolate the recorded fees over the whole ledger."""
     projection_eur: Decimal | None = None
     projection_note: str
     ter_note: str
