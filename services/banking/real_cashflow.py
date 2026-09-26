@@ -87,11 +87,11 @@ _FIELD_OF = {
     CashflowType.NEUTRAL: "neutral",
 }
 _AMOUNTS = (
-    "income", "expenses", "saving", "investment", "neutral", "net", "recurring", "one_off",
+    "income", "expenses", "saving", "investment", "neutral", "net", "cashflow", "recurring", "one_off",
     "recurring_income", "one_off_income",
 )
 # The figures `_totals` derives from the others.
-_DERIVED = ("net", "one_off", "one_off_income")
+_DERIVED = ("net", "cashflow", "one_off", "one_off_income")
 _PERCENT = Decimal("0.1")
 
 
@@ -597,6 +597,7 @@ def _totals(tally: _Tally) -> RealCashflowTotals:
     return _with_rates({
         **amounts,
         "net": t["income"] - t["expenses"] - t["saving"] - t["investment"],
+        "cashflow": t["income"] - t["expenses"],
         "one_off": t["expenses"] - t["recurring"],
         "one_off_income": t["income"] - t["recurring_income"],
     })
@@ -617,8 +618,12 @@ def _per_month(months: list[RealCashflowMonth], reduce) -> RealCashflowTotals:
 
 
 def _projection(totals: RealCashflowTotals, monthly: RealCashflowTotals, months_left: int) -> RealCashflowTotals:
-    amounts = {name: getattr(totals, name) + getattr(monthly, name) * months_left for name in _AMOUNTS if name != "net"}
+    amounts = {
+        name: getattr(totals, name) + getattr(monthly, name) * months_left
+        for name in _AMOUNTS if name not in ("net", "cashflow")
+    }
     amounts["net"] = amounts["income"] - amounts["expenses"] - amounts["saving"] - amounts["investment"]
+    amounts["cashflow"] = amounts["income"] - amounts["expenses"]
     return _with_rates(amounts)
 
 

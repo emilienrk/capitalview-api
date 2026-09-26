@@ -80,6 +80,19 @@ def test_a_median_month_one_off_is_a_month_s_not_a_difference_of_medians():
     assert (monthly.expenses, monthly.recurring, monthly.one_off) == (Decimal("100"), Decimal("50"), Decimal("100"))
 
 
+def test_a_median_month_cashflow_is_a_month_s_not_a_difference_of_medians():
+    months = []
+    for income, expenses in (("1000", "900"), ("2000", "1000"), ("1500", "1400")):
+        tally = _Tally()
+        tally.totals["income"], tally.totals["expenses"] = Decimal(income), Decimal(expenses)
+        months.append(_totals(tally))
+
+    monthly = _per_month(months, median)
+
+    # 1500 - 1000 would describe no month at all; the months left 100, 1000 and 100.
+    assert (monthly.income, monthly.expenses, monthly.cashflow) == (Decimal("1500"), Decimal("1000"), Decimal("100"))
+
+
 def test_a_transfer_to_a_livret_is_set_aside_not_spent(session: Session, master_key: str):
     _ops(
         session, master_key,

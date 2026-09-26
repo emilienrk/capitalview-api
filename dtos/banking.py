@@ -842,6 +842,9 @@ class RealCashflowTotals(BaseModel):
     investment: Decimal = Decimal("0")
     neutral: Decimal = Decimal("0")
     net: Decimal = Decimal("0")
+    # What the income left once spent, before any of it was set aside. Taken
+    # month by month, like `one_off`.
+    cashflow: Decimal = Decimal("0")
     # The part of `expenses` spent on counted recurring payments, their refunds
     # taken off: already in `expenses`, never added to anything else.
     recurring: Decimal = Decimal("0")
