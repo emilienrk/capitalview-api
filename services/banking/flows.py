@@ -498,6 +498,14 @@ def _links(session: Session, user_uuid: str, master_key: str) -> dict[str, date]
     }
 
 
+def _covered_until(account: BankAccount | None, synced: date | None, last: date | None) -> date | None:
+    """The last day an account's operations are known complete: its last sync
+    when a bank feeds it, else its last operation — or later, up to the day the
+    user vouched nothing more had happened."""
+    known = [day for day in (synced or last, account.history_confirmed_on if account else None) if day]
+    return max(known) if known else None
+
+
 def _scope(accounts: _Accounts, account_id: str | None, master_key: str) -> list[str]:
     """The accounts a reader asked about, among those it may read."""
     if account_id is None:

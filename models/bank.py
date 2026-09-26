@@ -42,6 +42,12 @@ class BankAccount(SQLModel, table=True):
         default=None,
         sa_column=Column(sa.Date, nullable=True),
     )
+    # The day the user vouched the account held every operation so far: an
+    # imported account with nothing new is quiet, not behind.
+    history_confirmed_on: date | None = Field(
+        default=None,
+        sa_column=Column(sa.Date, nullable=True),
+    )
     # Date the bank account was actually opened (user-supplied)
     opened_at: date | None = Field(
         default=None,

@@ -57,6 +57,7 @@ from services.banking.flows import (
     _filed,
     _filing,
     _label,
+    _covered_until,
     _links,
     _pairing,
     _paired_movements,
@@ -75,7 +76,7 @@ RECENT_MONTHS = 12
 # Below this many covered months, no month of a year is called unusual: the
 # spread of three months says nothing.
 ATYPICAL_MIN_MONTHS = 6
-# A balance a sync has not refreshed for longer may be out of date.
+# A balance neither a sync nor the user has vouched for since may be out of date.
 STALE_BALANCE_DAYS = 7
 
 _FIELD_OF = {
@@ -646,7 +647,7 @@ def _safety_net(
         available += balance
         if bidx in savings:
             held += balance
-        synced = links.get(bidx)
+        synced = _covered_until(account, links.get(bidx), None)
         if synced is None or synced < today - timedelta(days=STALE_BALANCE_DAYS):
             stale.append(decrypt_data(account.name_enc, master_key))
 
@@ -684,7 +685,7 @@ def _coverage_gaps(
         if bidx not in patterns.coverage:
             continue
         first, last = patterns.coverage[bidx]
-        covered_until = links.get(bidx, last)
+        covered_until = _covered_until(accounts.by_bidx[bidx], links.get(bidx), last)
         starts_late, ends_early = first > start, covered_until < end
         if starts_late or ends_early:
             account = accounts.by_bidx[bidx]

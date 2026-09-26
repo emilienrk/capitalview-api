@@ -43,6 +43,7 @@ from services.banking.flows import (
     _filing,
     _internal_transfer_legs,
     _item_builder,
+    _covered_until,
     _links,
     _load_movements,
     _pairing,
@@ -173,7 +174,8 @@ class _Reader:
         self.bidx = {account.uuid: bidx for bidx, account in accounts.by_bidx.items()}
         links = _links(session, user_uuid, master_key)
         self.covered_until = {
-            bidx: links.get(bidx, last) for bidx, (_, last) in patterns.coverage.items()
+            bidx: _covered_until(accounts.by_bidx.get(bidx), links.get(bidx), last)
+            for bidx, (_, last) in patterns.coverage.items()
         }
 
     def item(self, stored: StoredRecurring) -> BankRecurringItem:

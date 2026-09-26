@@ -13,6 +13,7 @@ from dtos.banking import CashflowType, TypeScope
 from models.bank import BankAccount
 from models.banking import BankAccountLink
 from services.banking.flows import list_month_transactions, set_transaction_type
+from services.bank import confirm_up_to_date
 from services.banking.real_cashflow import real_cashflow_current, real_cashflow_month, real_cashflow_year
 from services.encryption import encrypt_data, hash_index
 from tests.services.test_banking_flows import USER, _raw, _store
@@ -196,6 +197,19 @@ class TestSafetyNet:
         # A week without a sync, and never synced at all.
         assert net.stale_accounts == ["Livret A", "Néobanque"]
 
+    def test_a_balance_the_user_vouched_for_this_week_is_not_stale(self, session: Session, master_key: str):
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-03-05", "2000.00", "DBIT", "CARTE MAGASIN CB*08"),
+            (LIVRET, "2026-01-31", "1.00", "CRDT", "*INTER.BRUTS 2025"),
+        )
+        _set_account(session, master_key, CURRENT, synced=TODAY)
+        _set_account(session, master_key, LIVRET, name="Livret A")
+        _unlink(session, master_key, LIVRET)
+        confirm_up_to_date(session, session.get(BankAccount, LIVRET), today=TODAY)
+
+        assert _year(session, master_key).safety_net.stale_accounts == []
+
     def test_only_the_current_year_has_one(self, session: Session, master_key: str):
         _ops(session, master_key, (CURRENT, "2025-03-05", "100.00", "DBIT", "CARTE MAGASIN CB*08"))
         assert _year(session, master_key, 2025).safety_net is None
@@ -237,6 +251,18 @@ class TestCoverage:
 
         assert (gap.covered_until, gap.starts_late, gap.ends_early) == (date(2026, 2, 10), False, True)
         assert real_cashflow_month(session, USER, master_key, "2026-01", today=TODAY).coverage_gaps == []
+
+    def test_an_imported_account_is_known_until_the_user_vouched_for_it(self, session: Session, master_key: str):
+        _ops(
+            session, master_key,
+            (CURRENT, "2025-12-02", "10.00", "DBIT", "CARTE MAGASIN CB*08"),
+            (LIVRET, "2025-12-10", "300.00", "CRDT", "VIR Virement depuis Compte courant"),
+        )
+        _set_account(session, master_key, CURRENT, synced=TODAY)
+        _unlink(session, master_key, LIVRET)
+        confirm_up_to_date(session, session.get(BankAccount, LIVRET), today=date(2026, 3, 31))
+
+        assert real_cashflow_month(session, USER, master_key, "2026-03", today=TODAY).coverage_gaps == []
 
     def test_a_linked_account_is_known_until_its_last_sync(self, session: Session, master_key: str):
         _ops(session, master_key, (CURRENT, "2025-12-02", "10.00", "DBIT", "CARTE MAGASIN CB*08"))

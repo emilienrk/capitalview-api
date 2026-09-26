@@ -28,6 +28,7 @@ from services.bank import (
     get_all_bank_accounts_history,
     delete_bank_account_history,
     import_bank_account_history,
+    confirm_up_to_date,
 )
 from dtos.transaction import AccountHistorySnapshotResponse
 from services.savings_interest import get_user_savings_interest
@@ -130,6 +131,21 @@ def import_account_history(
         session, account, payload.entries, master_key, overwrite=payload.overwrite
     )
     return {"inserted": count}
+
+
+@router.post("/accounts/{account_id}/up-to-date", status_code=204)
+def confirm_account_up_to_date(
+    account_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+) -> None:
+    """Vouch that nothing happened on the account since its last operation."""
+    from models import BankAccount as BankAccountModel
+
+    if not get_bank_account(session, account_id, current_user.uuid, master_key):
+        raise HTTPException(status_code=404, detail="Account not found")
+    confirm_up_to_date(session, session.get(BankAccountModel, account_id))
 
 
 @router.get("/accounts/{account_id}/history", response_model=list[AccountHistorySnapshotResponse])

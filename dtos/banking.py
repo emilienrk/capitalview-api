@@ -915,7 +915,8 @@ class RealCashflowCoverageGap(BaseModel):
     account_name: str
     first_day: date
     # The last day its operations are known complete: the last sync of a
-    # linked account, the last operation of an imported one.
+    # linked account, the last operation of an imported one, or later the day
+    # the user vouched nothing more happened.
     covered_until: date
     starts_late: bool
     ends_early: bool

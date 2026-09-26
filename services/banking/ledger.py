@@ -36,6 +36,7 @@ from models.banking import BankAccountLink
 from services.banking import transfer_patterns as stored_patterns
 from services.banking.cashflow_types import counted_leg, signed_amount
 from services.banking.flows import (
+    _covered_until,
     _filed,
     _filing,
     _flow_groups,
@@ -201,7 +202,7 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
             currency=decrypt_data(account.currency_enc, master_key) if account.currency_enc else currency,
             balance=Decimal(decrypt_data(account.balance_enc, master_key)),
             first_day=first,
-            covered_until=links.get(bidx, last),
+            covered_until=_covered_until(account, links.get(bidx), last),
             linked=bidx in links,
         ))
 

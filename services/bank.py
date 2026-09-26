@@ -228,6 +228,13 @@ def _map_to_response(
     )
 
 
+def confirm_up_to_date(session: Session, account: BankAccount, today: date | None = None) -> None:
+    """The user's word that the account holds every operation to this day."""
+    account.history_confirmed_on = today or date.today()
+    session.add(account)
+    session.commit()
+
+
 def create_bank_account(
     session: Session, 
     data: BankAccountCreate, 
