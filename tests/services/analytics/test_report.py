@@ -248,7 +248,7 @@ def test_buying_at_a_flat_price_is_not_detectable():
     execution = _run_blocks(_monthly_buys(24))["execution"]
 
     assert execution["is_detectable"] is False
-    assert "pas là qu'il faut chercher" in execution["verdict"]
+    assert "indiscernable du hasard" in execution["verdict"]
 
 
 def test_the_replay_blocks_survive_missing_snapshots():
@@ -272,6 +272,9 @@ def test_the_new_blocks_are_assembled_for_a_two_year_buyer():
     assert len(regularity["monthly"]) == regularity["months_total"]
     assert report["deposit_lag"] is not None
     assert report["market_conditioning"] is not None
+    # The scale the page draws comes with the figure, from the same thresholds.
+    assert regularity["reading"]["bands"]
+    assert isinstance(report["signals"], list)
 
 
 def test_too_few_purchases_withholds_every_regularity_value_and_its_heatmap():
@@ -285,7 +288,8 @@ def test_too_few_purchases_withholds_every_regularity_value_and_its_heatmap():
     assert regularity["invested_share"]["value"] is None
     # A heatmap is the same numbers in another shape: withheld here too.
     assert regularity["monthly"] == []
-    assert "pas encore de quoi dire" in regularity["verdict"]
+    assert "pas encore de rythme mesurable" in regularity["verdict"]
+    assert regularity["reading"]["tone"] is None
 
 
 def test_the_conditioning_block_withholds_its_chart_data_when_gated():

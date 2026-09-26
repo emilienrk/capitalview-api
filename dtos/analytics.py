@@ -20,6 +20,44 @@ class MetricOut(BaseModel):
     caveat: str | None = None
 
 
+class BandOut(BaseModel):
+    up_to: Decimal | None = None
+    """Inclusive ceiling. Null on the last band, which runs to infinity."""
+    label: str
+    tone: str
+    """good, watch or bad."""
+
+
+class ReadingOut(BaseModel):
+    """Where a block's headline figure sits on the scale the page judges it by.
+
+    The bands are the API's own thresholds, so the scale drawn and the signals
+    derived from it cannot disagree.
+    """
+
+    value: Decimal | None = None
+    format: str
+    """How the client prints the value and the ceilings: pct, days, decimal, bps, times."""
+    active: int | None = None
+    """Index of the band the value falls in. Null when the gate withheld the value."""
+    tone: str | None = None
+    bands: list[BandOut]
+
+
+class SignalOut(BaseModel):
+    """One line of the page's opening board."""
+
+    block: str
+    """The block it summarises, which the client scrolls to."""
+    label: str
+    tone: str
+    """good, watch, bad, or neutral when the figure is indistinguishable from chance."""
+    value: Decimal | None = None
+    format: str | None = None
+    eur: Decimal | None = None
+    """Signed from the reader's side: negative is money lost."""
+
+
 class InvestorGapResponse(BaseModel):
     twr: MetricOut
     """Cumulative time-weighted return — the strategy's performance."""
@@ -119,6 +157,7 @@ class RegularityResponse(BaseModel):
     """1/HHI: how many equal monthly purchases the real pattern amounts to."""
     day_of_month_spread: MetricOut
     median_day_of_month: int | None = None
+    reading: ReadingOut | None = None
     verdict: str
 
 
@@ -141,6 +180,7 @@ class DepositLagResponse(BaseModel):
     purchase_variation: MetricOut
     idle_cash_opportunity: Decimal | None = None
     """What the waiting cash gave up, taken from the counterfactual bridge."""
+    reading: ReadingOut | None = None
     verdict: str
 
 
@@ -235,6 +275,7 @@ class ConcentrationResponse(BaseModel):
     overlap: int
     dropped: list[AssetLabelOut] = []
     """Lines held but too thinly quoted to enter the covariance."""
+    reading: ReadingOut | None = None
     verdict: str
 
 
@@ -270,6 +311,7 @@ class FeesResponse(BaseModel):
     projection_note: str
     ter_note: str
     """Never conditional: brokerage is not the main cost of a buy-and-hold ETF."""
+    reading: ReadingOut | None = None
     verdict: str
 
 
@@ -296,6 +338,7 @@ class ExitsResponse(BaseModel):
     payoff_ratio: MetricOut
     episode_count: int
     episodes: list[EpisodeOut] = []
+    reading: ReadingOut | None = None
     verdict: str
 
 
@@ -358,6 +401,7 @@ class PlanResponse(BaseModel):
     rebalance_eur: Decimal | None = None
     under_invested_months: int
     under_in_down_months: int
+    reading: ReadingOut | None = None
     verdict: str
     error: str | None = None
     """Why a declared plan could not be scored, when that is the case."""
@@ -370,6 +414,8 @@ class InvestorAnalyticsResponse(BaseModel):
     benchmark_asset_key: str
     verdict: str = ""
     """The page's opening statement, written only from figures that passed their gate."""
+    signals: list[SignalOut] = []
+    """The same findings as a board, one line per block, what is off first."""
     investor_gap: InvestorGapResponse | None = None
     counterfactual: CounterfactualResponse | None = None
     execution: ExecutionResponse | None = None

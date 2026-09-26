@@ -162,10 +162,10 @@ def test_free_orders_are_not_counted_under_the_threshold():
     assert result.invested_below_threshold == Decimal("3600")
 
 
-def test_the_verdict_stops_advising_a_regrouping_it_calls_harmless():
+def test_a_harmless_load_reads_green_however_many_orders_sit_under_the_threshold():
     """0,50 € on 150 € orders is 17 bps a year — under the 25 the block targets.
 
-    It said "regroupe-les" all the same, one line under a tile stating the
+    It once said "regroupe-les" all the same, one line under a tile stating the
     annual load was fine, which is how a rounding error read as a problem.
     """
     from services.analytics.report import _fees_payload
@@ -176,11 +176,10 @@ def test_the_verdict_stops_advising_a_regrouping_it_calls_harmless():
     # Every order under the threshold, and none of it worth acting on.
     assert payload["orders_below_threshold"] == 24
     assert payload["avoidable"] is False
-    assert "Regroupe-les" not in payload["verdict"]
-    assert "pas un problème à corriger" in payload["verdict"]
+    assert payload["reading"]["tone"] == "good"
 
 
-def test_the_verdict_still_advises_a_regrouping_when_the_load_is_real():
+def test_a_real_load_is_flagged_by_its_band_not_by_advice():
     from services.analytics.report import _fees_payload
 
     # A flat 8 € per order, on sizes varied enough to establish that it is flat:
@@ -189,7 +188,9 @@ def test_the_verdict_still_advises_a_regrouping_when_the_load_is_real():
 
     assert payload["model"] == "fixe"
     assert payload["avoidable"] is True
-    assert "Regroupe-les" in payload["verdict"]
+    assert payload["reading"]["tone"] != "good"
+    # The page states figures; it no longer tells the reader what to do.
+    assert "Regroupe" not in payload["verdict"]
 
 
 def test_a_partly_filled_ledger_is_extrapolated_not_reported_as_a_floor():
@@ -327,10 +328,8 @@ def test_grouping_is_never_advised_under_a_percentage_tariff():
 
     assert payload["model"] == "proportionnel"
     assert payload["avoidable"] is False
-    # The word appears, but only inside the sentence refusing the advice.
-    assert "Regroupe-les" not in payload["verdict"]
-    assert "Regrouper tes ordres n'y changerait rien" in payload["verdict"]
-    assert "du montant, pas un forfait" in payload["verdict"]
+    assert "Regroupe" not in payload["verdict"]
+    assert "quelle que soit la taille de l'ordre" in payload["verdict"]
     # A threshold order size is not a smaller number here, it is a question that
     # does not apply — so none is offered.
     assert payload["threshold_order_size"]["value"] is None
@@ -343,7 +342,7 @@ def test_grouping_is_not_promised_when_the_tariff_shape_is_unknown():
 
     assert payload["model"] == "indéterminé"
     assert payload["avoidable"] is False
-    assert "Regroupe-les" not in payload["verdict"]
+    assert "Regroupe" not in payload["verdict"]
     assert "trop uniformes" in payload["verdict"]
 
 

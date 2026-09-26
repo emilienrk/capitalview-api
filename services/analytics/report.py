@@ -52,6 +52,18 @@ from services.analytics.execution import MIN_ORDERS, SOLID_ORDERS, analyse_execu
 from services.analytics.flows import is_auto_provision, stock_external_flows
 from services.analytics.labels import label_of, resolve_asset_labels
 from services.analytics.prices import fill_price_gaps, get_price_matrix
+from services.analytics.readings import (
+    ADHERENCE_BANDS,
+    BAD,
+    GOOD,
+    DEPOSIT_LAG_BANDS,
+    DISPOSITION_BANDS,
+    FEES_BANDS,
+    INDEPENDENT_BETS_BANDS,
+    build_signals,
+    reading,
+    regularity_bands,
+)
 from services.analytics.reliability import Metric
 from services.analytics.returns import annualize, time_weighted_return, xirr
 from services.analytics.timing import (
@@ -105,6 +117,7 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
             "days": 0,
             "benchmark_asset_key": benchmark_key,
             "verdict": build_global_verdict(blocks),
+            "signals": build_signals(blocks),
             **blocks,
         }
 
@@ -173,6 +186,7 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
         "days": span_days,
         "benchmark_asset_key": benchmark_key,
         "verdict": build_global_verdict(blocks),
+        "signals": build_signals(blocks),
         **blocks,
     }
 
@@ -406,6 +420,9 @@ def _regularity_payload(regularity) -> dict | None:
         "median_day_of_month": (
             regularity.median_day_of_month if spread["value"] is not None else None
         ),
+        "reading": reading(
+            deployment["value"], regularity_bands(regularity.purchase_count), "pct"
+        ),
         "verdict": _regularity_verdict(regularity, equivalent["value"], spread["value"]),
     }
 
@@ -414,32 +431,18 @@ def _regularity_verdict(regularity, equivalent, spread) -> str:
     if equivalent is None:
         return (
             f"{regularity.purchase_count} achats sur {regularity.months_total} mois : "
-            "pas encore de quoi dire quelle est ta stratégie réelle."
+            "pas encore de rythme mesurable."
         )
-
-    months = regularity.months_total
-    rounded = round(equivalent, 1)
     day_note = ""
-    if spread is not None and regularity.median_day_of_month is not None:
-        if spread <= Decimal("3"):
-            day_note = (
-                f" Tes ordres tombent autour du {regularity.median_day_of_month} du mois : "
-                "ça, c'est une habitude."
-            )
-        else:
-            day_note = " Le jour du mois, lui, est au hasard : tu achètes quand tu y penses."
-
-    if equivalent >= Decimal(months) * Decimal("0.8"):
-        return (
-            f"Tu as investi sur {regularity.months_invested} des {months} mois, et de façon "
-            f"régulière : ton capital équivaut à {rounded} achats mensuels égaux. "
-            f"C'est bien du DCA.{day_note}"
-        )
+    if (
+        spread is not None
+        and spread <= Decimal("3")
+        and regularity.median_day_of_month is not None
+    ):
+        day_note = f" Ordres autour du {regularity.median_day_of_month} du mois."
     return (
-        f"Tu penses peut-être faire du DCA. Sur {months} mois tu as investi "
-        f"{regularity.months_invested} fois, et la répartition de ton capital équivaut à "
-        f"{rounded} achats mensuels égaux, pas {months}. Tu fais des achats opportunistes."
-        f"{day_note}"
+        f"Achats sur {regularity.months_invested} des {regularity.months_total} mois, "
+        f"l'équivalent de {_fr(equivalent, 1)} mois pleins.{day_note}"
     )
 
 
@@ -498,45 +501,18 @@ def _deposit_lag_payload(lag, purchases, deposits, idle_opportunity) -> dict | N
         "deposit_variation": deposit_variation,
         "purchase_variation": purchase_variation,
         "idle_cash_opportunity": idle_opportunity,
-        "verdict": _deposit_lag_verdict(
-            median["value"],
-            deposit_variation["value"],
-            purchase_variation["value"],
-            idle_opportunity,
-            lag,
-        ),
+        "reading": reading(median["value"], DEPOSIT_LAG_BANDS, "days"),
+        "verdict": _deposit_lag_verdict(median["value"]),
     }
 
 
-def _deposit_lag_verdict(median, deposit_cv, purchase_cv, idle_opportunity, lag) -> str:
+def _deposit_lag_verdict(median) -> str:
     if median is None:
         return (
-            "Tes achats sont financés par des provisions automatiques : l'app crée le dépôt au "
-            "moment de l'achat, donc le délai entre ton virement réel et ton investissement n'est "
-            "pas mesurable. Ce n'est pas un défaut de ta part, c'est une limite de la donnée."
+            "Achats financés par des provisions automatiques : le délai entre le virement réel "
+            "et l'achat n'est pas mesurable."
         )
-
-    cost = ""
-    if idle_opportunity is not None and idle_opportunity != _ZERO:
-        cost = f" Ce délai t'a coûté {abs(round(idle_opportunity))} €."
-
-    if median <= Decimal("2"):
-        return (
-            f"Ton argent est investi en médiane en {round(median)} jour(s). Ton irrégularité "
-            "éventuelle est celle de ton épargne, pas de ta stratégie — ne cherche pas à corriger "
-            "le mauvais comportement."
-        )
-
-    rhythms = ""
-    if deposit_cv is not None and purchase_cv is not None and purchase_cv > deposit_cv:
-        rhythms = (
-            f" Tes dépôts sont plus réguliers que tes achats (variation {round(deposit_cv, 2)} "
-            f"contre {round(purchase_cv, 2)}) : ta discipline s'arrête au virement."
-        )
-
-    return (
-        f"Ton argent dort en médiane {round(median)} jours avant d'être investi.{rhythms}{cost}"
-    )
+    return f"La moitié de tes euros est investie en {round(median)} jour(s) ou moins."
 
 
 def _conditioning_payload(conditioning) -> dict | None:
@@ -644,33 +620,20 @@ def _density(conditioning) -> list[dict]:
 def _conditioning_verdict(conditioning, weighted) -> str:
     if weighted is None:
         return (
-            f"{conditioning.sample_size} achats : pas de quoi dire si tu achètes les creux ou "
-            "les sommets."
+            f"{conditioning.sample_size} achats : trop peu pour situer tes achats dans le cycle."
         )
-
     unconditional = conditioning.unconditional_drawdown
-    mine = f"{round(weighted * 100, 1)} %"
-    average = f"{round(unconditional * 100, 1)} %" if unconditional is not None else "—"
-    permutation = conditioning.permutation
-
-    if permutation is None or not permutation.is_detectable:
-        return (
-            f"Ton euro moyen entre quand le marché est à {mine} de son plus haut ; un jour moyen, "
-            f"c'est {average}. L'écart n'est pas distinguable du hasard : tes achats ne sont "
-            "conditionnés ni à la peur ni à l'euphorie. Ce n'est pas là qu'il faut chercher."
-        )
-    if unconditional is not None and weighted > unconditional:
-        return (
-            f"Ton euro moyen entre quand le marché est à {mine} de son plus haut. Un jour moyen, "
-            f"c'est {average}. Tu achètes plus haut que le hasard (p = "
-            f"{round(permutation.p_value, 3)}) : tu attends la confirmation, et la confirmation "
-            "se paie."
-        )
-    return (
-        f"Ton euro moyen entre quand le marché est à {mine} de son plus haut, contre {average} "
-        f"pour un jour au hasard (p = {round(permutation.p_value, 3)}) : tu achètes dans les "
-        "creux. Sur cette durée, c'est un constat, pas une garantie que ça continue."
+    average = _pct(unconditional) if unconditional is not None else "—"
+    base = (
+        f"L'euro moyen entre à {_pct(weighted)} du plus haut du marché, contre {average} "
+        "un jour au hasard"
     )
+    permutation = conditioning.permutation
+    if permutation is None or not permutation.is_detectable:
+        return f"{base} : écart indiscernable du hasard."
+    if unconditional is not None and weighted > unconditional:
+        return f"{base} : achats plus près des sommets que le hasard."
+    return f"{base} : achats plus bas que le hasard."
 
 
 def _bridge_payload(bridge) -> dict | None:
@@ -707,25 +670,23 @@ def _bridge_verdict(bridge) -> str:
     truncation = ""
     if bridge.truncated:
         truncation = (
-            f" La comparaison ne démarre qu'au {bridge.covered_from:%d/%m/%Y} : "
-            "l'indice de référence n'existait pas avant."
+            f" Comparaison à partir du {bridge.covered_from:%d/%m/%Y}, date de début de "
+            "l'indice."
         )
-
     drag = ""
     if bridge.idle_cash_opportunity is not None and bridge.idle_cash > _ZERO:
         drag = (
-            f" À côté de ça, {round(bridge.idle_cash)} € sont restés en liquidités : "
-            f"placés sur l'indice, ils auraient rapporté {round(bridge.idle_cash_opportunity)} €."
+            f" {round(bridge.idle_cash)} € restés en liquidités : "
+            f"{round(bridge.idle_cash_opportunity)} € de rendement manqué."
         )
-
     if cost < 0:
         return (
-            f"À capital investi égal, un robot qui aurait acheté l'indice tous les mois, sans "
-            f"jamais réfléchir, aurait {abs(cost)} € de plus que toi.{truncation}{drag}"
+            f"À capital investi égal, un robot achetant l'indice chaque mois aurait "
+            f"{abs(cost)} € de plus.{truncation}{drag}"
         )
     return (
-        f"À capital investi égal, tes décisions te rapportent {cost} € de plus qu'un robot qui "
-        f"aurait acheté l'indice tous les mois.{truncation}{drag}"
+        f"À capital investi égal, {cost} € de plus qu'un robot achetant l'indice chaque "
+        f"mois.{truncation}{drag}"
     )
 
 
@@ -784,26 +745,15 @@ def _execution_payload(execution, window) -> dict | None:
 
 def _execution_verdict(slippage_bps, cost_eur, orders: int, permutation) -> str:
     if slippage_bps is None or cost_eur is None:
-        return (
-            f"Seulement {orders} achats : pas de quoi dire si tu paies trop cher ou non."
-        )
-    if permutation is None or not permutation.is_detectable:
-        return (
-            f"Slippage moyen de {round(slippage_bps)} bps, mais le test de permutation ne le "
-            "distingue pas du hasard. Ton timing d'exécution ne te coûte rien et ne te rapporte "
-            "rien : ce n'est pas là qu'il faut chercher."
-        )
-    if slippage_bps > _ZERO:
-        return (
-            f"Sur {orders} achats, tu paies en moyenne {round(slippage_bps)} bps au-dessus du prix "
-            f"moyen du mois, soit {round(cost_eur)} €. Le test de permutation le classe au "
-            f"{round(permutation.percentile)}ᵉ centile : tu achètes systématiquement après la hausse."
-        )
-    return (
-        f"Sur {orders} achats, tu paies en moyenne {abs(round(slippage_bps))} bps sous le prix moyen "
-        f"du mois, soit {abs(round(cost_eur))} € gagnés. Sur cette durée, c'est autant de la chance "
-        "que du talent."
+        return f"Seulement {orders} achats : trop peu pour mesurer le prix payé."
+    side = "au-dessus" if slippage_bps > _ZERO else "en dessous"
+    base = (
+        f"{orders} achats, en moyenne {_pct(abs(slippage_bps) / Decimal('10000'), 2)} {side} "
+        f"du prix moyen du mois ({abs(round(cost_eur))} €)"
     )
+    if permutation is None or not permutation.is_detectable:
+        return f"{base} : écart indiscernable du hasard."
+    return f"{base} : écart significatif."
 
 
 def _benchmark_annual_return(
@@ -943,6 +893,7 @@ def _concentration_payload(concentration, labels) -> dict | None:
         "max_correlation": concentration.max_correlation if show else None,
         "overlap": concentration.overlap,
         "dropped": [label_of(labels, key).as_dict() for key in concentration.dropped],
+        "reading": reading(bets["value"], INDEPENDENT_BETS_BANDS, "decimal"),
         "verdict": _concentration_verdict(concentration, effective["value"], bets["value"]),
     }
 
@@ -953,25 +904,18 @@ def _concentration_verdict(concentration, effective, bets) -> str:
         if effective is None:
             return "Aucune ligne détenue à analyser."
         return (
-            f"Tu détiens {lines} ligne(s), soit {effective} position(s) effective(s) une fois "
-            "pondérées. Pas encore assez d'historique commun pour dire combien de paris "
-            "réellement distincts ça représente."
+            f"{lines} ligne(s), {_fr(effective, 1)} position(s) effective(s) : pas encore "
+            "assez d'historique commun pour compter les paris indépendants."
         )
     correlation_note = ""
     if concentration.max_correlation is not None and concentration.max_correlation > Decimal("0.9"):
         correlation_note = (
-            f" Tes deux lignes les plus proches corrèlent à {concentration.max_correlation}."
-        )
-    if bets < Decimal("1.5") and lines > 1:
-        return (
-            f"Tu détiens {lines} lignes. Pondérées, ça fait {effective} positions effectives. "
-            f"Statistiquement, ça fait {round(bets, 1)} pari indépendant : ta diversification est une "
-            f"illusion de comptage.{correlation_note} Ajouter un ETF de plus sur le même univers "
-            "ne changera rien ; seul un actif décorrélé le ferait."
+            f" Les deux lignes les plus proches corrèlent à "
+            f"{_fr(concentration.max_correlation, 2)}."
         )
     return (
-        f"Tu détiens {lines} lignes, soit {effective} positions effectives et {round(bets, 1)} "
-        f"paris réellement indépendants.{correlation_note}"
+        f"{lines} lignes, {_fr(effective, 1)} positions effectives, {_fr(bets, 1)} pari(s) "
+        f"indépendant(s).{correlation_note}"
     )
 
 
@@ -1021,6 +965,12 @@ def _fees_payload(fees) -> dict | None:
         "EUR",
         insufficient=too_few,
     )
+    annual = gated(
+        round(fees.annual_bps, 2) if fees.annual_bps is not None else None,
+        "bps",
+        insufficient=too_few,
+        estimated=True,
+    )
 
     return {
         # The three totals are extrapolated over the whole ledger; the per-order
@@ -1032,12 +982,7 @@ def _fees_payload(fees) -> dict | None:
             insufficient=too_few,
             estimated=True,
         ),
-        "annual_bps": gated(
-            round(fees.annual_bps, 2) if fees.annual_bps is not None else None,
-            "bps",
-            insufficient=too_few,
-            estimated=True,
-        ),
+        "annual_bps": annual,
         "threshold_order_size": threshold,
         # Whether the small orders are a problem worth acting on, or only a
         # calibration figure: below the target the annual load is a rounding
@@ -1068,6 +1013,7 @@ def _fees_payload(fees) -> dict | None:
             "C'est le coût d'opportunité de tes frais, pas les frais eux-mêmes."
         ),
         "ter_note": fees.ter_note,
+        "reading": reading(annual["value"], FEES_BANDS, "bps"),
         "verdict": _fees_verdict(fees, threshold["value"]),
     }
 
@@ -1078,77 +1024,55 @@ def _fees_verdict(fees, threshold) -> str:
         # charges none look identical from here, and a third reading is likelier
         # than either — the price keyed in already included the commission.
         return (
-            f"Aucun frais renseigné sur tes {fees.order_count} ordres. Soit ton courtier ne t'en "
-            "prend pas, soit ils sont déjà compris dans les prix que tu as saisis, soit ils "
-            "n'ont pas été renseignés — rien ici ne permet de trancher, donc rien n'est mesuré. "
-            + fees.ter_note
+            f"Aucun frais renseigné sur tes {fees.order_count} ordres : courtier gratuit, frais "
+            "déjà compris dans les prix saisis ou frais non saisis — rien n'est mesuré."
         )
     if fees.is_too_partial:
         return (
             f"Frais renseignés sur {fees.orders_with_fee} de tes {fees.order_count} ordres "
-            f"({round(fees.coverage * 100)} %). C'est trop peu pour que ces ordres représentent "
-            "les autres : rien n'est estimé plutôt qu'estimé au hasard."
+            f"({round(fees.coverage * 100)} %) : trop peu pour estimer les autres."
         )
     # An estimate has to say so before quoting a total, not after.
     partial = ""
     if fees.is_estimated:
         partial = (
-            f" Total estimé : seuls {fees.orders_with_fee} de tes {fees.order_count} ordres "
-            f"portent des frais renseignés ({round(fees.recorded_fees)} € saisis), les autres "
-            "sont comptés au même tarif."
+            f" Total estimé : frais saisis sur {fees.orders_with_fee} de tes "
+            f"{fees.order_count} ordres."
         )
 
     # A percentage tariff has no order size to fall under, so the whole
     # threshold sentence is skipped rather than reworded around a null.
     if fees.model is FeeModel.PROPORTIONAL and fees.fee_rate is not None:
-        rate = f"{round(fees.fee_rate * 100, 3)} %".replace(".", ",")
         load = (
-            f" Ta charge annuelle est de {round(fees.annual_bps)} bps."
+            f" Charge annuelle : {_pct(fees.annual_bps / Decimal('10000'), 2)}."
             if fees.annual_bps is not None
             else ""
         )
         return (
-            f"Ton courtier te prend {rate} du montant, pas un forfait par ordre. Regrouper tes "
-            f"ordres n'y changerait rien : le coût suit les euros, pas le nombre d'ordres. Le "
-            f"seul levier est le tarif lui-même.{load}{partial}"
+            f"Commission proportionnelle : {_pct(fees.fee_rate, 3)} du montant, quelle que "
+            f"soit la taille de l'ordre.{load}{partial}"
         )
 
     if threshold is None:
-        return f"{fees.order_count} ordres : trop peu pour dire si tes frais sont un sujet."
+        return f"{fees.order_count} ordres : trop peu pour mesurer tes frais."
 
+    head = (
+        f"{_fr(fees.average_fee, 2)} € par ordre facturé. Sous {round(threshold)} € d'ordre, "
+        f"les frais d'entrée dépassent {_pct(TARGET_BPS / Decimal('10000'), 2)}"
+    )
     if fees.orders_below_threshold == 0:
-        return (
-            f"Ton courtier te prend {round(fees.average_fee, 2)} € par ordre facturé. En dessous "
-            f"de {round(threshold)} € par ordre tu dépasserais 25 bps de frais d'entrée : aucun "
-            f"de tes ordres facturés n'est sous ce seuil.{partial}"
-        )
+        return f"{head} : aucun de tes ordres facturés n'y est.{partial}"
 
     detail = (
-        f"Ton courtier te prend en moyenne {round(fees.average_fee, 2)} € par ordre facturé. En "
-        f"dessous de {round(threshold)} € par ordre, tu dépasses 25 bps de frais d'entrée. "
-        f"{fees.orders_below_threshold} de tes {fees.order_count} ordres sont sous ce seuil — ils "
-        f"t'ont coûté {round(fees.cost_below_threshold)} € pour "
+        f"{head} : {fees.orders_below_threshold} de tes {fees.order_count} ordres y sont, "
+        f"pour {round(fees.cost_below_threshold)} € de frais sur "
         f"{round(fees.invested_below_threshold)} € investis."
     )
-    # "Group your orders" is advice, and it must not contradict the tile above
-    # it: below the target the annual load is a rounding error, however many
-    # orders sit under a threshold derived from the user's own average fee.
-    if fees.annual_bps is not None and fees.annual_bps > TARGET_BPS and fees.grouping_helps:
-        return f"{detail} Regroupe-les.{partial}"
-    if fees.annual_bps is not None and fees.annual_bps > TARGET_BPS:
-        # Above the target, but the tariff's shape is not established enough to
-        # promise that grouping would help.
-        return (
-            f"{detail} Ta charge annuelle dépasse les 25 bps visés "
-            f"({round(fees.annual_bps)} bps), mais tes ordres sont trop uniformes pour dire si "
-            f"ton courtier facture au forfait ou au pourcentage — et donc si les regrouper "
-            f"changerait quelque chose.{partial}"
+    if fees.annual_bps is not None and fees.annual_bps > TARGET_BPS and not fees.grouping_helps:
+        detail += (
+            " Ordres trop uniformes pour dire si la commission est fixe ou proportionnelle."
         )
-    return (
-        f"{detail} Mais ta charge annuelle reste sous les 25 bps visés "
-        f"({round(fees.annual_bps)} bps) : c'est un calibrage, pas un problème à "
-        f"corriger.{partial}"
-    )
+    return f"{detail}{partial}"
 
 
 def _exits_payload(exits) -> dict | None:
@@ -1223,6 +1147,7 @@ def _exits_payload(exits) -> dict | None:
             if exits.has_episodes
             else []
         ),
+        "reading": reading(ratio["value"], DISPOSITION_BANDS, "times"),
         "verdict": _exits_verdict(exits, ratio["value"]),
     }
 
@@ -1230,39 +1155,36 @@ def _exits_payload(exits) -> dict | None:
 def _exits_verdict(exits, ratio) -> str:
     if ratio is None:
         return (
-            f"Tu as vendu {exits.realisations} fois. C'est trop peu pour mesurer quoi que ce "
-            "soit — et c'est en soi l'information : tu es un accumulateur, pas un arbitragiste. "
-            "L'effet de disposition n'est pas ton problème, les métriques d'apport le sont."
+            f"{exits.realisations} occasion(s) de vente : trop peu pour mesurer. Profil "
+            "d'accumulateur."
         )
 
     cost = ""
     if exits.cost_eur is not None and exits.measured_sales:
         if exits.cost_eur > _ZERO:
             cost = (
-                f" Sur {exits.measured_sales} ventes évaluables à un an, ce que tu as vendu a fait "
-                f"mieux que l'indice ensuite : {round(exits.cost_eur)} € abandonnés."
+                f" Sur {exits.measured_sales} ventes évaluables à un an, les lignes vendues ont "
+                f"ensuite fait {round(exits.cost_eur)} € de mieux que l'indice."
             )
         else:
             cost = (
-                f" Sur {exits.measured_sales} ventes évaluables à un an, sortir t'a évité "
-                f"{abs(round(exits.cost_eur))} € de moins-value par rapport à l'indice."
+                f" Sur {exits.measured_sales} ventes évaluables à un an, les lignes vendues ont "
+                f"ensuite fait {abs(round(exits.cost_eur))} € de moins que l'indice."
             )
 
     episodes = ""
     if exits.has_episodes and exits.hit_rate is not None and exits.payoff_ratio is not None:
         episodes = (
-            f" Tu as raison {round(exits.hit_rate * 100)} % du temps, et tes gagnantes rapportent "
-            f"{round(exits.payoff_ratio, 1)} fois ce que tes perdantes coûtent."
+            f" Taux de réussite {round(exits.hit_rate * 100)} %, gain moyen égal à "
+            f"{_fr(exits.payoff_ratio, 1)} fois la perte moyenne."
         )
 
     if ratio > Decimal("1"):
         return (
-            f"Tu réalises tes gains {round(ratio, 1)} fois plus volontiers que tes pertes : tu "
-            f"coupes ce qui monte et gardes ce qui baisse.{cost}{episodes}"
+            f"Gains vendus {_fr(ratio, 1)} fois plus volontiers que les pertes.{cost}{episodes}"
         )
     return (
-        f"Tu ne coupes pas tes gains plus vite que tes pertes (ratio {round(ratio, 1)}).{cost}"
-        f"{episodes}"
+        f"Gains pas vendus plus vite que les pertes (rapport {_fr(ratio, 1)}).{cost}{episodes}"
     )
 
 
@@ -1404,6 +1326,7 @@ def _plan_payload(plan, error: str | None, labels) -> dict | None:
         "rebalance_eur": round(plan.rebalance_eur, 2) if plan.rebalance_eur is not None else None,
         "under_invested_months": plan.under_invested_months,
         "under_in_down_months": plan.under_in_down_months,
+        "reading": reading(adherence["value"], ADHERENCE_BANDS, "pct"),
         "verdict": _plan_verdict(plan, adherence["value"]),
         "error": None,
     }
@@ -1412,14 +1335,14 @@ def _plan_payload(plan, error: str | None, labels) -> dict | None:
 def _plan_verdict(plan, adherence) -> str:
     if adherence is None:
         return (
-            f"Ton plan court depuis {plan.since:%m/%Y} : pas encore assez de mois complets pour "
-            "dire si tu le tiens."
+            f"Plan en cours depuis {plan.since:%m/%Y} : pas encore assez de mois complets pour "
+            "le mesurer."
         )
 
     drift = ""
     if plan.drift_l1 is not None and plan.drift_l1 > Decimal("10") and plan.rebalance_eur:
         drift = (
-            f" Ton allocation dérive de {round(plan.drift_l1)} points de ta cible : "
+            f" Allocation à {round(plan.drift_l1)} points de la cible, soit "
             f"{round(plan.rebalance_eur)} € à rééquilibrer."
         )
 
@@ -1435,31 +1358,20 @@ def _plan_verdict(plan, adherence) -> str:
         and current.flow_drift_l1 > Decimal("10")
     ):
         reallocation = (
-            f" Depuis {current.since:%m/%Y} tes achats s'écartent de "
-            f"{round(current.flow_drift_l1)} points de la répartition que tu as déclarée pour "
-            "cette période : le montant a changé, la répartition non."
+            f" Depuis {current.since:%m/%Y}, achats à {round(current.flow_drift_l1)} points de "
+            "la répartition déclarée pour cette période."
         )
 
     timing = ""
     if plan.under_invested_months and plan.under_in_down_months:
         share = round(plan.under_in_down_months * 100 / plan.under_invested_months)
         if share >= 50:
-            timing = (
-                f" Et les mois où tu as sous-investi sont à {share} % des mois de baisse du "
-                "marché."
-            )
+            timing = f" {share} % des mois sous-investis sont des mois de baisse du marché."
 
-    promise = _plan_promise(plan)
-    if adherence >= Decimal("0.98"):
-        return (
-            f"{promise} Tu as investi {round(plan.total_invested)} € en "
-            f"{len(plan.months)} mois : tu le tiens.{reallocation}{drift}"
-        )
-    gap = round((Decimal("1") - adherence) * 100)
     return (
-        f"{promise} Tu as investi {round(plan.total_invested)} € en {len(plan.months)} mois, "
-        f"soit {round(plan.average_monthly)} €/mois réels — {gap} % sous ton propre "
-        f"plan.{reallocation}{drift}{timing}"
+        f"{_plan_promise(plan)} {round(plan.total_invested)} € investis en "
+        f"{len(plan.months)} mois, soit {round(adherence * 100)} % du plan."
+        f"{reallocation}{drift}{timing}"
     )
 
 
@@ -1543,31 +1455,36 @@ def build_global_verdict(blocks: dict) -> str:
             )
         )
 
+    # Judged by the same bands the page draws, so the sentence cannot contradict
+    # the scale under the figure.
     regularity = blocks.get("regularity")
-    if regularity and regularity["equivalent_monthly_purchases"]["value"] is not None:
+    if regularity and regularity["reading"]["tone"] == BAD:
         equivalent = regularity["equivalent_monthly_purchases"]["value"]
-        months = regularity["months_total"]
-        if equivalent < Decimal(months) * Decimal("0.6"):
-            structural.append(
-                f"Ta répartition dans le temps équivaut à {round(equivalent, 1)} achats mensuels "
-                f"égaux sur {months} mois : ce que tu appelles régularité n'en est pas."
-            )
+        structural.append(
+            f"Ta répartition dans le temps équivaut à {_fr(equivalent, 1)} mois pleins sur "
+            f"{regularity['months_total']}."
+        )
 
     lag = blocks.get("deposit_lag")
-    if lag and lag["median_days"]["value"] is not None and lag["median_days"]["value"] > Decimal("7"):
+    if lag and lag["reading"]["tone"] == BAD:
         structural.append(
             f"Ton argent attend en médiane {round(lag['median_days']['value'])} jours entre le "
             "virement et l'investissement."
         )
 
     fees = blocks.get("fees")
-    if fees and fees["threshold_order_size"]["value"] is not None and fees["orders_below_threshold"]:
+    if (
+        fees
+        and fees["reading"]["tone"] not in (None, GOOD)
+        and fees["threshold_order_size"]["value"] is not None
+        and fees["orders_below_threshold"]
+    ):
         costed.append(
             (
                 fees["cost_below_threshold"],
                 f"{fees['orders_below_threshold']} de tes ordres sont sous le seuil de "
                 f"{round(fees['threshold_order_size']['value'])} € où les frais dépassent "
-                f"25 bps : {round(fees['cost_below_threshold'])} € de frais évitables.",
+                f"0,25 % : {round(fees['cost_below_threshold'])} € de frais.",
             )
         )
 
@@ -1598,29 +1515,23 @@ def build_global_verdict(blocks: dict) -> str:
         bets = concentration["independent_bets"]["value"]
         if bets < Decimal("1.5") and concentration["lines"] > 1:
             structural.append(
-                f"Tes {concentration['lines']} lignes ne font que {bets} pari indépendant : ta "
-                "diversification est une illusion de comptage."
+                f"Tes {concentration['lines']} lignes ne font que {_fr(bets, 1)} pari "
+                "indépendant."
             )
 
     conditioning = blocks.get("market_conditioning")
-    if conditioning and conditioning["weighted_drawdown"]["value"] is not None:
-        if conditioning["is_detectable"]:
-            structural.append(conditioning["verdict"].split(". ", 1)[-1])
-        else:
-            structural.append(
-                "Le moment de tes achats dans le cycle de marché n'est pas distinguable du "
-                "hasard : ce n'est pas là qu'il faut chercher."
-            )
+    if (
+        conditioning
+        and conditioning["weighted_drawdown"]["value"] is not None
+        and conditioning["is_detectable"]
+    ):
+        structural.append(conditioning["verdict"])
 
     costed.sort(key=lambda item: item[0], reverse=True)
     sentences = [text for _, text in costed[:3]] + structural[:2]
 
     if not sentences:
-        return (
-            "Pas encore assez d'historique pour dire quoi que ce soit d'utile sur ton "
-            "comportement. Reviens quand tu auras quelques mois d'achats derrière toi — la page "
-            "préfère se taire que d'inventer un verdict."
-        )
+        return "Pas encore assez d'historique pour dire quoi que ce soit sur ton comportement."
     return " ".join(sentences[:5])
 
 
@@ -1639,20 +1550,22 @@ def _verdict(gap, gap_eur, auto_share: Decimal) -> str:
         return (
             "Pas encore assez d'historique pour séparer ta performance de celle de ta stratégie."
         )
+    provision_note = ""
     if auto_share > Decimal("0.30"):
         provision_note = (
-            f" {int(auto_share * 100)} % de tes dépôts sont des provisions automatiques : "
-            "la date réelle d'entrée de ton argent est inconnue, ce chiffre est à lire avec réserve."
+            f" {int(auto_share * 100)} % de dépôts automatiques : date d'entrée réelle de "
+            "l'argent inconnue."
         )
-    else:
-        provision_note = ""
-    if gap < _ZERO:
-        return (
-            f"Ta stratégie fait mieux que toi. L'écart, sur ton capital moyen, représente "
-            f"{round(gap_eur)} €. Il ne vient pas de tes choix d'actifs mais du moment où "
-            f"tu mets l'argent.{provision_note}"
-        )
+    side = "moins" if gap < _ZERO else "plus"
     return (
-        f"Le moment où tu investis t'a rapporté {round(gap_eur)} € par rapport à ta propre "
-        f"stratégie. Sur cette durée, c'est autant de la chance que du talent.{provision_note}"
+        f"Tes euros ont rendu {side} que ta stratégie : {abs(round(gap_eur))} € d'écart sur "
+        f"ton capital moyen, dû au moment des versements.{provision_note}"
     )
+
+
+def _fr(value, digits: int) -> str:
+    return f"{Decimal(value):.{digits}f}".replace(".", ",")
+
+
+def _pct(ratio, digits: int = 1) -> str:
+    return f"{_fr(Decimal(ratio) * 100, digits)} %"
