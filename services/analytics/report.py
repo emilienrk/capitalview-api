@@ -1049,7 +1049,7 @@ def _fees_verdict(fees, threshold) -> str:
             else ""
         )
         return (
-            f"Commission proportionnelle : {_pct(fees.fee_rate, 3)} du montant, quelle que "
+            f"Commission proportionnelle : {_pct(fees.fee_rate, 2)} du montant, quelle que "
             f"soit la taille de l'ordre.{load}{partial}"
         )
 

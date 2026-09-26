@@ -145,7 +145,7 @@ def build_signals(blocks: dict) -> list[dict]:
         else:
             add("execution", "Prix d'achat", BAD if cost > _ZERO else GOOD, eur=-cost)
 
-    from_reading("regularity", "Régularité", blocks.get("regularity"))
+    from_reading("regularity", "Irrégularité", blocks.get("regularity"))
     from_reading("deposit_lag", "Délai virement → achat", blocks.get("deposit_lag"))
 
     conditioning = blocks.get("market_conditioning")
@@ -158,11 +158,10 @@ def build_signals(blocks: dict) -> list[dict]:
             tone = GOOD if mine < average else BAD
         add("market_conditioning", "Moment dans le marché", tone, value=mine, fmt="pct")
 
-    from_reading("concentration", "Diversification", blocks.get("concentration"))
-
-    fees = blocks.get("fees")
-    total = fees["total_fees"]["value"] if fees else None
-    from_reading("fees", "Frais de courtage", fees, eur=-total if total is not None else None)
+    from_reading("concentration", "Paris indépendants", blocks.get("concentration"))
+    # The annual load, not the euros paid: every portfolio pays fees, and a green
+    # line reading "−59 €" says the opposite of what it means.
+    from_reading("fees", "Frais de courtage", blocks.get("fees"))
 
     exits = blocks.get("exits")
     exit_cost = exits["cost_eur"]["value"] if exits else None
