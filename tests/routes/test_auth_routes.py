@@ -428,3 +428,16 @@ def test_login_ignores_email_case(session):
     r = client.post("/auth/login", json={"email": "CLAIRE.DUPONT@example.com", "password": "wrong"})
     assert r.status_code == 401
     assert r.json()["detail"] == "Email ou mot de passe incorrect"
+
+
+def test_register_accepts_a_passphrase_and_refuses_a_short_plain_password(session):
+    client = TestClient(app)
+
+    passphrase = {"username": "phraseuser", "email": "phrase@example.com", "password": "cheval agrafe batterie correct"}
+    assert client.post("/auth/register", json=passphrase).status_code == 201
+
+    short = {"username": "shortuser", "email": "short@example.com", "password": "chevalagrafe"}
+    r = client.post("/auth/register", json=short)
+    assert r.status_code == 422
+    message = r.json()["detail"][0]["msg"]
+    assert "une majuscule" in message and "16 caractères" in message

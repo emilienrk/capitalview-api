@@ -6,16 +6,30 @@ from datetime import datetime
 from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
 
 
+PASSPHRASE_MIN_LENGTH = 16
+
+_MIX_RULES = (
+    (r'[A-Z]', 'une majuscule'),
+    (r'[a-z]', 'une minuscule'),
+    (r'\d', 'un chiffre'),
+    (r'[^A-Za-z0-9]', 'un caractère spécial'),
+)
+
+
 def validate_password_strength(v: str) -> str:
-    """Enforce password complexity rules (shared by register/change/recover)."""
-    if not re.search(r'[A-Z]', v):
-        raise ValueError('Le mot de passe doit contenir au moins une majuscule')
-    if not re.search(r'[a-z]', v):
-        raise ValueError('Le mot de passe doit contenir au moins une minuscule')
-    if not re.search(r'\d', v):
-        raise ValueError('Le mot de passe doit contenir au moins un chiffre')
-    if not re.search(r'[^A-Za-z0-9]', v):
-        raise ValueError('Le mot de passe doit contenir au moins un caractère spécial')
+    """Accept a long passphrase as is; a shorter password must mix every kind of character.
+
+    Shared by register/change/recover. Length is what resists an offline attack
+    on a stolen database, so four plain words pass where a mix rule would refuse them.
+    """
+    if len(v) >= PASSPHRASE_MIN_LENGTH:
+        return v
+    missing = [label for pattern, label in _MIX_RULES if not re.search(pattern, v)]
+    if missing:
+        raise ValueError(
+            f"Ajoutez {', '.join(missing)} au mot de passe, "
+            f"ou allongez-le à {PASSPHRASE_MIN_LENGTH} caractères ou plus"
+        )
     return v
 
 
