@@ -327,3 +327,25 @@ def test_a_period_missing_its_month_is_named_in_the_error(session, master_key):
 
     assert r.status_code == 422
     assert "Période 2" in r.json()["detail"]
+
+
+def test_ui_look_defaults_persists_and_rejects_junk(session, master_key):
+    client = TestClient(app)
+
+    data = client.get("/settings").json()
+    assert data["ui_style"] == "current"
+    assert data["ui_palette"] == "current"
+
+    r = client.put("/settings", json={"ui_style": "editorial", "ui_palette": "encre"})
+    assert r.status_code == 200
+    data = client.get("/settings").json()
+    assert data["ui_style"] == "editorial"
+    assert data["ui_palette"] == "encre"
+
+    # Changing one keeps the other.
+    client.put("/settings", json={"ui_palette": "prune"})
+    data = client.get("/settings").json()
+    assert data["ui_style"] == "editorial"
+    assert data["ui_palette"] == "prune"
+
+    assert client.put("/settings", json={"ui_style": "<script>"}).status_code == 422

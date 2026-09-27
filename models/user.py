@@ -77,6 +77,9 @@ class UserSettings(SQLModel, table=True):
     user_uuid_bidx: str = Field(index=True, unique=True)
     objectives_enc: str | None = Field(sa_column=Column(TEXT))
     theme: str = Field(default="system", nullable=False)
+    # Look chosen by the user; ids are the web client's ("current" = default look).
+    ui_style: str = Field(default="current", nullable=False)
+    ui_palette: str = Field(default="current", nullable=False)
     # IANA timezone for date display (None = follow the browser)
     display_timezone: str | None = Field(default=None, nullable=True)
     # BCP 47 locale driving date/number formatting (None = app default, fr-FR)

@@ -70,6 +70,8 @@ def _map_settings_to_response(
     return UserSettingsResponse(
         objectives=objectives,
         theme=settings.theme,
+        ui_style=settings.ui_style,
+        ui_palette=settings.ui_palette,
         display_timezone=settings.display_timezone,
         display_locale=settings.display_locale,
         flat_tax_rate=float(settings.flat_tax_rate),
@@ -167,6 +169,12 @@ def update_settings(
 
     if data.theme is not None:
         settings.theme = data.theme
+
+    if data.ui_style is not None:
+        settings.ui_style = data.ui_style
+
+    if data.ui_palette is not None:
+        settings.ui_palette = data.ui_palette
 
     if "display_timezone" in data.model_fields_set:
         tz = data.display_timezone

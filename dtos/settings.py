@@ -54,6 +54,10 @@ class UserSettingsUpdate(BaseModel):
     """Update user settings (all fields optional)."""
     objectives: str | None = None
     theme: str | None = None
+    # Ids belong to the web client, which falls back to the default look on an
+    # unknown one; the API only keeps them short and slug-shaped.
+    ui_style: str | None = Field(None, max_length=32, pattern=r"^[a-z][a-z-]*$")
+    ui_palette: str | None = Field(None, max_length=32, pattern=r"^[a-z][a-z-]*$")
     display_timezone: str | None = None  # IANA name; None = follow the browser
     display_locale: str | None = None  # BCP 47 tag; None = app default (fr-FR)
     flat_tax_rate: float | None = Field(None, ge=0, le=1)
@@ -83,6 +87,8 @@ class UserSettingsResponse(BaseModel):
 
     objectives: str | None = None
     theme: str = "system"
+    ui_style: str = "current"
+    ui_palette: str = "current"
     display_timezone: str | None = None
     display_locale: str | None = None
     flat_tax_rate: float = 0.30
