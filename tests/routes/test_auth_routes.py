@@ -410,3 +410,21 @@ def test_legacy_login_lazy_migration(session):
     r2 = client.post("/auth/login", json=login, headers={"X-Return-Master-Key": "true"})
     assert r2.status_code == 200
     assert r2.json()["master_key"] == legacy_mk
+
+
+def test_login_ignores_email_case(session):
+    from sqlmodel import select
+    client = TestClient(app)
+
+    payload = {"username": "caseuser", "email": "Claire.Dupont@Example.com", "password": "StrongCase1!"}
+    assert client.post("/auth/register", json=payload).status_code == 201
+
+    user = session.exec(select(User).where(User.username == "caseuser")).first()
+    assert user.email == "claire.dupont@example.com"
+
+    r = client.post("/auth/login", json={"email": "claire.dupont@example.com", "password": "StrongCase1!"})
+    assert r.status_code == 200
+
+    r = client.post("/auth/login", json={"email": "CLAIRE.DUPONT@example.com", "password": "wrong"})
+    assert r.status_code == 401
+    assert r.json()["detail"] == "Email ou mot de passe incorrect"

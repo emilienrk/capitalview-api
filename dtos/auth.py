@@ -19,12 +19,18 @@ def validate_password_strength(v: str) -> str:
     return v
 
 
+def normalize_email(v: str) -> str:
+    """Store and look up emails in lowercase so login ignores case."""
+    return v.strip().lower()
+
+
 class RegisterRequest(BaseModel):
     """User registration request."""
     username: str = Field(..., min_length=3, max_length=50)
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=100)
 
+    _normalize_email = field_validator('email')(normalize_email)
     _validate_password = field_validator('password')(validate_password_strength)
 
     @field_validator('username')
@@ -40,6 +46,8 @@ class LoginRequest(BaseModel):
     """User login request."""
     email: EmailStr
     password: str
+
+    _normalize_email = field_validator('email')(normalize_email)
 
 
 class TokenResponse(BaseModel):
@@ -81,6 +89,8 @@ class MessageResponse(BaseModel):
 class EmailUpdateRequest(BaseModel):
     """Email update request."""
     email: EmailStr
+
+    _normalize_email = field_validator('email')(normalize_email)
 
 
 class UsernameUpdateRequest(BaseModel):
@@ -134,6 +144,7 @@ class RecoverRequest(BaseModel):
     new_password: str = Field(..., min_length=8, max_length=100)
     totp_code: str | None = None
 
+    _normalize_email = field_validator('email')(normalize_email)
     _validate_password = field_validator('new_password')(validate_password_strength)
 
 
