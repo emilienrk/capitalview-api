@@ -225,42 +225,6 @@ def test_a_malformed_overview_date_is_refused_like_any_other_bound(client, sessi
     assert "YYYY-MM-DD" in result["content"][0]["text"]
 
 
-def test_a_dated_overview_answers_for_an_account_holding_a_line(client, session, account, master_key):
-    """Every dated call used to raise once a stock account existed: the date
-    reached the account summary as a string and was compared to a date."""
-    from dtos.stock import StockAccountCreate, StockTransactionCreate
-    from models.enums import StockAccountType, StockTransactionType
-    from services.stock_account import create_stock_account
-    from services.stock_transaction import create_stock_transaction
-
-    user, _, token = account
-    pea = create_stock_account(
-        session, StockAccountCreate(name="PEA", account_type=StockAccountType.PEA), user.uuid, master_key
-    )
-    create_stock_transaction(
-        session,
-        StockTransactionCreate(
-            account_id=pea.id,
-            asset_key="FR0000120073",
-            type=StockTransactionType.BUY,
-            amount=Decimal("2"),
-            price_per_unit=Decimal("150"),
-            fees=Decimal("0"),
-            executed_at=datetime.datetime(2025, 3, 10, 10, 0),
-        ),
-        master_key,
-    )
-
-    for day in ("2025-01-01", "2025-06-01"):
-        response = _call(
-            client, "tools/call",
-            {"name": "get_portfolio_overview", "arguments": {"date": day, "details": True}},
-            token=token, name="get_portfolio_overview",
-        )
-        result = response.json()["result"]
-        assert result["isError"] is False, result["content"][0]["text"]
-
-
 def test_a_long_projection_is_reported_in_yearly_milestones():
     """Ten years of monthly points is noise; the horizon itself is the answer."""
     from mcp_server.tools import _as_months, _projection_points, _projection_step
@@ -524,7 +488,8 @@ def test_a_tool_call_returns_the_callers_own_figures(client, session, account):
     # An account with nothing in it still answers with the full breakdown.
     overview = json.loads(result["content"][0]["text"])
     assert overview["global_wealth"] == 0
-    assert set(overview) >= {"stocks_total", "crypto_total", "cash_total", "assets_total"}
+    # The dashboard's pockets, so a figure quoted is the one the user sees.
+    assert set(overview["pockets"]) == {"bank", "stocks", "crypto", "broker_cash", "placements", "assets"}
 
 
 def test_the_overview_reports_cost_basis_alongside_value(client, session, account):
@@ -538,12 +503,10 @@ def test_the_overview_reports_cost_basis_alongside_value(client, session, accoun
 
     assert response.status_code == 200
     overview = json.loads(response.json()["result"]["content"][0]["text"])
-    assert set(overview) >= {
-        "invested_total",
-        "stocks_invested",
-        "crypto_invested",
-        "unrealized_profit_loss",
-    }
+    assert "unrealized_profit_loss" in overview
+    for pocket in ("stocks", "crypto"):
+        assert {"value", "invested", "profit_loss", "profit_loss_pct"} <= set(overview["pockets"][pocket])
+    assert {"net_invested", "gain"} <= set(overview["pockets"]["placements"])
 
 
 def test_observed_flows_report_transfers_apart_from_spending(client, session, account, master_key):

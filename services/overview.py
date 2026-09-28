@@ -20,11 +20,12 @@ never AI-specific.
 """
 
 import datetime
-import json
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 from sqlmodel import Session, select
 
+from dtos.crypto import FIAT_ASSET_KEYS
 from models import CryptoAccount, StockAccount
 from models.enums import FlowType
 from services.asset import (
@@ -37,6 +38,7 @@ from services.bank import (
     get_all_bank_accounts_snapshot_for_date,
     get_user_bank_accounts,
 )
+from services.banking.real_cashflow import stale_balances
 from services.cashflow import get_user_cashflow_balance
 from services.crypto_account import get_all_crypto_accounts_history, get_user_crypto_accounts
 from services.crypto_transaction import (
@@ -46,6 +48,7 @@ from services.crypto_transaction import (
     get_crypto_account_summary,
 )
 from services.encryption import decrypt_data, hash_index
+from services.market import latest_price_dates
 from services.placement import build_timeline, get_all_placements_history, get_user_placements
 from services.settings import get_or_create_settings
 from services.stock_account import get_all_stock_accounts_history, get_user_stock_accounts
@@ -193,227 +196,372 @@ def _opt_float(value: Decimal | None) -> float | None:
     return float(value) if value is not None else None
 
 
-def _as_position(position) -> dict:
+def _pct(part: Decimal | None, whole: Decimal | None) -> float | None:
+    """*part* as a percentage of *whole*, None when either is missing or whole is not positive."""
+    if part is None or whole is None or whole <= 0:
+        return None
+    return round(float(part / whole * 100), 2)
+
+
+@dataclass
+class _Pocket:
+    """A stock or crypto pocket: what its lines are worth, the cash idle beside
+    them, and what they cost."""
+    holdings: Decimal = Decimal(0)
+    cash: Decimal = Decimal(0)
+    invested: Decimal = Decimal(0)
+    realized: Decimal = Decimal(0)
+    dividends: Decimal = Decimal(0)
+    fees: Decimal = Decimal(0)
+    # One entry per account that could be priced.
+    priced_profit_loss: list[Decimal] = field(default_factory=list)
+    # (account detail, its held lines), completed once the pocket's total is known.
+    accounts: list[tuple[dict, list]] = field(default_factory=list)
+    held_keys: set[str] = field(default_factory=set)
+
+    @property
+    def profit_loss(self) -> Decimal | None:
+        # Summed from the accounts rather than derived as value minus cost, and
+        # None rather than zero when no account could be priced: zero reads as flat.
+        return sum(self.priced_profit_loss) if self.priced_profit_loss else None
+
+    def summary(self, total: Decimal) -> dict:
+        return {
+            "value": float(self.holdings),
+            "invested": float(self.invested),
+            "profit_loss": _opt_float(self.profit_loss),
+            "profit_loss_pct": _pct(self.profit_loss, self.invested),
+            "realized_profit_loss": float(self.realized),
+            "dividends": float(self.dividends),
+            "fees": float(self.fees),
+            "share_pct": _pct(self.holdings, total),
+        }
+
+    def account_details(self) -> list[dict]:
+        return [
+            {**detail, "positions": [_as_position(line, self.holdings) for line in lines]}
+            for detail, lines in self.accounts
+        ]
+
+
+def _as_position(position, pocket_holdings: Decimal) -> dict:
     """A held line with both what it is worth and what it cost.
 
     Without the cost basis a reader can say how much you hold but not whether
-    you are up on it, which is most of what anyone wants to know.
+    you are up on it, which is most of what anyone wants to know. The name goes
+    with the ticker: "PUST.PA" tells a reader nothing about what is held.
     """
     return {
         "symbol": position.symbol,
-        "amount": float(position.total_amount),
-        "current_value": float(position.current_value) if position.current_value else 0.0,
-        "total_invested": float(position.total_invested),
+        "name": (position.name or "").strip() or None,
+        "quantity": float(position.total_amount),
+        "value": _opt_float(position.current_value),
+        "invested": float(position.total_invested),
         "average_buy_price": float(position.average_buy_price),
         "profit_loss": _opt_float(position.profit_loss),
-        "profit_loss_percentage": _opt_float(position.profit_loss_percentage),
+        "profit_loss_pct": _opt_float(position.profit_loss_percentage),
+        # Of every line in the pocket, across its accounts.
+        "weight_pct": _pct(position.current_value, pocket_holdings),
     }
 
 
+def _read_pocket(
+    session: Session,
+    models: list,
+    master_key: str,
+    read_transactions,
+    summarise,
+    as_of: datetime.date | None,
+    details: bool,
+    account_type=None,
+) -> _Pocket:
+    pocket = _Pocket()
+    for account in models:
+        summary = summarise(session, read_transactions(session, account.uuid, master_key), as_of=as_of, db_only=True)
+        holdings = summary.current_value or Decimal(0)
+        pocket.holdings += holdings
+        pocket.cash += summary.cash_balance
+        pocket.invested += summary.total_invested
+        pocket.realized += summary.realized_profit_loss or Decimal(0)
+        pocket.dividends += summary.total_dividends or Decimal(0)
+        pocket.fees += summary.total_fees or Decimal(0)
+        if summary.profit_loss is not None:
+            pocket.priced_profit_loss.append(summary.profit_loss)
+
+        # The idle cash is the account's `cash`, never a line: listed as both,
+        # it was counted twice by whoever added the lines up.
+        lines = [
+            p for p in summary.positions
+            if p.total_amount != 0 and p.asset_key not in FIAT_ASSET_KEYS
+        ]
+        pocket.held_keys.update(p.asset_key for p in lines)
+        if details:
+            detail = {"name": decrypt_data(account.name_enc, master_key)}
+            if account_type is not None:
+                detail["type"] = account_type(account)
+            detail.update({
+                "value": float(holdings),
+                "cash": float(summary.cash_balance),
+                "invested": float(summary.total_invested),
+                "profit_loss": _opt_float(summary.profit_loss),
+                "profit_loss_pct": _opt_float(summary.profit_loss_percentage),
+                "realized_profit_loss": _opt_float(summary.realized_profit_loss),
+                "dividends": float(summary.total_dividends or 0),
+                "fees": float(summary.total_fees or 0),
+            })
+            pocket.accounts.append((detail, lines))
+    return pocket
+
+
+def _read_bank(session: Session, user_uuid: str, master_key: str, as_of, details: bool, stale: dict[str, str]):
+    """The bank balances, today's or as of a past day, and their detail."""
+    if as_of:
+        snapshot = get_all_bank_accounts_snapshot_for_date(session, user_uuid, as_of, master_key)
+        accounts = [
+            {"name": a["name"], "institution": a["institution"], "balance": float(a["balance"] or 0)}
+            for a in snapshot.get("accounts") or []
+        ]
+        return snapshot.get("total_value") or Decimal(0), accounts if details else []
+
+    summary = get_user_bank_accounts(session, user_uuid, master_key)
+    accounts = []
+    if details:
+        for account in summary.accounts:
+            detail = {
+                "name": account.name,
+                "institution": account.institution_name,
+                "type": account.account_type.value,
+                "balance": float(account.balance),
+            }
+            if account.currency != "EUR":
+                detail["currency"] = account.currency
+            if account.interest_rate is not None:
+                detail["interest_rate_pct"] = float(account.interest_rate)
+            if account.id in stale:
+                detail["balance_may_be_outdated"] = True
+            accounts.append(detail)
+    # None when a held currency has no published rate: zero rather than a
+    # TypeError, the bank page being where that gap is shown for what it is.
+    return summary.total_balance or Decimal(0), accounts
+
+
+def _read_assets(session: Session, user_uuid: str, master_key: str, as_of, details: bool):
+    """The possessions' estimated value, today's or as of a past day."""
+    if as_of:
+        snapshot = get_asset_portfolio_snapshot_for_date(session, user_uuid, as_of, master_key)
+        if not snapshot:
+            return Decimal(0), []
+        accounts = [{"name": p.asset_key, "value": float(p.value)} for p in snapshot.positions or []]
+        return snapshot.total_value, accounts if details else []
+
+    summary = get_user_assets(session, user_uuid, master_key)
+    assets = [
+        {
+            "name": asset.name,
+            "category": asset.category,
+            "value": float(asset.estimated_value),
+            "purchase_price": _opt_float(asset.purchase_price),
+            "acquisition_date": asset.acquisition_date,
+            "gain": _opt_float(asset.profit_loss),
+        }
+        for asset in summary.assets
+    ] if details else []
+    return summary.total_estimated_value, assets
+
+
+def _read_placements(session: Session, user_uuid: str, master_key: str, as_of, details: bool):
+    """The placements' value and net amount paid in, today's or as of a past day."""
+    summary = get_user_placements(session, user_uuid, master_key)
+    if not as_of:
+        accounts = [
+            {
+                "name": placement.name,
+                "type": placement.placement_type.value,
+                "value": float(placement.current_value),
+                "net_invested": float(placement.net_invested),
+                "gain": _opt_float(placement.gain),
+                "gain_pct": _opt_float(placement.gain_percentage),
+                # The value is the last statement plus the flows since: say how
+                # old that statement is rather than let it pass for today's.
+                "last_valuation_date": (
+                    placement.last_valuation_date.isoformat() if placement.last_valuation_date else None
+                ),
+            }
+            for placement in summary.accounts
+        ] if details else []
+        gains = [p.gain for p in summary.accounts if p.gain is not None]
+        return summary.total_value, summary.net_invested, (sum(gains) if gains else None), accounts
+
+    value = invested = Decimal(0)
+    accounts = []
+    for placement in summary.accounts:
+        timeline = build_timeline(session, placement.id, master_key)
+        worth = timeline.value_on(as_of)
+        paid_in = timeline.deposits_until(as_of) - timeline.withdrawals_until(as_of)
+        value += worth
+        invested += paid_in
+        if details:
+            accounts.append({
+                "name": placement.name,
+                "type": placement.placement_type.value,
+                "value": float(worth),
+                "net_invested": float(paid_in),
+            })
+    return value, invested, None, accounts
+
+
+# The history's name for each pocket a reference snapshot must carry.
+_HISTORY_POCKETS = {
+    "bank": "bank_value",
+    "stocks": "stock_value",
+    "crypto": "crypto_value",
+    "placements": "placements_value",
+    "assets": "assets_value",
+}
+# Within a cent of zero a pocket is rounding noise, not money held.
+_HELD_EPSILON = Decimal("0.005")
+
+
+def net_worth_changes(
+    history: list[dict], total: Decimal, held: list[str], today: datetime.date
+) -> list[dict]:
+    """The total against the last snapshot, the start of the month and the start of the year.
+
+    A day's snapshot is the union of every pocket's own snapshots, and a pocket
+    with none that day counts zero: measured from such a day, the missing pocket
+    would read as a gain. So a reference must carry every pocket held today —
+    the rule the dashboard applies. Two references on the same snapshot say the
+    same thing twice, so the wider period is dropped.
+
+    Deposits are part of the change: this is how the total moved, not a return.
+    """
+    columns = [_HISTORY_POCKETS[pocket] for pocket in held]
+    candidates = (
+        ("last_snapshot", today),
+        ("month_start", today.replace(day=1)),
+        ("year_start", today.replace(month=1, day=1)),
+    )
+    changes: list[dict] = []
+    seen: set[datetime.date] = set()
+    for key, before in candidates:
+        reference = next(
+            (
+                snapshot for snapshot in reversed(history)
+                if snapshot["snapshot_date"] < before and all(snapshot[c] > 0 for c in columns)
+            ),
+            None,
+        )
+        if reference is None or reference["snapshot_date"] in seen:
+            continue
+        seen.add(reference["snapshot_date"])
+        base = Decimal(reference["total_wealth"])
+        changes.append({
+            "reference": key,
+            "since": reference["snapshot_date"].isoformat(),
+            "change": round(float(total - base), 2),
+            "change_pct": _pct(total - base, base),
+        })
+    return changes
+
+
 def get_user_balance(session: Session, user_uuid: str, master_key: bytes, details: bool = False, date: str = None) -> dict:
+    """
+    The whole net worth by pocket, with what each pocket cost.
+
+    The pockets follow the dashboard's legend, so a figure a reader quotes is
+    the one the user sees: stock and crypto *lines*, the cash idle on those
+    accounts apart as broker cash (negative on an overdrawn account), bank
+    balances, placements and possessions. Every share is of the global total.
+
+    Undated, it also says how the total moved lately and how fresh its inputs
+    are. Dated, it rebuilds the pockets as of that day.
+    """
     user_bidx = hash_index(user_uuid, master_key)
     settings = get_or_create_settings(session, user_uuid, master_key)
     # Parsed once: the account summaries compare it against dates, and the
     # string they used to receive made every dated call raise.
     target_date = datetime.date.fromisoformat(date) if date else None
+    today = datetime.date.today()
 
-    result = {}
+    stocks = _read_pocket(
+        session,
+        session.exec(select(StockAccount).where(StockAccount.user_uuid_bidx == user_bidx)).all(),
+        master_key, get_stock_transactions, get_stock_account_summary, target_date, details,
+        account_type=lambda account: decrypt_data(account.account_type_enc, master_key),
+    )
+    crypto = _read_pocket(
+        session,
+        session.exec(select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)).all(),
+        master_key, get_crypto_transactions, get_crypto_account_summary, target_date, details,
+    )
 
-    # --- Stock Accounts ---
-    stock_models = session.exec(
-        select(StockAccount).where(StockAccount.user_uuid_bidx == user_bidx)
-    ).all()
-
-    stock_current_value = Decimal(0)
-    stock_invested = Decimal(0)
-    stock_pnl: list[Decimal] = []
-    stock_accounts_details = []
-    for acc in stock_models:
-        transactions = get_stock_transactions(session, acc.uuid, master_key)
-        summary = get_stock_account_summary(session, transactions, as_of=target_date, db_only=True)
-        # Net worth = holdings VALEUR + idle account cash.
-        acc_val = (summary.current_value or Decimal(0)) + summary.cash_balance
-        stock_current_value += acc_val
-        stock_invested += summary.total_invested
-        if summary.profit_loss is not None:
-            stock_pnl.append(summary.profit_loss)
-
-        if details:
-            acc_name = decrypt_data(acc.name_enc, master_key)
-            positions = [_as_position(p) for p in summary.positions if p.total_amount != 0]
-            stock_accounts_details.append({
-                "name": acc_name,
-                "total_value": float(acc_val),
-                "total_invested": float(summary.total_invested),
-                "profit_loss": _opt_float(summary.profit_loss),
-                "realized_profit_loss": _opt_float(summary.realized_profit_loss),
-                "cash_balance": float(summary.cash_balance),
-                "positions": positions
-            })
-
-    # --- Crypto Accounts ---
-    crypto_models = session.exec(
-        select(CryptoAccount).where(CryptoAccount.user_uuid_bidx == user_bidx)
-    ).all()
-
-    crypto_current_value = Decimal(0)
-    crypto_invested = Decimal(0)
-    crypto_pnl: list[Decimal] = []
-    crypto_accounts_details = []
-    for acc in crypto_models:
-        transactions = get_crypto_transactions(session, acc.uuid, master_key)
-        summary = get_crypto_account_summary(session, transactions, as_of=target_date, db_only=True)
-        # Net worth = holdings VALEUR + idle account cash.
-        acc_val = (summary.current_value or Decimal(0)) + summary.cash_balance
-        crypto_current_value += acc_val
-        crypto_invested += summary.total_invested
-        if summary.profit_loss is not None:
-            crypto_pnl.append(summary.profit_loss)
-
-        if details:
-            acc_name = decrypt_data(acc.name_enc, master_key)
-            positions = [_as_position(p) for p in summary.positions if p.total_amount != 0]
-            crypto_accounts_details.append({
-                "name": acc_name,
-                "total_value": float(acc_val),
-                "total_invested": float(summary.total_invested),
-                "profit_loss": _opt_float(summary.profit_loss),
-                "realized_profit_loss": _opt_float(summary.realized_profit_loss),
-                "cash_balance": float(summary.cash_balance),
-                "positions": positions
-            })
-
-    # --- Bank Accounts (Cash) ---
-    cash_total = Decimal(0)
-    bank_accounts_details = []
+    stale = {} if target_date else stale_balances(session, user_uuid, master_key, today)
+    bank_total, bank_accounts = Decimal(0), []
     if settings.bank_module_enabled:
-        if date:
-            bank_summary = get_all_bank_accounts_snapshot_for_date(session, user_uuid, target_date, master_key)
-            # Keyed, not attribute access: this one answers with a dict, unlike
-            # the `BankSummaryResponse` of the branch below.
-            cash_total = bank_summary.get("total_value") or Decimal(0)
-            accounts = bank_summary.get("accounts") or []
+        bank_total, bank_accounts = _read_bank(session, user_uuid, master_key, target_date, details, stale)
 
-        else:
-            bank_summary = get_user_bank_accounts(session, user_uuid, master_key)
-            # None when a held currency has no published rate; zero rather than
-            # a TypeError three lines down.
-            cash_total = bank_summary.total_balance or Decimal(0)
-            accounts = bank_summary.accounts or []
-
-        if details:
-            # The two branches above answer with different shapes — a dict per
-            # account when a date is given, a `BankAccountResponse` otherwise —
-            # and `getattr` on a dict silently returned None for every field.
-            for bank_acc in accounts:
-                fields = bank_acc if isinstance(bank_acc, dict) else vars(bank_acc)
-                bank_accounts_details.append({
-                    "name": fields.get("name"),
-                    "institution": fields.get("institution_name") or fields.get("institution"),
-                    "balance": float(fields.get("balance") or 0),
-                })
-
-    # --- Real Estate / Other Assets ---
-    assets_total = Decimal(0)
-    assets_details = []
+    assets_total, assets = Decimal(0), []
     if settings.wealth_module_enabled:
-        if date:
-            asset_summary = get_asset_portfolio_snapshot_for_date(session, user_uuid, target_date, master_key)
-            if asset_summary:
-                assets_total = asset_summary.total_value
-                assets = asset_summary.positions or []
-            else:
-                assets = []
-        else:
-            asset_summary = get_user_assets(session, user_uuid, master_key)
-            assets_total = asset_summary.total_estimated_value
-            assets = asset_summary.assets
+        assets_total, assets = _read_assets(session, user_uuid, master_key, target_date, details)
 
-        if details:
-            for a in assets:
-                detail = {
-                    "name": getattr(a, "name", None) or getattr(a, "asset_key", None),
-                    "estimated_value": float(getattr(a, "estimated_value", 0.0) or getattr(a, "value", 0.0))
-                }
-                if hasattr(a, "category") and getattr(a, "category"):
-                    detail["category"] = a.category
-                assets_details.append(detail)
+    placements_total, placements_invested, placements_gain, placements = _read_placements(
+        session, user_uuid, master_key, target_date, details
+    )
 
-    # --- Placements (AV, PER, SCPI…) ---
-    placements_total = Decimal(0)
-    placements_invested = Decimal(0)
-    placements_details = []
-    if date:
-        summary = get_user_placements(session, user_uuid, master_key)
-        for placement in summary.accounts:
-            timeline = build_timeline(session, placement.id, master_key)
-            value = timeline.value_on(target_date)
-            invested = timeline.deposits_until(target_date) - timeline.withdrawals_until(target_date)
-            placements_total += value
-            placements_invested += invested
-            if details:
-                placements_details.append({
-                    "name": placement.name,
-                    "placement_type": placement.placement_type.value,
-                    "total_value": float(value),
-                    "net_invested": float(invested),
-                })
-    else:
-        summary = get_user_placements(session, user_uuid, master_key)
-        placements_total = summary.total_value
-        placements_invested = summary.net_invested
-        if details:
-            for placement in summary.accounts:
-                placements_details.append({
-                    "name": placement.name,
-                    "placement_type": placement.placement_type.value,
-                    "total_value": float(placement.current_value),
-                    "net_invested": float(placement.net_invested),
-                    "gain": _opt_float(placement.gain),
-                    # The value is the last statement plus the flows since: say
-                    # how old that statement is rather than let it pass for today's.
-                    "last_valuation_date": (
-                        placement.last_valuation_date.isoformat() if placement.last_valuation_date else None
-                    ),
-                })
+    broker_cash = stocks.cash + crypto.cash
+    total = stocks.holdings + crypto.holdings + broker_cash + bank_total + placements_total + assets_total
 
-    invested_total = stock_invested + crypto_invested
+    result = {
+        "as_of": (target_date or today).isoformat(),
+        "global_wealth": float(total),
+        "pockets": {
+            "bank": {"value": float(bank_total), "share_pct": _pct(bank_total, total)},
+            "stocks": stocks.summary(total),
+            "crypto": crypto.summary(total),
+            "broker_cash": {"value": float(broker_cash), "share_pct": _pct(broker_cash, total)},
+            "placements": {
+                "value": float(placements_total),
+                "net_invested": float(placements_invested),
+                "gain": _opt_float(placements_gain),
+                "share_pct": _pct(placements_total, total),
+            },
+            "assets": {"value": float(assets_total), "share_pct": _pct(assets_total, total)},
+        },
+    }
 
-    # Summed from the accounts rather than derived as value minus cost: the
-    # per-type totals above fold in each account's idle cash, so subtracting the
-    # cost basis from them would report an untouched cash balance as a gain.
-    # None, not zero, when no account could be priced — zero would read as flat.
-    priced = stock_pnl + crypto_pnl
-    unrealized = sum(priced) if priced else None
+    # Cost basis and the gain it implies, over the stock and crypto lines.
+    # Without these a reader knows the size of the portfolio but not whether it
+    # has made or lost money.
+    priced = stocks.priced_profit_loss + crypto.priced_profit_loss
+    result["unrealized_profit_loss"] = _opt_float(sum(priced) if priced else None)
 
-    result.update({
-        "stocks_total": float(stock_current_value),
-        "crypto_total": float(crypto_current_value),
-        "cash_total": float(cash_total),
-        "assets_total": float(assets_total),
-        "placements_total": float(placements_total),
-        "global_wealth": float(
-            stock_current_value + crypto_current_value + cash_total + assets_total + placements_total
-        ),
-        # Cost basis and the gain it implies. Without these a reader knows the
-        # size of the portfolio but not whether it has made or lost money.
-        "stocks_invested": float(stock_invested),
-        "crypto_invested": float(crypto_invested),
-        "placements_invested": float(placements_invested),
-        "invested_total": float(invested_total),
-        "unrealized_profit_loss": _opt_float(unrealized),
-    })
+    if not target_date:
+        values = {
+            "bank": bank_total, "stocks": stocks.holdings, "crypto": crypto.holdings,
+            "placements": placements_total, "assets": assets_total,
+        }
+        held = [pocket for pocket, value in values.items() if abs(value) > _HELD_EPSILON]
+        result["changes"] = net_worth_changes(
+            build_wealth_history(session, user_uuid, master_key), total, held, today
+        )
+        price_dates = latest_price_dates(session, stocks.held_keys | crypto.held_keys)
+        result["freshness"] = {
+            # The stalest of the prices the lines are valued at.
+            "prices_as_of": min(price_dates.values()).isoformat() if price_dates else None,
+            "stale_bank_accounts": sorted(stale.values()) if settings.bank_module_enabled else [],
+        }
 
     if details:
-        result.update({
-            "stock_accounts_details": stock_accounts_details,
-            "crypto_accounts_details": crypto_accounts_details,
-            "bank_accounts_details": bank_accounts_details,
-            "assets_details": assets_details,
-            "placements_details": placements_details,
-        })
+        result["accounts"] = {
+            "stocks": stocks.account_details(),
+            "crypto": crypto.account_details(),
+            "bank": bank_accounts,
+            "placements": placements,
+            "assets": assets,
+        }
 
     return result
+
 
 def get_historical_performance(session: Session, user_uuid: str, master_key: bytes, days: int = 10, account_type: str = "all") -> dict :
     today = datetime.date.today()
@@ -449,7 +597,39 @@ def get_historical_performance(session: Session, user_uuid: str, master_key: byt
         output["crypto"] = calculate_metrics(get_all_crypto_accounts_history(session, user_uuid, master_key, include_current=True, start_date=start_date))
     return output
 
+def _euros(total: Decimal | None) -> float | None:
+    """A total is None when a currency in play has no published rate; it
+    travels as null rather than as a made-up number."""
+    return round(float(total), 2) if total is not None else None
+
+
+def _declared_category(category) -> dict:
+    items = []
+    for flow in category.items:
+        item = {
+            "name": flow.name,
+            "amount": float(flow.amount),
+            "frequency": flow.frequency.value if hasattr(flow.frequency, "value") else flow.frequency,
+            "monthly_eur": _euros(flow.monthly_amount_eur),
+        }
+        if flow.currency != "EUR":
+            item["currency"] = flow.currency
+        if not flow.is_active:
+            item["active"] = False
+        items.append(item)
+    return {"category": category.category, "monthly": _euros(category.monthly_total), "items": items}
+
+
 def get_user_cashflow(session: Session, user_uuid: str, master_key: bytes, details: bool = False, flow_type: str = None) -> dict:
+    """
+    The budget the user *declared*: the income and expenses they entered,
+    each brought to a month and to euros.
+
+    What actually moved on the bank accounts is the real cashflow
+    (``services/banking/real_cashflow``), never this. Only monthly figures are
+    given: a plain sum of the amounts would add a yearly bill to a monthly
+    salary.
+    """
     parsed_flow = None
     if flow_type:
         try:
@@ -462,23 +642,23 @@ def get_user_cashflow(session: Session, user_uuid: str, master_key: bytes, detai
         except ValueError:
             pass
 
-    # A total is None when a currency in play has no published rate; it travels
-    # as null rather than as a made-up number.
-    def _euros(total) -> float | None:
-        return float(total) if total is not None else None
-
-    output = dict()
     balance = get_user_cashflow_balance(session, user_uuid, master_key)
-    if details:
-        return json.loads(balance.model_dump_json())
-    if parsed_flow == FlowType.INFLOW or parsed_flow is None:
-        output["inflow"] = { "total": _euros(balance.total_inflows), "monthly_inflows": _euros(balance.monthly_inflows) }
-    if parsed_flow == FlowType.OUTFLOW or parsed_flow is None:
-        output["outflow"] = { "total": _euros(balance.total_outflows), "monthly_outflows": _euros(balance.monthly_outflows) }
+    sides = (
+        (FlowType.INFLOW, "inflow", balance.monthly_inflows, balance.inflows),
+        (FlowType.OUTFLOW, "outflow", balance.monthly_outflows, balance.outflows),
+    )
+
+    output = {}
+    for flow, key, monthly, summary in sides:
+        if parsed_flow not in (None, flow):
+            continue
+        side = {"monthly": _euros(monthly)}
+        if details:
+            side["categories"] = [_declared_category(category) for category in summary.categories]
+        output[key] = side
     if parsed_flow is None:
-        output["balance"] = _euros(balance.net_balance)
         output["monthly_balance"] = _euros(balance.monthly_balance)
-        output["savings_rate"] = _euros(balance.savings_rate)
+        output["savings_rate_pct"] = _euros(balance.savings_rate)
     return output
 
 

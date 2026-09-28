@@ -43,6 +43,7 @@ from dtos.banking import (
     RealCashflowYear,
     RecurringDirection,
 )
+from models.bank import BankAccount
 from models.banking import BankTransaction
 from services.banking.cashflow_types import counted_leg, signed_amount
 from services.banking import natures, recurrence
@@ -627,6 +628,27 @@ def _projection(totals: RealCashflowTotals, monthly: RealCashflowTotals, months_
     return _with_rates(amounts)
 
 
+def _balance_is_stale(account: BankAccount, synced: date | None, today: date) -> bool:
+    vouched = _covered_until(account, synced, None)
+    return vouched is None or vouched < today - timedelta(days=STALE_BALANCE_DAYS)
+
+
+def stale_balances(session: Session, user_uuid: str, master_key: str, today: date | None = None) -> dict[str, str]:
+    """The bank accounts whose balance may be out of date, as uuid -> name.
+
+    The safety net's own test, for readers that show the balances elsewhere and
+    must not present one nobody has vouched for as today's.
+    """
+    today = today or date.today()
+    accounts = _user_accounts(session, user_uuid, master_key)
+    links = _links(session, user_uuid, master_key)
+    return {
+        account.uuid: decrypt_data(account.name_enc, master_key)
+        for bidx, account in accounts.by_bidx.items()
+        if _balance_is_stale(account, links.get(bidx), today)
+    }
+
+
 def _safety_net(
     session: Session,
     user_uuid: str,
@@ -652,8 +674,7 @@ def _safety_net(
         available += balance
         if bidx in savings:
             held += balance
-        synced = _covered_until(account, links.get(bidx), None)
-        if synced is None or synced < today - timedelta(days=STALE_BALANCE_DAYS):
+        if _balance_is_stale(account, links.get(bidx), today):
             stale.append(decrypt_data(account.name_enc, master_key))
 
     def months_of(amount: Decimal) -> Decimal | None:

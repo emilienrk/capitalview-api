@@ -259,6 +259,19 @@ def _get_latest_price_entry_as_of(
     ).first()
 
 
+def latest_price_dates(session: Session, asset_keys: set[str]) -> dict[str, date]:
+    """The day of the newest stored price of each asset, for those that have one."""
+    if not asset_keys:
+        return {}
+    rows = session.exec(
+        select(MarketAsset.asset_key, sa.func.max(MarketPriceHistory.price_date))
+        .join(MarketPriceHistory, MarketPriceHistory.market_asset_id == MarketAsset.id)
+        .where(MarketAsset.asset_key.in_(asset_keys))
+        .group_by(MarketAsset.asset_key)
+    ).all()
+    return {asset_key: day for asset_key, day in rows}
+
+
 def _upsert_price(session: Session, asset_id: int, price: Decimal) -> None:
     """Insert or update today's price for an asset."""
     today = date.today()
