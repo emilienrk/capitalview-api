@@ -36,11 +36,13 @@ from dtos.banking import (
     RealCashflowMonth,
     RealCashflowMonthDetail,
     RealCashflowPacePoint,
+    RealCashflowRecent,
     RealCashflowSafetyNet,
     RealCashflowRecurring,
     RealCashflowTotals,
     RealCashflowUpcoming,
     RealCashflowYear,
+    RealCashflowYearTrend,
     RecurringDirection,
 )
 from models.bank import BankAccount
@@ -159,6 +161,70 @@ def real_cashflow_year(
             date.fromisoformat(f"{periods[0]}-01"), _last_day(periods[-1]),
         ),
         **_running(session, user_uuid, master_key, accounts, reading, today) if current else {},
+    )
+
+
+def real_cashflow_recent(
+    session: Session, user_uuid: str, master_key: str, months: int = RECENT_MONTHS, today: date | None = None
+) -> RealCashflowRecent:
+    """The last `months` completed months, read as `real_cashflow_year` reads a
+    year: the same totals, medians and tops, over a window that ends on the
+    last completed month rather than on a calendar year — in January, a year
+    has no completed month to say anything with.
+    """
+    today = today or date.today()
+    last = completed_period(today)
+    periods = [_shift_period(last, -offset) for offset in range(months - 1, -1, -1)]
+    accounts = _user_accounts(session, user_uuid, master_key)
+    stored = _stored_periods(session, master_key, accounts, today)
+    if not stored:
+        return RealCashflowRecent(
+            first_period=periods[0], last_period=last, currency="EUR", history_starts=None,
+            months=[RealCashflowMonth(period=p) for p in periods], totals=RealCashflowTotals(),
+            covered_months=0, monthly_mean=RealCashflowTotals(), monthly_median=RealCashflowTotals(),
+        )
+
+    # Months before the first stored operation are not months without spending.
+    periods = [p for p in periods if p >= stored[0]] or [last]
+    recent = _recent_periods(last)
+    reading = _read(session, user_uuid, master_key, accounts, _span([*periods, *recent]))
+    window_months = [_month(reading, p) for p in periods]
+    covered = [m for m in window_months if m.operation_count]
+    _mark_atypical(covered)
+    window = set(periods)
+    years = sorted({int(p[:4]) for p in periods})
+    return RealCashflowRecent(
+        first_period=periods[0],
+        last_period=last,
+        currency=reading.currency,
+        history_starts=stored[0],
+        months=window_months,
+        totals=_sum(window_months),
+        covered_months=len(covered),
+        open_questions=sum(m.open_questions for m in window_months),
+        open_amount=sum((m.open_amount for m in window_months), Decimal("0")),
+        monthly_mean=_per_month(covered, lambda values: sum(values, Decimal("0")) / len(values)),
+        monthly_median=_per_month(covered, median),
+        years=[
+            RealCashflowYearTrend(
+                year=year,
+                covered_months=len(in_year),
+                monthly_median=_per_month(in_year, median),
+            )
+            for year in years
+            for in_year in [[m for m in covered if int(m.period[:4]) == year]]
+            if in_year
+        ],
+        top_expenses=reading.top_expenses(window),
+        top_sources=reading.counterparts(window, sources=True),
+        top_destinations=reading.counterparts(window, sources=False),
+        other_currencies=reading.other_currencies(window),
+        safety_net=_safety_net(session, user_uuid, master_key, accounts, reading, recent, today),
+        coverage_gaps=_coverage_gaps(
+            session, user_uuid, master_key, accounts, reading.patterns,
+            date.fromisoformat(f"{periods[0]}-01"), _last_day(last),
+        ),
+        **_running(session, user_uuid, master_key, accounts, reading, today),
     )
 
 

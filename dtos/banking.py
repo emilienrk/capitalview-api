@@ -970,6 +970,41 @@ class RealCashflowYear(BaseModel):
     running_recurring_income: Decimal | None = None
 
 
+class RealCashflowYearTrend(BaseModel):
+    """One calendar year of a window, reduced to its median month."""
+    year: int
+    covered_months: int
+    monthly_median: RealCashflowTotals
+
+
+class RealCashflowRecent(BaseModel):
+    """The last completed months, however many are asked for: a window that
+    does not reset every January."""
+    first_period: str
+    last_period: str
+    currency: str
+    # The first month holding a stored operation: how far back a trend can go.
+    history_starts: str | None
+    months: list[RealCashflowMonth]
+    totals: RealCashflowTotals
+    # Over the months carrying data, not the months asked for.
+    covered_months: int
+    open_questions: int = 0
+    open_amount: Decimal = Decimal("0")
+    monthly_mean: RealCashflowTotals
+    monthly_median: RealCashflowTotals
+    # Each calendar year the window touches, oldest first.
+    years: list[RealCashflowYearTrend] = []
+    top_expenses: list[RealCashflowExpense] = []
+    top_sources: list[RealCashflowCounterpart] = []
+    top_destinations: list[RealCashflowCounterpart] = []
+    other_currencies: list[BankFlowCurrencyTotal] = []
+    safety_net: RealCashflowSafetyNet | None = None
+    coverage_gaps: list[RealCashflowCoverageGap] = []
+    running_recurring: Decimal | None = None
+    running_recurring_income: Decimal | None = None
+
+
 class RealCashflowMonthDetail(BaseModel):
     """GET /banking/real-cashflow/months/{period} — one completed month."""
     period: str

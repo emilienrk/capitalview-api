@@ -1236,6 +1236,37 @@ def list_month_transactions(
     )
 
 
+def list_operations(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    periods: list[str],
+    account_id: str | None = None,
+) -> list[BankTransactionItem]:
+    """Every operation of several "YYYY-MM" months, newest first, typed and
+    flagged as `list_month_transactions` types and flags one month's.
+
+    One pairing for the whole window, for readers that search across months
+    rather than page through them.
+    """
+    accounts = _user_accounts(session, user_uuid, master_key)
+    scope = _scope(accounts, account_id, master_key)
+    if not scope or not periods:
+        return []
+
+    pairing = _pairing(session, user_uuid, master_key, accounts)
+    movements, transfer_legs = _paired_movements(session, master_key, accounts.readable, periods, pairing)
+    window, in_scope = set(periods), set(scope)
+    selected = [
+        i for i, m in enumerate(movements) if m.period in window and m.account_bidx in in_scope
+    ]
+    item = _item_builder(
+        movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs),
+    )
+    items = [item(i) for i in selected]
+    return sorted(items, key=lambda tx: tx.operation_date or date.min, reverse=True)
+
+
 def review_queue(
     session: Session, user_uuid: str, master_key: str, year: int | None = None
 ) -> BankReviewQueue:

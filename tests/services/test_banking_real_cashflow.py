@@ -13,7 +13,8 @@ from dtos.banking import CashflowType, TypeScope
 from models.bank import BankAccount
 from services.banking.flows import list_month_transactions, set_transaction_type
 from services.banking.real_cashflow import (
-    PeriodNotCompletedError, _per_month, _Tally, _totals, real_cashflow_month, real_cashflow_year,
+    PeriodNotCompletedError, _per_month, _Tally, _totals, real_cashflow_month, real_cashflow_recent,
+    real_cashflow_year,
 )
 from services.encryption import encrypt_data
 from tests.services.test_banking_flows import USER, _link, _raw, _store
@@ -273,3 +274,38 @@ def test_a_question_asked_in_a_later_year_is_open_on_the_earlier_one(session: Se
     earlier = real_cashflow_year(session, USER, master_key, 2025, today=TODAY)
     assert (earlier.open_questions, earlier.months[11].open_questions) == (1, 1)
     assert real_cashflow_month(session, USER, master_key, "2026-03", today=TODAY).open_questions == 1
+
+
+def test_the_recent_window_spans_the_new_year_instead_of_resetting(session: Session, master_key: str):
+    """In January a calendar year has no completed month; the window still has twelve."""
+    _ops(
+        session, master_key,
+        (CURRENT, "2025-11-05", "100.00", "DBIT", "CARTE 04/11/25 BOULANGERIE CB*08"),
+        (CURRENT, "2025-12-05", "300.00", "DBIT", "CARTE 04/12/25 BOULANGERIE CB*08"),
+        (CURRENT, "2026-01-05", "999.00", "DBIT", "CARTE 04/01/26 BIJOUTERIE CB*08"),
+    )
+
+    recent = real_cashflow_recent(session, USER, master_key, months=12, today=date(2026, 1, 20))
+
+    # The months before the first operation are not months without spending.
+    assert [m.period for m in recent.months] == ["2025-11", "2025-12"]
+    assert recent.history_starts == "2025-11"
+    assert recent.covered_months == 2
+    assert recent.monthly_median.expenses == Decimal("200")
+    assert [(y.year, y.covered_months) for y in recent.years] == [(2025, 2)]
+
+
+def test_list_operations_reads_several_months_newest_first(session: Session, master_key: str):
+    from services.banking.flows import list_operations
+
+    _ops(
+        session, master_key,
+        (CURRENT, "2026-01-05", "10.00", "DBIT", "CARTE 04/01/26 BOULANGERIE CB*08"),
+        (CURRENT, "2026-02-05", "20.00", "DBIT", "CARTE 04/02/26 BOULANGERIE CB*08"),
+        (CURRENT, "2026-03-05", "30.00", "DBIT", "CARTE 04/03/26 BOULANGERIE CB*08"),
+    )
+
+    operations = list_operations(session, USER, master_key, ["2026-02", "2026-03"])
+
+    assert [op.amount for op in operations] == [Decimal("30.00"), Decimal("20.00")]
+    assert all(op.cashflow_type is CashflowType.EXPENSE for op in operations)
