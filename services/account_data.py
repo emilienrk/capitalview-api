@@ -307,12 +307,7 @@ def purge_account(session: Session, user: User, master_key: str) -> dict[str, in
     """
     user_bidx = hash_index(user.uuid, master_key)
     deleted: dict[str, int] = {}
-
-    def wipe(model, condition) -> None:
-        result = session.exec(sa.delete(model).where(condition))
-        deleted[model.__tablename__] = deleted.get(model.__tablename__, 0) + (
-            result.rowcount or 0
-        )
+    wipe = _wiper(session, deleted)
 
     # 1. Transactions hang off accounts, not off the user: their account_id_bidx
     #    has to be recomputed from each account before the accounts are gone.
@@ -395,8 +390,49 @@ def purge_account(session: Session, user: User, master_key: str) -> dict[str, in
     #    since every row carries the user's own bidx.
     wipe(AccountHistory, AccountHistory.user_uuid_bidx == user_bidx)
 
-    # 5. Tables with a real foreign key. Deleted rather than revoked: a revoked
-    #    token is still a row describing a person who asked to be forgotten.
+    # 5. Tables with a real foreign key.
+    _wipe_rows_keyed_by_user_uuid(wipe, user)
+
+    session.delete(user)
+    deleted["users"] = 1
+
+    session.commit()
+    return deleted
+
+
+def purge_account_without_key(session: Session, user: User) -> dict[str, int]:
+    """Erase *user* when both the password and the recovery key are lost.
+
+    Without the Master Key the blind-indexed rows cannot be found, so they stay
+    behind. Deleting the user row and its API tokens destroys every wrapping of
+    the key, which leaves those rows unreadable and tied to no one, for good.
+    Bank sessions cannot be closed at the provider either: their consent runs
+    out on its own date.
+    """
+    deleted: dict[str, int] = {}
+    _wipe_rows_keyed_by_user_uuid(_wiper(session, deleted), user)
+    session.delete(user)
+    deleted["users"] = 1
+    session.commit()
+    return deleted
+
+
+def _wiper(session: Session, deleted: dict[str, int]):
+    """Return a `wipe(model, condition)` that deletes and tallies per table."""
+    def wipe(model, condition) -> None:
+        result = session.exec(sa.delete(model).where(condition))
+        deleted[model.__tablename__] = deleted.get(model.__tablename__, 0) + (
+            result.rowcount or 0
+        )
+    return wipe
+
+
+def _wipe_rows_keyed_by_user_uuid(wipe, user: User) -> None:
+    """The rows reachable from the user's uuid alone, with or without the Master Key.
+
+    Deleted rather than revoked: a revoked token is still a row describing a
+    person who asked to be forgotten.
+    """
     wipe(CommunityPosition, CommunityPosition.profile_user_id == user.uuid)
     wipe(CommunityProfile, CommunityProfile.user_id == user.uuid)
     wipe(CommunityPick, CommunityPick.user_id == user.uuid)
@@ -411,12 +447,6 @@ def purge_account(session: Session, user: User, master_key: str) -> dict[str, in
     wipe(TotpBackupCode, TotpBackupCode.user_uuid == user.uuid)
     wipe(RefreshToken, RefreshToken.user_uuid == user.uuid)
     wipe(Notification, Notification.user_uuid == user.uuid)
-
-    session.delete(user)
-    deleted["users"] = 1
-
-    session.commit()
-    return deleted
 
 
 def _close_user_bank_sessions(

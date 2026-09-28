@@ -26,9 +26,11 @@ NOT_USER_DATA = {
 
 
 def _tables_purged() -> set[str]:
-    """Every table a model named inside `purge_account` maps to."""
-    source = textwrap.dedent(inspect.getsource(account_data.purge_account))
-    names = {node.id for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Name)}
+    """Every table a model named inside `purge_account` or its helpers maps to."""
+    names = set()
+    for function in (account_data.purge_account, account_data._wipe_rows_keyed_by_user_uuid):
+        source = textwrap.dedent(inspect.getsource(function))
+        names |= {node.id for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Name)}
     tables = set()
     for name in names:
         candidate = getattr(account_data, name, None)

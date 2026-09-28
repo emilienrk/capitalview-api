@@ -769,3 +769,31 @@ def test_purge_deletes_the_links_before_the_sessions_they_point_at(session, monk
     assert order.index("bank_account_links") < order.index("bank_sessions")
     assert deleted["bank_account_links"] == 1
     assert deleted["bank_sessions"] == 1
+
+
+def test_a_lost_account_is_deleted_without_its_key(session):
+    """scripts.delete_account: no password, no recovery key, still erasable."""
+    from scripts.delete_account import run
+
+    client = TestClient(app)
+    access_token, master_key, user_uuid = _register(client, session, email="lost@example.com")
+    _seed_account(client, _auth_headers(access_token, master_key))
+
+    def account():
+        return session.exec(select(User).where(User.email == "lost@example.com")).first()
+
+    assert run(session, "LOST@example.com", confirm=False) == 0
+    assert account() is not None
+    assert run(session, "lost@example.com", confirm=True, ask=lambda _: "other@example.com") == 1
+    assert account() is not None
+
+    assert run(session, "lost@example.com", confirm=True, ask=lambda _: " Lost@Example.com") == 0
+    assert account() is None
+    after = _remaining_rows(session, user_uuid, master_key)
+    assert after["refresh_tokens"] == 0
+    # Blind-indexed rows cannot be found without the key: they stay, with no
+    # wrapping of that key left anywhere to read them.
+    assert after["bank_accounts"] == 1
+
+    again = {"username": "lostagain", "email": "lost@example.com", "password": PASSWORD}
+    assert client.post("/auth/register", json=again).status_code == 201
