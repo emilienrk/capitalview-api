@@ -165,3 +165,13 @@ def test_a_savings_account_can_count_by_the_day(session: Session, master_key: st
         Decimal("12000") * Decimal("0.02") / (366 if calendar.isleap(date.today().year) else 365),
         abs=Decimal("0.01"),
     )
+
+
+def test_the_bank_rate_is_diluted_by_the_accounts_that_earn_nothing(session: Session, master_key: str):
+    """Projected on every bank balance, a livret's rate must not pay the current account too."""
+    from services.savings_interest import declared_bank_rate
+
+    _account(session, master_key, "LIVRET_A", "0.024")
+    _account(session, master_key, "CHECKING", None)
+
+    assert declared_bank_rate(session, USER, master_key) == pytest.approx(Decimal("0.012"))

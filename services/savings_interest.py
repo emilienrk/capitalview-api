@@ -224,3 +224,30 @@ def declared_savings_rate(session: Session, user_uuid: str, master_key: str) -> 
         weighted += terms.rate_on(today) * share
         weight += share
     return weighted / weight if weight > 0 else None
+
+
+def declared_bank_rate(session: Session, user_uuid: str, master_key: str) -> Decimal | None:
+    """What the whole bank pocket earns a year at today's declared rates.
+
+    Each savings account's rate weighted by its balance, over every account's
+    balance: a current account earns nothing and dilutes the rest, which
+    `declared_savings_rate` — a rate for money about to be saved — leaves out.
+    None when no account carries a rate; the savings rate itself while nothing
+    is held yet.
+    """
+    earning = _interest_accounts(session, user_uuid, master_key)
+    if not earning:
+        return None
+    accounts = session.exec(
+        select(BankAccount).where(BankAccount.user_uuid_bidx == hash_index(user_uuid, master_key))
+    ).all()
+    held = sum((max(_balance_in_base(session, account, master_key), _ZERO) for account in accounts), _ZERO)
+    if held <= 0:
+        return declared_savings_rate(session, user_uuid, master_key)
+    today = date.today()
+    earned = sum(
+        (terms.rate_on(today) * max(_balance_in_base(session, account, master_key), _ZERO)
+         for account, terms, _ in earning),
+        _ZERO,
+    )
+    return earned / held

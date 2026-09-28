@@ -688,8 +688,9 @@ def build_projection(
 
     A derived figure that would not stand up is not substituted: under a year of
     history yields no rate at all, and the projection then runs flat for that
-    category rather than compounding an extrapolation. BANK stays on the
-    service's own conservative default by design.
+    category rather than compounding an extrapolation. BANK takes its monthly
+    surplus from the real cashflow and its rate from the declared ones; ASSET,
+    the possessions, is held flat.
 
     Returns:
         The service's ``ProjectionResponse`` — it now carries the measurement

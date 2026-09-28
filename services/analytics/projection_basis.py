@@ -35,6 +35,9 @@ WEAK_RATE_DAYS = 1096
 # No asset class sustains this for a decade: flagged, never rewritten.
 EXTREME_ANNUAL_RATE = Decimal("0.30")
 
+# Below this many months with operations, a median month of saving is noise.
+MIN_MONTHS_FOR_A_SURPLUS = 6
+
 # TWR only neutralises a flow landing on a priced day; any other reads as
 # performance, always upward. Below this share of the final value the error is
 # rounding, above it the rate cannot be trusted.
@@ -72,13 +75,12 @@ WARNING_MESSAGES = {
     "no_statement": (
         "Aucun relevé de solde saisi sur les placements : aucun rendement n'est déduit."
     ),
-    "not_measured": (
-        "Aucun rendement ni versement déduit pour la banque : les soldes bougent avec les "
-        "revenus et les dépenses, pas avec une performance."
+    "short_cashflow_history": (
+        "Seulement {months} mois d'opérations bancaires sur les douze derniers : "
+        "l'épargne mensuelle n'est pas déduite, la banque est projetée sans apport."
     ),
-    "contribution_not_measured": (
-        "Rendement de la banque pris sur les taux saisis sur vos livrets ; aucun versement "
-        "n'est déduit, les soldes bougeant avec les revenus et les dépenses."
+    "no_declared_rate": (
+        "Aucun taux saisi sur les livrets : la banque est projetée sans rendement."
     ),
 }
 
@@ -212,10 +214,9 @@ def derive_projection_defaults(
 ) -> dict[str, CategoryBasis]:
     """Measure each category's contribution rhythm and realised return.
 
-    BANK measures nothing: its balance moves with salary and spending, not
-    performance, and its monthly surplus is the money already counted as
-    deposits into the stock and crypto accounts. Its return is at most the
-    rates the user entered on their savings accounts.
+    BANK's contribution is what stays on the bank accounts each month, read off
+    the real cashflow; its return is at most the rates the user entered on
+    their savings accounts (see `_bank_basis`).
     """
     from services.crypto_account import get_all_crypto_accounts_history, get_user_crypto_accounts
     from services.crypto_transaction import get_account_transactions as get_crypto_transactions
@@ -248,23 +249,43 @@ def derive_projection_defaults(
 
 
 def _bank_basis(session: Session, user_uuid: str, master_key: str) -> CategoryBasis:
-    """The rates the user entered on their savings accounts, when there are any.
+    """What stays on the bank accounts each month, and what they earn.
 
-    Declared, not measured: the balances move with income and spending, so no
-    return can be read from them, and no contribution either.
+    The surplus is income, less expenses, less what left for the investment
+    accounts: that money arrives as the other categories' own contributions,
+    and subtracting it here keeps a euro from being projected twice. Money set
+    aside on a savings account stays in the bank, so it is not subtracted. The
+    median month of the last twelve completed, so a bonus or a holiday does not
+    set the rhythm; with fewer than six months of operations nothing is deduced.
+
+    The return is the rates the user entered, spread over every bank balance.
     """
-    from services.savings_interest import declared_savings_rate
+    from statistics import median
+
+    from services.banking.real_cashflow import real_cashflow_recent
+    from services.savings_interest import declared_bank_rate
 
     bank = CategoryBasis()
-    rate = declared_savings_rate(session, user_uuid, master_key)
-    if rate is None:
-        bank.warnings.append(BasisWarning("not_measured"))
-        return bank
-    bank.annual_return_rate = rate
-    bank.return_source = "declared_rates"
-    bank.warnings.append(BasisWarning("contribution_not_measured"))
-    return bank
+    covered = [
+        month for month in real_cashflow_recent(session, user_uuid, master_key, months=12).months
+        if month.operation_count
+    ]
+    if len(covered) >= MIN_MONTHS_FOR_A_SURPLUS:
+        surpluses = [month.income - month.expenses - month.investment for month in covered]
+        bank.monthly_contribution = Decimal(median(surpluses))
+        bank.contribution_source = "real_cashflow"
+        bank.contribution_months = len(covered)
+        bank.contribution_total = sum(surpluses, Decimal("0"))
+    else:
+        bank.warnings.append(BasisWarning("short_cashflow_history", {"months": len(covered)}))
 
+    rate = declared_bank_rate(session, user_uuid, master_key)
+    if rate is None:
+        bank.warnings.append(BasisWarning("no_declared_rate"))
+    else:
+        bank.annual_return_rate = rate
+        bank.return_source = "declared_rates"
+    return bank
 
 
 def _placements_basis(session: Session, user_uuid: str, master_key: str) -> CategoryBasis:

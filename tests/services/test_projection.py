@@ -112,8 +112,89 @@ def test_defaults_come_from_the_measured_basis(session: Session, master_key: str
     assert used[AccountCategory.STOCK].monthly_injection == 0
     assert used[AccountCategory.STOCK].return_rate == 0.0
     assert used[AccountCategory.CRYPTO].return_rate == 0.0
-    # The bank keeps its own conservative default, untouched by the change.
-    assert used[AccountCategory.BANK].return_rate == 0.02
+    # The bank starts from its real balance now, so a default rate would pay
+    # interest on the current account: without a declared rate it earns nothing.
+    bank = used[AccountCategory.BANK]
+    assert bank.return_rate == 0.0
+    assert {w.code for w in bank.basis.warnings} == {"short_cashflow_history", "no_declared_rate"}
+
+
+def test_the_curve_starts_from_the_whole_net_worth(session: Session, master_key: str):
+    """The bank balances and the possessions are part of today's value: a curve
+    starting from the investments alone read as a net worth half the real one."""
+    from unittest.mock import patch
+
+    from dtos.asset import AssetCreate
+    from dtos.bank import BankAccountCreate
+    from models.enums import BankAccountType
+    from services.asset import create_asset
+    from services.bank import create_bank_account
+
+    user = _make_user()
+    with patch("services.bank.has_exchange_rate", return_value=True):
+        create_bank_account(
+            session,
+            BankAccountCreate(name="Courant", balance=Decimal("3000"), account_type=BankAccountType.CHECKING),
+            user.uuid, master_key,
+        )
+    create_asset(
+        session, AssetCreate(name="Montre", category="Bijoux", estimated_value=Decimal("500")), user.uuid, master_key
+    )
+
+    response = generate_wealth_projection(session, user, master_key, ProjectionParameters(months_to_project=12))
+
+    start, end = response.data[0], response.data[-1]
+    assert start.asset_values[AccountCategory.BANK] == 3000.0
+    assert start.asset_values[AccountCategory.ASSET] == 500.0
+    assert start.total_value == 3500.0
+    # Nothing measured, nothing declared: both stay where they are.
+    assert end.total_value == 3500.0
+
+
+def test_the_bank_surplus_is_the_median_month_left_after_spending_and_investing(
+    session: Session, master_key: str, monkeypatch
+):
+    """Money sent to the investment accounts is their contribution already;
+    money set aside on a livret stays in the bank."""
+    from dtos.banking import RealCashflowMonth
+    from services.analytics.projection_basis import _bank_basis
+
+    months = [
+        RealCashflowMonth(period=f"2026-{m:02d}", operation_count=10, income=Decimal("2500"),
+                          expenses=Decimal(expenses), saving=Decimal("300"), investment=Decimal("400"))
+        for m, expenses in enumerate(("1500", "1600", "1400", "1500", "3000", "1500"), start=1)
+    ]
+
+    class _Recent:
+        pass
+
+    recent = _Recent()
+    recent.months = months
+    monkeypatch.setattr(
+        "services.banking.real_cashflow.real_cashflow_recent", lambda *a, **k: recent
+    )
+
+    basis = _bank_basis(session, "nobody", master_key)
+
+    # 2500 - 1500 - 400 = 600 on the median month; the 3 000 € month does not set it.
+    assert basis.monthly_contribution == Decimal("600")
+    assert basis.contribution_source == "real_cashflow"
+    assert basis.contribution_months == 6
+
+
+def test_the_bank_surplus_waits_for_six_months_of_operations(session: Session, master_key: str, monkeypatch):
+    from dtos.banking import RealCashflowMonth
+    from services.analytics.projection_basis import _bank_basis
+
+    class _Recent:
+        months = [RealCashflowMonth(period="2026-01", operation_count=3, income=Decimal("2000"))]
+
+    monkeypatch.setattr("services.banking.real_cashflow.real_cashflow_recent", lambda *a, **k: _Recent())
+
+    basis = _bank_basis(session, "nobody", master_key)
+
+    assert basis.monthly_contribution is None
+    assert [w.code for w in basis.warnings][0] == "short_cashflow_history"
 
 
 def test_a_supplied_basis_is_used_instead_of_being_measured_again(

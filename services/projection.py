@@ -36,6 +36,7 @@ PROJECTED_CATEGORIES: tuple[AccountCategory, ...] = (
     AccountCategory.STOCK,
     AccountCategory.CRYPTO,
     AccountCategory.PLACEMENT,
+    AccountCategory.ASSET,
 )
 
 ZERO_DECIMAL = Decimal("0")
@@ -101,6 +102,24 @@ def _get_history_stats(
 
     return current_value, total_invested, days_elapsed
 
+
+
+def _held_outside_investments(session: Session, user_uuid: str, master_key: str) -> tuple[Decimal, Decimal]:
+    """Today's bank balances and possessions, as the dashboard counts them:
+    nothing for a module the user turned off."""
+    from services.asset import get_user_assets
+    from services.bank import get_user_bank_accounts
+    from services.settings import get_or_create_settings
+
+    settings = get_or_create_settings(session, user_uuid, master_key)
+    bank = ZERO_DECIMAL
+    if settings.bank_module_enabled:
+        # None when a held currency has no published rate.
+        bank = get_user_bank_accounts(session, user_uuid, master_key).total_balance or ZERO_DECIMAL
+    assets = ZERO_DECIMAL
+    if settings.wealth_module_enabled:
+        assets = get_user_assets(session, user_uuid, master_key).total_estimated_value
+    return bank, assets
 
 
 def _to_monthly_rate(annual_rate: float) -> float:
@@ -181,9 +200,9 @@ def generate_wealth_projection(
     history_stats: dict[AccountCategory, tuple[Decimal, Decimal, int]] = {
         AccountCategory.STOCK: _get_history_stats(session, user_bidx, master_key, AccountCategory.STOCK),
         AccountCategory.CRYPTO: _get_history_stats(session, user_bidx, master_key, AccountCategory.CRYPTO),
-        AccountCategory.BANK: (ZERO_DECIMAL, ZERO_DECIMAL, 0),
     }
     placements = get_user_placements(session, user.uuid, master_key)
+    bank_total, assets_total = _held_outside_investments(session, user.uuid, master_key)
 
     if basis is None:
         basis = derive_projection_defaults(session, user.uuid, master_key)
@@ -193,18 +212,14 @@ def generate_wealth_projection(
     used_rates: dict[AccountCategory, float] = {}
 
     for category in PROJECTED_CATEGORIES:
-        if category == AccountCategory.BANK:
-            # Bank balances move with salary and spending, so there is nothing
-            # here it would be honest to measure: only the rates the user
-            # entered on savings accounts, else a conservative 2 %.
-            declared = basis.get(category.value)
-            default_injection = ZERO_DECIMAL
-            default_rate = (
-                float(declared.annual_return_rate)
-                if declared is not None and declared.annual_return_rate is not None
-                else 0.02
-            )
+        if category == AccountCategory.ASSET:
+            # Possessions are held at their estimate: no rate a watch or a car
+            # could be given would be a measurement.
+            default_injection, default_rate = ZERO_DECIMAL, 0.0
         else:
+            # BANK included: its surplus is measured on the real cashflow and
+            # its rate is the declared one, else nothing — a flat 2 % on a
+            # current account would be invented interest.
             measured = basis.get(category.value)
             default_injection = (
                 measured.monthly_contribution
@@ -229,11 +244,13 @@ def generate_wealth_projection(
     # 3. Projection loop.
     data_points: list[ProjectionDataPoint] = []
 
+    # The whole net worth, so the curve starts where the dashboard's total stands.
     current_values: dict[AccountCategory, Decimal] = {
-        AccountCategory.BANK: ZERO_DECIMAL,
+        AccountCategory.BANK: bank_total,
         AccountCategory.STOCK: history_stats[AccountCategory.STOCK][0],
         AccountCategory.CRYPTO: history_stats[AccountCategory.CRYPTO][0],
         AccountCategory.PLACEMENT: placements.total_value,
+        AccountCategory.ASSET: assets_total,
     }
     current_date = date.today()
 

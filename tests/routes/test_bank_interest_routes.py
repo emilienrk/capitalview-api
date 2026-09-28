@@ -118,6 +118,9 @@ def test_the_bank_projection_takes_the_declared_rates(session, master_key):
 
     bank = derive_projection_defaults(session, "user_1", master_key)["BANK"]
 
-    assert bank.annual_return_rate == pytest.approx(Decimal("0.035"))
+    # Spread over every balance: the 5 000 € current account earns nothing, and
+    # the projection applies this rate to the whole bank pocket.
+    assert bank.annual_return_rate == pytest.approx(Decimal("1400") / Decimal("45000"))
     assert bank.return_source == "declared_rates"
-    assert [w.code for w in bank.warnings] == ["contribution_not_measured"]
+    # No operation stored yet: no monthly surplus is deduced.
+    assert [w.code for w in bank.warnings] == ["short_cashflow_history"]

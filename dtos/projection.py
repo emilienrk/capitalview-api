@@ -23,7 +23,7 @@ class ProjectionParameters(BaseModel):
     )
     assets: dict[AccountCategory, ProjectionAssetParameters] = Field(
         default_factory=dict,
-        description="Parametres par type d'actif (STOCK, CRYPTO, BANK, PLACEMENT).",
+        description="Parametres par type d'actif (STOCK, CRYPTO, BANK, PLACEMENT, ASSET).",
     )
 
 
@@ -43,7 +43,9 @@ class ProjectionBasisWarning(BaseModel):
 class ProjectionAssetBasis(BaseModel):
     """Where a default came from, so a caller can state it rather than imply it."""
 
-    contribution: str = Field(description="'net_external_flows' ou 'unavailable'")
+    contribution: str = Field(
+        description="'net_external_flows', 'real_cashflow' (banque, épargne mesurée sur les relevés) ou 'unavailable'"
+    )
     contribution_months: int = 0
     contribution_total: float = 0.0
     return_: str = Field(
