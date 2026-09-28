@@ -213,6 +213,9 @@ def _as_position(position) -> dict:
 def get_user_balance(session: Session, user_uuid: str, master_key: bytes, details: bool = False, date: str = None) -> dict:
     user_bidx = hash_index(user_uuid, master_key)
     settings = get_or_create_settings(session, user_uuid, master_key)
+    # Parsed once: the account summaries compare it against dates, and the
+    # string they used to receive made every dated call raise.
+    target_date = datetime.date.fromisoformat(date) if date else None
 
     result = {}
 
@@ -227,7 +230,7 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
     stock_accounts_details = []
     for acc in stock_models:
         transactions = get_stock_transactions(session, acc.uuid, master_key)
-        summary = get_stock_account_summary(session, transactions, as_of=date, db_only=True)
+        summary = get_stock_account_summary(session, transactions, as_of=target_date, db_only=True)
         # Net worth = holdings VALEUR + idle account cash.
         acc_val = (summary.current_value or Decimal(0)) + summary.cash_balance
         stock_current_value += acc_val
@@ -259,7 +262,7 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
     crypto_accounts_details = []
     for acc in crypto_models:
         transactions = get_crypto_transactions(session, acc.uuid, master_key)
-        summary = get_crypto_account_summary(session, transactions, as_of=date, db_only=True)
+        summary = get_crypto_account_summary(session, transactions, as_of=target_date, db_only=True)
         # Net worth = holdings VALEUR + idle account cash.
         acc_val = (summary.current_value or Decimal(0)) + summary.cash_balance
         crypto_current_value += acc_val
@@ -285,8 +288,6 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
     bank_accounts_details = []
     if settings.bank_module_enabled:
         if date:
-            from datetime import datetime
-            target_date = datetime.strptime(date, "%Y-%m-%d").date()
             bank_summary = get_all_bank_accounts_snapshot_for_date(session, user_uuid, target_date, master_key)
             # Keyed, not attribute access: this one answers with a dict, unlike
             # the `BankSummaryResponse` of the branch below.
@@ -317,8 +318,6 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
     assets_details = []
     if settings.wealth_module_enabled:
         if date:
-            from datetime import datetime
-            target_date = datetime.strptime(date, "%Y-%m-%d").date()
             asset_summary = get_asset_portfolio_snapshot_for_date(session, user_uuid, target_date, master_key)
             if asset_summary:
                 assets_total = asset_summary.total_value
@@ -345,8 +344,6 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
     placements_invested = Decimal(0)
     placements_details = []
     if date:
-        from datetime import datetime
-        target_date = datetime.strptime(date, "%Y-%m-%d").date()
         summary = get_user_placements(session, user_uuid, master_key)
         for placement in summary.accounts:
             timeline = build_timeline(session, placement.id, master_key)
