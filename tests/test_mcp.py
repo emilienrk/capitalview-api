@@ -652,6 +652,10 @@ def test_performance_and_recurring_answer_on_an_empty_account(client, session, a
     assert performance["pockets"] == {} and performance["total"] is None
     assert _answer(client, token, "get_performance", {"period": "2y"})["isError"] is True
 
+    yearly = _body(_answer(client, token, "get_performance", {"period": "by_year"}))
+    assert yearly["years"]["rows"] == []
+    assert "year" in yearly["years"]["columns"] and "benchmark_return_pct" in yearly["years"]["columns"]
+
     recurring = _body(_answer(client, token, "get_recurring"))
     assert recurring["payments"]["items"]["rows"] == []
     assert set(recurring) == {"payments", "income"}

@@ -431,3 +431,41 @@ class InvestorAnalyticsResponse(BaseModel):
     fees: FeesResponse | None = None
     exits: ExitsResponse | None = None
     plan: PlanResponse | None = None
+
+
+class YearPocketOut(BaseModel):
+    start: date | None = None
+    end: date | None = None
+    value_start: Decimal | None = None
+    value_end: Decimal | None = None
+    net_contributions: Decimal
+    gain: Decimal
+    """What the pocket produced over the year, deposits taken out."""
+    time_weighted_return: Decimal | None = None
+    """Over the days covered, never annualised. None for placements, which only move on statements."""
+    notes: list[str] = []
+
+
+class YearPerformanceOut(BaseModel):
+    year: int
+    start: date
+    end: date
+    covered_from: date
+    """1 January, or the first day anything was held when that came later."""
+    complete: bool
+    """False for the year in progress and for the first one, which opened inside it."""
+    stocks: YearPocketOut | None = None
+    crypto: YearPocketOut | None = None
+    placements: YearPocketOut | None = None
+    gain: Decimal
+    net_contributions: Decimal
+    benchmark_return: Decimal | None = None
+    """Over the stock pocket's own days, so a pocket opened in June meets the index from June."""
+    benchmark_start: date | None = None
+    benchmark_end: date | None = None
+
+
+class YearlyPerformanceResponse(BaseModel):
+    benchmark_asset_key: str
+    benchmark_name: str
+    years: list[YearPerformanceOut] = []

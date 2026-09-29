@@ -53,3 +53,24 @@ def get_benchmark_series(
     matrix = get_price_matrix(session, [asset_key], from_date, to_date)
     filled = fill_price_gaps(matrix, [asset_key], days, session)
     return {day: Decimal(str(price)) for day, price in sorted(filled.get(asset_key, {}).items())}
+
+
+def user_benchmark(session: Session, user_uuid: str, master_key: str) -> tuple[str, str]:
+    """The user's benchmark key and the name to print for it."""
+    from services.analytics.labels import label_of, resolve_asset_labels
+    from services.settings import get_or_create_settings
+
+    key = resolve_benchmark_key(get_or_create_settings(session, user_uuid, master_key))
+    return key, label_of(resolve_asset_labels(session, [key]), key).name
+
+
+def total_return(series: dict[date, Decimal], start: date, end: date) -> Decimal | None:
+    """Accumulating ETF: first and last quote are the whole total return."""
+    first, last = series.get(start), series.get(end)
+    if not first or not last or first <= Decimal("0"):
+        return None
+    return last / first - Decimal("1")
+
+
+def benchmark_return(session: Session, asset_key: str, start: date, end: date) -> Decimal | None:
+    return total_return(get_benchmark_series(session, asset_key, start, end), start, end)

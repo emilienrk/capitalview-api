@@ -40,6 +40,13 @@ def test_investor_analytics_is_empty_without_any_account(session, master_key):
     assert body["benchmark_asset_key"] == "IE00B4L5Y983"
 
 
+def test_yearly_performance_is_empty_without_any_account(session, master_key):
+    body = TestClient(app).get("/analytics/yearly").json()
+
+    assert body["years"] == []
+    assert body["benchmark_asset_key"] == "IE00B4L5Y983"
+
+
 @patch("services.analytics.benchmark.ensure_price_history")
 def test_investor_analytics_reports_a_gap_for_a_funded_account(_ensure, session, master_key):
     from models.stock import StockAccount

@@ -97,17 +97,13 @@ def _series_period(
     return period
 
 
-def _placements_period(session: Session, user_uuid: str, master_key: str, start, end) -> PocketPeriod:
+def _placements_period(timelines, start, end) -> PocketPeriod:
     """Placements move only on statements and flows: a gain, never a daily return."""
-    from services.placement import build_timeline, get_user_placements
-
-    summary = get_user_placements(session, user_uuid, master_key)
-    if not summary.accounts:
+    if not timelines:
         return PocketPeriod()
 
     value_start = value_end = contributions = _ZERO
-    for placement in summary.accounts:
-        timeline = build_timeline(session, placement.id, master_key)
+    for timeline in timelines:
         value_start += timeline.value_on(start)
         value_end += timeline.value_on(end)
         contributions += sum(
@@ -126,6 +122,68 @@ def _placements_period(session: Session, user_uuid: str, master_key: str, start,
     )
 
 
+Series = list[tuple[datetime.date, Decimal]]
+
+
+@dataclass
+class PocketInputs:
+    """Everything the pockets are measured from, read once for any number of windows."""
+
+    stocks: tuple[Series, dict[datetime.date, Decimal]]
+    crypto: tuple[Series, dict[datetime.date, Decimal]]
+    placements: list = field(default_factory=list)
+
+    def first_day(self) -> datetime.date | None:
+        days = [series[0][0] for series, _ in (self.stocks, self.crypto) if series]
+        days += [timeline.start for timeline in self.placements if timeline.start]
+        return min(days, default=None)
+
+
+def load_pockets(session: Session, user_uuid: str, master_key: str) -> PocketInputs:
+    from services.crypto_account import get_all_crypto_accounts_history, get_user_crypto_accounts
+    from services.crypto_transaction import get_account_transactions as get_crypto_transactions
+    from services.placement import build_timeline, get_user_placements
+    from services.stock_account import get_all_stock_accounts_history, get_user_stock_accounts
+    from services.stock_transaction import get_account_transactions as get_stock_transactions
+
+    def read(accounts, read_transactions, read_history):
+        transactions = []
+        for account in accounts:
+            transactions.extend(read_transactions(session, account.id, master_key))
+        series = sorted(
+            (snapshot.snapshot_date, Decimal(snapshot.total_value))
+            for snapshot in read_history(session, user_uuid, master_key, include_current=True)
+        )
+        return series, stock_external_flows(transactions)
+
+    return PocketInputs(
+        stocks=read(
+            get_user_stock_accounts(session, user_uuid, master_key),
+            get_stock_transactions,
+            get_all_stock_accounts_history,
+        ),
+        crypto=read(
+            get_user_crypto_accounts(session, user_uuid, master_key),
+            get_crypto_transactions,
+            get_all_crypto_accounts_history,
+        ),
+        placements=[
+            build_timeline(session, placement.id, master_key)
+            for placement in get_user_placements(session, user_uuid, master_key).accounts
+        ],
+    )
+
+
+def measure_pockets(
+    inputs: PocketInputs, start: datetime.date, end: datetime.date
+) -> dict[str, PocketPeriod]:
+    return {
+        "stocks": _series_period(*inputs.stocks, start, end),
+        "crypto": _series_period(*inputs.crypto, start, end),
+        "placements": _placements_period(inputs.placements, start, end),
+    }
+
+
 def period_performance(
     session: Session,
     user_uuid: str,
@@ -134,33 +192,6 @@ def period_performance(
     end: datetime.date | None = None,
 ) -> dict[str, PocketPeriod]:
     """Each investment pocket's gain and return between `start` and `end` (today by default)."""
-    from services.crypto_account import get_all_crypto_accounts_history, get_user_crypto_accounts
-    from services.crypto_transaction import get_account_transactions as get_crypto_transactions
-    from services.stock_account import get_all_stock_accounts_history, get_user_stock_accounts
-    from services.stock_transaction import get_account_transactions as get_stock_transactions
-
-    end = end or datetime.date.today()
-
-    def measure(accounts, read_transactions, read_history) -> PocketPeriod:
-        transactions = []
-        for account in accounts:
-            transactions.extend(read_transactions(session, account.id, master_key))
-        series = [
-            (snapshot.snapshot_date, Decimal(snapshot.total_value))
-            for snapshot in read_history(session, user_uuid, master_key, include_current=True)
-        ]
-        return _series_period(series, stock_external_flows(transactions), start, end)
-
-    return {
-        "stocks": measure(
-            get_user_stock_accounts(session, user_uuid, master_key),
-            get_stock_transactions,
-            get_all_stock_accounts_history,
-        ),
-        "crypto": measure(
-            get_user_crypto_accounts(session, user_uuid, master_key),
-            get_crypto_transactions,
-            get_all_crypto_accounts_history,
-        ),
-        "placements": _placements_period(session, user_uuid, master_key, start, end),
-    }
+    return measure_pockets(
+        load_pockets(session, user_uuid, master_key), start, end or datetime.date.today()
+    )

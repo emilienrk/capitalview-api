@@ -145,6 +145,7 @@ from .analytics import (
     InvestorGapResponse,
     MetricOut,
     SlippageDistributionOut,
+    YearlyPerformanceResponse,
 )
 
 
@@ -257,6 +258,7 @@ __all__ = [
     "AnalysedAssetOut",
     "InvestorGapResponse",
     "InvestorAnalyticsResponse",
+    "YearlyPerformanceResponse",
     "BridgeStepOut",
     "CounterfactualResponse",
     "SlippageDistributionOut",

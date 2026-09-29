@@ -54,9 +54,11 @@ from pydantic_core import to_jsonable_python
 from dtos.banking import CashflowType, RecurringDirection, RecurringState, RecurringStatus
 from mcp_server.context import require_scope
 from mcp_server.db import open_session
+from services.analytics.benchmark import benchmark_return, user_benchmark
 from services.analytics.period import period_performance
 from services.analytics.projection_basis import BasisWarning, describe
 from services.analytics.report import build_investor_analytics
+from services.analytics.yearly import yearly_performance
 from services.api_token import READ_SCOPE
 from services.bank import get_user_bank_accounts
 from services.banking.flows import DEDUCTED, list_operations
@@ -723,6 +725,30 @@ def _pocket_performance(pocket) -> dict | None:
     return {key: value for key, value in measured.items() if value is not None}
 
 
+_YEAR_COLUMNS = [
+    "year", "from", "to", "complete",
+    "stocks_gain", "stocks_return_pct", "crypto_gain", "crypto_return_pct", "placements_gain",
+    "net_contributions", "gain", "benchmark_return_pct",
+]
+
+
+def _year_row(year) -> list:
+    def pocket(name: str) -> tuple:
+        measured = year.pockets.get(name)
+        if measured is None:
+            return None, None
+        rate = measured.time_weighted_return
+        return _money(measured.gain), _pct(rate * 100) if rate is not None else None
+
+    stocks, crypto = pocket("stocks"), pocket("crypto")
+    return [
+        year.year, year.covered_from, year.end, year.complete,
+        *stocks, *crypto, pocket("placements")[0],
+        _money(year.net_contributions), _money(year.gain),
+        _pct(year.benchmark_return * 100) if year.benchmark_return is not None else None,
+    ]
+
+
 # ---------------------------------------------------------------------------
 # The tools
 # ---------------------------------------------------------------------------
@@ -778,21 +804,42 @@ def register_tools(mcp) -> None:
             "pendant la période) et `gain` = ce que la poche a produit, versements exclus. "
             "`time_weighted_return_pct` est le rendement qui neutralise le moment des versements "
             "(la bonne mesure de « comment ça a performé ») ; `annualised_return_pct` seulement sur "
-            "un an ou plus. `period` : '1m', '3m', '6m', 'ytd' (depuis le 1er janvier, défaut), "
-            "'1y', '3y', '5y', 'max'. Pour la valeur à l'instant T, get_portfolio_overview."
+            "un an ou plus. `benchmark` : ce qu'a fait l'indice de référence de l'utilisateur (MSCI "
+            "World par défaut) sur les mêmes jours que la poche actions, à comparer à son "
+            "`time_weighted_return_pct`. `period` : '1m', '3m', '6m', 'ytd' (depuis le 1er janvier, "
+            "défaut), '1y', '3y', '5y', 'max', ou 'by_year' : une ligne par année civile, poche par "
+            "poche, avec l'indice en face — la première et l'année en cours sont partielles "
+            "(`complete` à false), leur % couvre les jours de `from` à `to`, jamais annualisé. "
+            "Pour la valeur à l'instant T, get_portfolio_overview."
         ),
     )
     def get_performance(
         period: Annotated[
-            Literal["1m", "3m", "6m", "ytd", "1y", "3y", "5y", "max"],
-            Field(description="Fenêtre mesurée, jusqu'à aujourd'hui."),
+            Literal["1m", "3m", "6m", "ytd", "1y", "3y", "5y", "max", "by_year"],
+            Field(description="Fenêtre mesurée jusqu'à aujourd'hui, ou 'by_year' pour chaque année civile."),
         ] = "ytd",
     ) -> str:
         principal = require_scope(READ_SCOPE)
+        if period == "by_year":
+            with open_session() as session:
+                result = yearly_performance(session, principal.user_uuid, principal.master_key)
+            return _render({
+                "period": period,
+                "benchmark": result.benchmark_name,
+                "years": _table(_YEAR_COLUMNS, [_year_row(year) for year in result.years]),
+            })
+
         today = datetime.date.today()
         start = _period_start(period, today)
         with open_session() as session:
             pockets = period_performance(session, principal.user_uuid, principal.master_key, start, today)
+            stocks = pockets["stocks"]
+            benchmark = None
+            if stocks.gain is not None and stocks.start and stocks.end:
+                key, name = user_benchmark(session, principal.user_uuid, principal.master_key)
+                bench = benchmark_return(session, key, stocks.start, stocks.end)
+                if bench is not None:
+                    benchmark = {"name": name, "from": stocks.start, "to": stocks.end, "return_pct": _pct(bench * 100)}
 
         measured = {name: _pocket_performance(p) for name, p in pockets.items()}
         present = [p for p in pockets.values() if p.gain is not None]
@@ -801,6 +848,7 @@ def register_tools(mcp) -> None:
             "from": start if period != "max" else None,
             "to": today,
             "pockets": {name: body for name, body in measured.items() if body is not None},
+            "benchmark": benchmark,
             "total": {
                 "value_start": _money(sum((p.value_start for p in present), Decimal(0))),
                 "value_end": _money(sum((p.value_end for p in present), Decimal(0))),
