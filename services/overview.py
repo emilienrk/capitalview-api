@@ -28,6 +28,7 @@ from sqlmodel import Session, select
 from dtos.crypto import FIAT_ASSET_KEYS
 from models import CryptoAccount, StockAccount
 from models.enums import FlowType
+from models.market import MarketAsset
 from services.asset import (
     get_asset_portfolio_history,
     get_asset_portfolio_snapshot_for_date,
@@ -171,8 +172,23 @@ def list_transactions(
         collected = [m for m in collected if m["executed_at"].date() <= until]
 
     collected.sort(key=lambda m: m["executed_at"], reverse=True)
+    kept = collected[:limit] if limit else collected
 
-    return collected[:limit] if limit else collected
+    # The ledger keys a line by ISIN for stocks: without the ticker and the
+    # name, "FR0000120073" says nothing about what was bought.
+    known = {
+        asset_key: (symbol, name)
+        for asset_key, symbol, name in session.exec(
+            select(MarketAsset.asset_key, MarketAsset.symbol, MarketAsset.name).where(
+                MarketAsset.asset_key.in_({m["asset_key"] for m in kept})
+            )
+        ).all()
+    } if kept else {}
+    for movement in kept:
+        symbol, name = known.get(movement["asset_key"], (None, None))
+        movement["symbol"] = symbol or movement["asset_key"]
+        movement["name"] = (name or "").strip() or None
+    return kept
 
 
 def _as_movement(transaction, account_type: str, account_name: str) -> dict:

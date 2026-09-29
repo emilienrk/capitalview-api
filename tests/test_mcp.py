@@ -178,22 +178,61 @@ def test_a_malformed_date_bound_is_refused_rather_than_guessed():
         _as_date("01/03/2026")
 
 
-def test_an_unknown_account_type_is_refused_rather_than_answered_empty():
-    """"bank" is the obvious guess, and an empty ledger would read as an answer."""
-    from mcp_server.tools import _as_account_type
-
-    assert _as_account_type("all") == "all"
-    with pytest.raises(ToolError, match="'stock', 'crypto' ou 'all'"):
-        _as_account_type("bank")
+def _tools(client, token) -> dict[str, dict]:
+    return {tool["name"]: tool for tool in _call(client, "tools/list", {}, token=token).json()["result"]["tools"]}
 
 
-def test_an_unknown_flow_type_is_refused_rather_than_ignored():
-    from mcp_server.tools import _as_flow_type
+def _answer(client, token, name: str, arguments: dict | None = None) -> dict:
+    """Call a tool and return its result, asserting the answer is one compact line."""
+    response = _call(
+        client, "tools/call", {"name": name, "arguments": arguments or {}}, token=token, name=name
+    )
+    assert response.status_code == 200
+    result = response.json()["result"]
+    if not result["isError"]:
+        # Indented JSON spent a third of every answer on spaces.
+        assert "\n" not in result["content"][0]["text"]
+    return result
 
-    assert _as_flow_type(None) is None
-    assert _as_flow_type("inflow") == "inflow"
-    with pytest.raises(ToolError, match="'inflow' ou 'outflow'"):
-        _as_flow_type("revenus")
+
+def _body(result: dict) -> dict:
+    assert result["isError"] is False, result["content"][0]["text"]
+    return json.loads(result["content"][0]["text"])
+
+
+def test_every_tool_is_advertised_as_a_read_only_query(client, session, account):
+    """A client can then call them without asking the user each time."""
+    _, _, token = account
+
+    for tool in _tools(client, token).values():
+        assert tool["annotations"]["readOnlyHint"] is True
+        assert tool["annotations"]["destructiveHint"] is False
+        assert tool["annotations"]["openWorldHint"] is False
+
+
+def test_the_accepted_values_are_in_the_schema_not_only_in_the_prose(client, session, account):
+    """An enum the model can read beats a refusal it has to recover from."""
+    _, _, token = account
+    tools = _tools(client, token)
+
+    def schema(tool, argument):
+        prop = tools[tool]["inputSchema"]["properties"][argument]
+        options = prop.get("anyOf", [prop])
+        return next(option for option in options if option.get("type") != "null")
+
+    assert schema("list_investment_transactions", "account_type")["enum"] == ["stock", "crypto", "all"]
+    assert schema("get_declared_budget", "flow_type")["enum"] == ["inflow", "outflow"]
+    assert schema("get_wealth_history", "granularity")["enum"] == ["auto", "day", "week", "month"]
+    assert "description" in tools["get_portfolio_overview"]["inputSchema"]["properties"]["details"]
+
+
+def test_an_unknown_flow_type_is_refused_rather_than_ignored(client, session, account):
+    _, _, token = account
+
+    result = _answer(client, token, "get_declared_budget", {"flow_type": "revenus"})
+
+    assert result["isError"] is True
+    assert "flow_type" in result["content"][0]["text"]
 
 
 def test_asking_for_bank_movements_says_so_instead_of_reporting_none(client, session, account):
@@ -202,8 +241,8 @@ def test_asking_for_bank_movements_says_so_instead_of_reporting_none(client, ses
 
     response = _call(
         client, "tools/call",
-        {"name": "list_recent_transactions", "arguments": {"account_type": "bank"}},
-        token=token, name="list_recent_transactions",
+        {"name": "list_investment_transactions", "arguments": {"account_type": "bank"}},
+        token=token, name="list_investment_transactions",
     )
 
     result = response.json()["result"]
@@ -464,10 +503,12 @@ def test_tools_are_advertised_to_an_authenticated_client(client, session, accoun
     assert names == {
         "get_portfolio_overview",
         "get_performance",
-        "get_cashflow_summary",
-        "get_observed_flows",
+        "get_cashflow",
+        "list_bank_operations",
+        "get_recurring",
+        "get_declared_budget",
         "get_wealth_history",
-        "list_recent_transactions",
+        "list_investment_transactions",
         "project_wealth",
         "get_investor_analytics",
     }
@@ -509,53 +550,129 @@ def test_the_overview_reports_cost_basis_alongside_value(client, session, accoun
     assert {"net_invested", "gain"} <= set(overview["pockets"]["placements"])
 
 
-def test_observed_flows_report_transfers_apart_from_spending(client, session, account, master_key):
-    """Money moved between the user's own accounts is neither income nor
-    spending — but it is not hidden either: it is counted and named."""
-    from datetime import date as _date
-
+def _current_and_livret(session, master_key, user_uuid) -> tuple[str, str]:
     from dtos.bank import BankAccountCreate
     from models.enums import BankAccountType
     from services.bank import create_bank_account
+
+    return tuple(
+        create_bank_account(
+            session, BankAccountCreate(name=name, balance="0", account_type=kind), user_uuid, master_key,
+        ).id
+        for name, kind in (("Courant", BankAccountType.CHECKING), ("Livret A", BankAccountType.LIVRET_A))
+    )
+
+
+def _operations(session, master_key, *rows):
+    """(account, direction, amount, reference, label), all booked on the 1st of this month."""
+    from datetime import date as _date
+
     from services.banking.transactions import store_transactions
 
-    user, _, token = account
-    accounts = [
-        create_bank_account(
-            session,
-            BankAccountCreate(name=name, balance="0", account_type=kind),
-            user.uuid, master_key,
-        ).id
-        for name, kind in (("Courant", BankAccountType.CHECKING),
-                           ("Livret A", BankAccountType.LIVRET_A))
-    ]
-    today = _date.today()
-    day = today.replace(day=1).isoformat()
-    for account_id, direction, amount, ref in (
-        (accounts[0], "DBIT", "400.00", "to-savings"),
-        (accounts[1], "CRDT", "400.00", "from-current"),
-        (accounts[0], "DBIT", "30.00", "groceries"),
-    ):
+    day = _date.today().replace(day=1).isoformat()
+    for account_id, direction, amount, ref, label in rows:
         store_transactions(session, master_key, account_id, [{
             "entry_reference": ref,
             "transaction_amount": {"currency": "EUR", "amount": amount},
             "credit_debit_indicator": direction,
             "status": "BOOK",
             "booking_date": day,
-            "remittance_information": ["peu importe"],
+            "remittance_information": [label],
         }])
 
-    response = _call(
-        client, "tools/call", {"name": "get_observed_flows", "arguments": {"months": 1}},
-        token=token, name="get_observed_flows",
+
+def test_money_moved_to_a_livret_is_neither_spent_nor_listed_as_spending(client, session, account, master_key):
+    """The transfer to the livret is saving: the month has spent 30 €, not 430 €,
+    and the operations list flags the transfer rather than totalling it."""
+    user, _, token = account
+    current, livret = _current_and_livret(session, master_key, user.uuid)
+    _operations(
+        session, master_key,
+        (current, "DBIT", "400.00", "to-savings", "VIR Virement vers Livret A"),
+        (livret, "CRDT", "400.00", "from-current", "VIR Virement depuis Courant"),
+        (current, "DBIT", "30.00", "groceries", "CARTE 01/09 Épicerie du Marché"),
     )
 
-    assert response.status_code == 200
-    flows = json.loads(response.json()["result"]["content"][0]["text"])
-    assert flows["outflow"] == 30.0
-    assert flows["internal_transfers_excluded"] == 1
-    assert flows["internal_transfers_amount"] == 400.0
-    assert sorted(flows["account_names"]) == ["Courant", "Livret A"]
+    month = _body(_answer(client, token, "get_cashflow", {"period": "current"}))
+    assert month["spent_so_far"] == 30.0
+
+    listed = _body(_answer(client, token, "list_bank_operations", {"months": 1}))
+    assert listed["matched"] == 3
+    assert listed["total_out"] == 30.0
+    notes = {row[1]: row[5] for row in listed["operations"]["rows"]}
+    assert "virement interne" in notes["VIR Virement vers Livret A"]
+
+
+def test_a_search_ignores_accents_and_totals_every_match_not_only_the_rows_returned(
+    client, session, account, master_key
+):
+    user, _, token = account
+    current, _ = _current_and_livret(session, master_key, user.uuid)
+    _operations(
+        session, master_key,
+        (current, "DBIT", "12.00", "m1", "CARTE Épicerie du Marché"),
+        (current, "DBIT", "8.00", "m2", "CARTE EPICERIE DU MARCHE"),
+        (current, "DBIT", "99.00", "other", "CARTE Librairie"),
+    )
+
+    found = _body(_answer(client, token, "list_bank_operations", {"search": "epicerie", "limit": 1}))
+
+    assert found["matched"] == 2
+    assert found["returned"] == 1 and found["truncated"] is True
+    assert found["total_out"] == 20.0
+    assert found["operations"]["rows"][0][2] < 0  # a debit reads as negative
+
+
+def test_an_unfinished_month_is_refused_with_the_way_to_ask_for_it(client, session, account):
+    from datetime import date as _date
+
+    _, _, token = account
+
+    result = _answer(client, token, "get_cashflow", {"period": f"{_date.today():%Y-%m}"})
+    assert result["isError"] is True
+    assert "current" in result["content"][0]["text"]
+
+    assert _answer(client, token, "get_cashflow", {"period": "demain"})["isError"] is True
+
+
+def test_the_cashflow_window_answers_on_an_account_without_operations(client, session, account):
+    _, _, token = account
+
+    body = _body(_answer(client, token, "get_cashflow"))
+
+    assert body["window"]["history_starts"] is None
+    assert body["monthly_median"]["expenses"] == 0
+    assert body["caveats"] == []
+
+
+def test_performance_and_recurring_answer_on_an_empty_account(client, session, account):
+    _, _, token = account
+
+    performance = _body(_answer(client, token, "get_performance", {"period": "1y"}))
+    assert performance["pockets"] == {} and performance["total"] is None
+    assert _answer(client, token, "get_performance", {"period": "2y"})["isError"] is True
+
+    recurring = _body(_answer(client, token, "get_recurring"))
+    assert recurring["payments"]["items"]["rows"] == []
+    assert set(recurring) == {"payments", "income"}
+
+
+def test_the_analytics_answer_keeps_the_verdicts_and_drops_the_chart_series():
+    from mcp_server.tools import _lean
+
+    report = {
+        "verdict": "Bien.",
+        "market_conditioning": {"points": [1, 2], "density": [3], "yearly": [{"label": "2025"}], "verdict": "Neutre."},
+        "regularity": {"monthly": [4], "reading": {"tone": "good"}, "verdict": "Régulier."},
+        "signals": [{"label": "Frais", "value": None, "format": None, "tone": "good"}],
+    }
+
+    assert _lean(report) == {
+        "verdict": "Bien.",
+        "market_conditioning": {"yearly": [{"label": "2025"}], "verdict": "Neutre."},
+        "regularity": {"verdict": "Régulier."},
+        "signals": [{"label": "Frais", "tone": "good"}],
+    }
 
 
 def test_the_wealth_curve_answers_on_an_empty_account(client, session, account):
@@ -572,22 +689,16 @@ def test_the_wealth_curve_answers_on_an_empty_account(client, session, account):
     assert result["isError"] is False
     payload = json.loads(result["content"][0]["text"])
     assert payload["granularity"] == "day"
-    assert payload["points"] == []
+    assert payload["points"]["rows"] == []
+    assert payload["summary"] is None
 
 
 def test_listing_transactions_answers_on_an_empty_account(client, session, account):
     _, _, token = account
 
-    response = _call(
-        client, "tools/call",
-        {"name": "list_recent_transactions", "arguments": {"account_type": "all"}},
-        token=token, name="list_recent_transactions",
-    )
+    body = _body(_answer(client, token, "list_investment_transactions", {"account_type": "all"}))
 
-    assert response.status_code == 200
-    result = response.json()["result"]
-    assert result["isError"] is False
-    assert json.loads(result["content"][0]["text"]) == {"count": 0, "transactions": []}
+    assert (body["matched"], body["truncated"], body["transactions"]["rows"]) == (0, False, [])
 
 
 def test_a_caller_cannot_lift_the_transaction_cap(client, session, account):
@@ -598,8 +709,8 @@ def test_a_caller_cannot_lift_the_transaction_cap(client, session, account):
 
     response = _call(
         client, "tools/call",
-        {"name": "list_recent_transactions", "arguments": {"limit": 10_000}},
-        token=token, name="list_recent_transactions",
+        {"name": "list_investment_transactions", "arguments": {"limit": 10_000}},
+        token=token, name="list_investment_transactions",
     )
 
     assert response.status_code == 200

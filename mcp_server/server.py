@@ -20,15 +20,29 @@ logger = logging.getLogger(__name__)
 
 INSTRUCTIONS = """\
 CapitalView est l'application de gestion de patrimoine personnel de l'utilisateur.
-Ces outils donnent accès en lecture seule à ses comptes : titres, crypto, banque,
-autres actifs, budget, et son analyse d'investisseur.
+Ces outils lisent ses comptes, en lecture seule : titres, crypto, banque, placements,
+biens, budget, et l'analyse de son comportement d'investisseur.
 
-Tous les montants sont en euros. Commencer par get_portfolio_overview pour situer
-la situation globale avant d'appeler un outil plus spécifique.
+Quel outil pour quelle question :
+- Où en est mon patrimoine, sa répartition, mes plus-values : get_portfolio_overview,
+  à appeler en premier pour situer la conversation.
+- Combien je dépense, gagne, épargne ; mon taux d'épargne ; ce mois-ci : get_cashflow.
+- Un paiement précis, un marchand, un libellé : list_bank_operations.
+- Abonnements, loyer, salaire et autres récurrents : get_recurring.
+- Ce qu'ont rapporté mes investissements, mon rendement : get_performance.
+- La trajectoire passée du patrimoine : get_wealth_history ; son avenir : project_wealth.
+- Mes achats et ventes de titres ou de crypto : list_investment_transactions.
+- Le budget que l'utilisateur a prévu, pas le réel : get_declared_budget.
+- Un diagnostic de fond sur sa façon d'investir : get_investor_analytics.
 
-Ces chiffres sont les données financières réelles de l'utilisateur : les citer
-tels quels, ne jamais les extrapoler, et signaler explicitement quand une donnée
-manque plutôt que de l'estimer.\
+Conventions : montants en euros ; un champ `*_pct` est en pourcent (12.5 = 12,5 %) ;
+`annual_return_*` et `growth_share` sont des ratios (0.05 = 5 %) ; dates ISO ; un tableau
+arrive en `columns` + `rows`.
+
+Ces chiffres sont les données financières réelles de l'utilisateur, déjà calculées par
+l'app : les citer tels quels plutôt que les recalculer ou les additionner soi-même, ne
+jamais les extrapoler, et dire quand une donnée manque plutôt que l'estimer. Relayer les
+`caveats`, `notes` et `freshness` qui touchent la question posée.\
 """
 
 
