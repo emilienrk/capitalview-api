@@ -331,6 +331,13 @@ def _compute_daily_net_flow(
 
     return net_flow
 
+def _snapshot_price(price: Decimal) -> str:
+    """About seven significant digits: cents are enough for a share, not for a
+    token worth a fraction of a euro, whose change since the last snapshot the
+    web reads off this price."""
+    return str(round(price, max(2, 6 - price.adjusted())))
+
+
 def _build_positions_from_summary(
     summary,
 ) -> dict[str, Decimal | str | None]:
@@ -386,7 +393,7 @@ def _build_positions_from_summary(
                 "asset_key": p["asset_key"],
                 "quantity": str(p["quantity"]),
                 "value": str(round(p["value"], 2)),
-                "price": str(round(p["price"], 2)) if p["price"] is not None else None,
+                "price": _snapshot_price(p["price"]) if p["price"] is not None else None,
                 "invested": str(round(p["invested"], 2)),
                 "percentage": str(round(percentage, 2)),
             }

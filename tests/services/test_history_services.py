@@ -941,6 +941,28 @@ def test_snapshot_cumulative_pnl_is_total_pnl():
     assert payload["cumulative_pnl"] == Decimal("35")
 
 
+def test_snapshot_price_keeps_the_digits_of_a_cheap_token():
+    """Rounded to cents, a token at 0.86 € could not give its change since the
+    previous snapshot; a share keeps its usual two decimals."""
+    from services.account_history import _build_positions_from_summary
+
+    def position(asset_key: str, price: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            asset_key=asset_key, total_amount=Decimal("10"), current_price=Decimal(price),
+            total_invested=Decimal("5"), current_value=Decimal("10") * Decimal(price),
+        )
+
+    summary = SimpleNamespace(
+        positions=[position("USDC", "0.861234567"), position("PEPE", "0.0000081234567"), position("BTC", "58900.1234")],
+        current_value=Decimal("589009.83"), cash_balance=Decimal("0"),
+        total_invested=Decimal("15"), total_deposits=Decimal("15"),
+        total_withdrawals=Decimal("0"), total_fees=Decimal("0"),
+        total_dividends=Decimal("0"), profit_loss=Decimal("0"), total_profit_loss=Decimal("0"),
+    )
+    prices = {p["asset_key"]: p["price"] for p in json.loads(_build_positions_from_summary(summary)["positions_json"])}
+    assert prices == {"USDC": "0.8612346", "PEPE": "0.000008123457", "BTC": "58900.12"}
+
+
 def test_snapshot_cumulative_pnl_falls_back_to_latent_then_deposits():
     """No total_profit_loss (legacy summary) → latent; neither → deposits math."""
     from services.account_history import _build_positions_from_summary
