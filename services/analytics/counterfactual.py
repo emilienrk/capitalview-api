@@ -208,11 +208,11 @@ def build_bridge(
     exits = sell_proceeds - sold_value_now
 
     steps = [
-        BridgeStep("timing", "Ton calendrier d'achats", v1 - v0),
-        BridgeStep("selection", "Tes actifs plutôt que l'indice", v2 - v1),
-        BridgeStep("execution", "Tes prix d'exécution", v3 - v2),
-        BridgeStep("fees", "Tes frais", -fees_total),
-        BridgeStep("exits", "Tes ventes et arbitrages", exits),
+        BridgeStep("timing", "Votre calendrier d'achats", v1 - v0),
+        BridgeStep("selection", "Vos actifs plutôt que l'indice", v2 - v1),
+        BridgeStep("execution", "Vos prix d'exécution", v3 - v2),
+        BridgeStep("fees", "Vos frais", -fees_total),
+        BridgeStep("exits", "Vos ventes et arbitrages", exits),
     ]
 
     held_units = {

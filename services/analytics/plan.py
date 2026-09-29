@@ -189,8 +189,8 @@ def _parse_period(raw, *, default_since: date | None, label: str) -> PlanPeriod:
         total = sum(allocation.values())
         if abs(total - _HUNDRED) > ALLOCATION_TOLERANCE:
             raise PlanError(
-                f"{label}ton allocation cible fait {total} % au lieu de 100 %. "
-                "Corrige-la plutôt que de la laisser être normalisée en silence."
+                f"{label}votre allocation cible fait {total} % au lieu de 100 %. "
+                "Corrigez-la plutôt que de la laisser être normalisée en silence."
             )
 
     since = _parse_month(raw.get("since")) or default_since

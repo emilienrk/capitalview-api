@@ -452,8 +452,8 @@ def _deposit_lag_payload(lag, purchases, deposits, idle_opportunity) -> dict | N
 
     measurable = lag.is_measurable
     unmatched_caveat = (
-        f"{int(lag.unmatched_share * 100)} % de tes achats n'ont pas de dépôt réel en face "
-        "(provisions automatiques) : la date d'entrée de ton argent est inconnue."
+        f"{int(lag.unmatched_share * 100)} % de vos achats n'ont pas de dépôt réel en face "
+        "(provisions automatiques) : la date d'entrée de votre argent est inconnue."
     )
 
     def gated(value):
@@ -512,7 +512,7 @@ def _deposit_lag_verdict(median) -> str:
             "Achats financés par des provisions automatiques : le délai entre le virement réel "
             "et l'achat n'est pas mesurable."
         )
-    return f"La moitié de tes euros est investie en {round(median)} jour(s) ou moins."
+    return f"La moitié de vos euros est investie en {round(median)} jour(s) ou moins."
 
 
 def _conditioning_payload(conditioning) -> dict | None:
@@ -620,7 +620,7 @@ def _density(conditioning) -> list[dict]:
 def _conditioning_verdict(conditioning, weighted) -> str:
     if weighted is None:
         return (
-            f"{conditioning.sample_size} achats : trop peu pour situer tes achats dans le cycle."
+            f"{conditioning.sample_size} achats : trop peu pour situer vos achats dans le cycle."
         )
     unconditional = conditioning.unconditional_drawdown
     average = _pct(unconditional) if unconditional is not None else "—"
@@ -928,7 +928,7 @@ def _fees_payload(fees) -> dict | None:
     # reporting a confident total over it states a floor as if it were the sum.
     sample = 0 if fees.is_too_partial else fees.orders_with_fee
     estimate_note = (
-        f"Estimé : {fees.orders_with_fee} de tes {fees.order_count} ordres portent des frais "
+        f"Estimé : {fees.orders_with_fee} de vos {fees.order_count} ordres portent des frais "
         f"renseignés ({round(fees.coverage * 100)} %). Les autres sont comptés au même tarif "
         f"— {round(fees.average_fee, 2)} € par ordre — parce qu'un frais non saisi a quand même "
         "été payé. Hypothèse : une commission fixe par ordre."
@@ -952,7 +952,7 @@ def _fees_payload(fees) -> dict | None:
         )
 
     too_few = (
-        f"Frais renseignés sur {fees.orders_with_fee} de tes {fees.order_count} ordres "
+        f"Frais renseignés sur {fees.orders_with_fee} de vos {fees.order_count} ordres "
         f"({round(fees.coverage * 100)} %) : trop peu pour estimer le reste."
         if fees.is_too_partial
         else (
@@ -1010,7 +1010,7 @@ def _fees_payload(fees) -> dict | None:
         "projection_note": (
             f"Projection sur {PROJECTION_YEARS} ans à hypothèse constante : même cadence de "
             f"versement qu'aujourd'hui, {int(PROJECTION_RATE * 100)} % de rendement annuel. "
-            "C'est le coût d'opportunité de tes frais, pas les frais eux-mêmes."
+            "C'est le coût d'opportunité de vos frais, pas les frais eux-mêmes."
         ),
         "ter_note": fees.ter_note,
         "reading": reading(annual["value"], FEES_BANDS, "bps"),
@@ -1024,19 +1024,19 @@ def _fees_verdict(fees, threshold) -> str:
         # charges none look identical from here, and a third reading is likelier
         # than either — the price keyed in already included the commission.
         return (
-            f"Aucun frais renseigné sur tes {fees.order_count} ordres : courtier gratuit, frais "
+            f"Aucun frais renseigné sur vos {fees.order_count} ordres : courtier gratuit, frais "
             "déjà compris dans les prix saisis ou frais non saisis — rien n'est mesuré."
         )
     if fees.is_too_partial:
         return (
-            f"Frais renseignés sur {fees.orders_with_fee} de tes {fees.order_count} ordres "
+            f"Frais renseignés sur {fees.orders_with_fee} de vos {fees.order_count} ordres "
             f"({round(fees.coverage * 100)} %) : trop peu pour estimer les autres."
         )
     # An estimate has to say so before quoting a total, not after.
     partial = ""
     if fees.is_estimated:
         partial = (
-            f" Total estimé : frais saisis sur {fees.orders_with_fee} de tes "
+            f" Total estimé : frais saisis sur {fees.orders_with_fee} de vos "
             f"{fees.order_count} ordres."
         )
 
@@ -1054,17 +1054,17 @@ def _fees_verdict(fees, threshold) -> str:
         )
 
     if threshold is None:
-        return f"{fees.order_count} ordres : trop peu pour mesurer tes frais."
+        return f"{fees.order_count} ordres : trop peu pour mesurer vos frais."
 
     head = (
         f"{_fr(fees.average_fee, 2)} € par ordre facturé. Sous {round(threshold)} € d'ordre, "
         f"les frais d'entrée dépassent {_pct(TARGET_BPS / Decimal('10000'), 2)}"
     )
     if fees.orders_below_threshold == 0:
-        return f"{head} : aucun de tes ordres facturés n'y est.{partial}"
+        return f"{head} : aucun de vos ordres facturés n'y est.{partial}"
 
     detail = (
-        f"{head} : {fees.orders_below_threshold} de tes {fees.order_count} ordres y sont, "
+        f"{head} : {fees.orders_below_threshold} de vos {fees.order_count} ordres y sont, "
         f"pour {round(fees.cost_below_threshold)} € de frais sur "
         f"{round(fees.invested_below_threshold)} € investis."
     )
@@ -1241,7 +1241,7 @@ def _plan_payload(plan, error: str | None, labels) -> dict | None:
                 minimum=PLAN_MIN_MONTHS,
                 solid_at=12,
                 caveat_insufficient=(
-                    f"{months} mois complets depuis le début de ton plan : trop tôt pour juger."
+                    f"{months} mois complets depuis le début de votre plan : trop tôt pour juger."
                 ),
                 caveat_indicative="Moins d'un an de plan — tendance, pas preuve.",
             )
@@ -1384,14 +1384,14 @@ def _plan_promise(plan) -> str:
     the total is what the adherence ratio actually divides by.
     """
     if len(plan.periods) < 2:
-        return f"Ton plan dit {round(plan.monthly_target)} €/mois investis."
+        return f"Votre plan dit {round(plan.monthly_target)} €/mois investis."
 
     steps = " puis ".join(
         f"{round(period.monthly_target)} € depuis {period.since:%m/%Y}"
         for period in plan.periods
     )
     return (
-        f"Ton plan a changé {len(plan.periods) - 1} fois — {steps} — soit "
+        f"Votre plan a changé {len(plan.periods) - 1} fois — {steps} — soit "
         f"{round(plan.total_target)} € promis sur {len(plan.months)} mois complets."
     )
 
@@ -1417,8 +1417,8 @@ def build_global_verdict(blocks: dict) -> str:
             costed.append(
                 (
                     abs(amount),
-                    f"Le moment où tu mets l'argent te coûte {abs(round(amount))} € par rapport "
-                    "à ta propre stratégie.",
+                    f"Le moment où vous placez l'argent vous coûte {abs(round(amount))} € par rapport "
+                    "à votre propre stratégie.",
                 )
             )
 
@@ -1428,7 +1428,7 @@ def build_global_verdict(blocks: dict) -> str:
             (
                 abs(bridge["behaviour_cost"]),
                 f"À capital investi égal, un robot achetant l'indice tous les mois aurait "
-                f"{abs(round(bridge['behaviour_cost']))} € de plus que toi.",
+                f"{abs(round(bridge['behaviour_cost']))} € de plus que vous.",
             )
         )
     if bridge and bridge["idle_cash_opportunity"] and bridge["idle_cash"] > _ZERO:
@@ -1450,8 +1450,8 @@ def build_global_verdict(blocks: dict) -> str:
         costed.append(
             (
                 execution["cost_eur"]["value"],
-                f"Tes prix d'exécution te coûtent {round(execution['cost_eur']['value'])} € : tu "
-                "achètes systématiquement au-dessus du prix moyen du mois.",
+                f"Vos prix d'exécution vous coûtent {round(execution['cost_eur']['value'])} € : vous "
+                "achetez systématiquement au-dessus du prix moyen du mois.",
             )
         )
 
@@ -1461,14 +1461,14 @@ def build_global_verdict(blocks: dict) -> str:
     if regularity and regularity["reading"]["tone"] == BAD:
         equivalent = regularity["equivalent_monthly_purchases"]["value"]
         structural.append(
-            f"Ta répartition dans le temps équivaut à {_fr(equivalent, 1)} mois pleins sur "
+            f"Votre répartition dans le temps équivaut à {_fr(equivalent, 1)} mois pleins sur "
             f"{regularity['months_total']}."
         )
 
     lag = blocks.get("deposit_lag")
     if lag and lag["reading"]["tone"] == BAD:
         structural.append(
-            f"Ton argent attend en médiane {round(lag['median_days']['value'])} jours entre le "
+            f"Votre argent attend en médiane {round(lag['median_days']['value'])} jours entre le "
             "virement et l'investissement."
         )
 
@@ -1482,7 +1482,7 @@ def build_global_verdict(blocks: dict) -> str:
         costed.append(
             (
                 fees["cost_below_threshold"],
-                f"{fees['orders_below_threshold']} de tes ordres sont sous le seuil de "
+                f"{fees['orders_below_threshold']} de vos ordres sont sous le seuil de "
                 f"{round(fees['threshold_order_size']['value'])} € où les frais dépassent "
                 f"0,25 % : {round(fees['cost_below_threshold'])} € de frais.",
             )
@@ -1493,7 +1493,7 @@ def build_global_verdict(blocks: dict) -> str:
         costed.append(
             (
                 exits["cost_eur"]["value"],
-                f"Ce que tu as vendu a ensuite battu l'indice : "
+                f"Ce que vous avez vendu a ensuite battu l'indice : "
                 f"{round(exits['cost_eur']['value'])} € abandonnés en sortant.",
             )
         )
@@ -1505,7 +1505,7 @@ def build_global_verdict(blocks: dict) -> str:
             costed.append(
                 (
                     shortfall,
-                    f"Tu as investi {round(shortfall)} € de moins que ce que ton propre plan "
+                    f"Vous avez investi {round(shortfall)} € de moins que ce que votre propre plan "
                     "prévoyait.",
                 )
             )
@@ -1515,7 +1515,7 @@ def build_global_verdict(blocks: dict) -> str:
         bets = concentration["independent_bets"]["value"]
         if bets < Decimal("1.5") and concentration["lines"] > 1:
             structural.append(
-                f"Tes {concentration['lines']} lignes ne font que {_fr(bets, 1)} pari "
+                f"Vos {concentration['lines']} lignes ne font que {_fr(bets, 1)} pari "
                 "indépendant."
             )
 
@@ -1531,7 +1531,7 @@ def build_global_verdict(blocks: dict) -> str:
     sentences = [text for _, text in costed[:3]] + structural[:2]
 
     if not sentences:
-        return "Pas encore assez d'historique pour dire quoi que ce soit sur ton comportement."
+        return "Pas encore assez d'historique pour dire quoi que ce soit sur votre comportement."
     return " ".join(sentences[:5])
 
 
@@ -1548,7 +1548,7 @@ def _as_metric(metric: Metric) -> dict:
 def _verdict(gap, gap_eur, auto_share: Decimal) -> str:
     if gap is None or gap_eur is None:
         return (
-            "Pas encore assez d'historique pour séparer ta performance de celle de ta stratégie."
+            "Pas encore assez d'historique pour séparer votre performance de celle de votre stratégie."
         )
     provision_note = ""
     if auto_share > Decimal("0.30"):
@@ -1558,8 +1558,8 @@ def _verdict(gap, gap_eur, auto_share: Decimal) -> str:
         )
     side = "moins" if gap < _ZERO else "plus"
     return (
-        f"Tes euros ont rendu {side} que ta stratégie : {abs(round(gap_eur))} € d'écart sur "
-        f"ton capital moyen, dû au moment des versements.{provision_note}"
+        f"Vos euros ont rendu {side} que votre stratégie : {abs(round(gap_eur))} € d'écart sur "
+        f"votre capital moyen, dû au moment des versements.{provision_note}"
     )
 
 

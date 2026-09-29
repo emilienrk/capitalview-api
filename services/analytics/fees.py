@@ -61,9 +61,9 @@ PROJECTION_YEARS = 20
 PROJECTION_RATE = Decimal("0.05")
 
 TER_NOTE = (
-    "Les frais de courtage ne sont pas ton coût principal. Les frais de gestion des ETF "
+    "Les frais de courtage ne sont pas votre coût principal. Les frais de gestion des ETF "
     "(TER, typiquement 0,15 à 0,25 % par an) sont déjà dans le cours et ne sont pas traçables "
-    "ici : sur un portefeuille buy-and-hold, ils pèsent structurellement plus lourd que tes "
+    "ici : sur un portefeuille buy-and-hold, ils pèsent structurellement plus lourd que vos "
     "frais d'ordre."
 )
 
