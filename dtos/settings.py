@@ -72,6 +72,7 @@ class UserSettingsUpdate(BaseModel):
     open_banking_enabled: bool | None = None
     cashflow_module_enabled: bool | None = None
     wealth_module_enabled: bool | None = None
+    notes_module_enabled: bool | None = None
     ai_feature_enabled: bool | None = None
     ai_vision_provider: str | None = None
     ai_chat_provider: str | None = None
@@ -103,6 +104,7 @@ class UserSettingsResponse(BaseModel):
     open_banking_enabled: bool = False
     cashflow_module_enabled: bool = True
     wealth_module_enabled: bool = False
+    notes_module_enabled: bool = False
     ai_feature_enabled: bool = False
     ai_vision_provider: str | None = None
     ai_chat_provider: str | None = None

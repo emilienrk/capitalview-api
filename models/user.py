@@ -103,6 +103,7 @@ class UserSettings(SQLModel, table=True):
     open_banking_enabled: bool = Field(default=False, nullable=False)
     cashflow_module_enabled: bool = Field(default=True, nullable=False)
     wealth_module_enabled: bool = Field(default=True, nullable=False)
+    notes_module_enabled: bool = Field(default=False, nullable=False)
     ai_feature_enabled: bool = Field(default=False, nullable=False)
     # Preferred provider per capability (None = auto-select from priority list)
     ai_vision_provider: str | None = Field(default=None, nullable=True)

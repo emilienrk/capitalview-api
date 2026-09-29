@@ -86,6 +86,7 @@ def _map_settings_to_response(
         open_banking_enabled=settings.open_banking_enabled,
         cashflow_module_enabled=settings.cashflow_module_enabled,
         wealth_module_enabled=settings.wealth_module_enabled,
+        notes_module_enabled=settings.notes_module_enabled,
         ai_feature_enabled=settings.ai_feature_enabled,
         ai_vision_provider=settings.ai_vision_provider,
         ai_chat_provider=settings.ai_chat_provider,
@@ -229,6 +230,9 @@ def update_settings(
 
     if data.wealth_module_enabled is not None:
         settings.wealth_module_enabled = data.wealth_module_enabled
+
+    if data.notes_module_enabled is not None:
+        settings.notes_module_enabled = data.notes_module_enabled
 
     if data.ai_feature_enabled is not None:
         settings.ai_feature_enabled = data.ai_feature_enabled

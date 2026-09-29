@@ -40,6 +40,7 @@ def test_get_settings(session, master_key):
     assert "crypto_show_negative_positions" in data
     assert data["crypto_show_negative_positions"] is False
     assert data["crypto_module_enabled"] is False
+    assert data["notes_module_enabled"] is False
 
 
 def test_update_settings(session, master_key):
@@ -349,3 +350,14 @@ def test_ui_look_defaults_persists_and_rejects_junk(session, master_key):
     assert data["ui_palette"] == "prune"
 
     assert client.put("/settings", json={"ui_style": "<script>"}).status_code == 422
+
+
+def test_toggle_notes_module(session, master_key):
+    client = TestClient(app)
+
+    r = client.put("/settings", json={"notes_module_enabled": True})
+    assert r.status_code == 200
+    assert r.json()["notes_module_enabled"] is True
+
+    r2 = client.put("/settings", json={"inflation_rate": 0.03})
+    assert r2.json()["notes_module_enabled"] is True
