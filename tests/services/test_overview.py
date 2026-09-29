@@ -1,5 +1,6 @@
 """Cross-domain read models: the figures every consumer reads."""
 
+import datetime
 import uuid as uuid_lib
 from decimal import Decimal
 
@@ -260,3 +261,66 @@ class TestBalanceAtADate:
         rows = result["accounts"]["bank"]
         assert [row["name"] for row in rows] == ["Compte courant"]
         assert [row["balance"] for row in rows] == [300.0]
+
+
+def _snapshot(day: str, total: str, **pockets: str) -> dict:
+    """A history day holding every pocket, unless told otherwise."""
+    values = {"bank_value": "1", "stock_value": "1", "crypto_value": "1", "placements_value": "1", "assets_value": "1"}
+    values.update(pockets)
+    return {
+        "snapshot_date": datetime.date.fromisoformat(day),
+        "total_wealth": Decimal(total),
+        **{key: Decimal(value) for key, value in values.items()},
+    }
+
+
+_TODAY = datetime.date(2026, 9, 28)
+
+
+def test_changes_measure_from_the_last_snapshot_the_end_of_last_month_and_of_last_year():
+    history = [_snapshot("2025-12-31", "5000"), _snapshot("2026-08-31", "6000"), _snapshot("2026-09-27", "6400")]
+
+    changes = overview.net_worth_changes(history, Decimal("6500"), {}, _TODAY)
+
+    assert [(c["reference"], c["since"], c["change"]) for c in changes] == [
+        ("last_snapshot", "2026-09-27", 100.0),
+        ("month_start", "2026-08-31", 500.0),
+        ("year_start", "2025-12-31", 1500.0),
+    ]
+    assert changes[2]["change_pct"] == 30.0
+
+
+def test_a_change_never_measures_from_today():
+    history = [_snapshot("2026-09-27", "6000"), _snapshot("2026-09-28", "6100")]
+
+    assert overview.net_worth_changes(history, Decimal("6500"), {}, _TODAY)[0]["since"] == "2026-09-27"
+
+
+def test_a_reference_missing_a_held_pocket_is_skipped_since_it_would_read_as_a_gain():
+    history = [_snapshot("2026-09-26", "6000"), _snapshot("2026-09-27", "5000", bank_value="0")]
+
+    changes = overview.net_worth_changes(history, Decimal("6500"), {"bank": Decimal("1000")}, _TODAY)
+
+    assert changes[0]["since"] == "2026-09-26"
+
+
+def test_a_pocket_worth_rounding_noise_is_not_asked_of_the_reference():
+    history = [_snapshot("2026-09-27", "5000", assets_value="0")]
+
+    changes = overview.net_worth_changes(history, Decimal("6500"), {"assets": Decimal("0.001")}, _TODAY)
+
+    assert changes[0]["since"] == "2026-09-27"
+
+
+def test_two_periods_resting_on_one_snapshot_are_said_once():
+    history = [_snapshot("2026-08-31", "6000")]
+
+    changes = overview.net_worth_changes(history, Decimal("6500"), {}, _TODAY)
+
+    assert [c["reference"] for c in changes] == ["last_snapshot"]
+
+
+def test_a_zero_reference_gives_no_percentage():
+    changes = overview.net_worth_changes([_snapshot("2026-09-27", "0")], Decimal("100"), {}, _TODAY)
+
+    assert changes[0]["change_pct"] is None

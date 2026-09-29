@@ -170,6 +170,7 @@ def test_dashboard_statistics(
     # Check structure
     assert "distribution" in data
     assert "wealth" in data
+    assert isinstance(data["changes"], list)
 
     dist = data["distribution"]
     assert "stock_invested" in dist

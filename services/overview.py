@@ -439,19 +439,20 @@ _HELD_EPSILON = Decimal("0.005")
 
 
 def net_worth_changes(
-    history: list[dict], total: Decimal, held: list[str], today: datetime.date
+    history: list[dict], total: Decimal, pockets: dict[str, Decimal], today: datetime.date
 ) -> list[dict]:
     """The total against the last snapshot, the start of the month and the start of the year.
 
     A day's snapshot is the union of every pocket's own snapshots, and a pocket
     with none that day counts zero: measured from such a day, the missing pocket
-    would read as a gain. So a reference must carry every pocket held today —
-    the rule the dashboard applies. Two references on the same snapshot say the
+    would read as a gain. So a reference must carry every pocket held today,
+    ``pockets`` naming each one's value — broker cash aside, since the history
+    counts it inside its accounts. Two references on the same snapshot say the
     same thing twice, so the wider period is dropped.
 
     Deposits are part of the change: this is how the total moved, not a return.
     """
-    columns = [_HISTORY_POCKETS[pocket] for pocket in held]
+    columns = [_HISTORY_POCKETS[pocket] for pocket, value in pockets.items() if abs(value) > _HELD_EPSILON]
     candidates = (
         ("last_snapshot", today),
         ("month_start", today.replace(day=1)),
@@ -552,13 +553,12 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
     result["unrealized_profit_loss"] = _opt_float(sum(priced) if priced else None)
 
     if not target_date:
-        values = {
+        pockets = {
             "bank": bank_total, "stocks": stocks.holdings, "crypto": crypto.holdings,
             "placements": placements_total, "assets": assets_total,
         }
-        held = [pocket for pocket, value in values.items() if abs(value) > _HELD_EPSILON]
         result["changes"] = net_worth_changes(
-            build_wealth_history(session, user_uuid, master_key), total, held, today
+            build_wealth_history(session, user_uuid, master_key), total, pockets, today
         )
         price_dates = latest_price_dates(session, stocks.held_keys | crypto.held_keys)
         result["freshness"] = {

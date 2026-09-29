@@ -2,6 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -38,10 +39,19 @@ class WealthBreakdown(BaseModel):
     total_wealth: Decimal
 
 
+class NetWorthChange(BaseModel):
+    """How far the total moved since a dated snapshot, deposits included."""
+    reference: Literal["last_snapshot", "month_start", "year_start"]
+    since: date
+    change: float
+    change_pct: float | None = None
+
+
 class DashboardStatisticsResponse(BaseModel):
     """Aggregated dashboard statistics."""
     distribution: InvestmentDistribution
     wealth: WealthBreakdown
+    changes: list[NetWorthChange] = []
 
 
 class DashboardSummaryResponse(BaseModel):

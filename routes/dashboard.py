@@ -1,5 +1,6 @@
 """Dashboard routes - Personal portfolio overview."""
 
+import datetime
 from collections import defaultdict
 from decimal import Decimal
 from typing import Annotated
@@ -22,7 +23,7 @@ from services.auth import get_current_user, get_master_key
 from services.encryption import hash_index, decrypt_data
 from services.market import get_exchange_rate
 from services.settings import get_or_create_settings
-from services.overview import build_wealth_history
+from services.overview import build_wealth_history, net_worth_changes
 from services.stock_transaction import get_stock_account_summary, get_account_transactions as get_stock_transactions
 from services.crypto_transaction import get_crypto_account_summary, get_account_transactions as get_crypto_transactions
 from services.bank import get_user_bank_accounts
@@ -317,9 +318,22 @@ def get_dashboard_statistics(
         total_wealth=round(total_wealth, 2),
     )
 
+    # Measured here, against the total above, so the dashboard and the MCP
+    # server quote the same moves.
+    changes = net_worth_changes(
+        build_wealth_history(session, current_user.uuid, master_key),
+        total_wealth,
+        {
+            "bank": cash_total, "stocks": stock_current_value, "crypto": crypto_current_value,
+            "placements": placements_value, "assets": assets_total,
+        },
+        datetime.date.today(),
+    )
+
     return DashboardStatisticsResponse(
         distribution=distribution,
         wealth=wealth,
+        changes=changes,
     )
 @router.get("/card", response_model=CardResponse)
 async def get_or_generate_card(
