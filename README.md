@@ -63,13 +63,16 @@ Tools live in `mcp_server/tools.py` and are read-only. They call the same
 the account holder can.
 
 `project_wealth` is the one tool that answers about the future rather than the
-past, so both figures it assumes are measured rather than guessed
-(`services/analytics/projection_basis.py`):
+past. It starts from the whole net worth, and the figures it assumes are
+measured rather than guessed (`services/analytics/projection_basis.py`):
 
 | Assumption | Default | Override |
 | --- | --- | --- |
-| Monthly contribution | Net external flows from the ledger, averaged over the months they span | `monthly_stock`, `monthly_crypto`, `monthly_bank` |
-| Annual return | Annualised time-weighted return (TWR) | `annual_return_stock`, `annual_return_crypto`, `annual_return_bank` |
+| Monthly contribution | Stocks, crypto, placements: net external flows from the ledger, averaged over the months they span. Bank: the median month of the last twelve, income − expenses − investments, from six months of operations | `monthly_stock`, `monthly_crypto`, `monthly_placements`, `monthly_bank` |
+| Annual return | Annualised time-weighted return (TWR). Bank: the rates entered on the livrets, spread over every bank balance | `annual_return_stock`, `annual_return_crypto`, `annual_return_placements`, `annual_return_bank` |
+
+Possessions (`ASSET`) are held at their estimate: no rate given to a car or a
+watch would be a measurement.
 
 These defaults live in `generate_wealth_projection` itself, so the dashboard,
 `POST /projection/calculate` and the MCP tool all project from the same numbers.
