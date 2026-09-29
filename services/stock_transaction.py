@@ -14,9 +14,11 @@ from dtos import (
     TransactionResponse,
     PositionResponse,
     AccountSummaryResponse,
+    OrderFeesResponse,
 )
 from services.encryption import encrypt_data, decrypt_data, hash_index
 from services.market import get_stock_info, get_or_create_market_asset
+from services.analytics.fees import analyse_fees
 
 
 def bulk_tx_order_key(item_with_index: tuple[int, object]) -> tuple:
@@ -484,7 +486,38 @@ def get_account_transactions(
 
     decoded = [_decrypt_transaction(tx, master_key) for tx in transactions]
     decoded.sort(key=lambda tx: tx.executed_at, reverse=True)
+
+    asset_keys = {tx.asset_key for tx in decoded if tx.asset_key != "EUR"}
+    if asset_keys:
+        assets = session.exec(select(MarketAsset).where(MarketAsset.asset_key.in_(asset_keys))).all()
+        by_key = {asset.asset_key: asset for asset in assets}
+        for tx in decoded:
+            asset = by_key.get(tx.asset_key)
+            if asset:
+                tx.name = asset.name
+                tx.symbol = asset.symbol
     return decoded
+
+
+def summarise_order_fees(transactions: list[TransactionResponse]) -> OrderFeesResponse:
+    """Brokerage on an account's orders, extrapolated as Analyse › Frais does.
+
+    The estimate covers buy fees only, the ones the fee model is read from; sell
+    fees are added as keyed in.
+    """
+    sell_fees = sum(
+        (tx.fees for tx in transactions if tx.type == "SELL" and tx.asset_key != "EUR"),
+        Decimal("0"),
+    )
+    analysis = analyse_fees(transactions, None)
+    if analysis is None:
+        return OrderFeesResponse(recorded=round(sell_fees, 2))
+    return OrderFeesResponse(
+        recorded=round(analysis.recorded_fees + sell_fees, 2),
+        estimated=round(analysis.total_fees + sell_fees, 2) if analysis.is_estimated else None,
+        buy_orders=analysis.order_count,
+        buy_orders_with_fee=analysis.orders_with_fee,
+    )
 
 def get_stock_account_summary(
     session: Session,

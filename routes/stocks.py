@@ -50,6 +50,7 @@ from services.stock_transaction import (
     update_stock_transaction,
     delete_stock_transaction,
     get_stock_account_summary,
+    summarise_order_fees,
     _account_owned_by_user as _stock_account_owned_by_user,
 )
 from services.market import search_assets as _search_assets_svc, get_assets_bulk_info
@@ -123,8 +124,12 @@ def get_account(
     #acc_resp = _map_account_to_response(account_model, master_key)
 
     transactions = get_account_transactions(session, account_model.uuid, master_key)
-    
-    return get_stock_account_summary(session, transactions, db_only=db_only)
+
+    # Only this route carries the fee figure: the summary also backs every
+    # history snapshot, which has no use for it.
+    summary = get_stock_account_summary(session, transactions, db_only=db_only)
+    summary.order_fees = summarise_order_fees(transactions)
+    return summary
 
 
 @router.get("/accounts/{account_id}/history", response_model=list[AccountHistorySnapshotResponse])

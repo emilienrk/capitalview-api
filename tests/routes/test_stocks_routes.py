@@ -306,3 +306,69 @@ def test_bulk_import_sorts_transactions_to_allow_loss_sells(session, master_key)
     assert txs_resp.status_code == 200
     txs = txs_resp.json()
     assert sum(1 for t in txs if t["asset_key"] == "FR0011869353") == 2
+
+
+def _named_account(client, session, name="CTO Names"):
+    session.add(MarketAsset(asset_key="FR0000120271", symbol="TTE", name="TotalEnergies", asset_type=AssetType.STOCK))
+    session.commit()
+    resp = client.post("/stocks/accounts", json={"name": name, "account_type": "CTO"})
+    assert resp.status_code == 201
+    return resp.json()["id"]
+
+
+def _order(kind, amount, price, fees, day):
+    return {
+        "asset_key": "FR0000120271", "type": kind, "amount": amount, "price_per_unit": price,
+        "fees": fees, "executed_at": f"2026-01-{day:02d}T10:00:00",
+    }
+
+
+def test_account_transactions_carry_the_asset_name(session, master_key):
+    client = TestClient(app)
+    account_id = _named_account(client, session)
+    bulk = {"account_id": account_id, "transactions": [
+        {"asset_key": "EUR", "type": "DEPOSIT", "amount": "500", "price_per_unit": "1", "fees": "0", "executed_at": "2026-01-01T09:00:00"},
+        _order("BUY", "4", "55", "1", 2),
+        _order("SELL", "4", "60", "1", 3),
+    ]}
+    assert client.post("/stocks/transactions/bulk", json=bulk).status_code == 201
+
+    txs = client.get(f"/stocks/transactions/account/{account_id}").json()
+
+    trades = [t for t in txs if t["asset_key"] != "EUR"]
+    assert {t["name"] for t in trades} == {"TotalEnergies"}
+    assert {t["symbol"] for t in trades} == {"TTE"}
+    deposit = next(t for t in txs if t["asset_key"] == "EUR")
+    assert deposit["name"] is None
+
+
+@patch("services.stock_transaction.get_stock_info")
+def test_account_summary_estimates_the_buy_fees_nobody_typed_in(mock_market, session, master_key):
+    mock_market.return_value = ("TotalEnergies", Decimal("60"))
+    client = TestClient(app)
+    account_id = _named_account(client, session)
+    # Four buys charged 1 EUR, one left blank, and a sell charged 2 EUR.
+    orders = [_order("BUY", str(n), "50", "1", day) for day, n in zip(range(2, 6), (2, 5, 9, 14))]
+    orders += [_order("BUY", "3", "50", "0", 6), _order("SELL", "1", "58", "2", 7)]
+    assert client.post("/stocks/transactions/bulk", json={"account_id": account_id, "transactions": orders}).status_code == 201
+
+    fees = client.get(f"/stocks/accounts/{account_id}").json()["order_fees"]
+
+    assert Decimal(str(fees["recorded"])) == Decimal("6")
+    assert Decimal(str(fees["estimated"])) == Decimal("7")
+    assert (fees["buy_orders"], fees["buy_orders_with_fee"]) == (5, 4)
+
+
+@patch("services.stock_transaction.get_stock_info")
+def test_account_summary_has_no_fee_estimate_when_none_was_ever_typed_in(mock_market, session, master_key):
+    mock_market.return_value = ("TotalEnergies", Decimal("60"))
+    client = TestClient(app)
+    account_id = _named_account(client, session)
+    orders = [_order("BUY", "2", "50", "0", 2), _order("BUY", "3", "52", "0", 3)]
+    assert client.post("/stocks/transactions/bulk", json={"account_id": account_id, "transactions": orders}).status_code == 201
+
+    fees = client.get(f"/stocks/accounts/{account_id}").json()["order_fees"]
+
+    assert Decimal(str(fees["recorded"])) == Decimal("0")
+    assert fees["estimated"] is None
+    assert fees["buy_orders_with_fee"] == 0

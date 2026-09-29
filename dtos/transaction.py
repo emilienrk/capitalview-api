@@ -12,6 +12,9 @@ class TransactionResponse(BaseModel):
     """Base transaction response with calculated fields."""
     id: str
     asset_key: str
+    # Stock history only: the market name, so a sold line still reads as a name.
+    name: str | None = None
+    symbol: str | None = None
     type: str
     amount: Decimal
     price_per_unit: Decimal
@@ -49,6 +52,17 @@ class PositionResponse(BaseModel):
     profit_loss_percentage: Decimal | None = None
 
 
+class OrderFeesResponse(BaseModel):
+    """Brokerage paid on an account's orders, for the account's own figure."""
+    recorded: Decimal
+    """Fees keyed in on buys and sells."""
+    estimated: Decimal | None = None
+    """The whole bill once unrecorded buy fees are extrapolated; null when the
+    recorded fees are complete, or too few to stand in for the rest."""
+    buy_orders: int = 0
+    buy_orders_with_fee: int = 0
+
+
 class AccountSummaryResponse(BaseModel):
     """Summary of an account with all positions."""
     total_invested: Decimal
@@ -63,6 +77,7 @@ class AccountSummaryResponse(BaseModel):
     profit_loss_percentage: Decimal | None = None
     realized_profit_loss: Decimal | None = None
     total_profit_loss: Decimal | None = None
+    order_fees: OrderFeesResponse | None = None
     positions: list[PositionResponse]
 
 
