@@ -38,7 +38,7 @@ def test_get_settings(session, master_key):
     assert r.status_code == 200
     data = r.json()
     assert "crypto_auto_deposits" in data
-    assert data["crypto_auto_deposits"] is True
+    assert data["crypto_auto_deposits"] is False
     assert data["crypto_module_enabled"] is False
     assert data["notes_module_enabled"] is False
 
@@ -46,16 +46,16 @@ def test_get_settings(session, master_key):
 def test_update_settings(session, master_key):
     client = TestClient(app)
 
-    # Enable the module and turn automatic deposits off
+    # Enable the module and turn automatic deposits on
     r = client.put("/settings", json={
         "crypto_module_enabled": True,
-        "crypto_auto_deposits": False,
+        "crypto_auto_deposits": True,
         "crypto_mode": "MULTI"
     })
     assert r.status_code == 200
     data = r.json()
     assert data["crypto_module_enabled"] is True
-    assert data["crypto_auto_deposits"] is False
+    assert data["crypto_auto_deposits"] is True
     assert data["crypto_mode"] == "MULTI"
 
     # Verify changes persisted
@@ -63,17 +63,17 @@ def test_update_settings(session, master_key):
     assert r2.status_code == 200
     data2 = r2.json()
     assert data2["crypto_module_enabled"] is True
-    assert data2["crypto_auto_deposits"] is False
+    assert data2["crypto_auto_deposits"] is True
     assert data2["crypto_mode"] == "MULTI"
 
-    # Turn automatic deposits back on
+    # Turn automatic deposits back off
     r3 = client.put("/settings", json={
-        "crypto_auto_deposits": True,
+        "crypto_auto_deposits": False,
     })
     assert r3.status_code == 200
     data3 = r3.json()
     assert data3["crypto_module_enabled"] is True  # Should remain unchanged
-    assert data3["crypto_auto_deposits"] is True
+    assert data3["crypto_auto_deposits"] is False
 
 
 def test_update_display_timezone(session, master_key):

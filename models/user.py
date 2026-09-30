@@ -93,7 +93,7 @@ class UserSettings(SQLModel, table=True):
     crypto_mode: str = Field(default="SINGLE", nullable=False)
     # True = the user doesn't enter EUR deposits: purchases are read as funded by
     # them, so a negative EUR balance is never shown as a line.
-    crypto_auto_deposits: bool = Field(default=True, nullable=False)
+    crypto_auto_deposits: bool = Field(default=False, nullable=False)
     bank_module_enabled: bool = Field(default=True, nullable=False)
     # False = linked cashflows no longer adjust bank balances automatically.
     # Off by default: a forecast moving a real balance on its own surprises more

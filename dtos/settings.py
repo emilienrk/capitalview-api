@@ -98,7 +98,7 @@ class UserSettingsResponse(BaseModel):
     inflation_rate: float = 0.02
     crypto_module_enabled: bool = False
     crypto_mode: str = "SINGLE"
-    crypto_auto_deposits: bool = True
+    crypto_auto_deposits: bool = False
     bank_module_enabled: bool = False
     bank_auto_sync_enabled: bool = False
     open_banking_enabled: bool = False
