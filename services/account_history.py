@@ -40,7 +40,6 @@ from services.broker_cash import counted_cash, uncounted_cash
 from services.encryption import decrypt_data, encrypt_data, hash_index
 from services.placement import PlacementTimeline, build_timeline
 from services.market import get_exchange_rate
-from services.settings import get_or_create_settings
 from models.enums import CryptoTransactionType, StockTransactionType
 
 logger = logging.getLogger(__name__)
@@ -107,7 +106,6 @@ class _AccountSnapshot:
 
     # Exact mode for Stocks and Crypto
     transactions: list = field(default_factory=list)
-    show_negative_positions: bool = False
 
     physical_assets: list[IndividualAsset] = field(default_factory=list)
 
@@ -666,7 +664,6 @@ def _build_crypto_snapshots(
     session: Session,
     master_key: str,
     user_uuid_bidx: str,
-    show_negative: bool,
 ) -> list[_AccountSnapshot]:
     """Return one _AccountSnapshot per crypto account for the user."""
     from services.crypto_transaction import get_account_transactions
@@ -692,7 +689,6 @@ def _build_crypto_snapshots(
                 account_type=AccountCategory.CRYPTO,
                 account_created_at=account_start_date,
                 transactions=txs,
-                show_negative_positions=show_negative,
             )
         )
     return result
@@ -862,9 +858,6 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
         user_uuid_bidx = hash_index(user_uuid, master_key)
         yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
 
-        # ── 1. Load settings ──────────────────────────────────────────────────
-        settings = get_or_create_settings(session, user_uuid, master_key)
-
         # ── 2. Collect all account snapshots (frozen positions) ───────────────
         all_accounts: list[_AccountSnapshot] = []
 
@@ -876,10 +869,7 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
             session.rollback()
 
         try:
-            show_negative = getattr(settings, "crypto_show_negative_positions", False)
-            crypto_accounts = _build_crypto_snapshots(
-                session, master_key, user_uuid_bidx, show_negative
-            )
+            crypto_accounts = _build_crypto_snapshots(session, master_key, user_uuid_bidx)
             all_accounts += crypto_accounts
         except Exception as exc:
             logger.warning("account_history: crypto snapshot error: %s", exc)

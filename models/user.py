@@ -91,7 +91,9 @@ class UserSettings(SQLModel, table=True):
     inflation_rate: Decimal = Field(default=Decimal("0.02"), max_digits=5, decimal_places=4)
     crypto_module_enabled: bool = Field(default=False, nullable=False)
     crypto_mode: str = Field(default="SINGLE", nullable=False)
-    crypto_show_negative_positions: bool = Field(default=False, nullable=False)
+    # True = the user doesn't enter EUR deposits: purchases are read as funded by
+    # them, so a negative EUR balance is never shown as a line.
+    crypto_auto_deposits: bool = Field(default=True, nullable=False)
     bank_module_enabled: bool = Field(default=True, nullable=False)
     # False = linked cashflows no longer adjust bank balances automatically.
     # Off by default: a forecast moving a real balance on its own surprises more

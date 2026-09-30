@@ -80,7 +80,7 @@ def _map_settings_to_response(
         inflation_rate=float(settings.inflation_rate),
         crypto_module_enabled=settings.crypto_module_enabled,
         crypto_mode=settings.crypto_mode,
-        crypto_show_negative_positions=settings.crypto_show_negative_positions,
+        crypto_auto_deposits=settings.crypto_auto_deposits,
         bank_module_enabled=settings.bank_module_enabled,
         bank_auto_sync_enabled=settings.bank_auto_sync_enabled,
         open_banking_enabled=settings.open_banking_enabled,
@@ -211,8 +211,8 @@ def update_settings(
         if data.crypto_mode in ("SINGLE", "MULTI"):
             settings.crypto_mode = data.crypto_mode
 
-    if data.crypto_show_negative_positions is not None:
-        settings.crypto_show_negative_positions = data.crypto_show_negative_positions
+    if data.crypto_auto_deposits is not None:
+        settings.crypto_auto_deposits = data.crypto_auto_deposits
 
     if data.bank_module_enabled is not None:
         settings.bank_module_enabled = data.bank_module_enabled

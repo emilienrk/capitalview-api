@@ -66,7 +66,7 @@ class UserSettingsUpdate(BaseModel):
     inflation_rate: float | None = Field(None, ge=0, le=1)
     crypto_module_enabled: bool | None = None
     crypto_mode: str | None = None
-    crypto_show_negative_positions: bool | None = None
+    crypto_auto_deposits: bool | None = None
     bank_module_enabled: bool | None = None
     bank_auto_sync_enabled: bool | None = None
     open_banking_enabled: bool | None = None
@@ -98,7 +98,7 @@ class UserSettingsResponse(BaseModel):
     inflation_rate: float = 0.02
     crypto_module_enabled: bool = False
     crypto_mode: str = "SINGLE"
-    crypto_show_negative_positions: bool = False
+    crypto_auto_deposits: bool = True
     bank_module_enabled: bool = False
     bank_auto_sync_enabled: bool = False
     open_banking_enabled: bool = False

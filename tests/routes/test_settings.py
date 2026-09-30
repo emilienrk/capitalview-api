@@ -37,8 +37,8 @@ def test_get_settings(session, master_key):
     r = client.get("/settings")
     assert r.status_code == 200
     data = r.json()
-    assert "crypto_show_negative_positions" in data
-    assert data["crypto_show_negative_positions"] is False
+    assert "crypto_auto_deposits" in data
+    assert data["crypto_auto_deposits"] is True
     assert data["crypto_module_enabled"] is False
     assert data["notes_module_enabled"] is False
 
@@ -46,16 +46,16 @@ def test_get_settings(session, master_key):
 def test_update_settings(session, master_key):
     client = TestClient(app)
 
-    # Enable module and set negative positions to true
+    # Enable the module and turn automatic deposits off
     r = client.put("/settings", json={
         "crypto_module_enabled": True,
-        "crypto_show_negative_positions": True,
+        "crypto_auto_deposits": False,
         "crypto_mode": "MULTI"
     })
     assert r.status_code == 200
     data = r.json()
     assert data["crypto_module_enabled"] is True
-    assert data["crypto_show_negative_positions"] is True
+    assert data["crypto_auto_deposits"] is False
     assert data["crypto_mode"] == "MULTI"
 
     # Verify changes persisted
@@ -63,17 +63,17 @@ def test_update_settings(session, master_key):
     assert r2.status_code == 200
     data2 = r2.json()
     assert data2["crypto_module_enabled"] is True
-    assert data2["crypto_show_negative_positions"] is True
+    assert data2["crypto_auto_deposits"] is False
     assert data2["crypto_mode"] == "MULTI"
 
-    # Set negative positions back to false
+    # Turn automatic deposits back on
     r3 = client.put("/settings", json={
-        "crypto_show_negative_positions": False,
+        "crypto_auto_deposits": True,
     })
     assert r3.status_code == 200
     data3 = r3.json()
     assert data3["crypto_module_enabled"] is True  # Should remain unchanged
-    assert data3["crypto_show_negative_positions"] is False
+    assert data3["crypto_auto_deposits"] is True
 
 
 def test_update_display_timezone(session, master_key):
