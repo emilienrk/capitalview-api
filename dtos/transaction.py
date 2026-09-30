@@ -63,6 +63,20 @@ class OrderFeesResponse(BaseModel):
     buy_orders_with_fee: int = 0
 
 
+class NegativeBalanceResponse(BaseModel):
+    """A crypto whose ledger balance went below zero: a missing or duplicated transaction."""
+    asset_key: str
+    since: UtcDatetimeOut
+    """First transaction that took the balance below zero."""
+    shortfall: Decimal
+    """Largest quantity missing at any point."""
+    shortfall_value: Decimal | None = None
+    """That quantity at the current price, to tell dust from a real gap."""
+    excluded_proceeds: Decimal
+    """Euro value of the disposals the ledger could not cover. Their cost is
+    unknown, so they are kept out of the realized P/L."""
+
+
 class AccountSummaryResponse(BaseModel):
     """Summary of an account with all positions."""
     total_invested: Decimal
@@ -78,6 +92,7 @@ class AccountSummaryResponse(BaseModel):
     realized_profit_loss: Decimal | None = None
     total_profit_loss: Decimal | None = None
     order_fees: OrderFeesResponse | None = None
+    negative_balances: list[NegativeBalanceResponse] = []
     positions: list[PositionResponse]
 
 

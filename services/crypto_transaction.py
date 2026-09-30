@@ -16,6 +16,7 @@ from dtos import (
     PositionResponse,
     AccountSummaryResponse,
 )
+from dtos.transaction import NegativeBalanceResponse
 from dtos.crypto import CryptoCompositeTransactionCreate, CrossAccountTransferCreate, FIAT_ASSET_KEYS
 from services.encryption import encrypt_data, decrypt_data, hash_index
 from services.market import get_crypto_info, get_crypto_price, get_exchange_rate
@@ -716,6 +717,10 @@ def get_account_transactions(
     return decoded
 
 
+# Rounding dust left by fees taken in the traded asset is not a missing transaction.
+NEGATIVE_BALANCE_TOLERANCE = Decimal("-0.00000001")
+
+
 def get_crypto_account_summary(
     session: Session,
     transactions: list[TransactionResponse],
@@ -759,6 +764,11 @@ def get_crypto_account_summary(
     )
 
     positions_map: dict[str, dict] = {}
+    # A crypto disposal larger than the ledger's balance has no known cost for
+    # the uncovered part: only the covered share of its proceeds is realized.
+    spent_by_group: dict[str, Decimal] = {}
+    covered_by_group: dict[str, Decimal] = {}
+    negative_by_asset: dict[str, dict] = {}
 
     for tx in transactions:
         asset_key = tx.asset_key
@@ -802,6 +812,10 @@ def get_crypto_account_summary(
                     if tx.type == "SPEND" and tx.group_uuid and tx.asset_key not in FIAT_ASSET_KEYS:
                         cost_removed_by_group.setdefault(tx.group_uuid, Decimal("0"))
                         cost_removed_by_group[tx.group_uuid] += cost_removed
+                if tx.type == "SPEND" and tx.group_uuid and tx.asset_key not in FIAT_ASSET_KEYS:
+                    held = max(pos["total_amount"], Decimal("0"))
+                    spent_by_group[tx.group_uuid] = spent_by_group.get(tx.group_uuid, Decimal("0")) + tx.amount
+                    covered_by_group[tx.group_uuid] = covered_by_group.get(tx.group_uuid, Decimal("0")) + min(held, tx.amount)
                 pos["total_amount"] -= tx.amount
             case "FEE":
                 pos["total_amount"] -= tx.amount
@@ -822,6 +836,14 @@ def get_crypto_account_summary(
                     pos["total_amount"] -= tx.amount
             case _:
                 pass
+
+        if asset_key not in FIAT_ASSET_KEYS and pos["total_amount"] < NEGATIVE_BALANCE_TOLERANCE:
+            event = negative_by_asset.setdefault(
+                asset_key, {"since": tx.executed_at, "shortfall": Decimal("0"), "groups": set()}
+            )
+            event["shortfall"] = max(event["shortfall"], -pos["total_amount"])
+            if tx.type == "SPEND" and tx.group_uuid:
+                event["groups"].add(tx.group_uuid)
 
     positions = []
     for asset_key, data in positions_map.items():
@@ -917,6 +939,7 @@ def get_crypto_account_summary(
     # fiat received (sell-to-fiat) or the EUR anchor (crypto→crypto swap). Transfers and
     # outbound WITHDRAW carry no proceeds and never reach cost_removed_by_group.
     realized_acc = Decimal("0")
+    excluded_by_group: dict[str, Decimal] = {}
     for group in groups_with_crypto_spend:
         if group in fiat_deposit_by_group:
             proceeds = fiat_deposit_by_group[group]
@@ -924,7 +947,28 @@ def get_crypto_account_summary(
             proceeds = anchor_by_group[group]
         else:
             proceeds = Decimal("0")
+        spent = spent_by_group.get(group, Decimal("0"))
+        if spent > 0:
+            covered_proceeds = proceeds * covered_by_group.get(group, Decimal("0")) / spent
+            excluded_by_group[group] = proceeds - covered_proceeds
+            proceeds = covered_proceeds
         realized_acc += proceeds - cost_removed_by_group.get(group, Decimal("0"))
+
+    def _latest_price(asset_key: str) -> Decimal | None:
+        if preloaded_prices is not None:
+            return preloaded_prices.get(asset_key)
+        return get_crypto_info(session, asset_key, as_of=as_of, db_only=db_only)[1]
+
+    negative_balances = []
+    for asset_key, event in sorted(negative_by_asset.items(), key=lambda item: item[1]["since"]):
+        price = _latest_price(asset_key)
+        negative_balances.append(NegativeBalanceResponse(
+            asset_key=asset_key,
+            since=event["since"],
+            shortfall=event["shortfall"],
+            shortfall_value=round(event["shortfall"] * price, 2) if price else None,
+            excluded_proceeds=round(sum((excluded_by_group.get(g, Decimal("0")) for g in event["groups"]), Decimal("0")), 2),
+        ))
 
     if profit_loss_acc is not None:
         total_profit_loss_acc = profit_loss_acc + realized_acc
@@ -943,6 +987,7 @@ def get_crypto_account_summary(
         profit_loss_percentage=round(profit_loss_pct_acc, 2) if profit_loss_pct_acc is not None else None,
         realized_profit_loss=round(realized_acc, 2),
         total_profit_loss=round(total_profit_loss_acc, 2),
+        negative_balances=negative_balances,
         positions=positions,
     )
 

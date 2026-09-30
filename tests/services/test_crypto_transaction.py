@@ -1712,3 +1712,60 @@ def test_crypto_outbound_withdraw_no_realized(mock_info, session: Session, maste
         amount=Decimal("1"), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 2)), master_key)
     summary = _crypto_summary(session, "acc_wd", master_key)
     assert summary.realized_profit_loss == Decimal("0")
+
+
+def _swap_more_than_held(session: Session, master_key: str, account_id: str, held: str):
+    """Buy `held` BTC for 15000/BTC, then swap 1 BTC for ETH at an anchor of 40000."""
+    _make_crypto_account(session, account_id, f"user_{account_id}", master_key)
+    if Decimal(held) > 0:
+        create_crypto_transaction(session, CryptoTransactionCreate(
+            account_id=account_id, asset_key="BTC", type=CryptoTransactionType.BUY,
+            amount=Decimal(held), price_per_unit=Decimal("0"), executed_at=datetime(2023, 1, 2)), master_key, group_uuid=f"{account_id}-buy")
+        create_crypto_transaction(session, CryptoTransactionCreate(
+            account_id=account_id, asset_key="EUR", type=CryptoTransactionType.SPEND,
+            amount=Decimal(held) * 15000, price_per_unit=Decimal("1"), executed_at=datetime(2023, 1, 2)), master_key, group_uuid=f"{account_id}-buy")
+    swap = f"{account_id}-swap"
+    for type_, asset, amount in (("SPEND", "BTC", "1"), ("ANCHOR", "EUR", "40000"), ("BUY", "ETH", "20")):
+        create_crypto_transaction(session, CryptoTransactionCreate(
+            account_id=account_id, asset_key=asset, type=CryptoTransactionType(type_), amount=Decimal(amount),
+            price_per_unit=Decimal("1") if asset == "EUR" else Decimal("0"), executed_at=datetime(2023, 1, 3)), master_key, group_uuid=swap)
+
+
+@patch("services.crypto_transaction.get_crypto_info")
+def test_crypto_realized_counts_only_the_covered_part_of_a_disposal(mock_info, session: Session, master_key: str):
+    """Swapping 1 BTC while holding 0.5: the missing half has no known cost, so only
+    half of the proceeds is realized, and the gap is reported instead of hidden."""
+    mock_info.side_effect = lambda s, symbol, db_only=False, as_of=None: {
+        "BTC": ("Bitcoin", Decimal("50000")), "ETH": ("Ether", Decimal("2000")),
+    }.get(symbol, ("Unknown", Decimal("0")))
+    _swap_more_than_held(session, master_key, "acc_short", "0.5")
+
+    summary = _crypto_summary(session, "acc_short", master_key)
+    assert summary.realized_profit_loss == Decimal("12500")  # 40000 × 0.5 − 7500 cost
+    [gap] = summary.negative_balances
+    assert gap.asset_key == "BTC"
+    assert gap.since == datetime(2023, 1, 3)
+    assert gap.shortfall == Decimal("0.5")
+    assert gap.shortfall_value == Decimal("25000")
+    assert gap.excluded_proceeds == Decimal("20000")
+
+
+@patch("services.crypto_transaction.get_crypto_info")
+def test_crypto_disposal_of_nothing_held_realizes_nothing(mock_info, session: Session, master_key: str):
+    """Before the fix, a swap with no balance counted its whole euro value as a gain."""
+    mock_info.return_value = ("Ether", Decimal("2000"))
+    _swap_more_than_held(session, master_key, "acc_none", "0")
+
+    summary = _crypto_summary(session, "acc_none", master_key)
+    assert summary.realized_profit_loss == Decimal("0")
+    assert summary.negative_balances[0].excluded_proceeds == Decimal("40000")
+
+
+@patch("services.crypto_transaction.get_crypto_info")
+def test_crypto_covered_disposal_reports_no_negative_balance(mock_info, session: Session, master_key: str):
+    mock_info.return_value = ("Ether", Decimal("2000"))
+    _swap_more_than_held(session, master_key, "acc_full", "1")
+
+    summary = _crypto_summary(session, "acc_full", master_key)
+    assert summary.realized_profit_loss == Decimal("25000")  # 40000 − 15000
+    assert summary.negative_balances == []
