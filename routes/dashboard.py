@@ -20,6 +20,7 @@ from dtos.dashboard import (
     CardResponse,
 )
 from services.auth import get_current_user, get_master_key
+from services.broker_cash import counted_cash
 from services.encryption import hash_index, decrypt_data
 from services.market import get_exchange_rate
 from services.settings import get_or_create_settings
@@ -216,7 +217,7 @@ def get_dashboard_statistics(
         stock_invested += summary.total_invested
         stock_deposits += summary.total_deposits
         stock_withdrawals += summary.total_withdrawals
-        liquidity += summary.cash_balance
+        liquidity += counted_cash(summary.cash_balance)
 
         if summary.current_value:
             stock_current_value += summary.current_value
@@ -238,7 +239,7 @@ def get_dashboard_statistics(
         crypto_invested += summary.total_invested
         crypto_deposits += summary.total_deposits
         crypto_withdrawals += summary.total_withdrawals
-        liquidity += summary.cash_balance
+        liquidity += counted_cash(summary.cash_balance)
 
         if summary.current_value:
             crypto_current_value += summary.current_value

@@ -19,6 +19,7 @@ from dtos.projection import (
     ProjectionResponse,
 )
 
+from services.broker_cash import counted_cash
 from services.encryption import hash_index
 from services.placement import get_user_placements
 from services.stock_transaction import (
@@ -87,7 +88,7 @@ def _get_history_stats(
         # Project on the full account value (holdings VALEUR + idle cash).
         if summary.current_value is not None:
             current_value += summary.current_value
-        current_value += summary.cash_balance
+        current_value += counted_cash(summary.cash_balance)
 
         total_invested += summary.total_invested
 

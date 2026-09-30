@@ -5,6 +5,7 @@ from services.analytics.flows import (
     is_auto_provision,
     stock_external_flow_for_day,
     stock_external_flows,
+    with_implied_deposits,
 )
 
 
@@ -75,3 +76,33 @@ def test_days_without_external_flow_are_absent_from_the_mapping():
         _Tx("BUY", "IE00B4L5Y983", 5, D1),
     ]
     assert stock_external_flows(txs) == {}
+
+
+class _Snap:
+    def __init__(self, day, uncounted):
+        self.snapshot_date = day
+        self.uncounted_cash = Decimal(str(uncounted))
+
+
+def test_the_rise_of_uncounted_cash_is_a_deposit_and_its_fall_a_withdrawal():
+    d3 = date(2026, 1, 7)
+    history = [_Snap(D2, 1800), _Snap(D1, 1000), _Snap(d3, 0)]
+
+    assert with_implied_deposits({}, history) == {
+        D1: Decimal("1000"),
+        D2: Decimal("800"),
+        d3: Decimal("-1800"),
+    }
+
+
+def test_a_deposit_entered_later_cancels_out_with_the_implied_one():
+    """Recording the 1000 deposit on D2 closes the gap: no net flow that day."""
+    history = [_Snap(D1, 1000), _Snap(D2, 0)]
+
+    assert with_implied_deposits({D2: Decimal("1000")}, history) == {D1: Decimal("1000")}
+
+
+def test_no_uncounted_cash_leaves_the_flows_untouched():
+    flows = {D1: Decimal("500")}
+
+    assert with_implied_deposits(flows, [_Snap(D1, 0), _Snap(D2, 0)]) == flows

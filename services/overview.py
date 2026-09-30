@@ -40,6 +40,7 @@ from services.bank import (
     get_user_bank_accounts,
 )
 from services.banking.real_cashflow import stale_balances
+from services.broker_cash import counted_cash
 from services.cashflow import get_user_cashflow_balance
 from services.crypto_account import get_all_crypto_accounts_history, get_user_crypto_accounts
 from services.crypto_transaction import (
@@ -296,7 +297,7 @@ def _read_pocket(
         summary = summarise(session, read_transactions(session, account.uuid, master_key), as_of=as_of, db_only=True)
         holdings = summary.current_value or Decimal(0)
         pocket.holdings += holdings
-        pocket.cash += summary.cash_balance
+        pocket.cash += counted_cash(summary.cash_balance)
         pocket.invested += summary.total_invested
         pocket.realized += summary.realized_profit_loss or Decimal(0)
         pocket.dividends += summary.total_dividends or Decimal(0)
@@ -487,7 +488,7 @@ def get_user_balance(session: Session, user_uuid: str, master_key: bytes, detail
 
     The pockets follow the dashboard's legend, so a figure a reader quotes is
     the one the user sees: stock and crypto *lines*, the cash idle on those
-    accounts apart as broker cash (negative on an overdrawn account), bank
+    accounts apart as broker cash (never below zero, see broker_cash), bank
     balances, placements and possessions. Every share is of the global total.
 
     Undated, it also says how the total moved lately and how fresh its inputs

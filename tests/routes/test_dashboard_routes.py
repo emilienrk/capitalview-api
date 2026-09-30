@@ -195,3 +195,70 @@ def test_dashboard_statistics(
             + Decimal(str(wealth["assets_percentage"]))
         )
         assert abs(total_pct - 100) < 1
+
+
+@patch("routes.dashboard.get_user_bank_accounts")
+@patch("routes.dashboard.get_user_assets")
+@patch("services.stock_transaction.get_stock_info")
+@patch("services.crypto_transaction.get_crypto_info")
+@patch("routes.dashboard.get_exchange_rate")
+def test_dashboard_statistics_leaves_negative_broker_cash_out_of_net_worth(
+    mock_rate, mock_crypto, mock_stock, mock_assets, mock_bank, session, master_key
+):
+    """A crypto buy with no deposit entered leaves EUR at -20000: net worth
+    ignores it, while a positive stock cash balance still counts."""
+    from dtos import BankSummaryResponse
+    from dtos.asset import AssetSummaryResponse
+
+    mock_stock.return_value = ("Apple Inc.", Decimal("200"))
+    mock_crypto.return_value = ("Bitcoin", Decimal("50000"))
+    mock_rate.return_value = Decimal("1")
+    mock_bank.return_value = BankSummaryResponse(total_balance=Decimal("5000"), accounts=[])
+    mock_assets.return_value = AssetSummaryResponse(
+        total_estimated_value=Decimal("0"),
+        total_purchase_price=Decimal("0"),
+        total_profit_loss=Decimal("0"),
+        asset_count=0,
+        categories=[],
+        assets=[],
+    )
+
+    client = TestClient(app)
+    r = client.post(
+        "/auth/register",
+        json={"username": "floorcash", "email": "floorcash@example.com", "password": "StrongFloor1!"},
+    )
+    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    stock_id = client.post(
+        "/stocks/accounts", json={"name": "PEA", "account_type": "PEA"}, headers=headers
+    ).json()["id"]
+    client.post("/stocks/transactions", json={
+        "account_id": stock_id,
+        "asset_key": "EUR",
+        "type": "DEPOSIT",
+        "amount": "1000",
+        "price_per_unit": "1",
+        "fees": "0",
+        "executed_at": "2024-01-01T10:00:00",
+    }, headers=headers)
+
+    crypto_id = client.post("/crypto/accounts", json={"name": "Exchange"}, headers=headers).json()["id"]
+    client.post("/crypto/transactions/composite", json={
+        "account_id": crypto_id,
+        "asset_key": "BTC",
+        "type": "BUY",
+        "amount": "0.4",
+        "eur_amount": "20000",
+        "quote_asset_key": "EUR",
+        "quote_amount": "20000",
+        "executed_at": "2024-01-01T12:00:00",
+    }, headers=headers)
+
+    summary = client.get(f"/crypto/accounts/{crypto_id}", headers=headers).json()
+    assert Decimal(str(summary["cash_balance"])) == Decimal("-20000")
+
+    wealth = client.get("/dashboard/statistics", headers=headers).json()["wealth"]
+    # 0.4 BTC at 50000 plus the stock account's 1000 of cash; the -20000 is not a debt.
+    assert Decimal(str(wealth["investments"])) == Decimal("21000")
+    assert Decimal(str(wealth["total_wealth"])) == Decimal("26000")

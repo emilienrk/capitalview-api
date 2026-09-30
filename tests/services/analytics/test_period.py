@@ -52,3 +52,24 @@ def test_nothing_before_the_end_is_an_empty_period():
     period = _series_period([(date(2026, 5, 1), Decimal("10"))], {}, date(2026, 1, 1), date(2026, 3, 1))
 
     assert period.gain is None and period.value_end is None
+
+
+def test_a_buy_paid_without_a_recorded_deposit_is_not_a_gain():
+    """1 000 € held, then 1 000 € of shares bought with no deposit entered: the
+    snapshot floors the cash, and the implied deposit keeps the 1 000 € out of the gain."""
+    from types import SimpleNamespace
+
+    from services.analytics.flows import with_implied_deposits
+
+    days = [date(2026, 1, 1), date(2026, 2, 1), date(2026, 2, 2)]
+    history = [
+        SimpleNamespace(snapshot_date=days[0], total_value=Decimal("1000"), uncounted_cash=Decimal("0")),
+        SimpleNamespace(snapshot_date=days[1], total_value=Decimal("1100"), uncounted_cash=Decimal("0")),
+        SimpleNamespace(snapshot_date=days[2], total_value=Decimal("2100"), uncounted_cash=Decimal("1000")),
+    ]
+    series = [(snap.snapshot_date, snap.total_value) for snap in history]
+
+    period = _series_period(series, with_implied_deposits({}, history), days[0], date(2026, 3, 1))
+
+    assert period.gain == Decimal("100")
+    assert period.time_weighted_return == pytest.approx(Decimal("0.10"))

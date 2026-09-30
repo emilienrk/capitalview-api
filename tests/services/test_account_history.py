@@ -1456,13 +1456,13 @@ def test_compute_daily_net_flow_stock_withdraw():
 
 
 def test_current_calc_version_crypto_is_bumped():
-    """CRYPTO is at version 2 (cumulative_pnl now total P/L = latent + realized)."""
-    assert _current_calc_version(AccountCategory.CRYPTO) == 2
+    """CRYPTO is at version 3 (negative cash no longer counted in total_value)."""
+    assert _current_calc_version(AccountCategory.CRYPTO) == 3
 
 
 def test_current_calc_version_stock_is_bumped():
-    """STOCK is at version 2 (cumulative_pnl now total P/L = latent + realized + dividends)."""
-    assert _current_calc_version(AccountCategory.STOCK) == 2
+    """STOCK is at version 3 (negative cash no longer counted in total_value)."""
+    assert _current_calc_version(AccountCategory.STOCK) == 3
 
 
 def test_current_calc_version_other_types_are_zero():
@@ -1504,7 +1504,7 @@ def test_get_snapshot_date_bounds_returns_min_calc_version(
 def test_generate_missing_snapshots_stamps_current_calc_version(
     session: Session, master_key: str
 ):
-    """Crypto rows are stamped with the current crypto version (2)."""
+    """Crypto rows are stamped with the current crypto version (3)."""
     rows = _generate_missing_snapshots(
         session=session,
         user_uuid_bidx=hash_index("user_v", master_key),
@@ -1522,7 +1522,7 @@ def test_generate_missing_snapshots_stamps_current_calc_version(
     )
 
     assert rows[0]["calc_version"] == CURRENT_CALC_VERSION[AccountCategory.CRYPTO]
-    assert rows[0]["calc_version"] == 2
+    assert rows[0]["calc_version"] == 3
 
 
 def test_generate_missing_snapshots_stamps_zero_for_bank(
@@ -1652,3 +1652,125 @@ def test_generate_missing_snapshots_placement_keeps_deposits_out_of_the_pnl(
     assert decrypt_data(rows[-1]["total_deposits_enc"], master_key) == "1500.00"
     assert decrypt_data(rows[-1]["cumulative_pnl_enc"], master_key) == "10.00"
     assert rows[0]["account_type"] == "PLACEMENT"
+
+
+# ---------------------------------------------------------------------------
+# Negative cash (services/broker_cash.py)
+# ---------------------------------------------------------------------------
+
+
+def _stock_buy_without_deposit(day: int) -> object:
+    return _tx(
+        type="BUY",
+        asset_key="US0378331005",
+        amount=Decimal("10"),
+        price_per_unit=Decimal("180"),
+        executed_at=datetime(2024, 3, day, 10, 0, tzinfo=timezone.utc),
+    )
+
+
+def _generate(session, master_key, account_type, transactions, price_matrix, dates, **kwargs):
+    return _generate_missing_snapshots(
+        session=session,
+        user_uuid_bidx=hash_index("user_uncounted", master_key),
+        account_id_bidx=hash_index("acc_uncounted", master_key),
+        account_snapshot=_AccountSnapshot(
+            account_id="fake_id", account_type=account_type, transactions=transactions
+        ),
+        price_matrix=price_matrix,
+        missing_dates=dates,
+        prev_value=kwargs.pop("prev_value", Decimal("0")),
+        master_key=master_key,
+        **kwargs,
+    )
+
+
+def test_a_stock_snapshot_leaves_negative_cash_out_and_reads_it_as_a_deposit(
+    session: Session, master_key: str
+):
+    """A buy with no deposit entered: the value is the holdings, not
+    holdings minus the cost, and the purchase day shows no P/L."""
+    prices = {"US0378331005": {date(2024, 3, 1): Decimal("180"), date(2024, 3, 2): Decimal("185")}}
+
+    rows = _generate(
+        session, master_key, AccountCategory.STOCK, [_stock_buy_without_deposit(1)], prices,
+        [date(2024, 3, 1), date(2024, 3, 2)], has_previous_snapshot=True,
+    )
+
+    assert decrypt_data(rows[0]["total_value_enc"], master_key) == "1800.00"
+    assert decrypt_data(rows[0]["uncounted_cash_enc"], master_key) == "1800.00"
+    assert decrypt_data(rows[0]["daily_pnl_enc"], master_key) == "0.00"
+    assert decrypt_data(rows[1]["total_value_enc"], master_key) == "1850.00"
+    assert decrypt_data(rows[1]["daily_pnl_enc"], master_key) == "50.00"
+
+
+def test_a_deposit_entered_later_closes_the_gap_without_moving_the_value(
+    session: Session, master_key: str
+):
+    """The deposit and the fall of the uncounted cash cancel out: no flow,
+    no P/L, and the value stays the holdings'."""
+    transactions = [
+        _stock_buy_without_deposit(1),
+        _tx(
+            type="DEPOSIT",
+            asset_key="EUR",
+            amount=Decimal("1800"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 2, 9, 0, tzinfo=timezone.utc),
+        ),
+    ]
+    prices = {"US0378331005": {date(2024, 3, 1): Decimal("180"), date(2024, 3, 2): Decimal("180")}}
+
+    rows = _generate(
+        session, master_key, AccountCategory.STOCK, transactions, prices,
+        [date(2024, 3, 2)], prev_value=Decimal("1800"), prev_uncounted_cash=Decimal("1800"),
+    )
+
+    assert decrypt_data(rows[0]["total_value_enc"], master_key) == "1800.00"
+    assert rows[0]["uncounted_cash_enc"] is None
+    assert decrypt_data(rows[0]["daily_pnl_enc"], master_key) == "0.00"
+
+
+def test_a_positive_stock_cash_balance_still_counts(session: Session, master_key: str):
+    transactions = [
+        _tx(
+            type="DEPOSIT",
+            asset_key="EUR",
+            amount=Decimal("2000"),
+            price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
+        ),
+        _stock_buy_without_deposit(1),
+    ]
+    prices = {"US0378331005": {date(2024, 3, 1): Decimal("180")}}
+
+    rows = _generate(session, master_key, AccountCategory.STOCK, transactions, prices, [date(2024, 3, 1)])
+
+    assert decrypt_data(rows[0]["total_value_enc"], master_key) == "2000.00"
+    assert rows[0]["uncounted_cash_enc"] is None
+
+
+def test_a_crypto_snapshot_leaves_negative_euros_out(session: Session, master_key: str):
+    """0.02 BTC bought with 1000 EUR never deposited."""
+    transactions = [
+        _tx(
+            id="tx_spend", group_uuid="g_buy", type="SPEND", asset_key="EUR",
+            amount=Decimal("1000"), price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
+        _tx(
+            id="tx_buy", group_uuid="g_buy", type="BUY", asset_key="BTC",
+            amount=Decimal("0.02"), price_per_unit=Decimal("50000"),
+            executed_at=datetime(2024, 3, 1, 10, 0, tzinfo=timezone.utc),
+        ),
+    ]
+    prices = {"BTC": {date(2024, 3, 1): Decimal("50000")}}
+
+    rows = _generate(
+        session, master_key, AccountCategory.CRYPTO, transactions, prices,
+        [date(2024, 3, 1)], has_previous_snapshot=True,
+    )
+
+    assert decrypt_data(rows[0]["total_value_enc"], master_key) == "1000.00"
+    assert decrypt_data(rows[0]["uncounted_cash_enc"], master_key) == "1000.00"
+    assert decrypt_data(rows[0]["daily_pnl_enc"], master_key) == "0.00"

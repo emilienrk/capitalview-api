@@ -36,6 +36,7 @@ from dtos.crypto import FIAT_ASSET_KEYS
 from services.analytics.flows import stock_external_flow_for_day
 from services.analytics.prices import fill_price_gaps, get_price_matrix
 from services.bank import account_currency
+from services.broker_cash import counted_cash, uncounted_cash
 from services.encryption import decrypt_data, encrypt_data, hash_index
 from services.placement import PlacementTimeline, build_timeline
 from services.market import get_exchange_rate
@@ -59,8 +60,8 @@ _ZERO = Decimal("0")
 # ---------------------------------------------------------------------------
 
 CURRENT_CALC_VERSION: dict[AccountCategory, int] = {
-    AccountCategory.CRYPTO: 2,   # bumped: cumulative_pnl now total P/L (latent + realized)
-    AccountCategory.STOCK: 2,    # bumped: cumulative_pnl now total P/L (latent + realized + dividends)
+    AccountCategory.CRYPTO: 3,   # bumped: negative cash no longer counted in total_value
+    AccountCategory.STOCK: 3,    # bumped: negative cash no longer counted in total_value
     AccountCategory.BANK: 0,
     AccountCategory.ASSET: 0,
     AccountCategory.PLACEMENT: 0,
@@ -370,11 +371,11 @@ def _build_positions_from_summary(
             }
         )
 
-    # Snapshots store the full liquidation value (net worth): holdings VALEUR
-    # (current_value, now holdings-scoped) plus idle fiat cash (cash_balance).
+    # Snapshots store the account's share of net worth: holdings VALEUR
+    # (current_value, holdings-scoped) plus idle fiat cash, floored at zero.
     cash_balance = _to_decimal(getattr(summary, "cash_balance", _ZERO))
     if summary.current_value is not None:
-        total_value = Decimal(summary.current_value) + cash_balance
+        total_value = Decimal(summary.current_value) + counted_cash(cash_balance)
     else:
         total_value = computed_total
     current_invested = Decimal(summary.total_invested)
@@ -412,6 +413,7 @@ def _build_positions_from_summary(
 
     return {
         "total_value": total_value,
+        "uncounted_cash": uncounted_cash(cash_balance),
         "total_invested": current_invested,
         "total_deposits": current_deposits,
         "total_withdrawals": current_withdrawals,
@@ -437,6 +439,7 @@ def _generate_missing_snapshots(
     prev_value: Decimal,
     master_key: str,
     has_previous_snapshot: bool = True,
+    prev_uncounted_cash: Decimal = _ZERO,
 ) -> list[dict]:
     """
     Generate one encrypted row dict per missing date.
@@ -455,6 +458,7 @@ def _generate_missing_snapshots(
         current_total_fees: Decimal | None = None
         current_total_dividends: Decimal | None = None
         current_cumulative_pnl: Decimal | None = None
+        current_uncounted_cash = _ZERO
 
         if account_snapshot.account_type == AccountCategory.BANK:
             # Bank balance doesn't fluctuate with the market — keep it frozen
@@ -552,6 +556,7 @@ def _generate_missing_snapshots(
             current_total_dividends = summary_payload["total_dividends"]
             current_cumulative_pnl = summary_payload["cumulative_pnl"]
             positions_json = summary_payload["positions_json"]
+            current_uncounted_cash = summary_payload["uncounted_cash"]
         else:  # AccountCategory.CRYPTO
             preloaded_prices = {}
             for tx in account_snapshot.transactions:
@@ -577,6 +582,7 @@ def _generate_missing_snapshots(
             current_total_dividends = summary_payload["total_dividends"]
             current_cumulative_pnl = summary_payload["cumulative_pnl"]
             positions_json = summary_payload["positions_json"]
+            current_uncounted_cash = summary_payload["uncounted_cash"]
 
         if total_value == _ZERO and prev_value > _ZERO:
             daily_pnl = _ZERO
@@ -584,6 +590,7 @@ def _generate_missing_snapshots(
             daily_pnl = _ZERO
         else:
             net_flow = _compute_daily_net_flow(account_snapshot, d, price_matrix)
+            net_flow += current_uncounted_cash - prev_uncounted_cash
             daily_pnl = total_value - prev_value - net_flow
 
         row: dict = {
@@ -602,11 +609,17 @@ def _generate_missing_snapshots(
             "total_fees_enc": encrypt_data(str(round(current_total_fees, 2)), master_key) if current_total_fees is not None else None,
             "total_dividends_enc": encrypt_data(str(round(current_total_dividends, 2)), master_key) if current_total_dividends is not None else None,
             "positions_enc": encrypt_data(positions_json, master_key) if positions_json else None,
+            "uncounted_cash_enc": (
+                encrypt_data(str(round(current_uncounted_cash, 2)), master_key)
+                if current_uncounted_cash
+                else None
+            ),
             "created_at": now,
             "updated_at": now,
         }
         rows.append(row)
         prev_value = total_value
+        prev_uncounted_cash = current_uncounted_cash
 
     return rows
 
@@ -1021,8 +1034,11 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
                 .order_by(AccountHistory.snapshot_date.desc())
             ).first()
 
+            prev_uncounted_cash = _ZERO
             if last_row:
                 prev_value = _to_decimal(decrypt_data(last_row.total_value_enc, master_key))
+                if last_row.uncounted_cash_enc:
+                    prev_uncounted_cash = _to_decimal(decrypt_data(last_row.uncounted_cash_enc, master_key))
             else:
                 prev_value = _ZERO
 
@@ -1035,6 +1051,7 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
                 missing_dates=missing_dates,
                 prev_value=prev_value,
                 has_previous_snapshot=last_row is not None,
+                prev_uncounted_cash=prev_uncounted_cash,
                 master_key=master_key,
             )
             all_rows.extend(rows)
@@ -1057,6 +1074,7 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
                 "total_fees_enc": stmt.excluded.total_fees_enc,
                 "total_dividends_enc": stmt.excluded.total_dividends_enc,
                 "positions_enc": stmt.excluded.positions_enc,
+                "uncounted_cash_enc": stmt.excluded.uncounted_cash_enc,
                 "updated_at": stmt.excluded.updated_at,
             },
         )

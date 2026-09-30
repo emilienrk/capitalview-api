@@ -109,3 +109,20 @@ def stock_external_flows(
         if flow != _ZERO:
             grouped[day] += flow
     return {day: total for day, total in grouped.items() if total != _ZERO}
+
+
+def with_implied_deposits(flows: dict[date, Decimal], history: Iterable[object]) -> dict[date, Decimal]:
+    """`flows` plus the negative cash the snapshots leave out (services/broker_cash.py).
+
+    Floored at zero, a purchase paid without a recorded deposit still adds its
+    value to the snapshot, so the rise of the uncounted cash is a deposit on that
+    day; a deposit recorded later closes the gap and cancels out with its fall.
+    """
+    merged = dict(flows)
+    previous = _ZERO
+    for snapshot in sorted(history, key=lambda snap: snap.snapshot_date):
+        uncounted = _to_decimal(getattr(snapshot, "uncounted_cash", _ZERO))
+        if uncounted != previous:
+            merged[snapshot.snapshot_date] = merged.get(snapshot.snapshot_date, _ZERO) + uncounted - previous
+        previous = uncounted
+    return {day: total for day, total in merged.items() if total != _ZERO}

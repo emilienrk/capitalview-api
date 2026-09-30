@@ -134,6 +134,7 @@ def _export_account_history(
                 "cumulative_pnl": _safe_decrypt(row.cumulative_pnl_enc, master_key),
                 "total_fees": _safe_decrypt(row.total_fees_enc, master_key),
                 "total_dividends": _safe_decrypt(row.total_dividends_enc, master_key),
+                "uncounted_cash": _safe_decrypt(row.uncounted_cash_enc, master_key),
                 "positions": json.loads(positions_raw) if positions_raw else None,
             }
         )

@@ -121,4 +121,5 @@ class AccountHistorySnapshotResponse(BaseModel):
     total_dividends: Decimal | None = None
     daily_pnl: Decimal | None = None
     cumulative_pnl: Decimal | None = None
+    uncounted_cash: Decimal = Decimal("0")
     positions: list[AccountHistoryPosition] | None = None

@@ -80,6 +80,19 @@ def test_idle_cash_is_not_counted_as_a_gain(session, master_key, stock_account, 
     assert balance["global_wealth"] == 5301.0
 
 
+def test_negative_broker_cash_is_left_out_of_the_total(session, master_key, stock_account, monkeypatch):
+    """-3 801 € means deposits never entered, not a debt: the bank already shows
+    that money gone. The account detail keeps the real balance."""
+    summary = _summary(Decimal("217.60")).model_copy(update={"cash_balance": Decimal("-3801")})
+    monkeypatch.setattr(overview, "get_stock_account_summary", lambda *a, **k: summary)
+
+    balance = overview.get_user_balance(session, stock_account, master_key, details=True)
+
+    assert balance["pockets"]["broker_cash"]["value"] == 0.0
+    assert balance["global_wealth"] == 1500.0
+    assert balance["accounts"]["stocks"][0]["cash"] == -3801.0
+
+
 def test_an_unpriced_portfolio_reports_no_gain_rather_than_a_flat_one(
     session, master_key, stock_account, monkeypatch
 ):

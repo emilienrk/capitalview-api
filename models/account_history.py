@@ -49,6 +49,9 @@ class AccountHistory(SQLModel, table=True):
     total_fees_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     total_dividends_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     positions_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    # Negative idle cash left out of total_value (services/broker_cash.py);
+    # its day-to-day rise is an implicit deposit for returns. Null when none.
+    uncounted_cash_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     created_at: datetime = Field(
         default=sa.func.now(),
         sa_column=Column(

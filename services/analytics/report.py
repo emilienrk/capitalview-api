@@ -49,7 +49,7 @@ from services.analytics.plan import (
 from services.analytics.benchmark import get_benchmark_series, resolve_benchmark_key
 from services.analytics.counterfactual import build_bridge
 from services.analytics.execution import MIN_ORDERS, SOLID_ORDERS, analyse_execution
-from services.analytics.flows import is_auto_provision, stock_external_flows
+from services.analytics.flows import is_auto_provision, stock_external_flows, with_implied_deposits
 from services.analytics.labels import label_of, resolve_asset_labels
 from services.analytics.prices import fill_price_gaps, get_price_matrix
 from services.analytics.readings import (
@@ -125,8 +125,10 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
     period_start, period_end = series[0][0], series[-1][0]
     span_days = (period_end - period_start).days
 
-    flows_all = stock_external_flows(transactions)
-    flows_real = stock_external_flows(transactions, include_auto_provisions=False)
+    flows_all = with_implied_deposits(stock_external_flows(transactions), history)
+    flows_real = with_implied_deposits(
+        stock_external_flows(transactions, include_auto_provisions=False), history
+    )
 
     twr = time_weighted_return(series, flows_all)
     mwr = _money_weighted(flows_real, series[-1][1], period_end)

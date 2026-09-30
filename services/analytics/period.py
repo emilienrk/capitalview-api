@@ -16,7 +16,7 @@ from decimal import Decimal
 
 from sqlmodel import Session
 
-from services.analytics.flows import stock_external_flows
+from services.analytics.flows import stock_external_flows, with_implied_deposits
 from services.analytics.projection_basis import (
     MAX_UNALIGNED_FLOW_SHARE,
     MIN_DAYS_FOR_A_RATE,
@@ -150,11 +150,9 @@ def load_pockets(session: Session, user_uuid: str, master_key: str) -> PocketInp
         transactions = []
         for account in accounts:
             transactions.extend(read_transactions(session, account.id, master_key))
-        series = sorted(
-            (snapshot.snapshot_date, Decimal(snapshot.total_value))
-            for snapshot in read_history(session, user_uuid, master_key, include_current=True)
-        )
-        return series, stock_external_flows(transactions)
+        history = read_history(session, user_uuid, master_key, include_current=True)
+        series = sorted((snapshot.snapshot_date, Decimal(snapshot.total_value)) for snapshot in history)
+        return series, with_implied_deposits(stock_external_flows(transactions), history)
 
     return PocketInputs(
         stocks=read(

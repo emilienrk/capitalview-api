@@ -19,6 +19,7 @@ from dtos.transaction import (
     AccountHistorySnapshotResponse,
 )
 from services.crypto_transaction import get_account_transactions, get_crypto_account_summary
+from services.broker_cash import counted_cash, uncounted_cash
 from services.encryption import encrypt_data, decrypt_data, hash_index
 
 
@@ -215,8 +216,8 @@ def _build_current_account_snapshot(
     if summary.current_value is None and summary.cash_balance == 0:
         return None
 
-    # Full liquidation value (net worth): holdings VALEUR + idle fiat cash.
-    total_value = Decimal(summary.current_value or 0) + Decimal(summary.cash_balance)
+    # Net worth share: holdings VALEUR + idle fiat cash, floored at zero.
+    total_value = Decimal(summary.current_value or 0) + counted_cash(summary.cash_balance)
     total_invested = Decimal(summary.total_invested)
     total_deposits = Decimal(summary.total_deposits)
     total_withdrawals = Decimal(summary.total_withdrawals)
@@ -256,6 +257,7 @@ def _build_current_account_snapshot(
         total_fees=Decimal(summary.total_fees),
         total_dividends=Decimal(summary.total_dividends),
         daily_pnl=None,
+        uncounted_cash=uncounted_cash(summary.cash_balance),
         cumulative_pnl=round(
             Decimal(summary.total_profit_loss)
             if summary.total_profit_loss is not None
@@ -320,6 +322,11 @@ def get_crypto_account_history(
             if row.total_dividends_enc
             else None
         )
+        uncounted = (
+            Decimal(decrypt_data(row.uncounted_cash_enc, master_key))
+            if row.uncounted_cash_enc
+            else Decimal("0")
+        )
 
         positions = None
         if row.positions_enc:
@@ -352,6 +359,7 @@ def get_crypto_account_history(
                 total_dividends=total_dividends,
                 daily_pnl=daily_pnl,
                 cumulative_pnl=cumulative_pnl,
+                uncounted_cash=uncounted,
                 positions=positions,
             )
         )
@@ -423,6 +431,7 @@ def get_all_crypto_accounts_history(
                     "total_dividends": Decimal("0"),
                     "daily_pnl": Decimal("0"),
                     "cumulative_pnl": Decimal("0"),
+                    "uncounted_cash": Decimal("0"),
                     "has_cumulative_pnl": False,
                     "positions": {},
                 }
@@ -436,6 +445,7 @@ def get_all_crypto_accounts_history(
                 aggregated[d]["total_dividends"] += snap.total_dividends
             if snap.daily_pnl is not None:
                 aggregated[d]["daily_pnl"] += snap.daily_pnl
+            aggregated[d]["uncounted_cash"] += snap.uncounted_cash
             if snap.cumulative_pnl is not None:
                 aggregated[d]["cumulative_pnl"] += snap.cumulative_pnl
                 aggregated[d]["has_cumulative_pnl"] = True
@@ -492,6 +502,7 @@ def get_all_crypto_accounts_history(
                     if day["has_cumulative_pnl"]
                     else None
                 ),
+                uncounted_cash=day["uncounted_cash"],
                 positions=positions,
             )
         )

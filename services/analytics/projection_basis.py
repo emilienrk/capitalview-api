@@ -19,7 +19,7 @@ from decimal import Decimal
 
 from sqlmodel import Session
 
-from services.analytics.flows import stock_external_flows
+from services.analytics.flows import stock_external_flows, with_implied_deposits
 from services.analytics.returns import annualize, time_weighted_return
 
 # 365.25 / 12, so a month means the same thing here as it does in `annualize`.
@@ -154,13 +154,14 @@ def _unaligned_flow_share(
 def _category_basis(
     series: list[tuple[datetime.date, Decimal]],
     transactions: list,
+    history: list | None = None,
 ) -> CategoryBasis:
     """Derive one category's contribution and return from its own history."""
     basis = CategoryBasis()
 
     # Both measures read the same ledger, so a deposit cannot count for one and
     # not the other.
-    flows = stock_external_flows(transactions)
+    flows = with_implied_deposits(stock_external_flows(transactions), history or [])
     average, months, total = average_monthly_contribution(flows)
     if average is not None:
         basis.monthly_contribution = average
@@ -231,18 +232,14 @@ def derive_projection_defaults(
     for account in get_user_crypto_accounts(session, user_uuid, master_key):
         crypto_transactions.extend(get_crypto_transactions(session, account.id, master_key))
 
-    stock_series = [
-        (snapshot.snapshot_date, Decimal(snapshot.total_value))
-        for snapshot in get_all_stock_accounts_history(session, user_uuid, master_key)
-    ]
-    crypto_series = [
-        (snapshot.snapshot_date, Decimal(snapshot.total_value))
-        for snapshot in get_all_crypto_accounts_history(session, user_uuid, master_key)
-    ]
+    stock_history = get_all_stock_accounts_history(session, user_uuid, master_key)
+    crypto_history = get_all_crypto_accounts_history(session, user_uuid, master_key)
+    stock_series = [(snapshot.snapshot_date, Decimal(snapshot.total_value)) for snapshot in stock_history]
+    crypto_series = [(snapshot.snapshot_date, Decimal(snapshot.total_value)) for snapshot in crypto_history]
 
     return {
-        "STOCK": _category_basis(stock_series, stock_transactions),
-        "CRYPTO": _category_basis(crypto_series, crypto_transactions),
+        "STOCK": _category_basis(stock_series, stock_transactions, stock_history),
+        "CRYPTO": _category_basis(crypto_series, crypto_transactions, crypto_history),
         "BANK": _bank_basis(session, user_uuid, master_key),
         "PLACEMENT": _placements_basis(session, user_uuid, master_key),
     }
