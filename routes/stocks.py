@@ -207,6 +207,7 @@ def create_account_deposit(
         asset_type=AssetType.STOCK,
         affected_dates=[executed_date],
         affected_assets=["EUR"],
+        sync=True,
     )
 
     return result
@@ -239,7 +240,8 @@ def create_transaction(
             account_id=data.account_id,
             asset_type=AssetType.STOCK,
             affected_dates=[executed_date],
-            affected_assets=[data.asset_key]
+            affected_assets=[data.asset_key],
+            sync=True,
         )
         
         return result
@@ -316,7 +318,8 @@ def update_transaction(
             account_id_bidx=tx_model.account_id_bidx,
             asset_type=AssetType.STOCK,
             affected_dates=[old_date, new_date],
-            affected_assets=[result.asset_key]
+            affected_assets=[result.asset_key],
+            sync=True,
         )
         
         return result
@@ -352,7 +355,8 @@ def delete_transaction(
         account_id_bidx=account_id_bidx,
         asset_type=AssetType.STOCK,
         affected_dates=[executed_date],
-        affected_assets=[tx.asset_key]
+        affected_assets=[tx.asset_key],
+        sync=True,
     )
 
     return None

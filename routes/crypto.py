@@ -132,10 +132,10 @@ def get_default_account(
 
     transactions = get_account_transactions(session, account_model.uuid, master_key)
     summary = get_crypto_account_summary(session, transactions)
-    
+
     # Decrypt account name
     account_name = decrypt_data(account_model.name_enc, master_key)
-    
+
     # Create PortfolioAccountSummaryResponse with account metadata
     return PortfolioAccountSummaryResponse(
         account_id=account_model.uuid,
@@ -202,7 +202,7 @@ def update_account(
     existing = get_crypto_account(session, account_id, current_user.uuid, master_key)
     if not existing:
         raise HTTPException(status_code=404, detail="Account not found")
-        
+
     account_model = session.get(CryptoAccount, account_id)
     return update_crypto_account(session, account_model, data, master_key)
 
@@ -218,7 +218,7 @@ def delete_account(
     existing = get_crypto_account(session, account_id, current_user.uuid, master_key)
     if not existing:
         raise HTTPException(status_code=404, detail="Account not found")
-        
+
     delete_crypto_account(session, account_id, master_key)
     return None
 
@@ -249,7 +249,8 @@ def create_transaction(
         account_id=data.account_id,
         asset_type=AssetType.CRYPTO,
         affected_dates=[executed_date],
-        affected_assets=[resp.asset_key]
+        affected_assets=[resp.asset_key],
+        sync=True,
     )
 
     return CryptoTransactionBasicResponse(
@@ -317,7 +318,7 @@ def create_composite_transaction(
     ]
 
     warning = compute_balance_warning(session, data.account_id, created, master_key)
-    
+
     executed_date = data.executed_at.date() if hasattr(data.executed_at, "date") else data.executed_at
     trigger_post_transaction_updates(
         session=session,
@@ -327,7 +328,8 @@ def create_composite_transaction(
         account_id=data.account_id,
         asset_type=AssetType.CRYPTO,
         affected_dates=[executed_date],
-        affected_assets=[tx.asset_key for tx in created]
+        affected_assets=[tx.asset_key for tx in created],
+        sync=True,
     )
 
     return CryptoCompositeTransactionResponse(rows=rows, warning=warning, info=info)
@@ -378,7 +380,7 @@ def create_cross_account_transfer_route(
 
     executed_date = data.executed_at.date() if hasattr(data.executed_at, "date") else data.executed_at
     transfer_assets = [data.asset_key] if data.asset_key not in FIAT_ASSET_KEYS else []
-    
+
     # Update for source account
     trigger_post_transaction_updates(
         session=session,
@@ -388,9 +390,10 @@ def create_cross_account_transfer_route(
         account_id=data.from_account_id,
         asset_type=AssetType.CRYPTO,
         affected_dates=[executed_date],
-        affected_assets=transfer_assets
+        affected_assets=transfer_assets,
+        sync=True,
     )
-    
+
     # Update for destination account (community positions and dates are handled idempotently if called sequentially, but to be clean we should probably only call it once for community positions, but that's fine)
     trigger_post_transaction_updates(
         session=session,
@@ -400,7 +403,8 @@ def create_cross_account_transfer_route(
         account_id=data.to_account_id,
         asset_type=AssetType.CRYPTO,
         affected_dates=[executed_date],
-        affected_assets=transfer_assets
+        affected_assets=transfer_assets,
+        sync=True,
     )
 
     return CryptoCompositeTransactionResponse(rows=rows, warning=warning)
@@ -414,14 +418,14 @@ def list_transactions(
 ):
     """List all crypto transactions for current user (history)."""
     accounts = get_user_crypto_accounts(session, current_user.uuid, master_key)
-    
+
     all_transactions = []
     for acc in accounts:
         txs = get_account_transactions(session, acc.id, master_key)
         all_transactions.extend(txs)
-        
+
     all_transactions.sort(key=lambda x: x.executed_at, reverse=True)
-    
+
     return all_transactions
 
 
@@ -510,7 +514,7 @@ def update_transaction(
         new_date = data.executed_at.date() if data.executed_at and hasattr(data.executed_at, "date") else (
             data.executed_at if data.executed_at else None
         )
-        
+
         trigger_post_transaction_updates(
             session=session,
             background_tasks=background_tasks,
@@ -519,7 +523,8 @@ def update_transaction(
             account_id_bidx=tx_model.account_id_bidx,
             asset_type=AssetType.CRYPTO,
             affected_dates=[old_date, new_date],
-            affected_assets=[resp.asset_key] if resp.asset_key not in FIAT_ASSET_KEYS else []
+            affected_assets=[resp.asset_key] if resp.asset_key not in FIAT_ASSET_KEYS else [],
+            sync=True,
         )
 
         return CryptoTransactionBasicResponse(
@@ -592,9 +597,10 @@ def delete_transaction(
         account_id_bidx=account_id_bidx,
         asset_type=AssetType.CRYPTO,
         affected_dates=list(dict.fromkeys(affected_dates)) if affected_dates else [],
-        affected_assets=sorted(affected_assets)
+        affected_assets=sorted(affected_assets),
+        sync=True,
     )
-    
+
     return None
 
 
@@ -609,7 +615,7 @@ def get_transactions_by_account(
     account = get_crypto_account(session, account_id, current_user.uuid, master_key)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    
+
     return get_account_transactions(session, account_id, master_key)
 
 
@@ -627,7 +633,7 @@ def bulk_import_transactions(
         raise HTTPException(status_code=404, detail="Account not found")
 
     created_responses = []
-    
+
     for item in data.transactions:
         create_dto = CryptoTransactionCreate(
             account_id=data.account_id,
@@ -660,7 +666,7 @@ def bulk_import_transactions(
         item.executed_at.date() if hasattr(item.executed_at, "date") else item.executed_at
         for item in data.transactions
     ]
-    
+
     trigger_post_transaction_updates(
         session=session,
         background_tasks=background_tasks,
@@ -727,7 +733,7 @@ def bulk_composite_import_transactions(
         item.executed_at.date() if hasattr(item.executed_at, "date") else item.executed_at
         for item in data.transactions
     ]
-    
+
     trigger_post_transaction_updates(
         session=session,
         background_tasks=background_tasks,
@@ -842,7 +848,7 @@ def confirm_binance_import(
             )
 
     result = execute_import(session, data.account_id, data.groups, master_key)
-    
+
     # Extract affected dates and symbols
     past_dates = []
     affected_assets = set()
@@ -855,7 +861,7 @@ def confirm_binance_import(
         for row in g.rows:
             if row.mapped_asset_key and row.mapped_asset_key not in FIAT_ASSET_KEYS:
                 affected_assets.add(row.mapped_asset_key)
-                
+
     trigger_post_transaction_updates(
         session=session,
         background_tasks=background_tasks,
@@ -866,7 +872,7 @@ def confirm_binance_import(
         affected_dates=past_dates,
         affected_assets=list(affected_assets)
     )
-    
+
     return result
 
 @router.get("/market/price", response_model=CryptoHistoricalPriceResponse)

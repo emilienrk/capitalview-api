@@ -227,7 +227,7 @@ def _resolve_account_start_date(
             pass
 
     resolved = min(candidates)
-    
+
     # Auto-correct typo for years below 1900 (e.g., 0025 instead of 2025)
     if resolved.year < 1900:
         if 0 <= resolved.year <= 99:
@@ -648,7 +648,7 @@ def _build_stock_snapshots(
             opened_at=acc.opened_at,
             txs=txs,
         )
-        
+
         result.append(
             _AccountSnapshot(
                 account_id=acc.uuid,
@@ -682,7 +682,7 @@ def _build_crypto_snapshots(
             opened_at=acc.opened_at,
             txs=txs,
         )
-        
+
         result.append(
             _AccountSnapshot(
                 account_id=acc.uuid,
@@ -790,7 +790,7 @@ def _build_asset_snapshots(
             sold_at = _parse_iso_date(sold_at_raw)
 
         series = sorted(valuations_by_asset.get(asset.uuid, []), key=lambda item: item[0])
-        
+
         physical_assets.append(IndividualAsset(
             name=name,
             acquired_at=acquired_at,
@@ -1144,6 +1144,7 @@ def trigger_post_transaction_updates(
     affected_assets: list[str | None],
     account_id: str | None = None,
     account_id_bidx: str | None = None,
+    sync: bool = False,
 ) -> None:
     """
     Centralize post-transaction business orchestration:
@@ -1163,20 +1164,32 @@ def trigger_post_transaction_updates(
         earliest_date = min(past_dates)
         if not account_id_bidx and account_id:
             account_id_bidx = hash_index(account_id, master_key)
-            
+
         if not account_id_bidx:
             return
 
         # Clean the list of assets — exclude EUR (price=1, no market data needed)
         clean_assets = list({a for a in affected_assets if a and a != "EUR"})
 
-        background_tasks.add_task(
-            rebuild_account_history_from_date,
-            user_uuid,
-            account_id_bidx,
-            earliest_date,
-            master_key,
-            clean_assets,
-            asset_type
-        )
-
+        if sync:
+            try:
+                rebuild_account_history_from_date(
+                    user_uuid,
+                    account_id_bidx,
+                    earliest_date,
+                    master_key,
+                    clean_assets,
+                    asset_type
+                )
+            except Exception as exc:
+                logger.error("account_history: synchronous rebuild failed: %s", exc)
+        else:
+            background_tasks.add_task(
+                rebuild_account_history_from_date,
+                user_uuid,
+                account_id_bidx,
+                earliest_date,
+                master_key,
+                clean_assets,
+                asset_type
+            )
