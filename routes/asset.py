@@ -3,7 +3,7 @@
 from datetime import date, datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session
 
 from database import get_session
@@ -34,25 +34,23 @@ from services.asset import (
     get_asset_rebuild_start_date,
     get_asset_acquired_at,
 )
-from services.account_history import rebuild_account_history_from_date
+from services.account_history import rebuild_account_history_now
 from services.encryption import hash_index
 from dtos.transaction import AccountHistorySnapshotResponse
 
 router = APIRouter(prefix="/assets", tags=["Assets"])
 
 
-def _schedule_asset_history_rebuild(
-    background_tasks: BackgroundTasks,
+def _rebuild_asset_history(
     user_uuid: str,
     master_key: str,
     from_date,
 ) -> None:
-    """Schedule a retroactive history rebuild for the user's ASSET virtual account."""
+    """Rebuild the history of the user's ASSET virtual account from *from_date*."""
     user_uuid_bidx = hash_index(user_uuid, master_key)
     virtual_account_id = f"ASSET_PORTFOLIO::{user_uuid_bidx}"
     account_id_bidx = hash_index(virtual_account_id, master_key)
-    background_tasks.add_task(
-        rebuild_account_history_from_date,
+    rebuild_account_history_now(
         user_uuid,
         account_id_bidx,
         from_date,
@@ -63,7 +61,6 @@ def _schedule_asset_history_rebuild(
 @router.post("", response_model=AssetResponse, status_code=201)
 def create(
     data: AssetCreate,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -79,7 +76,7 @@ def create(
     except Exception:
         from_date = datetime.now(timezone.utc).date()
 
-    _schedule_asset_history_rebuild(background_tasks, current_user.uuid, master_key, from_date)
+    _rebuild_asset_history(current_user.uuid, master_key, from_date)
     return result
 
 
@@ -121,7 +118,6 @@ def get_one(
 def update(
     asset_id: str,
     data: AssetUpdate,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -153,7 +149,7 @@ def update(
         rebuild_from = min(rebuild_from, old_acquired_at) if rebuild_from else old_acquired_at
 
     if rebuild_from is not None:
-        _schedule_asset_history_rebuild(background_tasks, current_user.uuid, master_key, rebuild_from)
+        _rebuild_asset_history(current_user.uuid, master_key, rebuild_from)
 
     return result
 
@@ -161,7 +157,6 @@ def update(
 @router.delete("/{asset_id}", status_code=204)
 def delete(
     asset_id: str,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -176,7 +171,7 @@ def delete(
     acquired_at = get_asset_acquired_at(asset_model, master_key)
 
     service_delete_asset(session, asset_id)
-    _schedule_asset_history_rebuild(background_tasks, current_user.uuid, master_key, acquired_at)
+    _rebuild_asset_history(current_user.uuid, master_key, acquired_at)
     return None
 
 
@@ -184,7 +179,6 @@ def delete(
 def sell(
     asset_id: str,
     data: AssetSell,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -207,7 +201,7 @@ def sell(
     result = service_sell_asset(session, asset_id, data, master_key)
 
     rebuild_from = min(acquired_at, sold_at)
-    _schedule_asset_history_rebuild(background_tasks, current_user.uuid, master_key, rebuild_from)
+    _rebuild_asset_history(current_user.uuid, master_key, rebuild_from)
 
     return result
 
@@ -231,7 +225,6 @@ def list_valuations(
 def add_valuation(
     asset_id: str,
     data: AssetValuationCreate,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -255,7 +248,7 @@ def add_valuation(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    _schedule_asset_history_rebuild(background_tasks, current_user.uuid, master_key, from_date)
+    _rebuild_asset_history(current_user.uuid, master_key, from_date)
 
     return result
 
@@ -265,7 +258,6 @@ def edit_valuation(
     asset_id: str,
     valuation_id: str,
     data: AssetValuationUpdate,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -307,7 +299,7 @@ def edit_valuation(
     new_from = get_asset_rebuild_start_date(session, asset_id, new_date, master_key)
     rebuild_from = min(old_from, new_from)
 
-    _schedule_asset_history_rebuild(background_tasks, current_user.uuid, master_key, rebuild_from)
+    _rebuild_asset_history(current_user.uuid, master_key, rebuild_from)
 
     return result
 
@@ -316,7 +308,6 @@ def edit_valuation(
 def remove_valuation(
     asset_id: str,
     valuation_id: str,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -348,6 +339,6 @@ def remove_valuation(
     if not service_delete_valuation(session, valuation_id):
         raise HTTPException(status_code=404, detail="Valuation not found")
 
-    _schedule_asset_history_rebuild(background_tasks, current_user.uuid, master_key, from_date)
+    _rebuild_asset_history(current_user.uuid, master_key, from_date)
 
     return None

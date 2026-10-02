@@ -3,7 +3,7 @@
 from datetime import date, datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session
 
 from database import get_session
@@ -19,7 +19,7 @@ from dtos.placement import (
 from dtos.transaction import AccountHistorySnapshotResponse
 from models import User
 from models.placement import PlacementAccount
-from services.account_history import rebuild_account_history_from_date
+from services.account_history import rebuild_account_history_now
 from services.auth import get_current_user, get_master_key
 from services.encryption import hash_index
 from services.placement import (
@@ -50,8 +50,7 @@ def _owned_or_404(session: Session, account_id: str, user: User, master_key: str
     return account
 
 
-def _schedule_rebuild(
-    background_tasks: BackgroundTasks,
+def _rebuild(
     session: Session,
     account: PlacementAccount,
     user_uuid: str,
@@ -67,8 +66,7 @@ def _schedule_rebuild(
     start = build_timeline(session, account.uuid, master_key).start
     candidates = [d for d in (start, account.opened_at, *affected) if d is not None]
     from_date = min(candidates) if candidates else datetime.now(timezone.utc).date()
-    background_tasks.add_task(
-        rebuild_account_history_from_date,
+    rebuild_account_history_now(
         user_uuid,
         hash_index(account.uuid, master_key),
         from_date,
@@ -118,7 +116,6 @@ def get_placement(
 def update_placement(
     account_id: str,
     data: PlacementAccountUpdate,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -127,9 +124,7 @@ def update_placement(
     previous_opened_at = account.opened_at
     result = update_account(session, account, data, master_key)
     if "opened_at" in data.model_fields_set:
-        _schedule_rebuild(
-            background_tasks, session, account, current_user.uuid, master_key, previous_opened_at
-        )
+        _rebuild(session, account, current_user.uuid, master_key, previous_opened_at)
     return result
 
 
@@ -169,7 +164,6 @@ def list_placement_entries(
 def add_entry(
     account_id: str,
     data: PlacementEntryCreate,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -179,7 +173,7 @@ def add_entry(
         result = create_entry(session, account, data, master_key)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    _schedule_rebuild(background_tasks, session, account, current_user.uuid, master_key, data.occurred_at)
+    _rebuild(session, account, current_user.uuid, master_key, data.occurred_at)
     return result
 
 
@@ -188,7 +182,6 @@ def edit_entry(
     account_id: str,
     entry_id: str,
     data: PlacementEntryUpdate,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -202,9 +195,7 @@ def edit_entry(
         result = update_entry(session, entry, data, master_key)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    _schedule_rebuild(
-        background_tasks, session, account, current_user.uuid, master_key, previous_day, result.occurred_at
-    )
+    _rebuild(session, account, current_user.uuid, master_key, previous_day, result.occurred_at)
     return result
 
 
@@ -212,7 +203,6 @@ def edit_entry(
 def remove_entry(
     account_id: str,
     entry_id: str,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -227,7 +217,5 @@ def remove_entry(
         delete_entry(session, entry, master_key)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    _schedule_rebuild(
-        background_tasks, session, account, current_user.uuid, master_key, previous_start
-    )
+    _rebuild(session, account, current_user.uuid, master_key, previous_start)
     return None

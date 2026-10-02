@@ -3,7 +3,7 @@
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session
 
 from database import get_session
@@ -156,7 +156,6 @@ def preview_import(
 def confirm_import(
     source_id: str,
     data: ImportConfirmRequest,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_active_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -198,7 +197,6 @@ def confirm_import(
 
         trigger_post_transaction_updates(
             session=session,
-            background_tasks=background_tasks,
             user_uuid=current_user.uuid,
             master_key=master_key,
             account_id=data.account_id,

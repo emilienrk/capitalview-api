@@ -9,9 +9,10 @@ On every login, a BackgroundTask calls `run_lazy_catchup` which:
   5. Loops over missing dates × accounts in RAM to generate snapshots.
   6. Bulk-upserts the rows into `account_history`.
 
-Because this runs as a BackgroundTask, it is never blocking for the user.
-The function creates its own DB session (same pattern as `update_all_prices_daily`
-in services/market.py) since the request session closes before the task runs.
+The login catchup runs as a BackgroundTask, so it never blocks the user. A
+mutation's rebuild runs inside the request instead (`rebuild_account_history_now`),
+so the curves the client reloads afterwards already carry it. Both open their own
+DB session (same pattern as `update_all_prices_daily` in services/market.py).
 """
 
 import json
@@ -1100,8 +1101,8 @@ def rebuild_account_history_from_date(
     backfill missing market price history for the affected asset_keys, then re-run
     a full lazy catchup so the cleared range is rebuilt with real daily prices.
 
-    Designed to be called as a FastAPI BackgroundTask whenever a transaction is
-    created, updated, or deleted with an *executed_at* date that falls before today.
+    Called whenever a transaction is created, updated, or deleted with an
+    *executed_at* date that falls before today.
     """
     from services.market import ensure_price_history
     from services.jobs import job_run
@@ -1134,9 +1135,46 @@ def rebuild_account_history_from_date(
         run_lazy_catchup(user_uuid, master_key)
 
 
+def rebuild_account_history_now(
+    user_uuid: str,
+    account_id_bidx: str,
+    from_date: date,
+    master_key: str,
+    asset_keys: list[str] | None = None,
+    asset_type: AssetType | None = None,
+) -> None:
+    """Rebuild inside the request, so the response already reflects the change.
+
+    In the background, the client reloading its curves right after the response
+    read them half-deleted and cached that for an hour. The mutation is committed
+    by now: a failed rebuild must not turn it into an error, and the next catchup
+    fills the dates it left out.
+    """
+    try:
+        rebuild_account_history_from_date(
+            user_uuid, account_id_bidx, from_date, master_key, asset_keys, asset_type
+        )
+    except Exception:
+        logger.exception("account_history: rebuild from %s failed", from_date)
+
+
+def rebuild_after_opening_change(
+    user_uuid: str,
+    account_id: str,
+    master_key: str,
+    previous: date | None,
+    current: date | None,
+) -> None:
+    """An account's opening date bounds its curve: moving it either way reshapes
+    the curve from the earlier of the two dates."""
+    dates = [d for d in (previous, current) if d is not None]
+    if previous == current or not dates:
+        return
+    rebuild_account_history_now(user_uuid, hash_index(account_id, master_key), min(dates), master_key)
+
+
 def trigger_post_transaction_updates(
     session: Session,
-    background_tasks: "BackgroundTasks", # type: ignore
     user_uuid: str,
     master_key: str,
     asset_type: AssetType,
@@ -1144,12 +1182,11 @@ def trigger_post_transaction_updates(
     affected_assets: list[str | None],
     account_id: str | None = None,
     account_id_bidx: str | None = None,
-    sync: bool = False,
 ) -> None:
     """
     Centralize post-transaction business orchestration:
     - Update community positions
-    - Trigger retroactive account history rebuild if past dates are affected
+    - Rebuild account history if past dates are affected
     """
     from services.community import refresh_community_positions
 
@@ -1171,25 +1208,11 @@ def trigger_post_transaction_updates(
         # Clean the list of assets — exclude EUR (price=1, no market data needed)
         clean_assets = list({a for a in affected_assets if a and a != "EUR"})
 
-        if sync:
-            try:
-                rebuild_account_history_from_date(
-                    user_uuid,
-                    account_id_bidx,
-                    earliest_date,
-                    master_key,
-                    clean_assets,
-                    asset_type
-                )
-            except Exception as exc:
-                logger.error("account_history: synchronous rebuild failed: %s", exc)
-        else:
-            background_tasks.add_task(
-                rebuild_account_history_from_date,
-                user_uuid,
-                account_id_bidx,
-                earliest_date,
-                master_key,
-                clean_assets,
-                asset_type
-            )
+        rebuild_account_history_now(
+            user_uuid,
+            account_id_bidx,
+            earliest_date,
+            master_key,
+            clean_assets,
+            asset_type,
+        )

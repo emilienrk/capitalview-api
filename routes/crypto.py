@@ -7,7 +7,7 @@ from typing import Annotated
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
@@ -56,7 +56,7 @@ from services.crypto_account import (
 )
 from services.settings import get_or_create_settings
 from services.encryption import decrypt_data, hash_index
-from services.account_history import trigger_post_transaction_updates
+from services.account_history import rebuild_after_opening_change, trigger_post_transaction_updates
 from services.market import search_assets, get_assets_bulk_info, get_crypto_price
 from services.crypto_transaction import (
     create_composite_crypto_transaction,
@@ -204,7 +204,12 @@ def update_account(
         raise HTTPException(status_code=404, detail="Account not found")
 
     account_model = session.get(CryptoAccount, account_id)
-    return update_crypto_account(session, account_model, data, master_key)
+    previous_opened_at = account_model.opened_at
+    result = update_crypto_account(session, account_model, data, master_key)
+    rebuild_after_opening_change(
+        current_user.uuid, account_id, master_key, previous_opened_at, account_model.opened_at
+    )
+    return result
 
 
 @router.delete("/accounts/{account_id}", status_code=204)
@@ -228,7 +233,6 @@ def delete_account(
 @router.post("/transactions", response_model=CryptoTransactionBasicResponse, status_code=201)
 def create_transaction(
     data: CryptoTransactionCreate,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -243,14 +247,12 @@ def create_transaction(
     executed_date = data.executed_at.date() if hasattr(data.executed_at, "date") else data.executed_at
     trigger_post_transaction_updates(
         session=session,
-        background_tasks=background_tasks,
         user_uuid=current_user.uuid,
         master_key=master_key,
         account_id=data.account_id,
         asset_type=AssetType.CRYPTO,
         affected_dates=[executed_date],
         affected_assets=[resp.asset_key],
-        sync=True,
     )
 
     return CryptoTransactionBasicResponse(
@@ -269,7 +271,6 @@ def create_transaction(
 @router.post("/transactions/composite", response_model=CryptoCompositeTransactionResponse, status_code=201)
 def create_composite_transaction(
     data: CryptoCompositeTransactionCreate,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -322,14 +323,12 @@ def create_composite_transaction(
     executed_date = data.executed_at.date() if hasattr(data.executed_at, "date") else data.executed_at
     trigger_post_transaction_updates(
         session=session,
-        background_tasks=background_tasks,
         user_uuid=current_user.uuid,
         master_key=master_key,
         account_id=data.account_id,
         asset_type=AssetType.CRYPTO,
         affected_dates=[executed_date],
         affected_assets=[tx.asset_key for tx in created],
-        sync=True,
     )
 
     return CryptoCompositeTransactionResponse(rows=rows, warning=warning, info=info)
@@ -338,7 +337,6 @@ def create_composite_transaction(
 @router.post("/transactions/cross-account-transfer", response_model=CryptoCompositeTransactionResponse, status_code=201)
 def create_cross_account_transfer_route(
     data: CrossAccountTransferCreate,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -384,27 +382,23 @@ def create_cross_account_transfer_route(
     # Update for source account
     trigger_post_transaction_updates(
         session=session,
-        background_tasks=background_tasks,
         user_uuid=current_user.uuid,
         master_key=master_key,
         account_id=data.from_account_id,
         asset_type=AssetType.CRYPTO,
         affected_dates=[executed_date],
         affected_assets=transfer_assets,
-        sync=True,
     )
 
     # Update for destination account (community positions and dates are handled idempotently if called sequentially, but to be clean we should probably only call it once for community positions, but that's fine)
     trigger_post_transaction_updates(
         session=session,
-        background_tasks=background_tasks,
         user_uuid=current_user.uuid,
         master_key=master_key,
         account_id=data.to_account_id,
         asset_type=AssetType.CRYPTO,
         affected_dates=[executed_date],
         affected_assets=transfer_assets,
-        sync=True,
     )
 
     return CryptoCompositeTransactionResponse(rows=rows, warning=warning)
@@ -490,7 +484,6 @@ def get_transaction(
 def update_transaction(
     transaction_id: str,
     data: CryptoTransactionUpdate,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -517,14 +510,12 @@ def update_transaction(
 
         trigger_post_transaction_updates(
             session=session,
-            background_tasks=background_tasks,
             user_uuid=current_user.uuid,
             master_key=master_key,
             account_id_bidx=tx_model.account_id_bidx,
             asset_type=AssetType.CRYPTO,
             affected_dates=[old_date, new_date],
             affected_assets=[resp.asset_key] if resp.asset_key not in FIAT_ASSET_KEYS else [],
-            sync=True,
         )
 
         return CryptoTransactionBasicResponse(
@@ -545,7 +536,6 @@ def update_transaction(
 @router.delete("/transactions/{transaction_id}", status_code=204)
 def delete_transaction(
     transaction_id: str,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -591,14 +581,12 @@ def delete_transaction(
 
     trigger_post_transaction_updates(
         session=session,
-        background_tasks=background_tasks,
         user_uuid=current_user.uuid,
         master_key=master_key,
         account_id_bidx=account_id_bidx,
         asset_type=AssetType.CRYPTO,
         affected_dates=list(dict.fromkeys(affected_dates)) if affected_dates else [],
         affected_assets=sorted(affected_assets),
-        sync=True,
     )
 
     return None
@@ -622,7 +610,6 @@ def get_transactions_by_account(
 @router.post("/transactions/bulk", response_model=CryptoBulkImportResponse, status_code=201)
 def bulk_import_transactions(
     data: CryptoBulkImportRequest,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -669,7 +656,6 @@ def bulk_import_transactions(
 
     trigger_post_transaction_updates(
         session=session,
-        background_tasks=background_tasks,
         user_uuid=current_user.uuid,
         master_key=master_key,
         account_id=data.account_id,
@@ -691,7 +677,6 @@ def bulk_import_transactions(
 @router.post("/transactions/bulk-composite", response_model=CryptoBulkCompositeImportResponse, status_code=201)
 def bulk_composite_import_transactions(
     data: CryptoBulkCompositeImportRequest,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
@@ -736,7 +721,6 @@ def bulk_composite_import_transactions(
 
     trigger_post_transaction_updates(
         session=session,
-        background_tasks=background_tasks,
         user_uuid=current_user.uuid,
         master_key=master_key,
         account_id=data.account_id,
@@ -824,7 +808,6 @@ def preview_binance_import(
 @router.post("/import/binance/confirm", response_model=BinanceImportConfirmResponse, status_code=201)
 def confirm_binance_import(
     data: BinanceImportConfirmRequest,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
@@ -864,7 +847,6 @@ def confirm_binance_import(
 
     trigger_post_transaction_updates(
         session=session,
-        background_tasks=background_tasks,
         user_uuid=current_user.uuid,
         master_key=master_key,
         account_id=data.account_id,

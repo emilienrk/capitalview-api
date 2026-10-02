@@ -1774,3 +1774,102 @@ def test_a_crypto_snapshot_leaves_negative_euros_out(session: Session, master_ke
     assert decrypt_data(rows[0]["total_value_enc"], master_key) == "1000.00"
     assert decrypt_data(rows[0]["uncounted_cash_enc"], master_key) == "1000.00"
     assert decrypt_data(rows[0]["daily_pnl_enc"], master_key) == "0.00"
+
+
+# ---------------------------------------------------------------------------
+# Rebuild after a mutation — runs inside the request
+# ---------------------------------------------------------------------------
+
+
+def _record_rebuilds(monkeypatch) -> list[tuple]:
+    import services.account_history as account_history_service
+    import services.community as community_service
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(community_service, "refresh_community_positions", lambda *a, **k: None)
+    monkeypatch.setattr(
+        account_history_service, "rebuild_account_history_from_date", lambda *a: calls.append(a)
+    )
+    return calls
+
+
+def test_a_past_dated_mutation_rebuilds_before_returning(monkeypatch, session: Session):
+    from services.account_history import trigger_post_transaction_updates
+    from models.enums import AssetType
+
+    calls = _record_rebuilds(monkeypatch)
+
+    trigger_post_transaction_updates(
+        session=session,
+        user_uuid="user_1",
+        master_key="key",
+        asset_type=AssetType.CRYPTO,
+        affected_dates=[date(2024, 5, 2), None, date(2024, 3, 1)],
+        affected_assets=["BTC", "EUR", None, "BTC"],
+        account_id_bidx="acc_bidx",
+    )
+
+    assert calls == [("user_1", "acc_bidx", date(2024, 3, 1), "key", ["BTC"], AssetType.CRYPTO)]
+
+
+def test_a_mutation_dated_today_rebuilds_nothing(monkeypatch, session: Session):
+    from services.account_history import trigger_post_transaction_updates
+    from models.enums import AssetType
+
+    calls = _record_rebuilds(monkeypatch)
+
+    trigger_post_transaction_updates(
+        session=session,
+        user_uuid="user_1",
+        master_key="key",
+        asset_type=AssetType.STOCK,
+        affected_dates=[datetime.now(timezone.utc).date()],
+        affected_assets=["US0378331005"],
+        account_id_bidx="acc_bidx",
+    )
+
+    assert calls == []
+
+
+def test_a_failed_rebuild_does_not_fail_the_mutation(monkeypatch, caplog):
+    import services.account_history as account_history_service
+
+    def boom(*args):
+        raise RuntimeError("price provider down")
+
+    monkeypatch.setattr(account_history_service, "rebuild_account_history_from_date", boom)
+
+    account_history_service.rebuild_account_history_now("user_1", "acc_bidx", date(2024, 3, 1), "key")
+
+    assert "rebuild from 2024-03-01 failed" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("previous", "current", "expected_from"),
+    [
+        (date(2024, 6, 1), date(2024, 1, 1), date(2024, 1, 1)),
+        (date(2024, 1, 1), date(2024, 6, 1), date(2024, 1, 1)),
+        (None, date(2024, 6, 1), date(2024, 6, 1)),
+    ],
+)
+def test_moving_an_opening_date_rebuilds_from_the_earlier_one(
+    monkeypatch, master_key: str, previous, current, expected_from
+):
+    from services.account_history import rebuild_after_opening_change
+
+    calls = _record_rebuilds(monkeypatch)
+
+    rebuild_after_opening_change("user_1", "acc_1", master_key, previous, current)
+
+    assert calls == [("user_1", hash_index("acc_1", master_key), expected_from, master_key, None, None)]
+
+
+def test_an_unchanged_opening_date_rebuilds_nothing(monkeypatch, master_key: str):
+    from services.account_history import rebuild_after_opening_change
+
+    calls = _record_rebuilds(monkeypatch)
+
+    rebuild_after_opening_change("user_1", "acc_1", master_key, date(2024, 1, 1), date(2024, 1, 1))
+    rebuild_after_opening_change("user_1", "acc_1", master_key, None, None)
+
+    assert calls == []

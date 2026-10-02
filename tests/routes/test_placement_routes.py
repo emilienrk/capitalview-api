@@ -36,8 +36,8 @@ def _override_deps(session, master_key):
     app.dependency_overrides[get_current_user] = _get_user
     app.dependency_overrides[get_master_key] = _get_master_key
 
-    # The rebuild opens its own engine: the routes only have to schedule it.
-    with patch("routes.placement.rebuild_account_history_from_date") as rebuild:
+    # The rebuild opens its own engine: the routes only have to call it.
+    with patch("routes.placement.rebuild_account_history_now") as rebuild:
         yield rebuild
 
     CURRENT_USER["uuid"] = "user_1"

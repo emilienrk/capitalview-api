@@ -113,16 +113,12 @@ def isolate_rate_limiter(rate_limit_engine, monkeypatch):
 def disable_auth_background_catchup(monkeypatch):
     """Prevent account-history background jobs from opening a real PostgreSQL connection in tests."""
     import routes.auth as auth_routes
-    import routes.asset as asset_routes
-    import routes.placement as placement_routes
     import services.account_history as account_history_service
 
     noop = lambda *args, **kwargs: None
     monkeypatch.setattr(auth_routes, "run_lazy_catchup", noop)
     monkeypatch.setattr(account_history_service, "run_lazy_catchup", noop)
     monkeypatch.setattr(account_history_service, "rebuild_account_history_from_date", noop)
-    monkeypatch.setattr(asset_routes, "rebuild_account_history_from_date", noop)
-    monkeypatch.setattr(placement_routes, "rebuild_account_history_from_date", noop)
 
 
 def opt_into_open_banking(session, user_uuid: str, master_key: str) -> None:

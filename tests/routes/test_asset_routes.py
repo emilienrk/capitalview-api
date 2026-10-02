@@ -143,7 +143,7 @@ def test_delete_asset_not_found(session, master_key):
 def test_create_asset_triggers_history_rebuild(session, master_key):
     client = TestClient(app)
 
-    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+    with patch("routes.asset.rebuild_account_history_now") as mock_rebuild:
         r = client.post("/assets", json={
             "name": "Maison",
             "category": "Immobilier",
@@ -167,7 +167,7 @@ def test_delete_asset_triggers_history_rebuild(session, master_key):
     }).json()
     asset_id = created["id"]
 
-    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+    with patch("routes.asset.rebuild_account_history_now") as mock_rebuild:
         r = client.delete(f"/assets/{asset_id}")
         assert r.status_code == 204
         mock_rebuild.assert_called_once()
@@ -228,7 +228,7 @@ def test_sell_asset_triggers_history_rebuild(session, master_key):
     }).json()
     asset_id = created["id"]
 
-    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+    with patch("routes.asset.rebuild_account_history_now") as mock_rebuild:
         r = client.post(f"/assets/{asset_id}/sell", json={
             "sold_price": 900,
             "sold_at": "2024-06-10",
@@ -382,7 +382,7 @@ def test_update_acquisition_date_rebuild_uses_earliest_date(session, master_key)
     }).json()
     asset_id = created["id"]
 
-    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+    with patch("routes.asset.rebuild_account_history_now") as mock_rebuild:
         r = client.put(f"/assets/{asset_id}", json={"acquisition_date": "2024-06-01"})
         assert r.status_code == 200
 
@@ -406,7 +406,7 @@ def test_update_acquisition_date_rebuild_uses_new_date_when_earlier(session, mas
     }).json()
     asset_id = created["id"]
 
-    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+    with patch("routes.asset.rebuild_account_history_now") as mock_rebuild:
         r = client.put(f"/assets/{asset_id}", json={"acquisition_date": "2024-01-01"})
         assert r.status_code == 200
 
@@ -427,7 +427,7 @@ def test_update_purchase_price_rebuild_starts_at_acquired_at(session, master_key
     }).json()
     asset_id = created["id"]
 
-    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+    with patch("routes.asset.rebuild_account_history_now") as mock_rebuild:
         r = client.put(f"/assets/{asset_id}", json={"purchase_price": 55000})
         assert r.status_code == 200
 
@@ -446,7 +446,7 @@ def test_update_name_only_does_not_trigger_rebuild(session, master_key):
     }).json()
     asset_id = created["id"]
 
-    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+    with patch("routes.asset.rebuild_account_history_now") as mock_rebuild:
         r = client.put(f"/assets/{asset_id}", json={"name": "New Name"})
         assert r.status_code == 200
         mock_rebuild.assert_not_called()
@@ -464,7 +464,7 @@ def test_update_both_anchors_rebuild_from_absolute_earliest(session, master_key)
     }).json()
     asset_id = created["id"]
 
-    with patch("routes.asset.rebuild_account_history_from_date") as mock_rebuild:
+    with patch("routes.asset.rebuild_account_history_now") as mock_rebuild:
         # Shift acquisition date forward to June; purchase_price also changes.
         # from_date must be 2024-03-01 (the old, earlier, acquisition date).
         r = client.put(f"/assets/{asset_id}", json={
