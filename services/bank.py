@@ -743,6 +743,7 @@ def import_bank_account_history(
     entries: list[BankHistoryEntry],
     master_key: str,
     overwrite: bool = False,
+    replace_range: bool = False,
 ) -> int:
     """
     Import a list of (date, value) snapshots for a bank account.
@@ -752,6 +753,9 @@ def import_bank_account_history(
     - Gaps between known entries are forward-filled with the last known value.
     - If overwrite=True, existing history is deleted first; otherwise existing
       rows are preserved (on_conflict_do_nothing).
+    - If replace_range=True, only the rows between the first and last entry are
+      deleted first: a re-imported file wins over what it covers, including the
+      days an earlier import carried forward, and nothing outside it moves.
 
     Returns the number of rows written.
     """
@@ -762,6 +766,13 @@ def import_bank_account_history(
         delete_bank_account_history(session, account.uuid, master_key)
 
     sorted_entries = sorted(entries, key=lambda e: e.snapshot_date)
+    if replace_range and not overwrite:
+        session.exec(
+            sa.delete(AccountHistory)
+            .where(AccountHistory.account_id_bidx == hash_index(account.uuid, master_key))
+            .where(AccountHistory.snapshot_date >= sorted_entries[0].snapshot_date)
+            .where(AccountHistory.snapshot_date <= sorted_entries[-1].snapshot_date)
+        )
     yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
     account_start = account.created_at.date()
     first_entry_date = sorted_entries[0].snapshot_date

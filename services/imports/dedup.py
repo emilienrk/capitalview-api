@@ -5,7 +5,7 @@ decryption, scoped to the target account. A fingerprint is
 (executed_at to the second, asset_key, type, normalized amount).
 """
 
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from sqlmodel import Session
@@ -51,20 +51,6 @@ def stock_fingerprints(session: Session, account_id: str, master_key: str) -> se
         tx_type = tx.type.value if hasattr(tx.type, "value") else str(tx.type)
         result.add(make_fingerprint(tx.executed_at, tx.asset_key, tx_type, tx.amount))
     return result
-
-
-def bank_existing_dates(session: Session, account_id: str, master_key: str) -> set[date]:
-    """Dates that already have a history snapshot for the bank account."""
-    from sqlmodel import select
-
-    from models.account_history import AccountHistory
-    from services.encryption import hash_index
-
-    account_bidx = hash_index(account_id, master_key)
-    rows = session.exec(
-        select(AccountHistory.snapshot_date).where(AccountHistory.account_id_bidx == account_bidx)
-    ).all()
-    return set(rows)
 
 
 def bank_existing_transaction_refs(

@@ -49,7 +49,7 @@ from models.currency import BASE_CURRENCY
 from services.banking.transactions import CREDIT, DEBIT, STATUS_BOOKED, canonical_amount
 from services.encryption import encrypt_data, hash_index
 from services.imports.base import ImportCategory, ImportParser, header_has
-from services.imports.dedup import bank_existing_dates, bank_existing_transaction_refs
+from services.imports.dedup import bank_existing_transaction_refs
 from services.imports.generic_csv import (
     get_mapped,
     parse_generic_date,
@@ -122,21 +122,13 @@ class _BankHistoryParser(ImportParser):
         account_id: str | None = None,
         master_key: str | None = None,
     ) -> ImportPreviewResponse:
+        # No duplicate flags: a day already stored is replaced, never skipped.
         points, warnings = parse_bank_points(csv_content, self.effective_options(options))
-
-        duplicates = 0
-        if account_id and master_key:
-            existing = bank_existing_dates(session, account_id, master_key)
-            for point in points:
-                if point.snapshot_date in existing:
-                    point.is_duplicate = True
-                    duplicates += 1
 
         return ImportPreviewResponse(
             source_id=self.source_id,
             category=self.category.value,
             total_rows=len(points),
-            duplicates_count=duplicates,
             warnings=warnings,
             bank_points=points,
         )
@@ -159,7 +151,8 @@ class _BankHistoryParser(ImportParser):
             for p in points
         ]
         written = import_bank_account_history(
-            session, account, entries, master_key, overwrite=payload.overwrite
+            session, account, entries, master_key,
+            overwrite=payload.overwrite, replace_range=True,
         )
         return ImportConfirmResponse(imported_count=written)
 

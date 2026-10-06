@@ -132,6 +132,47 @@ def test_native_missing_columns_yields_no_points():
     assert points == []
 
 
+def _confirm_balances(session, master_key, account_id, points):
+    parser = get_parser("generic_bank")
+    return parser.execute(
+        session, account_id,
+        ImportConfirmRequest(account_id=account_id, bank_points=points),
+        master_key,
+    )
+
+
+def test_a_fuller_reimport_wins_over_the_days_the_first_one_carried_forward(session, master_key):
+    """The first import fills every day after its last balance with that balance;
+    inside its own range, the fuller file must win over those carried values."""
+    parser = get_parser("generic_bank")
+    account_id = _account(session, master_key)
+    first, _ = parse_bank_points("snapshot_date,value\n2024-01-31,1000\n", parser.effective_options({}))
+    _confirm_balances(session, master_key, account_id, first)
+
+    fuller, _ = parse_bank_points(
+        "snapshot_date,value\n2024-01-31,1000\n2024-03-31,1500\n", parser.effective_options({})
+    )
+    _confirm_balances(session, master_key, account_id, fuller)
+
+    curve = _curve(session, master_key, account_id)
+    assert curve[date(2024, 2, 15)] == Decimal("1000")
+    assert curve[date(2024, 3, 31)] == Decimal("1500")
+
+
+def test_a_reimport_leaves_the_days_before_its_file_alone(session, master_key):
+    parser = get_parser("generic_bank")
+    account_id = _account(session, master_key)
+    older, _ = parse_bank_points("snapshot_date,value\n2023-06-30,700\n", parser.effective_options({}))
+    _confirm_balances(session, master_key, account_id, older)
+
+    later, _ = parse_bank_points("snapshot_date,value\n2024-01-31,1000\n", parser.effective_options({}))
+    _confirm_balances(session, master_key, account_id, later)
+
+    curve = _curve(session, master_key, account_id)
+    assert curve[date(2023, 6, 30)] == Decimal("700")
+    assert curve[date(2024, 1, 31)] == Decimal("1000")
+
+
 # ─── The transactional path ──────────────────────────────────────────────
 # For the accounts no bank API reaches. Movements, not a balance curve: the
 # `delta` mode above integrates them into end-of-day balances, which destroys
