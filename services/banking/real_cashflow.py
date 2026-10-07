@@ -67,6 +67,7 @@ from services.banking.flows import (
     _shift_period,
     _user_accounts,
 )
+from services.banking.transactions import SYNTHETIC_ORIGINS
 from services.encryption import decrypt_data, hash_index
 
 TOP_EXPENSES = 5
@@ -501,7 +502,7 @@ def _read(
     window = set(periods)
     selected = [
         i for i, m in enumerate(movements)
-        if m.period in window and (m.is_final or m.period in pending_in)
+        if m.period in window and (m.is_final or m.period in pending_in) and not m.synthetic
     ]
 
     # The headline currency, chosen as `flows._aggregate` chooses it.
@@ -632,11 +633,15 @@ def _stored_periods(session: Session, master_key: str, accounts: _Accounts, toda
     """The "YYYY-MM" periods holding at least one stored row, oldest first."""
     if not accounts.readable:
         return []
-    stored = set(session.exec(
-        select(sa.distinct(BankTransaction.period_bidx)).where(
-            BankTransaction.account_id_bidx.in_(accounts.readable)  # type: ignore[attr-defined]
-        )
-    ).all())
+    # An adjustment or a forecast alone does not make a month of cashflow.
+    stored = {
+        period for period, origin in session.exec(
+            select(BankTransaction.period_bidx, BankTransaction.origin_enc).where(
+                BankTransaction.account_id_bidx.in_(accounts.readable)  # type: ignore[attr-defined]
+            )
+        ).all()
+        if origin is None or decrypt_data(origin, master_key) not in SYNTHETIC_ORIGINS
+    }
     candidates = (
         f"{year:04d}-{month:02d}"
         for year in range(today.year - _HISTORY_YEARS, today.year + 1)

@@ -88,6 +88,20 @@ class BankImportTransactionPreview(BaseModel):
     label: str = ""
     currency: str = BASE_CURRENCY
     is_duplicate: bool = False
+    # What the import does with it, on an account no bank feeds: "new",
+    # "duplicate", "replaces_manual" or "ambiguous"
+    # (services.banking.transactions.classify_transactions).
+    status: str = "new"
+    # Left out of the import by the user (an ambiguous row, usually).
+    excluded: bool = False
+
+
+class BankImportReplacedEntry(BaseModel):
+    """An adjustment or a forecast the file's operations replace."""
+    day: date
+    amount: Decimal  # signed
+    origin: str  # "adjustment" | "forecast"
+    label: str | None = None
 
 
 class BankImportCurvePreview(BaseModel):
@@ -124,6 +138,11 @@ class ImportPreviewResponse(BaseModel):
     # counted in `covered_by_bank_count` and left out of `bank_transactions`.
     bank_history_from: date | None = None
     covered_by_bank_count: int = 0
+    # Account no bank feeds only (docs/bank-ledger.md): what the file replaces,
+    # and the balance at its last operation once imported.
+    bank_replaced: list[BankImportReplacedEntry] | None = None
+    bank_balance_after: Decimal | None = None
+    bank_balance_after_date: date | None = None
 
 
 class ImportConfirmRequest(BaseModel):
@@ -147,3 +166,5 @@ class ImportConfirmResponse(BaseModel):
     skipped_duplicates: int = 0
     groups_count: int | None = None
     covered_by_bank_count: int = 0
+    # Adjustments and forecasts the import replaced.
+    replaced_count: int = 0

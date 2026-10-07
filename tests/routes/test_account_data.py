@@ -509,9 +509,12 @@ def test_export_includes_bank_transactions_and_excludes_private_key(session):
     # Check bank account has transactions
     found_account = next(acc for acc in data["bank_accounts"] if acc["id"] == bank_account_uuid)
     assert "transactions" in found_account
-    assert len(found_account["transactions"]) == 1
-    assert found_account["transactions"][0]["amount"] == "50.00"
-    assert found_account["transactions"][0]["remittance"] == "Supermarché"
+    # The opening balance is an adjustment operation (docs/bank-ledger.md).
+    real = [tx for tx in found_account["transactions"] if tx["origin"] is None]
+    assert [tx["origin"] for tx in found_account["transactions"]].count("adjustment") == 1
+    assert len(real) == 1
+    assert real[0]["amount"] == "50.00"
+    assert real[0]["remittance"] == "Supermarché"
 
     # Crucial security check: private key is never leaked
     raw_export = response.text
@@ -681,7 +684,8 @@ def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeyp
 
     before = _remaining_rows(session, user_uuid, master_key)
     assert before["bank_accounts"] == 1
-    assert before["bank_transactions"] == 1
+    # The seeded one, and the adjustment the opening balance became.
+    assert before["bank_transactions"] == 2
     assert before["bank_account_links"] == 1
     assert before["bank_sessions"] == 1
     assert before["user_bank_connections"] == 1

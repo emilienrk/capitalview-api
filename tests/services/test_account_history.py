@@ -15,7 +15,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from models.account_history import AccountHistory
 from models.asset import Asset, AssetValuation
@@ -1575,6 +1575,7 @@ def test_a_bank_snapshot_is_frozen_in_euros(session: Session, master_key: str):
             master_key,
         )
 
+    _off_ledger(session, user_uuid, master_key)
     with patch("services.account_history.get_exchange_rate", return_value=Decimal("0.90")):
         snapshots = _build_bank_snapshots(
             session, master_key, hash_index(user_uuid, master_key)
@@ -1604,6 +1605,8 @@ def test_a_euro_bank_snapshot_never_looks_a_rate_up(session: Session, master_key
         master_key,
     )
 
+    _off_ledger(session, user_uuid, master_key)
+
     def _fail(*args, **kwargs):
         raise AssertionError("a euro account must not need an exchange rate")
 
@@ -1613,6 +1616,39 @@ def test_a_euro_bank_snapshot_never_looks_a_rate_up(session: Session, master_key
         )
 
     assert snapshots[0].frozen_positions[0].quantity == Decimal("1000")
+
+
+def _off_ledger(session: Session, user_uuid: str, master_key: str) -> None:
+    """The frozen balance is what a synced account, or one not converted to the
+    operations ledger yet, carries forward: an unsynced one is drawn from its
+    operations (docs/bank-ledger.md)."""
+    from models.bank import BankAccount
+    from services.encryption import hash_index
+
+    for account in session.exec(
+        select(BankAccount).where(BankAccount.user_uuid_bidx == hash_index(user_uuid, master_key))
+    ).all():
+        account.ledger_version = None
+        session.add(account)
+    session.commit()
+
+
+def test_an_unsynced_account_is_not_carried_as_a_frozen_balance(session: Session, master_key: str):
+    from dtos.bank import BankAccountCreate
+    from models.enums import BankAccountType
+    from services.account_history import _build_bank_snapshots
+    from services.bank import create_bank_account
+    from services.encryption import hash_index
+
+    user_uuid = "user_snapshot_ledger"
+    create_bank_account(
+        session,
+        BankAccountCreate(name="Livret", balance=Decimal("1000"), account_type=BankAccountType.CHECKING),
+        user_uuid,
+        master_key,
+    )
+
+    assert _build_bank_snapshots(session, master_key, hash_index(user_uuid, master_key)) == []
 
 
 def test_generate_missing_snapshots_placement_keeps_deposits_out_of_the_pnl(

@@ -128,6 +128,7 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
 
         counted = (
             movement.is_final
+            and not movement.synthetic
             and movement.currency == currency
             and counted_leg(
                 movement.is_credit, movement.account_bidx in filing.savings, resolution.type,

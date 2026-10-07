@@ -52,6 +52,8 @@ from services.banking.transactions import (
     CREDIT,
     FINAL_STATUSES,
     STATUS_BOOKED,
+    SYNTHETIC_ORIGINS,
+    row_origin,
     NormalizedTransaction,
     normalize_transaction,
     row_date,
@@ -277,6 +279,7 @@ def sync_account_link(
         [window_start] + [tx.effective_date for tx in parsed if tx.effective_date]
     )
 
+    _drop_ledger_entries(session, account, master_key)
     result.inserted, result.updated, result.skipped = store_transactions(session, master_key, account.uuid, raws
     )
     # Bounded by what the bank actually answered: a bank capped at ninety days
@@ -557,6 +560,17 @@ def _widen_history_served_from(
     if link.history_served_from_enc:
         oldest = min(oldest, date.fromisoformat(decrypt_data(link.history_served_from_enc, master_key)))
     link.history_served_from_enc = encrypt_data(oldest.isoformat(), master_key)
+
+
+def _drop_ledger_entries(session: Session, account: BankAccount, master_key: str) -> None:
+    """The adjustments and forecasts left from before the account was linked:
+    they described a balance the bank now gives (docs/bank-ledger.md)."""
+    for row in session.exec(
+        select(BankTransaction).where(BankTransaction.account_id_bidx == hash_index(account.uuid, master_key))
+    ).all():
+        if row_origin(row, master_key) in SYNTHETIC_ORIGINS:
+            session.delete(row)
+    session.flush()
 
 
 def _tried_today(link: BankAccountLink, today: date) -> bool:
@@ -846,15 +860,19 @@ def _rows_in_range(
 
     A blind index only supports equality, so the months of the range are
     enumerated and queried with IN, never the whole account.
+
+    Never an adjustment or a forecast left from before the account was linked:
+    the bank's word is its balance (docs/bank-ledger.md).
     """
-    return list(
-        session.exec(
+    return [
+        row for row in session.exec(
             select(BankTransaction).where(
                 BankTransaction.account_id_bidx == hash_index(account.uuid, master_key),
                 BankTransaction.period_bidx.in_(_period_indexes(start, end, master_key)),
             )
         ).all()
-    )
+        if row_origin(row, master_key) not in SYNTHETIC_ORIGINS
+    ]
 
 
 def _period_indexes(start: date, end: date, master_key: str) -> list[str]:

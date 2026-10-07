@@ -40,6 +40,7 @@ from models.banking import (
     BankTransaction,
     BankTransferDecision,
 )
+from services.bank_ledger import forget_ledger
 from services.banking.client import build_client
 from services.banking.credentials import (
     get_decrypted_credentials,
@@ -904,6 +905,7 @@ def unlink_account(
         )
 
     session.delete(link)
+    forget_ledger(session.get(BankAccount, bank_account_uuid))
     session.commit()
 
     return BankAccountUnlinkResult(
@@ -951,8 +953,11 @@ def delete_bank_session(session: Session, user_uuid: str, master_key: str, bank_
     links = session.exec(
         select(BankAccountLink).where(BankAccountLink.session_uuid == bank_session_uuid)
     ).all()
+    uuid_by_bidx = _accounts_bank_account_uuid_by_bidx(session, bank_session.user_uuid_bidx, master_key)
     for link in links:
         session.delete(link)
+        account_uuid = uuid_by_bidx.get(link.bank_account_uuid_bidx)
+        forget_ledger(session.get(BankAccount, account_uuid) if account_uuid else None)
 
     creds = get_decrypted_credentials(session, user_uuid, master_key)
     if creds is not None:

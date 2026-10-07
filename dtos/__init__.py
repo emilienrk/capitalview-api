@@ -21,6 +21,9 @@ from .bank import (
     BankSummaryResponse,
     BankHistoryEntry,
     BankHistoryImportRequest,
+    BankEntryKind,
+    BankEntryRequest,
+    BankEntryResponse,
     SavingsInterestResponse,
 )
 
@@ -167,6 +170,9 @@ __all__ = [
     "BankSummaryResponse",
     "BankHistoryEntry",
     "BankHistoryImportRequest",
+    "BankEntryKind",
+    "BankEntryRequest",
+    "BankEntryResponse",
     "SavingsInterestResponse",
     # Cashflow
     "CashflowBalanceResponse",

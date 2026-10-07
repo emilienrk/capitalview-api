@@ -63,3 +63,6 @@ class BankAccount(SQLModel, table=True):
         sa_column=Column(sa.Date, nullable=True),
     )
     interest_method_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    # Set once an unsynced account's balance is derived from its operations
+    # (docs/bank-ledger.md). NULL = not converted yet.
+    ledger_version: int | None = Field(default=None, sa_column=Column(sa.Integer, nullable=True))

@@ -1,9 +1,15 @@
 """
 Generic bank statement CSV import.
 
-The bank model stores a balance curve (daily snapshots), not transactions,
-so the CSV is converted into (date, balance) points and written through the
-existing ``import_bank_account_history`` (forward-fill included).
+On an account no bank feeds, the operations are the only source of truth
+(docs/bank-ledger.md): a file of movements adds operations, and replaces the
+adjustments and forecasts of its period; a file of balances adds the
+adjustments that make the operations agree with each balance. The balance and
+the curve are then rebuilt from the operations (services/bank_ledger.py).
+
+On a linked account, a file of balances draws the curve through
+``import_bank_account_history`` (forward-fill included), and a file of
+movements only fills the days before the bank's history.
 
 The mapped column is the balance on that date; the last row wins for a given
 date. A file of *movements* belongs to ``generic_bank_transactions`` below,
@@ -40,6 +46,7 @@ from dtos.bank import BankHistoryEntry
 from dtos.imports import (
     BankImportCurvePreview,
     BankImportPointPreview,
+    BankImportReplacedEntry,
     BankImportTransactionPreview,
     ImportConfirmRequest,
     ImportConfirmResponse,
@@ -122,13 +129,23 @@ class _BankHistoryParser(ImportParser):
         account_id: str | None = None,
         master_key: str | None = None,
     ) -> ImportPreviewResponse:
-        # No duplicate flags: a day already stored is replaced, never skipped.
         points, warnings = parse_bank_points(csv_content, self.effective_options(options))
+
+        # A point the operations already agree with records nothing: that is
+        # what a re-imported file looks like.
+        account = _ledger_account(session, account_id, master_key)
+        if account is not None:
+            from services.bank_ledger import point_adjustments
+
+            entries = [BankHistoryEntry(snapshot_date=p.snapshot_date, value=p.value) for p in points]
+            for point, gap in zip(points, point_adjustments(session, account, entries, master_key)):
+                point.is_duplicate = gap == 0
 
         return ImportPreviewResponse(
             source_id=self.source_id,
             category=self.category.value,
             total_rows=len(points),
+            duplicates_count=sum(1 for p in points if p.is_duplicate),
             warnings=warnings,
             bank_points=points,
         )
@@ -150,6 +167,11 @@ class _BankHistoryParser(ImportParser):
             BankHistoryEntry(snapshot_date=p.snapshot_date, value=p.value)
             for p in points
         ]
+        if _ledger_account(session, account_id, master_key) is not None:
+            from services.bank_ledger import import_balance_points
+
+            written = import_balance_points(session, account, entries, master_key)
+            return ImportConfirmResponse(imported_count=written, skipped_duplicates=len(entries) - written)
         written = import_bank_account_history(
             session, account, entries, master_key,
             overwrite=payload.overwrite, replace_range=True,
@@ -502,6 +524,9 @@ class GenericBankTransactionsParser(ImportParser):
     ) -> ImportPreviewResponse:
         rows, warnings = parse_bank_transactions(csv_content, self._options_for(session, options, account_id, master_key))
 
+        if _ledger_account(session, account_id, master_key) is not None:
+            return self._ledger_preview(session, account_id, master_key, rows, options, warnings)
+
         coverage = None
         covered = 0
         if account_id and master_key:
@@ -543,30 +568,133 @@ class GenericBankTransactionsParser(ImportParser):
     ) -> ImportConfirmResponse:
         from services.banking.transactions import store_transactions
 
+        if _ledger_account(session, account_id, master_key) is not None:
+            return self._ledger_execute(session, account_id, payload, master_key)
+
         currency = _account_currency(session, account_id, master_key)
         # Filtered again here, never trusted from the preview: what the bank
         # holds may have grown since, and a client can send anything.
         kept, coverage, covered = self._not_covered(
             session, account_id, master_key, payload.bank_transactions or []
         )
-        raws = [
-            {
-                "entry_reference": reference,
-                "transaction_amount": {"currency": currency, "amount": str(row.amount)},
-                "credit_debit_indicator": row.direction,
-                "status": STATUS_BOOKED,
-                "booking_date": row.day.isoformat(),
-                "remittance_information": [row.label] if row.label else [],
-            }
-            for row, reference in kept
-        ]
-        inserted, updated, skipped = store_transactions(session, master_key, account_id, raws)
+        inserted, updated, skipped = store_transactions(session, master_key, account_id, _raws(kept, currency))
         self._write_curve(session, account_id, [row for row, _ in kept], payload.options, master_key, coverage)
         return ImportConfirmResponse(
             imported_count=inserted,
             # Already there, under the same reference: the re-import case.
             skipped_duplicates=updated + skipped,
             covered_by_bank_count=covered,
+        )
+
+    def _ledger_preview(
+        self,
+        session: Session,
+        account_id: str,
+        master_key: str,
+        rows: list[BankImportTransactionPreview],
+        options: dict,
+        warnings: list[str],
+    ) -> ImportPreviewResponse:
+        """What the file does to an account whose operations are its truth: each
+        row's fate, the adjustments and forecasts of its period it replaces, and
+        the balance at its last operation once imported."""
+        from services.bank_ledger import balance_at, ensure_ledgers, synthetic_between
+        from services.banking.transactions import (
+            ROW_AMBIGUOUS, ROW_DUPLICATE, ROW_NEW, classify_transactions, row_origin,
+        )
+        from services.encryption import decrypt_data
+
+        account = _ledger_account(session, account_id, master_key)
+        # The opening balance it shows is the operations', once converted.
+        ensure_ledgers(session, account.user_uuid_bidx, master_key)
+        with_refs = _with_references(rows)
+        statuses = classify_transactions(
+            session, master_key, account_id, _raws(with_refs, _account_currency(session, account_id, master_key))
+        )
+        for row, status in zip(rows, statuses):
+            row.status = status
+            row.is_duplicate = status == ROW_DUPLICATE
+
+        replaced: list[BankImportReplacedEntry] = []
+        balance_after = None
+        last = None
+        opening = opening_balance(options)
+        if rows:
+            first, last = rows[0].day, rows[-1].day
+            stored_opening = balance_at(session, account, first - timedelta(days=1), master_key)
+            if options.get("initial_balance") is None:
+                opening = stored_opening
+            synthetic = synthetic_between(session, account, master_key, first, last)
+            replaced = [
+                BankImportReplacedEntry(
+                    day=day, amount=amount, origin=row_origin(row, master_key),
+                    label=decrypt_data(row.remittance_enc, master_key) if row.remittance_enc else None,
+                )
+                for day, amount, row in synthetic
+            ]
+            added = sum((_signed(r) for r in rows if r.status in (ROW_NEW, ROW_AMBIGUOUS)), Decimal("0"))
+            balance_after = (
+                balance_at(session, account, last, master_key)
+                - sum((e.amount for e in replaced), Decimal("0"))
+                + added
+                + (opening - stored_opening)
+            )
+
+        curve = curve_preview(transactions_to_curve(rows, opening), opening)
+        if curve and curve.first_negative_date:
+            warnings.append(
+                f"Avec ce solde de départ, le compte passe sous zéro le "
+                f"{curve.first_negative_date.strftime('%d/%m/%Y')} : c'est sans doute "
+                f"le solde d'avant la première opération qu'il faut corriger."
+            )
+        return ImportPreviewResponse(
+            source_id=self.source_id,
+            category=self.category.value,
+            total_rows=len(rows),
+            duplicates_count=sum(1 for row in rows if row.is_duplicate),
+            warnings=warnings,
+            bank_transactions=rows,
+            bank_curve=curve,
+            bank_replaced=replaced,
+            bank_balance_after=balance_after,
+            bank_balance_after_date=last,
+        )
+
+    def _ledger_execute(
+        self, session: Session, account_id: str, payload: ImportConfirmRequest, master_key: str
+    ) -> ImportConfirmResponse:
+        """Replace the adjustments and forecasts of the file's period, store its
+        operations, record a corrected opening balance as an adjustment, and
+        rebuild the balance from the whole."""
+        from services.bank_ledger import adjust_to, drop_synthetic, ensure_ledgers, rebuild_from_operations
+        from services.banking.transactions import store_transactions
+
+        account = _ledger_account(session, account_id, master_key)
+        ensure_ledgers(session, account.user_uuid_bidx, master_key)
+        rows = sorted(payload.bank_transactions or [], key=lambda r: (r.day, r.amount, r.direction, r.label))
+        if not rows:
+            return ImportConfirmResponse(imported_count=0)
+        # References over every row, excluded ones too: a twin's rank must not
+        # depend on what the user left out.
+        kept = [(row, reference) for row, reference in _with_references(rows) if not row.excluded]
+        first, last = rows[0].day, rows[-1].day
+
+        replaced = drop_synthetic(session, account, master_key, first, last)
+        inserted, updated, skipped = store_transactions(
+            session, master_key, account_id, _raws(kept, _account_currency(session, account_id, master_key))
+        )
+        if payload.options.get("initial_balance") is not None:
+            adjust_to(session, account, first - timedelta(days=1), opening_balance(payload.options), master_key)
+            session.commit()
+        # The movements already hold what the linked cashflows would add.
+        account.balance_updated_at = date.today()
+        session.add(account)
+        session.commit()
+        rebuild_from_operations(session, account, master_key)
+        return ImportConfirmResponse(
+            imported_count=inserted,
+            skipped_duplicates=updated + skipped,
+            replaced_count=replaced,
         )
 
     def _not_covered(
@@ -665,6 +793,34 @@ class GenericBankTransactionsParser(ImportParser):
         if options.get("currency") or not (account_id and master_key):
             return options
         return {**options, "currency": _account_currency(session, account_id, master_key)}
+
+
+def _raws(rows: list[tuple[BankImportTransactionPreview, str]], currency: str) -> list[dict]:
+    """The rows as the feed payloads `store_transactions` reads."""
+    return [
+        {
+            "entry_reference": reference,
+            "transaction_amount": {"currency": currency, "amount": str(row.amount)},
+            "credit_debit_indicator": row.direction,
+            "status": STATUS_BOOKED,
+            "booking_date": row.day.isoformat(),
+            "remittance_information": [row.label] if row.label else [],
+        }
+        for row, reference in rows
+    ]
+
+
+def _ledger_account(session: Session, account_id: str | None, master_key: str | None):
+    """The account, when its operations are its truth — no bank feeds it."""
+    from models.bank import BankAccount
+    from services.bank_ledger import is_synced
+
+    if not (account_id and master_key):
+        return None
+    account = session.get(BankAccount, account_id)
+    if account is None or is_synced(session, account, master_key):
+        return None
+    return account
 
 
 def _curve_end(coverage: BankCoverage | None) -> date | None:

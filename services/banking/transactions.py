@@ -14,7 +14,9 @@ to the most approximate:
    globally unique;
 2. intra-account, by `dedup_bidx` — the fallback when a bank supplies no
    reference, and the only way to follow a pending operation whose reference
-   changes when it books.
+   changes when it books. It is also how a statement replaces an operation the
+   user typed by hand (`store_entry`), which has no reference either.
+   Adjustments and forecasts are never claimed (docs/bank-ledger.md).
 
 There is deliberately no cross-account level: a card feed republishes the
 current account it debits, but every read filters on one `account_id_bidx`, so a
@@ -68,6 +70,19 @@ FINAL_STATUSES = frozenset({STATUS_BOOKED})
 # always unsigned.
 CREDIT = "CRDT"
 DEBIT = "DBIT"
+
+# Where a stored operation comes from, beyond the bank or a statement
+# (docs/bank-ledger.md). Adjustments and forecasts only move the balance.
+ORIGIN_MANUAL = "manual"
+ORIGIN_ADJUSTMENT = "adjustment"
+ORIGIN_FORECAST = "forecast"
+SYNTHETIC_ORIGINS = frozenset({ORIGIN_ADJUSTMENT, ORIGIN_FORECAST})
+
+# What an import would do with one of its rows (`classify_transactions`).
+ROW_NEW = "new"
+ROW_DUPLICATE = "duplicate"
+ROW_REPLACES_MANUAL = "replaces_manual"
+ROW_AMBIGUOUS = "ambiguous"
 
 
 @dataclass(frozen=True)
@@ -201,20 +216,7 @@ def store_transactions(
     """Store an account's transaction feed, deduplicated. Returns
     (inserted, updated, skipped). The feed's order is never relied upon."""
     account_bidx = hash_index(bank_account_uuid, master_key)
-
-    existing = list(
-        session.exec(
-            select(BankTransaction).where(BankTransaction.account_id_bidx == account_bidx)
-        ).all()
-    )
-    by_ref = {row.entry_ref_bidx: row for row in existing if row.entry_ref_bidx}
-    by_dedup: dict[str, list[BankTransaction]] = defaultdict(list)
-    for row in existing:
-        by_dedup[row.dedup_bidx].append(row)
-    # Rows this run already inserted or corrected. They come from the same feed
-    # snapshot, so they can never be the earlier version of another transaction
-    # in that same snapshot — level 2 must not claim them.
-    touched: set[int] = set()
+    matcher = _Matcher(_account_rows(session, account_bidx), master_key)
 
     inserted = updated = skipped = 0
     for raw in transactions:
@@ -223,29 +225,14 @@ def store_transactions(
             skipped += 1
             continue
 
-        ref_bidx = hash_index(tx.entry_reference, master_key) if tx.entry_reference else None
-        dedup_bidx = hash_index(tx.dedup_key, master_key)
-
-        row = by_ref.get(ref_bidx) if ref_bidx else None
-        if row is None:
-            row = _claimable_row(by_dedup.get(dedup_bidx, []), touched, master_key)
-        if row is None:
-            # Still level 2, and still confined to claimable rows: a pending row
-            # is keyed on the date it had then, which booking moves.
-            for alternate in tx.alternate_dedup_keys:
-                candidates = by_dedup.get(hash_index(alternate, master_key), [])
-                row = _claimable_row(candidates, touched, master_key)
-                if row is not None:
-                    break
-
+        row, _, ref_bidx, dedup_bidx = matcher.match(tx)
         if row is not None:
-            _drop_from_indexes(row, by_ref, by_dedup)
+            matcher.forget(row)
             if tx.status in INVALIDATING_STATUSES:
                 session.delete(row)
             else:
                 _apply(row, tx, ref_bidx, dedup_bidx, master_key)
-                _add_to_indexes(row, by_ref, by_dedup)
-                touched.add(id(row))
+                matcher.place(row)
             updated += 1
             continue
 
@@ -256,12 +243,159 @@ def store_transactions(
         row = BankTransaction(account_id_bidx=account_bidx)
         _apply(row, tx, ref_bidx, dedup_bidx, master_key)
         session.add(row)
-        _add_to_indexes(row, by_ref, by_dedup)
-        touched.add(id(row))
+        matcher.place(row)
         inserted += 1
 
     session.commit()
     return inserted, updated, skipped
+
+
+def classify_transactions(
+    session: Session,
+    master_key: str,
+    bank_account_uuid: str,
+    transactions: Iterable[dict[str, Any]],
+) -> list[str]:
+    """What `store_transactions` would do with each operation of a feed, without
+    writing anything: one of the `ROW_*` statuses, in the feed's order.
+
+    The same matcher decides, so the preview of an import cannot promise what
+    the import then does differently. Ambiguous on top of that: the operation's
+    (date, amount, direction, currency) is also held by another operation the
+    reference does not tell apart — a second one in the file facing a single
+    hand-typed entry, or a stored one under another reference.
+    """
+    account_bidx = hash_index(bank_account_uuid, master_key)
+    existing = [row for row in _account_rows(session, account_bidx) if not _is_synthetic(row, master_key)]
+    matcher = _Matcher(existing, master_key)
+
+    statuses: list[str] = []
+    fingerprints: list[str | None] = []
+    own: set[int] = set()
+    for raw in transactions:
+        tx = normalize_transaction(raw)
+        if tx.effective_date is None:
+            statuses.append(ROW_DUPLICATE)
+            fingerprints.append(None)
+            continue
+        row, by_reference, ref_bidx, dedup_bidx = matcher.match(tx)
+        fingerprints.append(dedup_bidx)
+        if row is not None:
+            matcher.forget(row)
+            if by_reference:
+                own.add(id(row))
+            manual = not by_reference and row_origin(row, master_key) == ORIGIN_MANUAL
+            statuses.append(ROW_REPLACES_MANUAL if manual else ROW_DUPLICATE)
+        else:
+            statuses.append(ROW_NEW)
+        matcher.place(BankTransaction(account_id_bidx=account_bidx, entry_ref_bidx=ref_bidx, dedup_bidx=dedup_bidx))
+
+    in_file: dict[str, int] = defaultdict(int)
+    for status, fingerprint in zip(statuses, fingerprints):
+        if status != ROW_DUPLICATE and fingerprint:
+            in_file[fingerprint] += 1
+    stored: dict[str, int] = defaultdict(int)
+    for row in existing:
+        if id(row) not in own:
+            stored[row.dedup_bidx] += 1
+    for i, (status, fingerprint) in enumerate(zip(statuses, fingerprints)):
+        if status == ROW_DUPLICATE or not fingerprint or not stored[fingerprint]:
+            continue
+        if status == ROW_REPLACES_MANUAL and in_file[fingerprint] == 1 and stored[fingerprint] == 1:
+            continue
+        statuses[i] = ROW_AMBIGUOUS
+    return statuses
+
+
+def store_entry(
+    session: Session,
+    master_key: str,
+    bank_account_uuid: str,
+    day: date,
+    amount: Decimal,
+    label: str | None,
+    currency: str,
+    origin: str,
+) -> BankTransaction:
+    """Write one operation the user typed, or one derived from a balance: a
+    signed amount, no reference — so a statement holding it replaces it."""
+    tx = normalize_transaction({
+        "transaction_amount": {"currency": currency, "amount": str(abs(amount))},
+        "credit_debit_indicator": CREDIT if amount >= 0 else DEBIT,
+        "status": STATUS_BOOKED,
+        "booking_date": day.isoformat(),
+        "remittance_information": [label] if label else [],
+    })
+    row = BankTransaction(account_id_bidx=hash_index(bank_account_uuid, master_key))
+    _apply(row, tx, None, hash_index(tx.dedup_key, master_key), master_key)
+    row.origin_enc = encrypt_data(origin, master_key)
+    session.add(row)
+    return row
+
+
+def row_origin(row: BankTransaction, master_key: str) -> str | None:
+    """`ORIGIN_MANUAL`, `ORIGIN_ADJUSTMENT`, `ORIGIN_FORECAST`, or None for an
+    operation the bank or a statement reported."""
+    return decrypt_data(row.origin_enc, master_key) if row.origin_enc else None
+
+
+def _is_synthetic(row: BankTransaction, master_key: str) -> bool:
+    return row_origin(row, master_key) in SYNTHETIC_ORIGINS
+
+
+def signed_row_amount(row: BankTransaction, master_key: str) -> Decimal:
+    amount = Decimal(decrypt_data(row.amount_enc, master_key))
+    return amount if decrypt_data(row.credit_debit_enc, master_key) == CREDIT else -amount
+
+
+def _account_rows(session: Session, account_bidx: str) -> list[BankTransaction]:
+    return list(
+        session.exec(select(BankTransaction).where(BankTransaction.account_id_bidx == account_bidx)).all()
+    )
+
+
+class _Matcher:
+    """The two deduplication levels over one account's stored rows, kept in step
+    as a feed is walked."""
+
+    def __init__(self, rows: list[BankTransaction], master_key: str):
+        self.master_key = master_key
+        self.by_ref = {row.entry_ref_bidx: row for row in rows if row.entry_ref_bidx}
+        self.by_dedup: dict[str, list[BankTransaction]] = defaultdict(list)
+        for row in rows:
+            self.by_dedup[row.dedup_bidx].append(row)
+        # Rows this run already inserted or corrected. They come from the same
+        # feed snapshot, so they can never be the earlier version of another
+        # transaction in that same snapshot — level 2 must not claim them.
+        self.touched: set[int] = set()
+
+    def match(self, tx: NormalizedTransaction) -> tuple[BankTransaction | None, bool, str | None, str]:
+        """The stored row `tx` is, whether its reference found it, and the two
+        blind indexes `tx` is stored under."""
+        master_key = self.master_key
+        ref_bidx = hash_index(tx.entry_reference, master_key) if tx.entry_reference else None
+        dedup_bidx = hash_index(tx.dedup_key, master_key)
+
+        row = self.by_ref.get(ref_bidx) if ref_bidx else None
+        if row is not None:
+            return row, True, ref_bidx, dedup_bidx
+        row = _claimable_row(self.by_dedup.get(dedup_bidx, []), self.touched, master_key)
+        if row is None:
+            # Still level 2, and still confined to claimable rows: a pending row
+            # is keyed on the date it had then, which booking moves.
+            for alternate in tx.alternate_dedup_keys:
+                candidates = self.by_dedup.get(hash_index(alternate, master_key), [])
+                row = _claimable_row(candidates, self.touched, master_key)
+                if row is not None:
+                    break
+        return row, False, ref_bidx, dedup_bidx
+
+    def place(self, row: BankTransaction) -> None:
+        _add_to_indexes(row, self.by_ref, self.by_dedup)
+        self.touched.add(id(row))
+
+    def forget(self, row: BankTransaction) -> None:
+        _drop_from_indexes(row, self.by_ref, self.by_dedup)
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +464,8 @@ def _apply(
     signature = label_signature(tx.remittance)
     row.label_signature_bidx = hash_index(signature, master_key) if signature else None
     row.operation_type_enc = encrypt_data(operation_type(tx.remittance).value, master_key)
+    # Whatever it was, the feed has now reported it.
+    row.origin_enc = None
 
 
 def _encrypt_date(value: date | None, master_key: str) -> str | None:

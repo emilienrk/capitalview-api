@@ -10,6 +10,7 @@ from models.bank import BankAccount
 from models.enums import AccountCategory, BankAccountType
 from dtos.bank import BankAccountCreate, BankAccountUpdate, BankHistoryEntry
 from services.bank import (
+    LedgerBalanceError,
     create_bank_account,
     delete_bank_account,
     delete_bank_account_history,
@@ -110,11 +111,20 @@ def test_update_bank_account(session: Session, master_key: str):
     user_uuid = "user_1"
     created = create_bank_account(session, BankAccountCreate(name="Old Name", balance=Decimal("100"), account_type=BankAccountType.CHECKING), user_uuid, master_key)
     db_acc = session.get(BankAccount, created.id)
-    updated = update_bank_account(session, db_acc, BankAccountUpdate(name="New Name", balance=Decimal("500"), institution_name="New Inst", identifier="New ID"), master_key)
+    updated = update_bank_account(session, db_acc, BankAccountUpdate(name="New Name", balance=Decimal("100"), institution_name="New Inst", identifier="New ID"), master_key)
     assert updated.name == "New Name"
-    assert updated.balance == Decimal("500")
+    assert updated.balance == Decimal("100")
     assert updated.institution_name == "New Inst"
     assert updated.identifier == "New ID"
+
+
+def test_a_typed_balance_is_refused_on_an_unsynced_account(session: Session, master_key: str):
+    """Its balance is the sum of its operations: a statement's balance goes
+    through /entries, as an adjustment (docs/bank-ledger.md)."""
+    created = create_bank_account(session, BankAccountCreate(name="Livret", balance=Decimal("100"), account_type=BankAccountType.CHECKING), "user_1", master_key)
+    db_acc = session.get(BankAccount, created.id)
+    with pytest.raises(LedgerBalanceError):
+        update_bank_account(session, db_acc, BankAccountUpdate(balance=Decimal("500")), master_key)
 
 
 def test_delete_bank_account(session: Session, master_key: str):

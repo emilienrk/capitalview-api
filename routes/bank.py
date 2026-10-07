@@ -14,9 +14,12 @@ from dtos import (
     BankAccountResponse,
     BankSummaryResponse,
     BankHistoryImportRequest,
+    BankEntryRequest,
+    BankEntryResponse,
     SavingsInterestResponse,
 )
 from services.bank import (
+    LedgerBalanceError,
     LinkedAccountFieldLockedError,
     UnconvertibleCurrencyError,
     create_bank_account,
@@ -118,15 +121,22 @@ def import_account_history(
     """Import historical balance snapshots for a bank account.
 
     Entries: a list of {snapshot_date, value} pairs.
-    When overwrite=True, all existing history is deleted before import.
-    When overwrite=False (default), existing rows are preserved.
+    On an account no bank feeds, each becomes an adjustment operation. On a
+    linked one, overwrite=True deletes all existing history before import;
+    overwrite=False (default) preserves existing rows.
     """
     from models import BankAccount as BankAccountModel
 
     if not get_bank_account(session, account_id, current_user.uuid, master_key):
         raise HTTPException(status_code=404, detail="Account not found")
 
+    from services.bank_ledger import import_balance_points, is_synced
+
     account = session.get(BankAccountModel, account_id)
+    if not is_synced(session, account, master_key):
+        # The operations are this account's truth: each balance becomes the
+        # adjustment that agrees with it (docs/bank-ledger.md).
+        return {"inserted": import_balance_points(session, account, payload.entries, master_key)}
     count = import_bank_account_history(
         session, account, payload.entries, master_key, overwrite=payload.overwrite
     )
@@ -197,7 +207,7 @@ def update_account(
         return update_bank_account(session, account, account_data, master_key)
     except UnconvertibleCurrencyError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except LinkedAccountFieldLockedError as exc:
+    except (LinkedAccountFieldLockedError, LedgerBalanceError) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         # Interest terms the account cannot carry once merged with its own.
@@ -217,3 +227,62 @@ def delete_account(
         raise HTTPException(status_code=404, detail="Account not found")
     
     return delete_bank_account(session, account_id, master_key)
+
+
+@router.post("/accounts/{account_id}/entries", response_model=BankEntryResponse)
+def add_account_entry(
+    account_id: str,
+    entry: BankEntryRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+    dry_run: bool = False,
+):
+    """An operation typed by hand, or a balance read on a statement, on an
+    account no bank feeds (docs/bank-ledger.md)."""
+    from models import BankAccount as BankAccountModel
+    from services.bank_ledger import SyncedAccountError, add_entry
+
+    if not get_bank_account(session, account_id, current_user.uuid, master_key):
+        raise HTTPException(status_code=404, detail="Account not found")
+    try:
+        return add_entry(session, session.get(BankAccountModel, account_id), entry, master_key, dry_run)
+    except SyncedAccountError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.delete("/transactions/{transaction_id}", status_code=204)
+def delete_transaction(
+    transaction_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+) -> None:
+    """Delete one operation, then rebuild the balance it was part of."""
+    from sqlmodel import select
+
+    from models import BankAccount as BankAccountModel
+    from models.banking import BankTransaction
+    from services.bank_ledger import OperationNotDeletableError, delete_operation
+    from services.encryption import hash_index
+
+    row = session.get(BankTransaction, transaction_id)
+    account = None
+    if row is not None:
+        account = next(
+            (
+                acc for acc in session.exec(
+                    select(BankAccountModel).where(
+                        BankAccountModel.user_uuid_bidx == hash_index(current_user.uuid, master_key)
+                    )
+                ).all()
+                if hash_index(acc.uuid, master_key) == row.account_id_bidx
+            ),
+            None,
+        )
+    if account is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    try:
+        delete_operation(session, account, row, master_key)
+    except OperationNotDeletableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))

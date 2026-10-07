@@ -1,4 +1,8 @@
-"""Bank account service."""
+"""Bank account service.
+
+An unsynced account's balance and curve are derived from its operations
+(docs/bank-ledger.md, services/bank_ledger.py); a synced one's are the bank's.
+"""
 
 import json
 import uuid
@@ -27,7 +31,15 @@ from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotRespo
 from services.banking.health import is_session_active
 from services.banking.linking import is_card_account
 from services.banking.recurring_decisions import forget_account
-from services.banking.transactions import first_operation_day
+from services.bank_ledger import (
+    LEDGER_VERSION,
+    OPENING_LABEL,
+    adjust_to,
+    ensure_ledgers,
+    on_ledger,
+    rebuild_from_operations,
+)
+from services.banking.transactions import ORIGIN_FORECAST, first_operation_day, store_entry
 from services.encryption import encrypt_data, decrypt_data, hash_index
 from services.market import (
     get_exchange_rate,
@@ -132,6 +144,12 @@ class LinkedAccountFieldLockedError(ValueError):
     the next sync find no balance at all. Refused rather than ignored — a change
     the form appeared to accept and that never landed is the worse surprise.
     """
+
+
+class LedgerBalanceError(ValueError):
+    """A balance typed over an unsynced account's: it is the sum of its
+    operations, and a balance read on a statement is entered as such
+    (POST /bank/accounts/{id}/entries), which records the gap as an adjustment."""
 
 
 class UnconvertibleCurrencyError(ValueError):
@@ -272,12 +290,18 @@ def create_bank_account(
         interest_method_enc=(
             encrypt_data(data.interest_method.value, master_key) if data.interest_method else None
         ),
+        ledger_version=LEDGER_VERSION,
     )
-    
+
     session.add(account)
     session.commit()
     session.refresh(account)
-    
+    if data.balance:
+        opened = min(data.opened_at or date.today(), date.today())
+        adjust_to(session, account, opened, data.balance, master_key, OPENING_LABEL)
+    rebuild_from_operations(session, account, master_key)
+    session.refresh(account)
+
     return _map_to_response(account, master_key)
 
 
@@ -292,17 +316,18 @@ def update_bank_account(
     link = _account_link(session, account, master_key)
     if link is not None:
         _refuse_bank_owned_changes(account, data, master_key)
+    else:
+        ensure_ledgers(session, account.user_uuid_bidx, master_key)
+        _refuse_typed_balance(account, data, master_key)
     # First, so a refused rate leaves nothing half-written.
     _apply_interest_terms(account, data, master_key)
+    reshaped = link is None and (
+        (data.currency is not None and data.currency != account_currency(account, master_key))
+        or (data.opened_at is not None and data.opened_at != account.opened_at)
+    )
 
     if data.name is not None:
         account.name_enc = encrypt_data(data.name, master_key)
-        
-    if data.balance is not None:
-        account.balance_enc = encrypt_data(str(data.balance), master_key)
-        # Reset the sync date: the balance is now manually set to today's real value,
-        # so the next auto-sync must start from today to avoid double-applying cashflows.
-        account.balance_updated_at = date.today()
 
     if data.institution_name is not None:
         account.institution_name_enc = encrypt_data(data.institution_name, master_key)
@@ -317,9 +342,11 @@ def update_bank_account(
         # Never after its first operation: the account was open by then.
         first = first_operation_day(session, hash_index(account.uuid, master_key), master_key)
         account.opened_at = min(data.opened_at, first) if first else data.opened_at
-        
+
     session.add(account)
     session.commit()
+    if reshaped:
+        rebuild_from_operations(session, account, master_key)
     session.refresh(account)
 
     return _map_to_response(account, master_key, link)
@@ -374,6 +401,16 @@ def _refuse_bank_owned_changes(
         raise LinkedAccountFieldLockedError(
             "La devise d'un compte lié est celle de la banque : la changer empêcherait "
             "la synchronisation de retrouver son solde."
+        )
+
+
+def _refuse_typed_balance(account: BankAccount, data: BankAccountUpdate, master_key: str) -> None:
+    """Refuse a *changed* balance on an unsynced account, compared to the
+    stored one for the same reason as `_refuse_bank_owned_changes`."""
+    if data.balance is not None and data.balance != Decimal(decrypt_data(account.balance_enc, master_key)):
+        raise LedgerBalanceError(
+            "Le solde de ce compte est la somme de ses opérations : saisissez un relevé de solde "
+            "pour le corriger."
         )
 
 
@@ -487,6 +524,10 @@ def _apply_pending_cashflows(
         session.commit()
         return
 
+    if on_ledger(session, account, master_key):
+        _forecast(session, account, linked, from_date, today, master_key, get_cashflow_occurrences_fn)
+        return
+
     # Compute net delta from all occurrences in (from_date, today]
     current_balance = Decimal(decrypt_data(account.balance_enc, master_key))
     delta = Decimal("0")
@@ -509,6 +550,29 @@ def _apply_pending_cashflows(
     session.commit()
 
 
+def _forecast(
+    session: Session,
+    account: BankAccount,
+    cashflows: list,
+    from_date: date,
+    today: date,
+    master_key: str,
+    get_cashflow_occurrences_fn,
+) -> None:
+    """Each occurrence fired since `from_date`, as a forecast operation on its
+    day: the operations stay the account's only truth, and a statement covering
+    that day replaces it (docs/bank-ledger.md)."""
+    currency = account_currency(account, master_key)
+    for cf in cashflows:
+        sign = 1 if cf.flow_type == FlowType.INFLOW else -1
+        for day in get_cashflow_occurrences_fn(cf, from_date, today):
+            store_entry(session, master_key, account.uuid, day, sign * cf.amount, cf.name, currency, ORIGIN_FORECAST)
+    account.balance_updated_at = today
+    session.add(account)
+    session.commit()
+    rebuild_from_operations(session, account, master_key)
+
+
 def get_user_bank_accounts(
     session: Session, 
     user_uuid: str, 
@@ -520,6 +584,8 @@ def get_user_bank_accounts(
     from services.settings import get_or_create_settings
 
     user_bidx = hash_index(user_uuid, master_key)
+    # Also run at login; here too, for a request that comes before it ends.
+    ensure_ledgers(session, user_bidx, master_key)
     accounts = session.exec(
         select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
     ).all()

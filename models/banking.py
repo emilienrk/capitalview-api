@@ -243,6 +243,9 @@ class BankTransaction(SQLModel, table=True):
     operation_type_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     # A CashflowType the user forced on this one operation, over any rule.
     type_override_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    # "manual", "adjustment" or "forecast"; NULL for an operation the bank or a
+    # statement reported (docs/bank-ledger.md).
+    origin_enc: str | None = Field(default=None, sa_column=Column(TEXT))
 
     created_at: datetime = Field(
         default=sa.func.now(),

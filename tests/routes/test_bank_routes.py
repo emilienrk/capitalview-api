@@ -173,3 +173,41 @@ def test_import_account_history_not_found(session, master_key):
     payload = {"entries": [{"snapshot_date": "2025-01-01", "value": "100"}], "overwrite": False}
     r = client.post("/bank/accounts/non-existent-id/history/import", json=payload)
     assert r.status_code == 404
+
+
+def test_entries_and_deletion_drive_the_balance(session, master_key):
+    """docs/bank-ledger.md: a balance read on a statement is an adjustment, a
+    typed operation a real one, and both can go."""
+    client = TestClient(app)
+    account_id = client.post("/bank/accounts", json={"name": "Livret", "account_type": "CHECKING"}).json()["id"]
+
+    dry = client.post(
+        f"/bank/accounts/{account_id}/entries?dry_run=true",
+        json={"kind": "balance", "day": "2024-01-10", "balance": "700"},
+    ).json()
+    assert Decimal(dry["adjustment"]) == Decimal("700")
+    assert Decimal(client.get(f"/bank/accounts/{account_id}").json()["balance"]) == 0
+
+    client.post(f"/bank/accounts/{account_id}/entries", json={"kind": "balance", "day": "2024-01-10", "balance": "700"})
+    added = client.post(
+        f"/bank/accounts/{account_id}/entries",
+        json={"kind": "operation", "day": "2024-01-12", "amount": "-50", "label": "Boulangerie"},
+    ).json()
+    assert Decimal(client.get(f"/bank/accounts/{account_id}").json()["balance"]) == Decimal("650")
+
+    assert client.delete(f"/bank/transactions/{added['id']}").status_code == 204
+    assert Decimal(client.get(f"/bank/accounts/{account_id}").json()["balance"]) == Decimal("700")
+
+    # The balance is no longer a field one types.
+    r = client.put(f"/bank/accounts/{account_id}", json={"balance": "900"})
+    assert r.status_code == 409
+
+
+def test_an_entry_in_the_future_is_refused(session, master_key):
+    client = TestClient(app)
+    account_id = client.post("/bank/accounts", json={"name": "Livret", "account_type": "CHECKING"}).json()["id"]
+    r = client.post(
+        f"/bank/accounts/{account_id}/entries",
+        json={"kind": "operation", "day": "2999-01-01", "amount": "-50"},
+    )
+    assert r.status_code == 422

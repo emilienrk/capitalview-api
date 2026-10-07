@@ -37,6 +37,7 @@ from dtos.crypto import FIAT_ASSET_KEYS
 from services.analytics.flows import stock_external_flow_for_day
 from services.analytics.prices import fill_price_gaps, get_price_matrix
 from services.bank import account_currency
+from services.bank_ledger import on_ledger, refresh_ledgers
 from services.broker_cash import counted_cash, uncounted_cash
 from services.encryption import decrypt_data, encrypt_data, hash_index
 from services.placement import PlacementTimeline, build_timeline
@@ -700,13 +701,17 @@ def _build_bank_snapshots(
     master_key: str,
     user_uuid_bidx: str,
 ) -> list[_AccountSnapshot]:
-    """Return one _AccountSnapshot per bank account (balance as frozen position)."""
+    """Return one _AccountSnapshot per synced bank account (balance as frozen
+    position). An unsynced one draws its curve from its operations instead
+    (services/bank_ledger.py)."""
     accounts = session.exec(
         select(BankAccount).where(BankAccount.user_uuid_bidx == user_uuid_bidx)
     ).all()
 
     result: list[_AccountSnapshot] = []
     for acc in accounts:
+        if on_ledger(session, acc, master_key):
+            continue
         # In euros, like every figure this store holds: the snapshots are summed
         # across accounts by date, and `FrozenPosition.total_invested` says
         # "already in EUR". Today's rate, because the balance itself is today's,
@@ -874,6 +879,14 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
             all_accounts += crypto_accounts
         except Exception as exc:
             logger.warning("account_history: crypto snapshot error: %s", exc)
+            session.rollback()
+
+        # First, so the accounts it carries to yesterday have no day left for
+        # the frozen-balance path below.
+        try:
+            refresh_ledgers(session, user_uuid_bidx, master_key)
+        except Exception as exc:
+            logger.warning("account_history: bank ledger error: %s", exc)
             session.rollback()
 
         try:

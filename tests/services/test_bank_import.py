@@ -1,5 +1,5 @@
 import textwrap
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlmodel import select
@@ -406,14 +406,16 @@ def test_the_curve_runs_one_point_a_day_from_the_first_movement(session, master_
     _confirm(session, master_key, account_id, rows, parser, {"initial_balance": "2000"})
     curve = _curve(session, master_key, account_id)
 
-    # 15/01 → 03/02, every day, nothing before the first movement.
-    assert min(curve) == date(2024, 1, 15)
-    assert max(curve) == date(2024, 2, 3)
-    assert len(curve) == 20
+    # From the eve of the first movement, where the opening balance sits as an
+    # adjustment, to yesterday: the operations draw the whole curve.
+    assert min(curve) == date(2024, 1, 14)
+    assert max(curve) == date.today() - timedelta(days=1)
+    assert curve[date(2024, 1, 14)] == Decimal("2000.00")
     assert curve[date(2024, 1, 15)] == Decimal("1957.50")   # 2000 - 42.50
     assert curve[date(2024, 1, 20)] == Decimal("1957.50")   # no movement: carried
     assert curve[date(2024, 1, 31)] == Decimal("3157.50")   # + 1200
     assert curve[date(2024, 2, 3)] == Decimal("2307.50")    # - 850
+    assert curve[max(curve)] == Decimal("2307.50")
 
 
 def test_the_anchor_shifts_the_whole_curve(session, master_key):
@@ -495,25 +497,22 @@ def test_a_given_anchor_still_wins_over_the_stored_one(session, master_key):
     assert preview.bank_curve.opening_balance == Decimal("50")
 
 
-def test_an_older_statement_does_not_walk_the_balance_back(session, master_key):
-    """It rebuilds its own stretch of the curve, but says nothing about today."""
+def test_an_older_statement_still_counts_in_the_balance(session, master_key):
+    """The operations are the account's truth, whatever their age: an older
+    statement adds to the balance instead of being drawn on its own stretch."""
     parser = get_parser("generic_bank_transactions")
     account_id = _account(session, master_key)
-    account = session.get(BankAccount, account_id)
-    import_bank_account_history(
-        session, account,
-        [BankHistoryEntry(snapshot_date=date(2025, 6, 1), value=Decimal("9000"))],
-        master_key,
-    )
+    later, _ = parse_bank_transactions("date,amount,label\n2025-06-01,100.00,VIREMENT\n", {})
+    _confirm(session, master_key, account_id, later, parser)
 
     rows, _ = parse_bank_transactions(TRANSACTIONS_CSV, {})
-    _confirm(session, master_key, account_id, rows, parser, {"initial_balance": "2000"})
+    _confirm(session, master_key, account_id, rows, parser)
 
-    session.refresh(account)
-    assert Decimal(decrypt_data(account.balance_enc, master_key)) == Decimal("0")  # untouched
+    account = session.get(BankAccount, account_id)
+    assert Decimal(decrypt_data(account.balance_enc, master_key)) == Decimal("407.50")
     curve = _curve(session, master_key, account_id)
-    assert curve[date(2024, 2, 3)] == Decimal("2307.50")  # its own window, rebuilt
-    assert curve[date(2025, 6, 1)] == Decimal("9000")     # and the later truth kept
+    assert curve[date(2024, 2, 3)] == Decimal("307.50")
+    assert curve[date(2025, 6, 1)] == Decimal("407.50")
 
 
 # ─── On an account the bank already feeds ────────────────────────────────

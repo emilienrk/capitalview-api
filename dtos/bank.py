@@ -211,3 +211,42 @@ class BankHistoryImportRequest(BaseModel):
     """Import historical balance snapshots for a bank account."""
     entries: list[BankHistoryEntry]
     overwrite: bool = False
+
+
+class BankEntryKind(str, Enum):
+    # An operation typed by hand: real, it counts like any other.
+    OPERATION = "operation"
+    # A balance read on a statement: the gap becomes an adjustment.
+    BALANCE = "balance"
+
+
+class BankEntryRequest(BaseModel):
+    """POST /bank/accounts/{id}/entries, on an account no bank feeds."""
+    kind: BankEntryKind
+    day: date
+    # OPERATION: signed, negative for money out.
+    amount: Decimal | None = None
+    # BALANCE: what the account held at the end of `day`.
+    balance: Decimal | None = None
+    label: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def _check(self) -> "BankEntryRequest":
+        if self.day > date.today():
+            raise ValueError("La date ne peut pas être dans le futur.")
+        if self.kind is BankEntryKind.OPERATION and not self.amount:
+            raise ValueError("Une opération a un montant non nul.")
+        if self.kind is BankEntryKind.BALANCE and self.balance is None:
+            raise ValueError("Un relevé de solde a un solde.")
+        return self
+
+
+class BankEntryResponse(BaseModel):
+    """What an entry does, or would do under ?dry_run=true."""
+    id: str | None = None
+    # BALANCE only: the adjustment it records, zero when the operations already agree.
+    adjustment: Decimal | None = None
+    # Forecasts it replaces (BALANCE only).
+    forecasts_replaced: int = 0
+    balance_now_before: Decimal
+    balance_now_after: Decimal

@@ -256,29 +256,6 @@ class TestAutoSync:
 # ─── Manual balance update resets sync date ───────────────────
 
 
-class TestManualBalanceReset:
-    def test_manual_update_resets_balance_updated_at(self, session: Session, master_key: str):
-        user_uuid = "manual_reset_user"
-        acc_resp = create_bank_account(
-            session,
-            BankAccountCreate(name="Reset", balance=Decimal("500"), account_type=BankAccountType.CHECKING),
-            user_uuid,
-            master_key,
-        )
-        acc = session.get(BankAccount, acc_resp.id)
-        acc.balance_updated_at = date(2026, 1, 15)
-        session.add(acc)
-        session.commit()
-
-        with patch("services.bank.date") as mock_date:
-            today = date(2026, 3, 21)
-            mock_date.today.return_value = today
-            update_bank_account(session, acc, BankAccountUpdate(balance=Decimal("1200")), master_key)
-
-        session.refresh(acc)
-        assert acc.balance_updated_at == today
-
-
 # ─── Inactive cashflows & global switch ──────────────────────
 
 

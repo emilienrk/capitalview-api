@@ -73,7 +73,7 @@ from services.banking.labels import label_signature, label_words
 from services.banking.linking import readable_account_bidxs
 from services.banking.operation_types import operation_type
 from services.banking.recurring_decisions import load_decisions as load_recurring_decisions
-from services.banking.transactions import CREDIT, FINAL_STATUSES, row_date
+from services.banking.transactions import CREDIT, FINAL_STATUSES, SYNTHETIC_ORIGINS, row_date, row_origin
 from services.banking.transfer_decisions import (
     MAX_DECISION_DAYS,
     Decisions,
@@ -165,6 +165,13 @@ class _Movement(NamedTuple):
     currency: str
     is_credit: bool
     is_final: bool
+    origin: str | None = None
+
+    @property
+    def synthetic(self) -> bool:
+        """An adjustment or a forecast: it moves the balance and nothing else
+        (docs/bank-ledger.md)."""
+        return self.origin in SYNTHETIC_ORIGINS
 
 
 class _TransferLeg(NamedTuple):
@@ -177,6 +184,9 @@ class _Accounts(NamedTuple):
     by_bidx: dict[str, BankAccount]
     # Only those whose movements a reader may sum (see readable_account_bidxs).
     readable: list[str]
+    # Linked accounts only: the first day the bank's history covers, None when
+    # it has served nothing yet. What lies before was imported, and can go.
+    bank_from: dict[str, date | None] = {}
 
 
 class _Pairing(NamedTuple):
@@ -323,7 +333,7 @@ def _internal_transfer_legs(
         # what it used to say no longer holds.
         same_account = d.account_bidx == c.account_bidx
         if (
-            d.is_credit or not c.is_credit or d.amount != c.amount or d.currency != c.currency
+            d.synthetic or c.synthetic or d.is_credit or not c.is_credit or d.amount != c.amount or d.currency != c.currency
             or same_account != (kind is BankTransferDecisionKind.REVERSAL)
         ):
             continue
@@ -350,7 +360,7 @@ def _internal_transfer_legs(
 
     by_key: dict[tuple[str, Decimal], tuple[list[int], list[int]]] = defaultdict(lambda: ([], []))
     for index, movement in enumerate(movements):
-        if movement.day is not None and index not in paired:
+        if movement.day is not None and index not in paired and not movement.synthetic:
             by_key[(movement.currency, movement.amount)][movement.is_credit].append(index)
 
     settled: list[tuple[int, int, int, int, BankTransferStatus]] = []
@@ -485,7 +495,14 @@ def _user_accounts(session: Session, user_uuid: str, master_key: str) -> _Accoun
     # `BankAccountLink.bank_account_uuid_bidx` and `BankTransaction.account_id_bidx`
     # are the same blind index of the same CapitalView account uuid. Linked
     # accounts and CSV-imported ones alike.
-    return _Accounts(by_bidx, readable_account_bidxs(session, user_bidx, master_key))
+    bank_from = {
+        link.bank_account_uuid_bidx: (
+            date.fromisoformat(decrypt_data(link.history_served_from_enc, master_key))
+            if link.history_served_from_enc else None
+        )
+        for link in session.exec(select(BankAccountLink).where(BankAccountLink.user_uuid_bidx == user_bidx)).all()
+    }
+    return _Accounts(by_bidx, readable_account_bidxs(session, user_bidx, master_key), bank_from)
 
 
 def _links(session: Session, user_uuid: str, master_key: str) -> dict[str, date]:
@@ -547,6 +564,7 @@ def _load_movements(
             currency=decrypt_data(row.currency_enc, master_key),
             is_credit=decrypt_data(row.credit_debit_enc, master_key) == CREDIT,
             is_final=decrypt_data(row.status_enc, master_key) in FINAL_STATUSES,
+            origin=row_origin(row, master_key),
         ))
     movements.sort(
         key=lambda m: (m.day or date.min, m.account_bidx, m.amount, m.is_credit, m.row.uuid)
@@ -621,6 +639,7 @@ def _contributions(
         Candidate(index, movement.day, movement.amount, movement.is_credit)
         for index, movement in enumerate(movements)
         if movement.is_final
+        and not movement.synthetic
         and movement.day is not None
         and movement.currency == BASE_CURRENCY
         and index not in transfer_legs
@@ -734,6 +753,8 @@ def transfer_patterns(
     side_words: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     side_labels: dict[str, set[frozenset[str]]] = defaultdict(set)
     for i, movement in enumerate(movements):
+        if movement.synthetic:
+            continue
         side = stored_patterns.side_key(movement.account_bidx, movement.is_credit)
         side_rows[side] += 1
         words = label_words(labels[i])
@@ -789,6 +810,7 @@ def transfer_patterns(
             _recurring_movement(index, movement, labels[index], transfer_legs.get(index), resolutions[index],
                                    kinds[index], master_key)
             for index, movement in enumerate(movements)
+            if not movement.synthetic
         ],
         load_recurring_decisions(session, user_uuid, master_key),
         {bidx: account.uuid for bidx, account in accounts.by_bidx.items()},
@@ -824,7 +846,7 @@ def transfer_patterns(
 
     # Sorted by day: an account's first movement seen is its earliest.
     for movement in movements:
-        if movement.day is None:
+        if movement.day is None or movement.synthetic:
             continue
         first, _ = patterns.coverage.get(movement.account_bidx, (movement.day, movement.day))
         patterns.coverage[movement.account_bidx] = (first, movement.day)
@@ -914,7 +936,7 @@ def _aggregate(
         min(i, transfer_legs[i].other) for i in selected
         if i in transfer_legs and transfer_legs[i].status is BankTransferStatus.SUGGESTED
     }
-    kept = [i for i in selected if i not in deducted]
+    kept = [i for i in selected if i not in deducted and not movements[i].synthetic]
 
     # The currency the headline totals speak. Picking the most frequent one keeps
     # a stray foreign-currency movement from silently joining a euro total —
@@ -1074,6 +1096,7 @@ def _filed(
         (rule.uuid, rule.type) if rule else None,
         contributed=match is not None and match.exact,
         recurring=filing.patterns.held_by_recurring(movement.row.uuid),
+        adjustment=movement.synthetic,
     )
 
 
@@ -1152,9 +1175,20 @@ def _item_builder(
                 _recurring_question(stored)
                 if stored is not None and stored.question and stored.carrier == row.uuid else None
             ),
+            origin=movement.origin,
+            deletable=_deletable(movement, accounts),
         )
 
     return item
+
+
+def _deletable(movement: _Movement, accounts: _Accounts) -> bool:
+    """Any operation of an account no bank feeds; on a linked one, only those
+    imported before the bank's own history — the bank would send the rest back."""
+    if movement.account_bidx not in accounts.bank_from:
+        return True
+    starts = accounts.bank_from[movement.account_bidx]
+    return starts is None or (movement.day is not None and movement.day < starts)
 
 
 def _recurring_question(stored: stored_patterns.StoredRecurring) -> BankRecurringQuestion:

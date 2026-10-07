@@ -48,6 +48,7 @@ def resolve_type(
     rule: tuple[str, CashflowType] | None,
     contributed: bool = False,
     recurring: CashflowType | None = None,
+    adjustment: bool = False,
 ) -> Resolution:
     """One operation's type.
 
@@ -60,8 +61,11 @@ def resolve_type(
     on the operation itself, which corrects a deduction rather than being
     corrected by it, but before a rule, which only reads its label.
     `recurring` is the kind of the recurring series holding the operation,
-    unless the user refused it.
+    unless the user refused it. `adjustment` marks an adjustment or a forecast,
+    which only moves a balance and comes before anything (docs/bank-ledger.md).
     """
+    if adjustment:
+        return Resolution(CashflowType.NEUTRAL, TypeSource.ADJUSTMENT)
     if transfer_status in CANCELLATIONS:
         return Resolution(CashflowType.NEUTRAL, TypeSource.PAIR)
     if transfer_status in TRANSFERS:
