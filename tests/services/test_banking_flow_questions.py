@@ -14,7 +14,6 @@ from services.banking import transfer_patterns as stored_patterns
 from services.banking.transfer_patterns import FlowCarrier
 from services.banking.flows import (
     CREDIT_CHOICES,
-    DEBIT_CHOICES,
     _regulated_savings,
     _user_accounts,
     list_flow_group,
@@ -48,25 +47,27 @@ def test_a_credit_asks_whatever_its_payment_means(session: Session, master_key: 
     assert _questions(session, master_key) == {"AVOIR 11/03/26 ZALANDO PAYMENTS CB*08": (CREDIT_CHOICES, 1)}
 
 
-def test_a_card_payment_never_asks_and_a_transfer_sent_does(session: Session, master_key: str):
+def test_a_debit_nothing_faces_never_asks_whatever_its_label_says(session: Session, master_key: str):
+    """No answer could change it: with every savings and investment account
+    linked, it is spending (docs/bank-sorting.md)."""
     _ops(
         session, master_key,
         (CURRENT, "2026-03-02", "42.10", "DBIT", "CARTE 01/03/26 CARREFOUR ANNECY CB*08"),
         (CURRENT, "2026-03-05", "19000.00", "DBIT", "VIR SEPA JEAN TIERS"),
     )
-    assert _questions(session, master_key) == {"VIR SEPA JEAN TIERS": (DEBIT_CHOICES, 1)}
+    assert _questions(session, master_key) == {}
 
 
 def test_a_label_asks_once_on_its_last_operation(session: Session, master_key: str):
     _ops(
         session, master_key,
-        (CURRENT, "2026-01-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
-        (CURRENT, "2026-02-05", "150.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
-        (CURRENT, "2026-03-05", "90.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-01-05", "400.00", "CRDT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-02-05", "150.00", "CRDT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-03-05", "90.00", "CRDT", "VIR INST ROUKINE EMILIEN"),
     )
 
     assert _questions(session, master_key, "2026-01") == {}
-    assert _questions(session, master_key) == {"VIR INST ROUKINE EMILIEN": (DEBIT_CHOICES, 3)}
+    assert _questions(session, master_key) == {"VIR INST ROUKINE EMILIEN": (CREDIT_CHOICES, 3)}
     assert transfer_patterns(session, USER, master_key).flow_questions == {"2026-03": 1}
     assert transfer_patterns(session, USER, master_key).flow_open == {"2026-01": 1, "2026-02": 1, "2026-03": 1}
     assert list_month_transactions(session, USER, master_key, "2026-03").transfer_questions == 1
@@ -123,9 +124,8 @@ def test_a_suggested_pair_asks_its_own_question_until_it_is_refused(session: Ses
         BankTransferDecisionKind.NOT_TRANSFER,
     )
 
-    assert _questions(session, master_key) == {
-        "To Emilien Roukine": (DEBIT_CHOICES, 1), "VIR Virement de Emilien ROUKINE": (CREDIT_CHOICES, 1),
-    }
+    # The debit, which nothing faces any longer, is spending.
+    assert _questions(session, master_key) == {"VIR Virement de Emilien ROUKINE": (CREDIT_CHOICES, 1)}
 
 
 def test_a_refund_answer_lowers_the_month_s_expenses(session: Session, master_key: str):
@@ -174,8 +174,8 @@ def test_a_label_asks_once_its_operations_reach_the_minimum_amount(session: Sess
 def test_a_question_carries_what_its_label_adds_up_to(session: Session, master_key: str):
     _ops(
         session, master_key,
-        (CURRENT, "2026-02-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
-        (CURRENT, "2026-03-05", "90.50", "DBIT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-02-05", "400.00", "CRDT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-03-05", "90.50", "CRDT", "VIR INST ROUKINE EMILIEN"),
     )
     [carrier] = [tx for tx in list_month_transactions(session, USER, master_key, "2026-03").transactions]
     patterns = transfer_patterns(session, USER, master_key)
@@ -211,10 +211,10 @@ def test_each_account_s_history_span_is_stored(session: Session, master_key: str
 def test_the_group_lists_the_very_operations_the_answer_types(session: Session, master_key: str):
     _ops(
         session, master_key,
-        (CURRENT, "2026-01-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
-        (CURRENT, "2026-02-05", "150.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
-        (CURRENT, "2026-03-05", "90.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
-        (CURRENT, "2026-03-08", "42.10", "DBIT", "CARTE 07/03/26 CARREFOUR ANNECY CB*08"),
+        (CURRENT, "2026-01-05", "400.00", "CRDT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-02-05", "150.00", "CRDT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-03-05", "90.00", "CRDT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-03-08", "42.10", "CRDT", "AVOIR 07/03/26 CARREFOUR ANNECY CB*08"),
     )
     [carrier] = [tx for tx in list_month_transactions(session, USER, master_key, "2026-03").transactions if tx.flow_question]
 
@@ -229,7 +229,7 @@ def test_the_group_lists_the_very_operations_the_answer_types(session: Session, 
 
 
 def test_an_answered_label_has_no_group_left(session: Session, master_key: str):
-    _ops(session, master_key, (CURRENT, "2026-03-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"))
+    _ops(session, master_key, (CURRENT, "2026-03-05", "400.00", "CRDT", "VIR INST ROUKINE EMILIEN"))
     [carrier] = [tx for tx in list_month_transactions(session, USER, master_key, "2026-03").transactions if tx.flow_question]
     set_transaction_type(session, USER, master_key, carrier.id, Type.INVESTMENT, TypeScope.LABEL)
 

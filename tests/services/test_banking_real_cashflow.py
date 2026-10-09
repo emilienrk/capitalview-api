@@ -268,8 +268,8 @@ def test_a_suggested_pair_counts_by_default_and_is_flagged(session: Session, mas
 def test_a_question_asked_in_a_later_year_is_open_on_the_earlier_one(session: Session, master_key: str):
     _ops(
         session, master_key,
-        (CURRENT, "2025-12-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
-        (CURRENT, "2026-03-05", "90.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2025-12-05", "400.00", "CRDT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-03-05", "90.00", "CRDT", "VIR INST ROUKINE EMILIEN"),
     )
     earlier = real_cashflow_year(session, USER, master_key, 2025, today=TODAY)
     assert (earlier.open_questions, earlier.months[11].open_questions) == (1, 1)

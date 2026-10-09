@@ -36,8 +36,8 @@ def _seed(session, master_key) -> None:
     _link(session, master_key, "current")
     _store(
         session, master_key, "current",
-        _raw("400.00", "DBIT", "2025-03-05", ref="a", label="VIR INST ROUKINE EMILIEN"),
-        _raw("19000.00", "DBIT", "2026-03-05", ref="b", label="VIR SEPA JEAN TIERS"),
+        _raw("400.00", "CRDT", "2025-03-05", ref="a", label="VIR INST ROUKINE EMILIEN"),
+        _raw("19000.00", "CRDT", "2026-03-05", ref="b", label="VIR SEPA JEAN TIERS"),
         *[_raw("12.30", "DBIT", f"2026-02-{day:02d}", ref=f"card-{day}", label=f"CARTE {day:02d}/02/26 BOULANGERIE CB*08") for day in range(1, 28)],
     )
 

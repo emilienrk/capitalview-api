@@ -47,6 +47,14 @@ def _seed(session, master_key) -> None:
     _op(session, master_key, "current", "2026-03-21", "35.00", "DBIT", "CARTE 20/03/26 BOULANGERIE CB*08")
 
 
+def _seed_asking(session, master_key) -> None:
+    """Two credits of one label: a question only the user can answer."""
+    _link(session, master_key, "current")
+    _op(session, master_key, "current", "2026-03-05", "400.00", "CRDT", "VIR INST ROUKINE EMILIEN")
+    _op(session, master_key, "current", "2026-03-19", "150.00", "CRDT", "VIR INST ROUKINE EMILIEN")
+    _op(session, master_key, "current", "2026-03-21", "35.00", "DBIT", "CARTE 20/03/26 BOULANGERIE CB*08")
+
+
 def test_a_label_correction_types_every_operation_like_it_even_one_imported_later(client, session, master_key):
     _seed(session, master_key)
     target = _month(client)["VIR INST ROUKINE EMILIEN"]
@@ -145,7 +153,7 @@ def test_rules_are_listed_with_what_they_type_and_can_be_deleted(client, session
 
 
 def test_flow_questions_count_with_the_transfer_questions_until_answered(client, session, master_key):
-    _seed(session, master_key)
+    _seed_asking(session, master_key)
     assert client.get("/banking/transfer-questions").json() == {"total": 1, "months": [{"period": "2026-03", "count": 1}], "recurring": 0}
     [target] = [tx for tx in client.get("/banking/transactions?period=2026-03").json()["transactions"] if tx["flow_question"]]
     assert (target["label"], target["flow_question"]["operation_count"]) == ("VIR INST ROUKINE EMILIEN", 2)
@@ -156,7 +164,7 @@ def test_flow_questions_count_with_the_transfer_questions_until_answered(client,
 
 
 def test_the_flow_group_route_lists_what_one_answer_would_type(client, session, master_key):
-    _seed(session, master_key)
+    _seed_asking(session, master_key)
     # The question sits on the label's last operation: read the list itself, which
     # `_month` keys by label and would leave only one operation per label.
     listed = client.get("/banking/transactions?period=2026-03").json()["transactions"]

@@ -86,18 +86,18 @@ class TestReview:
         assert (debit.transfer_label, debit.transfer_date) == ("Virement de : Jean Tiers", date(2023, 4, 19))
 
     @pytest.mark.parametrize("payment", ["CARTE 17/04/23 DECATHLON 4 CB*88", "PRLV SEPA Salle de sport"])
-    def test_a_payment_answered_by_a_transfer_received_is_not_even_offered(
+    def test_a_payment_answered_by_a_transfer_received_is_only_offered(
         self, session: Session, master_key: str, payment: str
     ):
-        """Someone paying the user back for a purchase, not the user moving money."""
+        """Most often someone paying the user back, which no label proves
+        (docs/bank-sorting.md): offered, both legs still counting."""
         _ops(
             session, master_key,
             (CURRENT, "2023-04-18", "85.00", "DBIT", payment),
             (NEOBANK, "2023-04-19", "85.00", "CRDT", "Virement de : Jean Tiers"),
         )
         month = _month(session, master_key, "2023-04")
-        assert month.transfer_questions == 0
-        assert _status(month, "Virement de : Jean Tiers") is None
+        assert _status(month, "Virement de : Jean Tiers") is Status.SUGGESTED
         assert month.inflow == month.outflow == 85
 
     def test_a_card_top_up_of_another_account_is_still_offered(self, session: Session, master_key: str):

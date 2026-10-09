@@ -32,10 +32,10 @@ def _queue(session: Session, master_key: str, year: int | None = None):
 def test_questions_come_heaviest_first_whatever_their_month(session: Session, master_key: str):
     _ops(
         session, master_key,
-        (CURRENT, "2025-06-05", "19000.00", "DBIT", "VIR SEPA JEAN TIERS"),
+        (CURRENT, "2025-06-05", "19000.00", "CRDT", "VIR SEPA JEAN TIERS"),
         (CURRENT, "2026-01-05", "150.00", "CRDT", "VIR SEPA VINTED"),
-        (CURRENT, "2026-02-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
-        (CURRENT, "2026-03-05", "90.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-02-05", "400.00", "CRDT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2026-03-05", "90.00", "CRDT", "VIR INST ROUKINE EMILIEN"),
     )
     questions, queue = _queue(session, master_key)
     assert questions == [
@@ -57,7 +57,7 @@ def test_a_suggested_pair_is_asked_once_on_its_debit(session: Session, master_ke
 
 
 def test_an_answered_label_leaves_the_queue(session: Session, master_key: str):
-    _ops(session, master_key, (CURRENT, "2026-03-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"))
+    _ops(session, master_key, (CURRENT, "2026-03-05", "400.00", "CRDT", "VIR INST ROUKINE EMILIEN"))
     [(_, _, _, _)], queue = _queue(session, master_key)
 
     set_transaction_type(session, USER, master_key, queue.questions[0].transaction.id, Type.SAVING, TypeScope.LABEL)
@@ -73,8 +73,8 @@ def test_a_label_under_the_minimum_amount_is_not_queued(session: Session, master
 def test_a_year_narrows_the_questions_but_not_the_years(session: Session, master_key: str):
     _ops(
         session, master_key,
-        (CURRENT, "2025-06-05", "1000.00", "DBIT", "VIR SEPA JEAN TIERS"),
-        (CURRENT, "2026-03-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
+        (CURRENT, "2025-06-05", "1000.00", "CRDT", "VIR SEPA JEAN TIERS"),
+        (CURRENT, "2026-03-05", "400.00", "CRDT", "VIR INST ROUKINE EMILIEN"),
         (CURRENT, "2026-03-06", "300.00", "CRDT", "VIR SEPA EMPLOYEUR"),
     )
     questions, queue = _queue(session, master_key, 2025)
@@ -89,8 +89,8 @@ def test_a_year_narrows_the_questions_but_not_the_years(session: Session, master
 def test_equal_amounts_come_latest_first(session: Session, master_key: str):
     _ops(
         session, master_key,
-        (CURRENT, "2026-01-05", "300.00", "DBIT", "VIR SEPA JEAN TIERS"),
-        (CURRENT, "2026-03-05", "300.00", "DBIT", "VIR SEPA PAUL TIERS"),
+        (CURRENT, "2026-01-05", "300.00", "CRDT", "VIR SEPA JEAN TIERS"),
+        (CURRENT, "2026-03-05", "300.00", "CRDT", "VIR SEPA PAUL TIERS"),
     )
     assert [label for _, label, _, _ in _queue(session, master_key)[0]] == ["VIR SEPA PAUL TIERS", "VIR SEPA JEAN TIERS"]
 

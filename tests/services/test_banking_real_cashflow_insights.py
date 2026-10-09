@@ -55,8 +55,8 @@ class TestOpenAmount:
     def test_a_month_weighs_its_flow_questions_and_its_suggested_pairs(self, session: Session, master_key: str):
         _ops(
             session, master_key,
-            (CURRENT, "2026-02-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
-            (CURRENT, "2026-03-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
+            (CURRENT, "2026-02-05", "400.00", "CRDT", "VIR INST ROUKINE EMILIEN"),
+            (CURRENT, "2026-03-05", "400.00", "CRDT", "VIR INST ROUKINE EMILIEN"),
             (NEOBANK, "2026-03-16", "50.00", "DBIT", "To Emilien Roukine"),
             (CURRENT, "2026-03-17", "50.00", "CRDT", "VIR Virement de Emilien ROUKINE"),
             (CURRENT, "2026-03-20", "40.00", "CRDT", "VIR SEPA VINTED"),
@@ -68,7 +68,7 @@ class TestOpenAmount:
         assert real_cashflow_month(session, USER, master_key, "2026-03", today=TODAY).open_amount == Decimal("450.00")
 
     def test_an_answer_leaves_nothing_open(self, session: Session, master_key: str):
-        _ops(session, master_key, (CURRENT, "2026-03-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN"))
+        _ops(session, master_key, (CURRENT, "2026-03-05", "400.00", "CRDT", "VIR INST ROUKINE EMILIEN"))
         [carrier] = list_month_transactions(session, USER, master_key, "2026-03").transactions
 
         set_transaction_type(session, USER, master_key, carrier.id, CashflowType.SAVING, TypeScope.LABEL)

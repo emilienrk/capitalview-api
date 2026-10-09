@@ -207,6 +207,9 @@ class _Filing(NamedTuple):
     # Resolved over the whole set of movements, since a deposit proves one of
     # them at most (services/banking/contributions.py).
     contributions: dict[int, Match]
+    # (bank account, label signature, investment account) the user once typed
+    # as facing its deposit: the next exact match of that shape proves itself.
+    validated: frozenset[tuple[str, str, str]] = frozenset()
 
 
 @dataclass
@@ -439,13 +442,12 @@ def _closest_complete_matching(
     return [(debit, credit, status[(debit, credit)]) for debit, credit in credit_of.items()]
 
 
-_PAID_TO_A_THIRD_PARTY = frozenset({OperationType.CARD, OperationType.DIRECT_DEBIT})
-
-
 def _transfer_status(
     pairing: _Pairing, d: _Movement, c: _Movement, debit: int, credit: int, verdict
 ) -> BankTransferStatus | None:
-    """How sure a candidate transfer is; None when it is not even offered."""
+    """How sure a candidate transfer is. Never read from a label's vocabulary
+    (docs/bank-sorting.md): a pair nothing proves is only offered, and an
+    offered pair moves no total."""
     if d.account_bidx in pairing.savings or c.account_bidx in pairing.savings:
         return BankTransferStatus.SAVINGS
     if pairing.patterns.recurs(
@@ -454,14 +456,6 @@ def _transfer_status(
         return BankTransferStatus.RECURRING
     if pairing.decisions.memory and (verdict(debit), verdict(credit)) == (Verdict.OWN, Verdict.OWN):
         return BankTransferStatus.LEARNED
-    # A card payment or a direct debit answered by a transfer received on
-    # another account is someone paying the user back, not the user moving
-    # money: every such pair seen in real histories was a reimbursement.
-    if (
-        _operation_type(d, pairing.master_key) in _PAID_TO_A_THIRD_PARTY
-        and _operation_type(c, pairing.master_key) is OperationType.TRANSFER
-    ):
-        return None
     return BankTransferStatus.SUGGESTED
 
 
@@ -604,29 +598,28 @@ def _filing(
     Every reader passes the movements it loaded, so they all read one operation
     the same way — the whole point of `_filed`.
     """
+    rules = load_rules(session, user_uuid, master_key)
+    contributions = _contributions(movements, transfer_legs, load_contributions(session, user_uuid, master_key))
     return _Filing(
         master_key=master_key,
         savings=_savings_accounts(accounts, master_key),
-        rules=load_rules(session, user_uuid, master_key),
+        rules=rules,
         patterns=patterns,
-        contributions=_contributions(
-            movements, transfer_legs, master_key, load_contributions(session, user_uuid, master_key)
-        ),
+        contributions=contributions,
+        validated=_validated_deposits(movements, contributions, rules, patterns, master_key),
     )
 
 
 def _contributions(
     movements: list[_Movement],
     transfer_legs: dict[int, _TransferLeg],
-    master_key: str,
     contributions: Contributions,
 ) -> dict[int, Match]:
     """The declared movement facing each bank movement, where there is one.
 
-    Offered to the matching: every operation whose question only the user could
-    answer otherwise — an unpaired credit, or an unpaired transfer sent
-    (`_asks_flow`). What the user or a rule already settled is offered too and
-    stays typed by them: `resolve_type` reads the deduction last.
+    Every unpaired operation is offered, whatever its label says: a card and a
+    transfer cannot be told apart without reading words (docs/bank-sorting.md).
+    What the user or a rule already settled stays typed by them.
     """
     candidates = [
         Candidate(index, movement.day, movement.amount, movement.is_credit)
@@ -636,9 +629,46 @@ def _contributions(
         and movement.day is not None
         and movement.currency == BASE_CURRENCY
         and index not in transfer_legs
-        and (movement.is_credit or _operation_type(movement, master_key) is OperationType.TRANSFER)
     ]
     return match_candidates(candidates, contributions)
+
+
+def _validated_deposits(
+    movements: list[_Movement],
+    contributions: dict[int, Match],
+    rules: TypeRules,
+    patterns: TransferPatterns,
+    master_key: str,
+) -> frozenset[tuple[str, str, str]]:
+    """The shapes the user vouched for: an operation facing a deposit, or a
+    withdrawal, on the very day, that they typed as an investment.
+
+    A match alone is only a coincidence of amount and day — a 200 € card
+    payment the day of a 200 € deposit — so it asks first. Once answered, the
+    same label from the same account to the same investment account is that
+    movement again, as a confirmed transfer pair is.
+    """
+    shapes = set()
+    for index, match in contributions.items():
+        movement = movements[index]
+        if not match.exact or movement.row.label_signature_bidx is None:
+            continue
+        label = _label(movement, master_key)
+        override = movement.row.type_override_enc
+        typed = CashflowType(decrypt_data(override, master_key)) if override else None
+        if typed is None:
+            rule = rules.reach(
+                movement.account_bidx, movement.is_credit, label,
+                patterns.label_common(movement.account_bidx, movement.is_credit),
+            )
+            typed = rule.type if rule else None
+        if typed is CashflowType.INVESTMENT:
+            shapes.add(_deposit_shape(movement, match))
+    return frozenset(shapes)
+
+
+def _deposit_shape(movement: _Movement, match: Match) -> tuple[str, str, str]:
+    return (movement.account_bidx, movement.row.label_signature_bidx, match.contribution.account_name)
 
 
 def _operation_type(movement: _Movement, master_key: str) -> OperationType:
@@ -816,7 +846,7 @@ def transfer_patterns(
     resolutions = [
         _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
     ]
-    asking_groups = _asking_groups(movements, transfer_legs, labels, resolutions)
+    asking_groups = _asking_groups(movements, transfer_legs, labels, resolutions, filing.contributions)
     heavy = [members for members in asking_groups if _heavy(movements, members)]
 
     flow_questions: dict[str, int] = defaultdict(int)
@@ -859,6 +889,7 @@ def _flow_groups(
     transfer_legs: dict[int, _TransferLeg],
     labels: dict[int, str | None],
     resolutions: list[Resolution],
+    facing: dict[int, Match],
     carriers: Collection[str] = frozenset(),
 ) -> list[list[int]]:
     """The labels only the user can type, each as its operations in date order:
@@ -866,7 +897,7 @@ def _flow_groups(
     carrying a question the rebuild asked all the same (`carriers`, the stored
     `TransferPatterns.flow_carriers`)."""
     return [
-        members for members in _asking_groups(movements, transfer_legs, labels, resolutions)
+        members for members in _asking_groups(movements, transfer_legs, labels, resolutions, facing)
         if _heavy(movements, members) or movements[members[-1]].row.uuid in carriers
     ]
 
@@ -876,16 +907,21 @@ def _asking_groups(
     transfer_legs: dict[int, _TransferLeg],
     labels: dict[int, str | None],
     resolutions: list[Resolution],
+    facing: dict[int, Match],
 ) -> list[list[int]]:
     groups: dict[tuple[str, bool, str], list[int]] = defaultdict(list)
     for index, movement in enumerate(movements):
         label = labels[index]
-        if _asks_flow(movement, transfer_legs.get(index), label, resolutions[index]):
+        if _asks_flow(movement, transfer_legs.get(index), label, resolutions[index], facing.get(index)):
             groups[(movement.account_bidx, movement.is_credit, label_signature(label))].append(index)
     return list(groups.values())
 
 
 def _heavy(movements: list[_Movement], members: list[int]) -> bool:
+    """Credits ask past a minimum; a debit facing a deposit always asks, since
+    otherwise it would count as spending money the user says they invested."""
+    if not movements[members[0]].is_credit:
+        return True
     return sum((movements[i].amount for i in members), Decimal("0")) >= FLOW_QUESTION_MIN_AMOUNT
 
 
@@ -1087,25 +1123,38 @@ def _filed(
         savings_legs,
         CashflowType(decrypt_data(override, filing.master_key)) if override else None,
         (rule.uuid, rule.type) if rule else None,
-        contributed=match is not None and match.exact,
+        contributed=(
+            match is not None and match.exact and movement.row.label_signature_bidx is not None
+            and _deposit_shape(movement, match) in filing.validated
+        ),
         recurring=filing.patterns.held_by_recurring(movement.row.uuid),
         adjustment=movement.synthetic,
     )
 
 
-def _asks_flow(movement: _Movement, leg: _TransferLeg | None, label: str | None, resolution: Resolution) -> bool:
+def _asks_flow(
+    movement: _Movement, leg: _TransferLeg | None, label: str | None, resolution: Resolution, facing: Match | None
+) -> bool:
     """Whether only the user can say how this operation counts: nothing pairs
-    or types it, and it is a credit or a transfer sent.
+    or types it, and the user can actually answer (docs/bank-sorting.md).
 
-    The operation type decides whether to ask, never an amount: a label format
-    the lexicon misses only asks one question fewer, and the default applies.
-    A suggested pair keeps its own question until the user settles it.
+    A credit always can: only they know a friend paid them back. A debit only
+    when something faces it — a deposit or a withdrawal they declared: with all
+    their savings and investment accounts linked, a debit nothing faces is
+    spending, which no answer could change. A suggested pair keeps its own
+    question until the user settles it.
+
+    A deposit on the very day asks even past a rule: the rule speaks for a
+    label, and one label may go to the investment account one day and anywhere
+    the next.
     """
-    if not movement.is_final or leg is not None or resolution.source is not TypeSource.DEFAULT:
+    if not movement.is_final or leg is not None or label_signature(label) is None:
         return False
-    if label_signature(label) is None:
+    if resolution.source is TypeSource.RULE:
+        return facing is not None and facing.exact
+    if resolution.source is not TypeSource.DEFAULT:
         return False
-    return movement.is_credit or operation_type(label) is OperationType.TRANSFER
+    return movement.is_credit or facing is not None
 
 
 def _item_builder(
@@ -1128,7 +1177,7 @@ def _item_builder(
         label = _label(movement, master_key)
         resolution = _filed(movements, transfer_legs, index, label, filing)
         settles = filing.patterns.flow_carriers.get(row.uuid)
-        asks = settles is not None and _asks_flow(movement, leg, label, resolution)
+        asks = settles is not None and _asks_flow(movement, leg, label, resolution, filing.contributions.get(index))
         stored, member = filing.patterns.recurring_of(row.uuid) or (None, None)
         offered = counterpart if leg and leg.status is BankTransferStatus.SUGGESTED else None
         return BankTransactionItem(
@@ -1416,7 +1465,9 @@ def list_flow_group(
         _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
     ]
 
-    groups = _flow_groups(movements, transfer_legs, labels, resolutions, pairing.patterns.flow_carriers)
+    groups = _flow_groups(
+        movements, transfer_legs, labels, resolutions, filing.contributions, pairing.patterns.flow_carriers
+    )
     members = next(
         (group for group in groups if any(movements[i].row.uuid == transaction_id for i in group)),
         [],
