@@ -651,7 +651,9 @@ def _contributions(
 
     Every unpaired operation is offered, whatever its label says: a card and a
     transfer cannot be told apart without reading words (docs/bank-sorting.md).
-    What the user or a rule already settled stays typed by them.
+    What the user or a rule already settled stays typed by them. A pair only
+    suggested is offered too: its question shows the deposit beside the other
+    leg, and the user picks (`_filed` types nothing from it meanwhile).
     """
     candidates = [
         Candidate(index, movement.day, movement.amount, movement.is_credit)
@@ -660,7 +662,7 @@ def _contributions(
         and not movement.synthetic
         and movement.day is not None
         and movement.currency == BASE_CURRENCY
-        and index not in transfer_legs
+        and (index not in transfer_legs or transfer_legs[index].status is BankTransferStatus.SUGGESTED)
     ]
     return match_candidates(candidates, contributions)
 
@@ -1159,8 +1161,9 @@ def _filed(
         savings_legs,
         CashflowType(decrypt_data(override, filing.master_key)) if override else None,
         (rule.uuid, rule.type) if rule else None,
+        # A suggested pair holds its question: the deposit is only shown beside it.
         contributed=(
-            match is not None and match.exact and movement.row.label_signature_bidx is not None
+            leg is None and match is not None and match.exact and movement.row.label_signature_bidx is not None
             and _deposit_shape(movement, match) in filing.validated
         ),
         recurring=filing.patterns.held_by_recurring(movement.row.uuid),

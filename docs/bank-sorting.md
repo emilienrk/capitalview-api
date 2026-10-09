@@ -39,7 +39,10 @@ l'utilisateur.
   ci-dessus ne confirme. Y compris entre deux comptes courants, même avec le même libellé, le même jour et le même
   montant. Une paire seulement proposée ne change aucun total.
 - **Dépôt Bourse/Crypto possible** : même montant, dans les 3 jours, ou avec un écart de frais. Si une paire et un
-  dépôt sont tous deux possibles, la même question montre les deux.
+  dépôt sont tous deux possibles, la même question montre les deux : « C'est… vers <compte> » ou « versement sur
+  <compte d'investissement> » (la paire écartée, l'opération comptée en investissement). Tant que la paire est
+  proposée, le dépôt n'est qu'affiché, même déjà validé pour ce libellé. Mesuré sur le dump : un cas (−20 € du
+  05/02/2024), dont le dépôt s'affichait jusque-là, à tort, sur une autre sortie de 20 € deux jours plus tard.
 - **Sortie sans rien en face, au-dessus du seuil** du curseur (500 € par défaut, réglable). Le seuil porte sur
   l'opération, pas sur le total du libellé. Les questions restent regroupées par libellé, « celle-ci » par défaut.
   Mesuré sur un historique de 4 ans : 6 opérations à 1 000 €, 20 à 500 €, 54 à 250 €, 139 à 100 €. À 100 €, on
@@ -130,6 +133,6 @@ l'utilisateur valide ou refuse. Mesurer sur le dump avant de changer quoi que ce
 | « Celles que je coche » dans la liste | fait |
 | Sortie sans contrepartie au-dessus du seuil = question, curseur (500 € par défaut, Paramètres › Modules) | fait |
 | Dépôts sans contrepartie, « X € à trier », phrase à l'ajout d'une banque | fait |
-| Paire proposée et dépôt possibles en même temps : une seule question | à faire |
+| Paire proposée et dépôt possibles en même temps : une seule question | fait |
 | Historique et annulation, texte du bouton | à faire |
 | Récurrents sans dictionnaire | second temps |

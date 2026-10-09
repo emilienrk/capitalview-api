@@ -10,7 +10,7 @@ from decimal import Decimal
 
 from sqlmodel import Session
 
-from dtos.banking import CashflowType as Type, TypeScope, TypeSource as Source
+from dtos.banking import BankTransferDecisionKind, CashflowType as Type, TypeScope, TypeSource as Source
 from dtos.crypto import CryptoCompositeTransactionCreate
 from models.crypto import CryptoAccount
 from models.enums import CryptoCompositeTransactionType
@@ -27,6 +27,7 @@ from services.banking.flows import (
     clear_transaction_type, list_month_transactions, review_queue, set_transaction_type,
 )
 from services.banking.real_cashflow import real_cashflow_month
+from services.banking.transfer_decisions import record_decision
 from services.crypto_transaction import create_composite_crypto_transaction
 from services.encryption import encrypt_data, hash_index
 from services.stock_transaction import create_eur_deposit
@@ -446,6 +447,64 @@ class TestOperations:
         [tx] = _month(session, master_key).values()
         assert (tx.cashflow_type, tx.type_source) == (Type.EXPENSE, Source.RULE)
         assert tx.flow_question is not None
+
+
+class TestSuggestedPair:
+    def test_a_deposit_facing_a_suggested_pair_shows_in_its_question(self, session: Session, master_key: str):
+        """Seen on the dump: the deposit went as a hint to another 20 € debit,
+        two days later, while the pair's own question never showed it."""
+        _ops(
+            session, master_key,
+            ("neobank", "2026-03-05", "20.00", "DBIT", "VIR Virement interne depuis BoursoBank"),
+            (CURRENT, "2026-03-06", "20.00", "CRDT", "Paiement envoye par M. TIERS"),
+            (CURRENT, "2026-03-07", "20.00", "DBIT", "Virement a : JEAN AUTRE"),
+        )
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "20")
+
+        month = _month(session, master_key)
+        pair = month["VIR Virement interne depuis BoursoBank"]
+        assert (pair.transfer_status.value, pair.cashflow_type, pair.type_source) == ("suggested", Type.EXPENSE, Source.DEFAULT)
+        assert (pair.contribution.account_name, pair.contribution.exact) == ("PEA", True)
+        assert pair.flow_question is None
+        assert month["Virement a : JEAN AUTRE"].contribution is None
+        [question] = review_queue(session, USER, master_key).questions
+        assert (question.kind.value, question.transaction.id) == ("transfer", pair.id)
+
+    def test_answered_as_the_deposit_it_asks_nothing_more(self, session: Session, master_key: str):
+        """What "Versement sur PEA" does: the pair set aside, the operation typed."""
+        _ops(
+            session, master_key,
+            ("neobank", "2026-03-05", "20.00", "DBIT", "VIR Virement interne depuis BoursoBank"),
+            (CURRENT, "2026-03-06", "20.00", "CRDT", "Paiement envoye par M. TIERS"),
+        )
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "20")
+        month = _month(session, master_key)
+        pair = month["VIR Virement interne depuis BoursoBank"]
+
+        record_decision(session, USER, master_key, pair.id, pair.transfer_id, BankTransferDecisionKind.NOT_TRANSFER)
+        _answer(session, master_key, pair.id)
+
+        tx = _month(session, master_key)["VIR Virement interne depuis BoursoBank"]
+        assert (tx.transfer_status, tx.cashflow_type, tx.flow_question) == (None, Type.INVESTMENT, None)
+        assert pair.id not in {q.transaction.id for q in review_queue(session, USER, master_key).questions}
+
+    def test_a_validated_deposit_shape_waits_for_the_pair_to_be_settled(self, session: Session, master_key: str):
+        _ops(
+            session, master_key,
+            ("neobank", "2026-02-05", "20.00", "DBIT", "VIR Virement interne depuis BoursoBank"),
+            ("neobank", "2026-03-05", "20.00", "DBIT", "VIR Virement interne depuis BoursoBank"),
+            (CURRENT, "2026-03-06", "20.00", "CRDT", "Paiement envoye par M. TIERS"),
+        )
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-02-05", "20")
+        _deposit(session, master_key, "2026-03-05", "20")
+        [first] = _month(session, master_key, "2026-02").values()
+        _answer(session, master_key, first.id)
+
+        pair = _month(session, master_key)["VIR Virement interne depuis BoursoBank"]
+        assert (pair.transfer_status.value, pair.type_source) == ("suggested", Source.DEFAULT)
 
 
 class TestReviewQueue:
