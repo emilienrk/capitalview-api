@@ -1726,8 +1726,8 @@ class TestFailedSyncSpendsTheDay:
 
 
 class TestLinkedAccountEdits:
-    """Once linked, the balance is the bank's last reading and the currency is
-    what that reading is matched on. Neither is editable by hand."""
+    """Once linked, the currency is what the bank's balance reading is matched
+    on: it is not editable by hand."""
 
     def _linked(self, session, master_key):
         account, link, _ = _one_account_setup(
@@ -1739,17 +1739,6 @@ class TestLinkedAccountEdits:
             anchor_balance=Decimal("1000"),
         )
         return account
-
-    def test_a_typed_balance_is_refused_rather_than_silently_overwritten(
-        self, session: Session, master_key: str
-    ):
-        account = self._linked(session, master_key)
-
-        with pytest.raises(LinkedAccountFieldLockedError):
-            update_bank_account(session, account, BankAccountUpdate(balance=Decimal("5")), master_key)
-
-        session.refresh(account)
-        assert Decimal(decrypt_data(account.balance_enc, master_key)) == Decimal("1000")
 
     def test_a_currency_change_is_refused(self, session: Session, master_key: str):
         """The sync reads the balance *in the account's currency*: switching it
@@ -1773,7 +1762,7 @@ class TestLinkedAccountEdits:
             response = update_bank_account(
                 session,
                 account,
-                BankAccountUpdate(name="Revolut", balance=Decimal("1000.00"), currency="EUR"),
+                BankAccountUpdate(name="Revolut", currency="EUR"),
                 master_key,
             )
 

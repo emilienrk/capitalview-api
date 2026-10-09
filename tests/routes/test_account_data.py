@@ -126,7 +126,7 @@ def _seed_account(client: TestClient, headers: dict[str, str]) -> None:
     """Create one row in each of the main user-owned domains."""
     bank = client.post(
         "/bank/accounts",
-        json={"name": "Compte courant", "account_type": "CHECKING", "balance": "2500"},
+        json={"name": "Compte courant", "account_type": "CHECKING"},
         headers=headers,
     )
     assert bank.status_code == 201
@@ -466,7 +466,7 @@ def test_export_includes_bank_transactions_and_excludes_private_key(session):
     # 1. Create a bank account
     bank_resp = client.post(
         "/bank/accounts",
-        json={"name": "Compte Boursorama", "account_type": "CHECKING", "balance": "1500"},
+        json={"name": "Compte Boursorama", "account_type": "CHECKING"},
         headers=headers,
     )
     assert bank_resp.status_code == 201
@@ -509,9 +509,8 @@ def test_export_includes_bank_transactions_and_excludes_private_key(session):
     # Check bank account has transactions
     found_account = next(acc for acc in data["bank_accounts"] if acc["id"] == bank_account_uuid)
     assert "transactions" in found_account
-    # The opening balance is an adjustment operation (docs/bank-ledger.md).
     real = [tx for tx in found_account["transactions"] if tx["origin"] is None]
-    assert [tx["origin"] for tx in found_account["transactions"]].count("adjustment") == 1
+    assert len(found_account["transactions"]) == 1
     assert len(real) == 1
     assert real[0]["amount"] == "50.00"
     assert real[0]["remittance"] == "Supermarché"
@@ -586,7 +585,7 @@ def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeyp
     # 1. Create bank account
     bank_resp = client.post(
         "/bank/accounts",
-        json={"name": "Compte à purger", "account_type": "CHECKING", "balance": "2000"},
+        json={"name": "Compte à purger", "account_type": "CHECKING"},
         headers=headers,
     )
     assert bank_resp.status_code == 201
@@ -684,8 +683,7 @@ def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeyp
 
     before = _remaining_rows(session, user_uuid, master_key)
     assert before["bank_accounts"] == 1
-    # The seeded one, and the adjustment the opening balance became.
-    assert before["bank_transactions"] == 2
+    assert before["bank_transactions"] == 1
     assert before["bank_account_links"] == 1
     assert before["bank_sessions"] == 1
     assert before["user_bank_connections"] == 1

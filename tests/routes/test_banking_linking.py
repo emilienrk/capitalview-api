@@ -8,6 +8,7 @@ tests/services/test_bank.py).
 """
 import json
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -642,19 +643,22 @@ def test_callback_error_message_does_not_reflect_raw_html(session, master_key, m
 
 
 def _create_bank_account(session, master_key, balance="1000.00") -> str:
-    from dtos.bank import BankAccountCreate
+    from dtos.bank import BankAccountCreate, BankEntryRequest
+    from models.bank import BankAccount
     from models.enums import BankAccountType
     from services.bank import create_bank_account
+    from services.bank_ledger import add_entry
 
     created = create_bank_account(
         session,
-        BankAccountCreate(
-            name="Compte courant",
-            balance=balance,
-            account_type=BankAccountType.CHECKING,
-        ),
+        BankAccountCreate(name="Compte courant", account_type=BankAccountType.CHECKING),
         USER_UUID,
         master_key,
+    )
+    # Money already on the account is its first operation.
+    add_entry(
+        session, session.get(BankAccount, created.id),
+        BankEntryRequest(day=date(2026, 1, 2), amount=Decimal(balance)), master_key,
     )
     return created.id
 

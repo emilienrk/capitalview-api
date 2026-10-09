@@ -116,91 +116,30 @@ def test_delete_account_history_not_found(session, master_key):
     assert r.status_code == 404
 
 
-def test_import_account_history(session, master_key):
-    """POST /bank/accounts/{id}/history/import fills history from the provided entries."""
-    client = TestClient(app)
-
-    r = client.post("/bank/accounts", json={"name": "Import", "account_type": "CHECKING"})
-    assert r.status_code == 201
-    account_id = r.json()["id"]
-
-    payload = {
-        "entries": [
-            {"snapshot_date": "2025-01-01", "value": "1000.00"},
-            {"snapshot_date": "2025-06-01", "value": "2000.00"},
-        ],
-        "overwrite": False,
-    }
-    r_import = client.post(f"/bank/accounts/{account_id}/history/import", json=payload)
-    assert r_import.status_code == 200
-    assert r_import.json()["inserted"] > 0
-
-
-def test_import_account_history_overwrite(session, master_key):
-    """overwrite=True clears existing history before importing."""
-    client = TestClient(app)
-
-    r = client.post("/bank/accounts", json={"name": "Overwrite", "account_type": "CHECKING"})
-    assert r.status_code == 201
-    account_id = r.json()["id"]
-
-    # First import
-    payload_v1 = {
-        "entries": [{"snapshot_date": "2025-01-01", "value": "9999"}],
-        "overwrite": False,
-    }
-    client.post(f"/bank/accounts/{account_id}/history/import", json=payload_v1)
-
-    # Second import with overwrite
-    payload_v2 = {
-        "entries": [{"snapshot_date": "2025-01-01", "value": "1234"}],
-        "overwrite": True,
-    }
-    r2 = client.post(f"/bank/accounts/{account_id}/history/import", json=payload_v2)
-    assert r2.status_code == 200
-
-    # Verify history endpoint now reflects the new value
-    r_hist = client.get(f"/bank/accounts/{account_id}/history")
-    assert r_hist.status_code == 200
-    jan1 = next((s for s in r_hist.json() if s["snapshot_date"] == "2025-01-01"), None)
-    assert jan1 is not None
-    assert Decimal(jan1["total_value"]) == Decimal("1234")
-
-
-def test_import_account_history_not_found(session, master_key):
-    """POST /bank/accounts/{id}/history/import returns 404 for unknown account."""
-    client = TestClient(app)
-    payload = {"entries": [{"snapshot_date": "2025-01-01", "value": "100"}], "overwrite": False}
-    r = client.post("/bank/accounts/non-existent-id/history/import", json=payload)
-    assert r.status_code == 404
-
-
 def test_entries_and_deletion_drive_the_balance(session, master_key):
-    """docs/bank-ledger.md: a balance read on a statement is an adjustment, a
-    typed operation a real one, and both can go."""
+    """docs/bank-ledger.md: the balance is the sum of the operations, typed or
+    deleted; it is never a field one types."""
     client = TestClient(app)
-    account_id = client.post("/bank/accounts", json={"name": "Livret", "account_type": "CHECKING"}).json()["id"]
-
-    dry = client.post(
-        f"/bank/accounts/{account_id}/entries?dry_run=true",
-        json={"kind": "balance", "day": "2024-01-10", "balance": "700"},
-    ).json()
-    assert Decimal(dry["adjustment"]) == Decimal("700")
+    account_id = client.post(
+        "/bank/accounts", json={"name": "Livret", "account_type": "CHECKING", "balance": "900"}
+    ).json()["id"]
     assert Decimal(client.get(f"/bank/accounts/{account_id}").json()["balance"]) == 0
 
-    client.post(f"/bank/accounts/{account_id}/entries", json={"kind": "balance", "day": "2024-01-10", "balance": "700"})
+    client.post(f"/bank/accounts/{account_id}/entries", json={"day": "2024-01-10", "amount": "700", "label": "Solde de départ"})
     added = client.post(
         f"/bank/accounts/{account_id}/entries",
-        json={"kind": "operation", "day": "2024-01-12", "amount": "-50", "label": "Boulangerie"},
+        json={"day": "2024-01-12", "amount": "-50", "label": "Boulangerie"},
     ).json()
     assert Decimal(client.get(f"/bank/accounts/{account_id}").json()["balance"]) == Decimal("650")
+
+    on_day = client.get(f"/bank/accounts/{account_id}/balance", params={"day": "2024-01-11"}).json()
+    assert (Decimal(on_day["balance_on_day"]), Decimal(on_day["balance_now"])) == (Decimal("700"), Decimal("650"))
 
     assert client.delete(f"/bank/transactions/{added['id']}").status_code == 204
     assert Decimal(client.get(f"/bank/accounts/{account_id}").json()["balance"]) == Decimal("700")
 
-    # The balance is no longer a field one types.
-    r = client.put(f"/bank/accounts/{account_id}", json={"balance": "900"})
-    assert r.status_code == 409
+    client.put(f"/bank/accounts/{account_id}", json={"balance": "900"})
+    assert Decimal(client.get(f"/bank/accounts/{account_id}").json()["balance"]) == Decimal("700")
 
 
 def test_an_entry_in_the_future_is_refused(session, master_key):
@@ -208,6 +147,6 @@ def test_an_entry_in_the_future_is_refused(session, master_key):
     account_id = client.post("/bank/accounts", json={"name": "Livret", "account_type": "CHECKING"}).json()["id"]
     r = client.post(
         f"/bank/accounts/{account_id}/entries",
-        json={"kind": "operation", "day": "2999-01-01", "amount": "-50"},
+        json={"day": "2999-01-01", "amount": "-50"},
     )
     assert r.status_code == 422

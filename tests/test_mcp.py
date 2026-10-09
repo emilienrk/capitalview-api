@@ -557,7 +557,7 @@ def _current_and_livret(session, master_key, user_uuid) -> tuple[str, str]:
 
     return tuple(
         create_bank_account(
-            session, BankAccountCreate(name=name, balance="0", account_type=kind), user_uuid, master_key,
+            session, BankAccountCreate(name=name, account_type=kind), user_uuid, master_key,
         ).id
         for name, kind in (("Courant", BankAccountType.CHECKING), ("Livret A", BankAccountType.LIVRET_A))
     )

@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 from sqlmodel import Session
 
-from dtos.bank import BankAccountCreate, BankAccountUpdate
+from dtos.bank import BankAccountCreate, BankAccountUpdate, BankEntryRequest
 from dtos.cashflow import CashflowCreate, CashflowUpdate
 from dtos.settings import UserSettingsUpdate
 from models.bank import BankAccount
@@ -18,6 +18,7 @@ from services.bank import (
     get_user_bank_accounts,
     update_bank_account,
 )
+from services.bank_ledger import add_entry
 from services.cashflow import create_cashflow, update_cashflow
 from services.encryption import decrypt_data
 from services.settings import update_settings
@@ -29,11 +30,15 @@ from services.settings import update_settings
 def _make_account(session, master_key, user_uuid="sync_user", balance=Decimal("1000")) -> BankAccount:
     resp = create_bank_account(
         session,
-        BankAccountCreate(name="Checking", balance=balance, account_type=BankAccountType.CHECKING),
+        BankAccountCreate(name="Checking", account_type=BankAccountType.CHECKING),
         user_uuid,
         master_key,
     )
-    return session.get(BankAccount, resp.id)
+    account = session.get(BankAccount, resp.id)
+    if balance:
+        # Money already on the account is its first operation.
+        add_entry(session, account, BankEntryRequest(day=date(2026, 1, 1), amount=balance), master_key)
+    return account
 
 
 def _link_cashflow(session, master_key, account_id, amount, flow_type, frequency,

@@ -19,6 +19,16 @@ Avant ce modèle (octobre 2026), le solde était un champ saisi, recopié chaque
 jour dans l'historique, et l'import d'opérations s'ancrait sur cet historique.
 Un réimport ne pouvait plus corriger un solde figé : d'où ce document.
 
+**Aucun solde ne se saisit.** Ni à la création du compte, ni dans la modale
+d'opération, ni par import : l'argent déjà présent à l'ouverture est la
+première opération, une entrée comme une autre, qui compte dans les flux. La
+modale montre le solde au jour choisi (`GET /bank/accounts/{id}/balance`) et
+où l'opération l'amène ; elle peut aussi déduire le montant d'un solde lu sur
+un relevé, ce qui donne une entrée ou une sortie réelle, jamais un ajustement.
+Les relevés de solde saisis, l'import de fichiers de soldes et le solde
+d'ouverture ont été retirés le 2026-10-09 : leur écart calculé à une date
+compliquait tout le reste pour un cas que personne n'utilisait.
+
 ## Trois sortes d'opérations
 
 Une colonne chiffrée `bank_transactions.origin_enc` les distingue :
@@ -27,11 +37,13 @@ Une colonne chiffrée `bank_transactions.origin_enc` les distingue :
 | --- | --- | --- |
 | `NULL` | la synchronisation ou un import CSV | oui |
 | `manual` | une saisie à la main | oui |
-| `adjustment` | un solde déclaré, un import de soldes, le solde à la création | non |
+| `adjustment` | la conversion d'un compte : détaché de sa banque, ou antérieur à ce modèle | non |
 | `forecast` | une prévision récurrente appliquée (option « Synchronisation automatique ») | non |
 
-Un **ajustement** vaut l'écart entre le solde déclaré à une date et le solde que
-les opérations donnent à cette date. Ajustements et prévisions sont neutres
+Un **ajustement** porte le solde qu'un compte avait avant d'être tenu par ses
+opérations : quand on le détache de sa banque, ses opérations ne remontent
+presque jamais à l'ouverture, et le solde lu à la banque la veille de la
+première devient un ajustement d'ouverture. Rien d'autre n'en crée. Ajustements et prévisions sont neutres
 (`TypeSource.ADJUSTMENT`) : jamais rapprochés en virement, jamais récurrents,
 jamais comptés en dépense, revenu ou flux réel. Ils restent visibles dans la
 liste des opérations, avec un badge, et se suppriment.
@@ -41,27 +53,26 @@ liste des opérations, avec un badge, et se suppriment.
 - Un import d'opérations supprime les ajustements et les prévisions datés dans
   sa période (de la première à la dernière opération du fichier). L'aperçu
   les liste.
-- Un solde déclaré au jour J supprime les prévisions datées de J ou avant.
 - Une saisie manuelle n'a pas de référence : le niveau 2 de
   `store_transactions` (même date, montant, sens et devise) la reconnaît, et un
   import qui contient la même opération la **remplace** au lieu de la doubler.
   Ajustements et prévisions sont exclus de ce niveau 2.
-- Importer un fichier de soldes crée, point par point dans l'ordre des dates,
-  l'ajustement qui amène le solde calculé au solde lu. Le même fichier
-  réimporté ne crée rien.
 
 ## Limite connue
 
 Un ajustement garde son montant. Si des opérations plus anciennes arrivent
 plus tard, hors de la période d'un import, le solde d'après l'ajustement
-bouge d'autant. Accepté : le corriger demanderait de stocker le solde déclaré
+bouge d'autant. Accepté : le corriger demanderait de stocker le solde lu
 et non l'écart, c'est-à-dire une seconde source de vérité.
 
-## Conversion des comptes existants
+## Conversion des comptes
 
-Les montants sont chiffrés par la clé maître : une migration SQL ne peut pas
-les lire. La conversion se fait à la connexion (`run_lazy_catchup`) et au
-premier `get_user_bank_accounts`, une fois par compte (`ledger_version`) :
+Un compte qu'on détache de sa banque (`forget_ledger`, dans
+`services/banking/linking.py`) repasse par la conversion, comme les comptes
+antérieurs à ce modèle. Les montants sont chiffrés par la clé maître : une
+migration SQL ne peut pas les lire. La conversion se fait à la connexion
+(`run_lazy_catchup`) et au premier `get_user_bank_accounts`, une fois par
+compte (`ledger_version`) :
 
 - avec des opérations : un ajustement d'ouverture, égal à la valeur de
   l'historique la veille de la première opération ;

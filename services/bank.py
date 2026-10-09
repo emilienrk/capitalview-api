@@ -33,8 +33,6 @@ from services.banking.linking import is_card_account
 from services.banking.recurring_decisions import forget_account
 from services.bank_ledger import (
     LEDGER_VERSION,
-    OPENING_LABEL,
-    adjust_to,
     ensure_ledgers,
     on_ledger,
     rebuild_from_operations,
@@ -136,20 +134,13 @@ DEFAULT_CURRENCY = BASE_CURRENCY
 
 
 class LinkedAccountFieldLockedError(ValueError):
-    """A bank-linked account's balance or currency was edited by hand.
+    """A bank-linked account's currency was edited by hand.
 
-    Both belong to the bank once the account is linked: the balance is the last
-    reading the sync took, and the next sync would silently overwrite a typed
-    value; the currency is what that reading is matched on, so changing it makes
-    the next sync find no balance at all. Refused rather than ignored — a change
-    the form appeared to accept and that never landed is the worse surprise.
+    It belongs to the bank once the account is linked: it is what the sync's
+    balance reading is matched on, so changing it makes the next sync find no
+    balance at all. Refused rather than ignored — a change the form appeared to
+    accept and that never landed is the worse surprise.
     """
-
-
-class LedgerBalanceError(ValueError):
-    """A balance typed over an unsynced account's: it is the sum of its
-    operations, and a balance read on a statement is entered as such
-    (POST /bank/accounts/{id}/entries), which records the gap as an adjustment."""
 
 
 class UnconvertibleCurrencyError(ValueError):
@@ -264,7 +255,8 @@ def create_bank_account(
     user_bidx = hash_index(user_uuid, master_key)
     
     name_enc = encrypt_data(data.name, master_key)
-    balance_enc = encrypt_data(str(data.balance), master_key)
+    # Money already there when it opened is its first operation, typed like any other.
+    balance_enc = encrypt_data("0", master_key)
     type_enc = encrypt_data(data.account_type.value, master_key)
     
     inst_enc = None
@@ -296,9 +288,6 @@ def create_bank_account(
     session.add(account)
     session.commit()
     session.refresh(account)
-    if data.balance:
-        opened = min(data.opened_at or date.today(), date.today())
-        adjust_to(session, account, opened, data.balance, master_key, OPENING_LABEL)
     rebuild_from_operations(session, account, master_key)
     session.refresh(account)
 
@@ -318,7 +307,6 @@ def update_bank_account(
         _refuse_bank_owned_changes(account, data, master_key)
     else:
         ensure_ledgers(session, account.user_uuid_bidx, master_key)
-        _refuse_typed_balance(account, data, master_key)
     # First, so a refused rate leaves nothing half-written.
     _apply_interest_terms(account, data, master_key)
     reshaped = link is None and (
@@ -384,33 +372,16 @@ def _apply_interest_terms(account: BankAccount, data: BankAccountUpdate, master_
 def _refuse_bank_owned_changes(
     account: BankAccount, data: BankAccountUpdate, master_key: str
 ) -> None:
-    """Refuse a *changed* balance or currency on a linked account.
+    """Refuse a *changed* currency on a linked account.
 
     Compared to the stored value rather than refused on presence: the edit form
-    sends every field back, so a rename would otherwise fail on a balance it
+    sends every field back, so a rename would otherwise fail on a currency it
     never touched.
     """
-    if data.balance is not None and data.balance != Decimal(
-        decrypt_data(account.balance_enc, master_key)
-    ):
-        raise LinkedAccountFieldLockedError(
-            "Le solde d'un compte lié est lu à la banque à chaque synchronisation : "
-            "il ne se modifie pas à la main."
-        )
     if data.currency is not None and data.currency != account_currency(account, master_key):
         raise LinkedAccountFieldLockedError(
             "La devise d'un compte lié est celle de la banque : la changer empêcherait "
             "la synchronisation de retrouver son solde."
-        )
-
-
-def _refuse_typed_balance(account: BankAccount, data: BankAccountUpdate, master_key: str) -> None:
-    """Refuse a *changed* balance on an unsynced account, compared to the
-    stored one for the same reason as `_refuse_bank_owned_changes`."""
-    if data.balance is not None and data.balance != Decimal(decrypt_data(account.balance_enc, master_key)):
-        raise LedgerBalanceError(
-            "Le solde de ce compte est la somme de ses opérations : saisissez un relevé de solde "
-            "pour le corriger."
         )
 
 
@@ -790,142 +761,6 @@ def last_known_balance_before(
     return Decimal(decrypt_data(row.total_value_enc, master_key)) if row else Decimal("0")
 
 
-def _known_values_before(
-    session: Session, account_id_bidx: str, until: date, master_key: str
-) -> dict[date, Decimal]:
-    """The account's stored balances strictly before ``until``, by date."""
-    rows = session.exec(
-        select(AccountHistory)
-        .where(AccountHistory.account_id_bidx == account_id_bidx)
-        .where(AccountHistory.snapshot_date < until)
-        .order_by(AccountHistory.snapshot_date)
-    ).all()
-    return {row.snapshot_date: Decimal(decrypt_data(row.total_value_enc, master_key)) for row in rows}
-
-
-def import_bank_account_history(
-    session: Session,
-    account: BankAccount,
-    entries: list[BankHistoryEntry],
-    master_key: str,
-    overwrite: bool = False,
-    replace_range: bool = False,
-) -> int:
-    """
-    Import a list of (date, value) snapshots for a bank account.
-
-    Fills the full range from account creation to yesterday:
-    - Dates before the first known entry are set to 0.
-    - Gaps between known entries are forward-filled with the last known value.
-    - If overwrite=True, existing history is deleted first; otherwise existing
-      rows are preserved (on_conflict_do_nothing).
-    - If replace_range=True, only the rows between the first and last entry are
-      deleted first: a re-imported file wins over what it covers, including the
-      days an earlier import carried forward, and nothing outside it moves.
-
-    Returns the number of rows written.
-    """
-    if not entries:
-        return 0
-
-    if overwrite:
-        delete_bank_account_history(session, account.uuid, master_key)
-
-    sorted_entries = sorted(entries, key=lambda e: e.snapshot_date)
-    if replace_range and not overwrite:
-        session.exec(
-            sa.delete(AccountHistory)
-            .where(AccountHistory.account_id_bidx == hash_index(account.uuid, master_key))
-            .where(AccountHistory.snapshot_date >= sorted_entries[0].snapshot_date)
-            .where(AccountHistory.snapshot_date <= sorted_entries[-1].snapshot_date)
-        )
-    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
-    account_start = account.created_at.date()
-    first_entry_date = sorted_entries[0].snapshot_date
-
-    # Start from the earliest of account creation and first imported entry,
-    # so historical data predating the app account creation is not silently dropped.
-    fill_start = min(account_start, first_entry_date)
-    if fill_start > yesterday:
-        return 0
-
-    # Build a date → value lookup
-    value_by_date: dict[date, Decimal] = {e.snapshot_date: e.value for e in sorted_entries}
-
-    now = datetime.now(timezone.utc)
-    account_id_bidx = hash_index(account.uuid, master_key)
-
-    # The days before the imported range are not empty days — they are days this
-    # file says nothing about. Zeroing them draws a balance that fell to nothing
-    # and came back, so what is already known is carried across instead. Zero
-    # survives only where nothing has ever been recorded.
-    known_before = _known_values_before(session, account_id_bidx, first_entry_date, master_key)
-
-    # Fill first, convert second. The balance stands still between two
-    # statements while its euro value moves with the rate, so carrying a
-    # *converted* value forward would freeze the rate along with the balance.
-    filled: list[BankHistoryEntry] = []
-    last_value = Decimal("0")
-    d = fill_start
-    while d <= yesterday:
-        if d < first_entry_date:
-            last_value = known_before.get(d, last_value)
-        elif d in value_by_date:
-            last_value = value_by_date[d]
-        # else: carry forward last_value
-        filled.append(BankHistoryEntry(snapshot_date=d, value=last_value))
-        d += timedelta(days=1)
-
-    filled = curve_in_base_currency(session, filled, account_currency(account, master_key))
-
-    rows: list[dict] = []
-    prev_value = Decimal("0")
-
-    for entry in filled:
-        d = entry.snapshot_date
-        total_value = entry.value
-        daily_pnl = total_value - prev_value
-
-        positions_json: str | None = None
-        if total_value > Decimal("0"):
-            positions_json = json.dumps([{
-                "asset_key": "EUR",
-                "quantity": str(total_value),
-                "value": str(total_value),
-                "price": "1",
-                "invested": str(total_value),
-                "percentage": "100",
-            }])
-
-        rows.append({
-            "uuid": str(uuid.uuid4()),
-            "user_uuid_bidx": account.user_uuid_bidx,
-            "account_id_bidx": account_id_bidx,
-            "account_type": AccountCategory.BANK.value,
-            "snapshot_date": d,
-            "total_value_enc": encrypt_data(str(round(total_value, 2)), master_key),
-            "total_invested_enc": encrypt_data(str(round(total_value, 2)), master_key),
-            "total_deposits_enc": encrypt_data(str(round(total_value, 2)), master_key),
-            "total_withdrawals_enc": encrypt_data("0.00", master_key),
-            "daily_pnl_enc": encrypt_data(str(round(daily_pnl, 2)), master_key),
-            "positions_enc": encrypt_data(positions_json, master_key) if positions_json else None,
-            "created_at": now,
-            "updated_at": now,
-        })
-
-        prev_value = total_value
-
-    if not rows:
-        return 0
-
-    stmt = pg_insert(AccountHistory).values(rows).on_conflict_do_nothing(
-        constraint="uq_account_history_account_date"
-    )
-    session.exec(stmt)
-    session.commit()
-    return len(rows)
-
-
 def replace_history_window(
     session: Session,
     account: BankAccount,
@@ -938,16 +773,9 @@ def replace_history_window(
     Replace the snapshots of one bank account **inside [start_date, end_date]**,
     and touch nothing outside it. Returns the number of rows written.
 
-    This exists because neither mode of `import_bank_account_history` fits the
-    bank sync: `overwrite=True` deletes the account's *entire*
-    history — years of manual entry with it — and the default mode
-    (`on_conflict_do_nothing`) overwrites nothing at all, so bank data could
-    never take precedence over a manual snapshot on the seeding window.
-
     The window is emptied first, so a day the bank no longer accounts for
     disappears instead of lingering; only the supplied entries are written back.
-    `end_date` is clamped to yesterday, following the same convention as
-    `import_bank_account_history`: today is left out so pending operations have
+    `end_date` is clamped to yesterday: today is left out so pending operations have
     time to settle. "Today" is the server's civil day, as everywhere else in
     this module, so the clamp can never disagree with the caller's own notion
     of yesterday.

@@ -4,9 +4,8 @@ The balance of an account no bank feeds, derived from its operations.
 On such an account the operations are the only source of truth: its balance is
 the sum of all of them from zero, its curve their running total, day by day.
 `balance_enc` and the `account_history` rows are a cache this module rewrites
-whole after every write. A balance the user states becomes an adjustment
-operation: the gap between what they read and what the operations add up to on
-that day. See docs/bank-ledger.md.
+whole after every write. Nobody types a balance: money already on the account
+when it is opened is its first operation. See docs/bank-ledger.md.
 
 A synced account is left alone everywhere here: the bank's word is its balance.
 """
@@ -20,14 +19,13 @@ from decimal import Decimal
 import sqlalchemy as sa
 from sqlmodel import Session, select
 
-from dtos.bank import BankEntryKind, BankEntryRequest, BankEntryResponse, BankHistoryEntry
+from dtos.bank import BankBalanceResponse, BankEntryRequest, BankEntryResponse, BankHistoryEntry
 from models.account_history import AccountHistory
 from models.bank import BankAccount
 from models.banking import BankAccountLink, BankTransaction
 from models.currency import BASE_CURRENCY
 from services.banking.transactions import (
     ORIGIN_ADJUSTMENT,
-    ORIGIN_FORECAST,
     ORIGIN_MANUAL,
     SYNTHETIC_ORIGINS,
     row_date,
@@ -119,19 +117,6 @@ def rebuild_from_operations(session: Session, account: BankAccount, master_key: 
     session.commit()
 
 
-def adjust_to(
-    session: Session, account: BankAccount, day: date, balance: Decimal, master_key: str,
-    label: str = ADJUSTMENT_LABEL,
-) -> Decimal:
-    """Make the operations add up to `balance` on `day`, with one adjustment.
-    Returns its amount — zero, and nothing written, when they already do."""
-    gap = balance - balance_at(session, account, day, master_key)
-    if gap != 0:
-        store_entry(session, master_key, account.uuid, day, gap, label, _currency(account, master_key), ORIGIN_ADJUSTMENT)
-        session.flush()
-    return gap
-
-
 def synthetic_between(
     session: Session, account: BankAccount, master_key: str, start: date | None, end: date,
     origins: frozenset[str] = SYNTHETIC_ORIGINS,
@@ -155,61 +140,10 @@ def drop_synthetic(
     return len(rows)
 
 
-def drop_forecasts_until(session: Session, account: BankAccount, master_key: str, day: date) -> int:
-    return drop_synthetic(session, account, master_key, None, day, frozenset({ORIGIN_FORECAST}))
-
-
 def _currency(account: BankAccount, master_key: str) -> str:
     from services.bank import account_currency
 
     return account_currency(account, master_key)
-
-
-def point_adjustments(
-    session: Session, account: BankAccount, points: list[BankHistoryEntry], master_key: str
-) -> list[Decimal]:
-    """The adjustment each balance point records, in date order: each brings the
-    operations to its value on its day, counting those before it. A file
-    already imported gives zeros. The forecasts up to the last point are left
-    out, as `import_balance_points` drops them."""
-    ordered = sorted(points, key=lambda p: p.snapshot_date)
-    if not ordered:
-        return []
-    dated = _dated(session, account, master_key)
-    last = ordered[-1].snapshot_date
-    kept = [
-        (day, amount) for day, amount, row in dated
-        if not (row_origin(row, master_key) == ORIGIN_FORECAST and day <= last)
-    ]
-    added = Decimal("0")
-    gaps = []
-    for point in ordered:
-        gap = point.value - (sum((a for d, a in kept if d <= point.snapshot_date), Decimal("0")) + added)
-        gaps.append(gap)
-        added += gap
-    return gaps
-
-
-def import_balance_points(
-    session: Session, account: BankAccount, points: list[BankHistoryEntry], master_key: str
-) -> int:
-    """A file of balances, as the adjustments that make the operations agree
-    with each. Returns how many it wrote — none for a file imported before."""
-    ensure_ledgers(session, account.user_uuid_bidx, master_key)
-    ordered = sorted(points, key=lambda p: p.snapshot_date)
-    if not ordered:
-        return 0
-    gaps = point_adjustments(session, account, ordered, master_key)
-    drop_forecasts_until(session, account, master_key, ordered[-1].snapshot_date)
-    currency = _currency(account, master_key)
-    written = 0
-    for point, gap in zip(ordered, gaps):
-        if gap:
-            store_entry(session, master_key, account.uuid, point.snapshot_date, gap, ADJUSTMENT_LABEL, currency, ORIGIN_ADJUSTMENT)
-            written += 1
-    session.commit()
-    rebuild_from_operations(session, account, master_key)
-    return written
 
 
 # ---------------------------------------------------------------------------
@@ -222,53 +156,32 @@ class OperationNotDeletableError(ValueError):
 
 
 def add_entry(
-    session: Session, account: BankAccount, entry: BankEntryRequest, master_key: str, dry_run: bool = False
+    session: Session, account: BankAccount, entry: BankEntryRequest, master_key: str
 ) -> BankEntryResponse:
-    """An operation typed by hand, or a balance read on a statement.
-
-    The balance becomes the adjustment that makes the operations agree with it
-    on its day, once the forecasts up to that day — which it replaces — are
-    gone. Nothing is written under `dry_run`: the answer says what would be.
-    """
+    """An operation typed by hand."""
     if is_synced(session, account, master_key):
         raise SyncedAccountError("Le solde de ce compte est lu à la banque : il ne se saisit pas à la main.")
     ensure_ledgers(session, account.user_uuid_bidx, master_key)
-    before = sum((amount for _, amount, _ in _dated(session, account, master_key)), Decimal("0"))
-
-    if entry.kind is BankEntryKind.OPERATION:
-        response = BankEntryResponse(balance_now_before=before, balance_now_after=before + entry.amount)
-        if dry_run:
-            return response
-        row = store_entry(
-            session, master_key, account.uuid, entry.day, entry.amount, entry.label,
-            _currency(account, master_key), ORIGIN_MANUAL,
-        )
-        session.commit()
-        rebuild_from_operations(session, account, master_key)
-        response.id = row.uuid
-        return response
-
-    forecasts = synthetic_between(session, account, master_key, None, entry.day, frozenset({ORIGIN_FORECAST}))
-    forecast_total = sum((amount for _, amount, _ in forecasts), Decimal("0"))
-    adjustment = entry.balance - (balance_at(session, account, entry.day, master_key) - forecast_total)
-    response = BankEntryResponse(
-        adjustment=adjustment,
-        forecasts_replaced=len(forecasts),
-        balance_now_before=before,
-        balance_now_after=before - forecast_total + adjustment,
+    row = store_entry(
+        session, master_key, account.uuid, entry.day, entry.amount, entry.label,
+        _currency(account, master_key), ORIGIN_MANUAL,
     )
-    if dry_run:
-        return response
-    drop_forecasts_until(session, account, master_key, entry.day)
-    if adjustment:
-        row = store_entry(
-            session, master_key, account.uuid, entry.day, adjustment, entry.label or ADJUSTMENT_LABEL,
-            _currency(account, master_key), ORIGIN_ADJUSTMENT,
-        )
-        response.id = row.uuid
     session.commit()
     rebuild_from_operations(session, account, master_key)
-    return response
+    return BankEntryResponse(id=row.uuid)
+
+
+def balance_on(session: Session, account: BankAccount, day: date, master_key: str) -> BankBalanceResponse:
+    """The balance at the end of `day` and today, in the account's currency."""
+    if is_synced(session, account, master_key):
+        raise SyncedAccountError("Le solde de ce compte est lu à la banque : il ne se saisit pas à la main.")
+    ensure_ledgers(session, account.user_uuid_bidx, master_key)
+    dated = _dated(session, account, master_key)
+    return BankBalanceResponse(
+        day=day,
+        balance_on_day=sum((amount for d, amount, _ in dated if d <= day), Decimal("0")),
+        balance_now=sum((amount for _, amount, _ in dated), Decimal("0")),
+    )
 
 
 def delete_operation(session: Session, account: BankAccount, row: BankTransaction, master_key: str) -> None:

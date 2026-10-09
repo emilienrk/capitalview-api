@@ -147,7 +147,7 @@ def test_create_cashflow_with_bank_account_id(session: Session, master_key: str)
     # Create a real bank account first
     acc = create_bank_account(
         session,
-        BankAccountCreate(name="Main", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        BankAccountCreate(name="Main", account_type=BankAccountType.CHECKING),
         user_uuid,
         master_key,
     )
@@ -198,7 +198,7 @@ def test_get_cashflow_resolves_bank_account_id(session: Session, master_key: str
     user_uuid = "user_cf_resolve"
     acc = create_bank_account(
         session,
-        BankAccountCreate(name="Savings", balance=Decimal("0"), account_type=BankAccountType.SAVINGS),
+        BankAccountCreate(name="Savings", account_type=BankAccountType.SAVINGS),
         user_uuid,
         master_key,
     )
@@ -224,7 +224,7 @@ def test_update_cashflow_links_bank_account(session: Session, master_key: str):
     user_uuid = "user_cf_update_link"
     acc = create_bank_account(
         session,
-        BankAccountCreate(name="Checking", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        BankAccountCreate(name="Checking", account_type=BankAccountType.CHECKING),
         user_uuid,
         master_key,
     )
@@ -257,7 +257,7 @@ def test_update_cashflow_unlinks_bank_account(session: Session, master_key: str)
     user_uuid = "user_cf_unlink"
     acc = create_bank_account(
         session,
-        BankAccountCreate(name="Checking", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        BankAccountCreate(name="Checking", account_type=BankAccountType.CHECKING),
         user_uuid,
         master_key,
     )
@@ -293,7 +293,7 @@ def test_bank_account_id_not_exposed_across_users(session: Session, master_key: 
     user_b = "user_isolation_b"
     acc = create_bank_account(
         session,
-        BankAccountCreate(name="Private", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        BankAccountCreate(name="Private", account_type=BankAccountType.CHECKING),
         user_a,
         master_key,
     )
@@ -412,7 +412,6 @@ def _account_in(session: Session, master_key: str, user_uuid: str, currency: str
             session,
             BankAccountCreate(
                 name=f"Compte {currency}",
-                balance=Decimal("0"),
                 account_type=BankAccountType.CHECKING,
                 currency=currency,
             ),

@@ -72,7 +72,6 @@ class BankAccountCreate(BaseModel):
     account_type: BankAccountType
     institution_name: str | None = None
     identifier: str | None = None
-    balance: Decimal = Decimal("0")
     currency: str = BASE_CURRENCY
     opened_at: date | None = None
     # Rates are decimals (0.025 = 2.5 %/year), gross of tax.
@@ -100,7 +99,6 @@ class BankAccountUpdate(BaseModel):
     name: str | None = None
     institution_name: str | None = None
     identifier: str | None = None
-    balance: Decimal | None = None
     currency: str | None = None
     opened_at: date | None = None
     interest_rate: Decimal | None = Field(default=None, ge=0, le=1)
@@ -207,46 +205,30 @@ class BankHistoryEntry(BaseModel):
     value: Decimal
 
 
-class BankHistoryImportRequest(BaseModel):
-    """Import historical balance snapshots for a bank account."""
-    entries: list[BankHistoryEntry]
-    overwrite: bool = False
-
-
-class BankEntryKind(str, Enum):
-    # An operation typed by hand: real, it counts like any other.
-    OPERATION = "operation"
-    # A balance read on a statement: the gap becomes an adjustment.
-    BALANCE = "balance"
-
-
 class BankEntryRequest(BaseModel):
-    """POST /bank/accounts/{id}/entries, on an account no bank feeds."""
-    kind: BankEntryKind
+    """POST /bank/accounts/{id}/entries: an operation typed by hand on an
+    account no bank feeds. Real, it counts like any other."""
     day: date
-    # OPERATION: signed, negative for money out.
-    amount: Decimal | None = None
-    # BALANCE: what the account held at the end of `day`.
-    balance: Decimal | None = None
+    # Signed, negative for money out.
+    amount: Decimal
     label: str | None = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
     def _check(self) -> "BankEntryRequest":
         if self.day > date.today():
             raise ValueError("La date ne peut pas être dans le futur.")
-        if self.kind is BankEntryKind.OPERATION and not self.amount:
+        if not self.amount:
             raise ValueError("Une opération a un montant non nul.")
-        if self.kind is BankEntryKind.BALANCE and self.balance is None:
-            raise ValueError("Un relevé de solde a un solde.")
         return self
 
 
 class BankEntryResponse(BaseModel):
-    """What an entry does, or would do under ?dry_run=true."""
-    id: str | None = None
-    # BALANCE only: the adjustment it records, zero when the operations already agree.
-    adjustment: Decimal | None = None
-    # Forecasts it replaces (BALANCE only).
-    forecasts_replaced: int = 0
-    balance_now_before: Decimal
-    balance_now_after: Decimal
+    id: str
+
+
+class BankBalanceResponse(BaseModel):
+    """GET /bank/accounts/{id}/balance: what the operations add up to, at the
+    end of `day` and today, for an entry to show where it takes the account."""
+    day: date
+    balance_on_day: Decimal
+    balance_now: Decimal

@@ -850,7 +850,7 @@ class TestBankAccountHistory:
         assert totals[date(2026, 6, 5)] == Decimal("2500.00")
 
     def test_empty_when_no_history(self, session: Session, master_key: str):
-        acc = create_bank_account(session, BankAccountCreate(name="Empty", balance=Decimal("0"), account_type=BankAccountType.CHECKING), "user_empty_bank", master_key)
+        acc = create_bank_account(session, BankAccountCreate(name="Empty", account_type=BankAccountType.CHECKING), "user_empty_bank", master_key)
         result = get_bank_account_history(session, acc.id, master_key)
         assert result == []
 

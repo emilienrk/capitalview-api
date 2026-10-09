@@ -1,5 +1,6 @@
 """Interest terms on bank accounts, and GET /bank/interest."""
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -24,9 +25,13 @@ def _override_deps(session, master_key):
     app.dependency_overrides.clear()
 
 
-def _create(client: TestClient, **fields):
-    payload = {"name": "Compte", "account_type": "SAVINGS", "balance": "10000", **fields}
-    return client.post("/bank/accounts", json=payload)
+def _create(client: TestClient, balance: str = "10000", **fields):
+    """An account with money on it: the money is its first operation."""
+    r = client.post("/bank/accounts", json={"name": "Compte", "account_type": "SAVINGS", **fields})
+    if r.status_code == 201:
+        opened = date.today().replace(month=1, day=1).isoformat()
+        client.post(f"/bank/accounts/{r.json()['id']}/entries", json={"day": opened, "amount": balance})
+    return r
 
 
 def test_a_savings_account_keeps_its_rates_and_counts_by_quinzaine_by_default():

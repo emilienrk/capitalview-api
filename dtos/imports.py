@@ -68,13 +68,6 @@ class StockImportRowPreview(BaseModel):
     notes: str | None = None
 
 
-class BankImportPointPreview(BaseModel):
-    """One (date, balance) point for bank history import."""
-    snapshot_date: date
-    value: Decimal
-    is_duplicate: bool = False
-
-
 class BankImportTransactionPreview(BaseModel):
     """One movement read from a bank statement CSV.
 
@@ -105,18 +98,15 @@ class BankImportReplacedEntry(BaseModel):
 
 
 class BankImportCurvePreview(BaseModel):
-    """The balance curve a movements file describes, once anchored.
-
-    Shown before the import so the anchor can be corrected: a wrong one shifts
-    the whole curve by a constant, which is invisible on the movements alone.
-    """
+    """The balance curve a movements file draws before a linked account's
+    history, anchored so that it meets the bank's."""
     start_date: date
     end_date: date
     opening_balance: Decimal  # balance before the first movement (the anchor)
     closing_balance: Decimal
     days: int
-    # First day the curve goes below zero, if any: the usual sign that the
-    # anchor is too low — a real account rarely goes negative for months.
+    # First day the curve goes below zero, if any: the usual sign of older
+    # operations missing — a real account rarely goes negative for months.
     first_negative_date: date | None = None
 
 
@@ -130,7 +120,6 @@ class ImportPreviewResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     crypto: BinanceImportPreviewResponse | None = None
     stock_rows: list[StockImportRowPreview] | None = None
-    bank_points: list[BankImportPointPreview] | None = None
     bank_transactions: list[BankImportTransactionPreview] | None = None
     bank_curve: BankImportCurvePreview | None = None
     # Bank-linked account only: the first day the bank's own history covers.
@@ -156,9 +145,7 @@ class ImportConfirmRequest(BaseModel):
     options: dict = Field(default_factory=dict)
     crypto_groups: list[BinanceImportGroupPreview] | None = None
     stock_rows: list[StockImportRowPreview] | None = None
-    bank_points: list[BankImportPointPreview] | None = None
     bank_transactions: list[BankImportTransactionPreview] | None = None
-    overwrite: bool = False  # bank only: replace existing history
 
 
 class ImportConfirmResponse(BaseModel):

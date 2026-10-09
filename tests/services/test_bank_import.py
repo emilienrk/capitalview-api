@@ -4,179 +4,26 @@ from decimal import Decimal
 
 from sqlmodel import select
 
-from dtos.bank import BankAccountCreate
+from dtos.bank import BankAccountCreate, BankEntryRequest
 from dtos.imports import ImportConfirmRequest
 from models.account_history import AccountHistory
 from models.banking import BankTransaction
 from models.enums import BankAccountType
 from dtos.bank import BankHistoryEntry
 from models.bank import BankAccount
-from services.bank import (
-    create_bank_account,
-    get_bank_account_history,
-    import_bank_account_history,
-)
+from services.bank import create_bank_account, get_bank_account_history
+from services.bank_ledger import add_entry
 from services.encryption import decrypt_data, hash_index
 
-from services.imports.bank_csv import (
-    _with_references,
-    parse_bank_points,
-    parse_bank_transactions,
-)
+from services.imports.bank_csv import _with_references, parse_bank_transactions
 from services.imports.registry import get_parser, list_parsers
 
-BALANCE_CSV = textwrap.dedent("""\
-    Date;Solde
-    15/01/2024;1000,00
-    15/01/2024;1050,00
-    20/01/2024;980,50
-""")
-
-def test_bank_balance_mode_last_wins():
-    points, warnings = parse_bank_points(BALANCE_CSV, {
-        "mapping": {"date": "Date", "balance": "Solde"},
-        "date_format": "%d/%m/%Y",
-        "decimal_separator": ",",
-    })
-    assert len(points) == 2
-    assert points[0].snapshot_date == date(2024, 1, 15)
-    assert points[0].value == Decimal("1050.00")  # last row for the date wins
-    assert points[1].value == Decimal("980.50")
-
-
-def test_bank_unreadable_rows_warn():
-    csv_content = "Date;Solde\ngarbage;xx\n15/01/2024;100,00\n"
-    points, warnings = parse_bank_points(csv_content, {
-        "mapping": {"date": "Date", "balance": "Solde"},
-        "date_format": "%d/%m/%Y",
-        "decimal_separator": ",",
-    })
-    assert len(points) == 1
-    assert warnings and "illisible" in warnings[0]
-
-
-NATIVE_CSV = textwrap.dedent("""\
-    snapshot_date,value
-    2024-01-31,12500.00
-    2024-02-29,13200.50
-""")
-
-NATIVE_FR_CSV = textwrap.dedent("""\
-    snapshot_date;value
-    31/01/2024;12 500,00
-    29/02/2024;13200,50
-""")
-
-
-def test_native_parser_is_still_resolvable_but_no_longer_offered():
-    """Old files and saved imports still name it; nothing proposes it."""
-    assert get_parser("native_bank") is not None
-    assert "native_bank" not in {s.source_id for s in list_parsers()}
-
-
-def test_generic_parser_detects_the_documented_header():
-    parser = get_parser("generic_bank")
-    assert parser.detect(NATIVE_CSV) == 1.0
-    assert parser.detect(NATIVE_FR_CSV) == 1.0  # any delimiter
-    assert parser.detect("Date;Solde\n15/01/2024;1000,00\n") == 0.0
-
-
-def test_native_parser_no_longer_competes_on_detection():
-    """Both scoring 1.0 would make the winner a coin toss."""
-    assert get_parser("native_bank").detect(NATIVE_CSV) == 0.0
-
-
-def test_generic_parser_reads_the_documented_shape_without_a_mapping():
-    parser = get_parser("generic_bank")
-    points, _ = parse_bank_points(NATIVE_CSV, parser.effective_options({}))
-    assert [p.snapshot_date for p in points] == [date(2024, 1, 31), date(2024, 2, 29)]
-    assert points[0].value == Decimal("12500.00")
-
-
-def test_generic_parser_still_honours_a_mapping():
-    parser = get_parser("generic_bank")
-    options = parser.effective_options({
-        "mapping": {"date": "Date", "balance": "Solde"},
-        "date_format": "%d/%m/%Y",
-        "decimal_separator": ",",
-    })
-    points, _ = parse_bank_points(BALANCE_CSV, options)
-    assert [p.value for p in points] == [Decimal("1050.00"), Decimal("980.50")]
-
-
-def test_balance_parsers_offer_a_template():
-    for source_id in ("generic_bank", "native_bank"):
-        parser = get_parser(source_id)
-        assert parser.template_csv is not None
-        assert parser.template_csv.splitlines()[0] == "snapshot_date,value"
-
-
-def test_native_points_parsed_without_mapping():
-    parser = get_parser("native_bank")
-    points, _ = parse_bank_points(NATIVE_CSV, parser.effective_options({}))
-    assert [p.snapshot_date for p in points] == [date(2024, 1, 31), date(2024, 2, 29)]
-    assert points[0].value == Decimal("12500.00")
-
-
-def test_native_points_accept_french_dates_and_decimals():
-    parser = get_parser("native_bank")
-    points, _ = parse_bank_points(NATIVE_FR_CSV, parser.effective_options({}))
-    assert [p.snapshot_date for p in points] == [date(2024, 1, 31), date(2024, 2, 29)]
-    assert points[0].value == Decimal("12500.00")
-    assert points[1].value == Decimal("13200.50")
-
-
-def test_native_missing_columns_yields_no_points():
-    parser = get_parser("native_bank")
-    points, _ = parse_bank_points("foo,bar\n1,2\n", parser.effective_options({}))
-    assert points == []
-
-
-def _confirm_balances(session, master_key, account_id, points):
-    parser = get_parser("generic_bank")
-    return parser.execute(
-        session, account_id,
-        ImportConfirmRequest(account_id=account_id, bank_points=points),
-        master_key,
-    )
-
-
-def test_a_fuller_reimport_wins_over_the_days_the_first_one_carried_forward(session, master_key):
-    """The first import fills every day after its last balance with that balance;
-    inside its own range, the fuller file must win over those carried values."""
-    parser = get_parser("generic_bank")
-    account_id = _account(session, master_key)
-    first, _ = parse_bank_points("snapshot_date,value\n2024-01-31,1000\n", parser.effective_options({}))
-    _confirm_balances(session, master_key, account_id, first)
-
-    fuller, _ = parse_bank_points(
-        "snapshot_date,value\n2024-01-31,1000\n2024-03-31,1500\n", parser.effective_options({})
-    )
-    _confirm_balances(session, master_key, account_id, fuller)
-
-    curve = _curve(session, master_key, account_id)
-    assert curve[date(2024, 2, 15)] == Decimal("1000")
-    assert curve[date(2024, 3, 31)] == Decimal("1500")
-
-
-def test_a_reimport_leaves_the_days_before_its_file_alone(session, master_key):
-    parser = get_parser("generic_bank")
-    account_id = _account(session, master_key)
-    older, _ = parse_bank_points("snapshot_date,value\n2023-06-30,700\n", parser.effective_options({}))
-    _confirm_balances(session, master_key, account_id, older)
-
-    later, _ = parse_bank_points("snapshot_date,value\n2024-01-31,1000\n", parser.effective_options({}))
-    _confirm_balances(session, master_key, account_id, later)
-
-    curve = _curve(session, master_key, account_id)
-    assert curve[date(2023, 6, 30)] == Decimal("700")
-    assert curve[date(2024, 1, 31)] == Decimal("1000")
+def test_balance_files_are_no_longer_offered():
+    """A balance is never typed nor imported: the operations make it."""
+    assert {s.source_id for s in list_parsers() if s.category == "bank"} == {"generic_bank_transactions"}
 
 
 # ─── The transactional path ──────────────────────────────────────────────
-# For the accounts no bank API reaches. Movements, not a balance curve: the
-# `delta` mode above integrates them into end-of-day balances, which destroys
-# the direction the whole point is to keep.
 
 TRANSACTIONS_CSV = textwrap.dedent("""\
     date,amount,label
@@ -195,14 +42,12 @@ def test_transaction_parser_is_registered():
 def test_transaction_parser_detects_its_own_header():
     parser = get_parser("generic_bank_transactions")
     assert parser.detect(TRANSACTIONS_CSV) == 1.0
-    # `snapshot_date` is not a `date` column: the two shapes stay apart.
-    assert parser.detect(NATIVE_CSV) == 0.0
+    assert parser.detect("snapshot_date,value\n2024-01-31,12500.00\n") == 0.0
 
 
 def test_default_mappings_are_published():
     """What the UI reads to know a file needs no mapping step."""
     sources = {s.source_id: s for s in list_parsers()}
-    assert sources["generic_bank"].default_mapping == {"date": "snapshot_date", "balance": "value"}
     assert sources["generic_bank_transactions"].default_mapping == {
         "date": "date", "amount": "amount", "label": "label",
     }
@@ -269,8 +114,7 @@ def test_the_amount_rendering_does_not_change_a_reference():
 def _account(session, master_key: str, currency: str = "EUR") -> str:
     return create_bank_account(
         session,
-        BankAccountCreate(name="Livret A", balance=Decimal("0"),
-                          account_type=BankAccountType.LIVRET_A),
+        BankAccountCreate(name="Livret A", account_type=BankAccountType.LIVRET_A),
         "import_user", master_key,
     ).id
 
@@ -281,6 +125,12 @@ def _confirm(session, master_key, account_id, rows, parser, options=None):
         ImportConfirmRequest(account_id=account_id, bank_transactions=rows, options=options or {}),
         master_key,
     )
+
+
+def _open_with(session, master_key, account_id, amount="2000", day=date(2024, 1, 14)):
+    """Money already on the account: its first operation."""
+    add_entry(session, session.get(BankAccount, account_id),
+              BankEntryRequest(day=day, amount=Decimal(amount), label="Solde de départ"), master_key)
 
 
 def _curve(session, master_key, account_id):
@@ -394,20 +244,17 @@ def test_the_preview_flags_what_is_already_stored(session, master_key):
 
 
 # ─── The curve the movements describe ────────────────────────────────────
-# A statement carries no balance of its own, so the curve is anchored on the
-# balance held before its first line — zero unless the user says otherwise.
 
 
-def test_the_curve_runs_one_point_a_day_from_the_first_movement(session, master_key):
+def test_the_curve_runs_one_point_a_day_from_the_first_operation(session, master_key):
     parser = get_parser("generic_bank_transactions")
     account_id = _account(session, master_key)
+    _open_with(session, master_key, account_id)
     rows, _ = parse_bank_transactions(TRANSACTIONS_CSV, {})
 
-    _confirm(session, master_key, account_id, rows, parser, {"initial_balance": "2000"})
+    _confirm(session, master_key, account_id, rows, parser)
     curve = _curve(session, master_key, account_id)
 
-    # From the eve of the first movement, where the opening balance sits as an
-    # adjustment, to yesterday: the operations draw the whole curve.
     assert min(curve) == date(2024, 1, 14)
     assert max(curve) == date.today() - timedelta(days=1)
     assert curve[date(2024, 1, 14)] == Decimal("2000.00")
@@ -418,25 +265,13 @@ def test_the_curve_runs_one_point_a_day_from_the_first_movement(session, master_
     assert curve[max(curve)] == Decimal("2307.50")
 
 
-def test_the_anchor_shifts_the_whole_curve(session, master_key):
-    parser = get_parser("generic_bank_transactions")
-    rows, _ = parse_bank_transactions(TRANSACTIONS_CSV, {})
-
-    from_zero = _account(session, master_key)
-    _confirm(session, master_key, from_zero, rows, parser)
-    anchored = _account(session, master_key)
-    _confirm(session, master_key, anchored, rows, parser, {"initial_balance": "2000"})
-
-    zero_curve, shifted = _curve(session, master_key, from_zero), _curve(session, master_key, anchored)
-    assert all(shifted[d] - zero_curve[d] == Decimal("2000") for d in zero_curve)
-
-
 def test_the_balance_lands_on_what_the_movements_end_at(session, master_key):
     parser = get_parser("generic_bank_transactions")
     account_id = _account(session, master_key)
+    _open_with(session, master_key, account_id)
     rows, _ = parse_bank_transactions(TRANSACTIONS_CSV, {})
 
-    _confirm(session, master_key, account_id, rows, parser, {"initial_balance": "2000"})
+    _confirm(session, master_key, account_id, rows, parser)
 
     account = session.get(BankAccount, account_id)
     assert Decimal(decrypt_data(account.balance_enc, master_key)) == Decimal("2307.50")
@@ -445,56 +280,33 @@ def test_the_balance_lands_on_what_the_movements_end_at(session, master_key):
 
 
 def test_a_dip_below_zero_is_reported_not_refused(session, master_key):
-    """The usual sign of an anchor left at zero on an account that had money."""
+    """The usual sign of the money already on the account left out."""
     parser = get_parser("generic_bank_transactions")
     account_id = _account(session, master_key)
 
     preview = parser.preview(session, TRANSACTIONS_CSV, {}, account_id=account_id, master_key=master_key)
-
-    assert preview.bank_curve.opening_balance == Decimal("0")
-    assert preview.bank_curve.closing_balance == Decimal("307.50")
-    assert preview.bank_curve.first_negative_date == date(2024, 1, 15)
     assert any("sous zéro" in w for w in preview.warnings)
 
-    priced = parser.preview(session, TRANSACTIONS_CSV, {"initial_balance": "2000"},
-                            account_id=account_id, master_key=master_key)
-    assert priced.bank_curve.first_negative_date is None
-    assert not priced.warnings
+    _open_with(session, master_key, account_id)
+    opened = parser.preview(session, TRANSACTIONS_CSV, {}, account_id=account_id, master_key=master_key)
+    assert not opened.warnings
 
 
-def test_the_next_month_picks_up_where_the_curve_left_off(session, master_key):
-    """Importing month after month: the anchor is the balance already reached."""
+def test_the_next_month_picks_up_where_the_operations_left_off(session, master_key):
     parser = get_parser("generic_bank_transactions")
     account_id = _account(session, master_key)
+    _open_with(session, master_key, account_id)
+    _confirm(session, master_key, account_id, parse_bank_transactions(TRANSACTIONS_CSV, {})[0], parser)
 
-    january, _ = parse_bank_transactions(TRANSACTIONS_CSV, {})
-    _confirm(session, master_key, account_id, january, parser, {"initial_balance": "2000"})
+    february = "date,amount,label\n2024-02-20,-100.00,CARTE\n2024-02-25,300.00,VIREMENT\n"
+    preview = parser.preview(session, february, {}, account_id=account_id, master_key=master_key)
+    assert preview.bank_balance_after == Decimal("2507.50")
+    assert not preview.warnings
 
-    february, _ = parse_bank_transactions(
-        "date,amount,label\n2024-02-20,-100.00,CARTE\n2024-02-25,300.00,VIREMENT\n", {}
-    )
-    preview = parser.preview(
-        session, "date,amount,label\n2024-02-20,-100.00,CARTE\n2024-02-25,300.00,VIREMENT\n",
-        {}, account_id=account_id, master_key=master_key,
-    )
-    # 2307.50 is where January ended — not zero, and not asked for again.
-    assert preview.bank_curve.opening_balance == Decimal("2307.50")
-
-    _confirm(session, master_key, account_id, february, parser)
+    _confirm(session, master_key, account_id, parse_bank_transactions(february, {})[0], parser)
     curve = _curve(session, master_key, account_id)
     assert curve[date(2024, 2, 20)] == Decimal("2207.50")
     assert curve[date(2024, 2, 25)] == Decimal("2507.50")
-
-
-def test_a_given_anchor_still_wins_over_the_stored_one(session, master_key):
-    parser = get_parser("generic_bank_transactions")
-    account_id = _account(session, master_key)
-    rows, _ = parse_bank_transactions(TRANSACTIONS_CSV, {})
-    _confirm(session, master_key, account_id, rows, parser, {"initial_balance": "2000"})
-
-    preview = parser.preview(session, TRANSACTIONS_CSV, {"initial_balance": "50"},
-                             account_id=account_id, master_key=master_key)
-    assert preview.bank_curve.opening_balance == Decimal("50")
 
 
 def test_an_older_statement_still_counts_in_the_balance(session, master_key):

@@ -353,7 +353,7 @@ class TestImportedAccount:
 
         return create_bank_account(
             session,
-            BankAccountCreate(name="Livret A", balance="0",
+            BankAccountCreate(name="Livret A",
                               account_type=BankAccountType.LIVRET_A),
             USER, master_key,
         ).id
@@ -514,7 +514,7 @@ class TestMonthTransactions:
 
         empty = create_bank_account(
             session,
-            BankAccountCreate(name="PEL", balance="0", account_type=BankAccountType.PEL),
+            BankAccountCreate(name="PEL", account_type=BankAccountType.PEL),
             USER, master_key,
         )
         result = list_month_transactions(

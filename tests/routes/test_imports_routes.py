@@ -245,17 +245,3 @@ def test_movements_fill_a_linked_account_up_to_the_bank_history(session):
     assert preview.status_code == 200
     assert preview.json()["bank_history_from"] == "2024-03-01"
     assert preview.json()["covered_by_bank_count"] == 1
-
-
-def test_balances_stay_refused_on_a_linked_account(session):
-    """Points carry no identity to keep them apart from the bank's own curve."""
-    from datetime import date
-
-    client, auth, account_id = _linked_bank_account(session, served_from=date(2024, 3, 1))
-
-    preview = client.post(
-        "/imports/generic_bank/preview",
-        json={"csv_content": "snapshot_date,value\n2024-01-31,100\n", "account_id": account_id},
-        headers=auth,
-    )
-    assert preview.status_code == 409

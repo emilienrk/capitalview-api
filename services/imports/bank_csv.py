@@ -1,36 +1,18 @@
 """
-Generic bank statement CSV import.
+Bank statement CSV import: a file of movements, one row each.
 
 On an account no bank feeds, the operations are the only source of truth
-(docs/bank-ledger.md): a file of movements adds operations, and replaces the
-adjustments and forecasts of its period; a file of balances adds the
-adjustments that make the operations agree with each balance. The balance and
-the curve are then rebuilt from the operations (services/bank_ledger.py).
+(docs/bank-ledger.md): the file adds operations and replaces the forecasts and
+adjustments of its period, then the balance and the curve are rebuilt from the
+operations (services/bank_ledger.py). Money held before the file's first line
+is an operation like any other, typed or imported.
 
-On a linked account, a file of balances draws the curve through
-``import_bank_account_history`` (forward-fill included), and a file of
-movements only fills the days before the bank's history.
+On a linked account, the file only fills the days before the bank's history,
+and its curve is anchored so that it meets the bank's.
 
-The mapped column is the balance on that date; the last row wins for a given
-date. A file of *movements* belongs to ``generic_bank_transactions`` below,
-which accumulates them into the same curve and keeps the operations too.
-
-Mapping: {"date": ..., "balance": ...}.
-
-``generic_bank`` owns that machinery: it reads the ``snapshot_date``/``value``
-shape the app documents without being told, and only needs a mapping when the
-columns are someone else's. ``native_bank`` is the alias it grew out of.
-
-``generic_bank_transactions`` is the other path entirely: it writes
-``BankTransaction`` rows through ``store_transactions``, the same table the sync
-fills, so an account with no Enable Banking connection (a Livret A, a passbook)
-can still say what actually moved on it — and it rebuilds the balance curve
-those movements describe, so such an account ends up with both halves a synced
-one gets. A statement carries no balance of its own, so the curve is anchored on
-``options["initial_balance"]``, the balance held before the file's first line
-(zero unless said otherwise). Importing balances stays the degraded mode: it
-draws a curve through the few dates a balance was recorded on, and nothing
-between them.
+The rows go through ``store_transactions``, the same table the sync fills, so
+an account with no Enable Banking connection (a Livret A, a passbook) can still
+say what actually moved on it.
 """
 
 import hashlib
@@ -45,7 +27,6 @@ from sqlmodel import Session
 from dtos.bank import BankHistoryEntry
 from dtos.imports import (
     BankImportCurvePreview,
-    BankImportPointPreview,
     BankImportReplacedEntry,
     BankImportTransactionPreview,
     ImportConfirmRequest,
@@ -54,7 +35,7 @@ from dtos.imports import (
 )
 from models.currency import BASE_CURRENCY
 from services.banking.transactions import CREDIT, DEBIT, STATUS_BOOKED, canonical_amount
-from services.encryption import encrypt_data, hash_index
+from services.encryption import hash_index
 from services.imports.base import ImportCategory, ImportParser, header_has
 from services.imports.dedup import bank_existing_transaction_refs
 from services.imports.generic_csv import (
@@ -64,168 +45,6 @@ from services.imports.generic_csv import (
     read_rows,
 )
 from services.imports.registry import register
-
-
-def opening_balance(options: dict) -> Decimal:
-    """The balance the curve starts from, before the file's first movement.
-
-    Zero when unset: a passbook opened with the file is the honest default, and
-    the preview shows what the anchor produces so a wrong one is visible.
-    """
-    try:
-        return Decimal(str(options.get("initial_balance") or "0"))
-    except Exception:
-        return Decimal("0")
-
-
-def parse_bank_points(csv_content: str, options: dict) -> tuple[list[BankImportPointPreview], list[str]]:
-    mapping = options.get("mapping") or {}
-    date_format = options.get("date_format")
-    decimal_separator = options.get("decimal_separator")
-
-    lines, warnings = read_rows(csv_content, options)
-
-    parsed: list[tuple] = []
-    skipped = 0
-
-    for line in lines:
-        snapshot_date = parse_generic_date(get_mapped(line, mapping, "date"), date_format)
-        value = parse_generic_decimal(get_mapped(line, mapping, "balance"), decimal_separator)
-        if snapshot_date is None or value is None:
-            skipped += 1
-            continue
-        parsed.append((snapshot_date.date(), value))
-
-    if skipped:
-        warnings.append(f"{skipped} ligne(s) illisible(s) ignorée(s)")
-
-    parsed.sort(key=lambda p: p[0])
-
-    points: dict = {}
-    for d, value in parsed:
-        points[d] = value  # last row wins for a given date
-
-    return (
-        [BankImportPointPreview(snapshot_date=d, value=v) for d, v in sorted(points.items())],
-        warnings,
-    )
-
-
-class _BankHistoryParser(ImportParser):
-    """Shared preview/execute for bank parsers; subclasses supply the effective options."""
-
-    category = ImportCategory.BANK
-
-    def effective_options(self, options: dict) -> dict:
-        """Options actually handed to :func:`parse_bank_points`."""
-        return options
-
-    def preview(
-        self,
-        session: Session,
-        csv_content: str,
-        options: dict,
-        *,
-        account_id: str | None = None,
-        master_key: str | None = None,
-    ) -> ImportPreviewResponse:
-        points, warnings = parse_bank_points(csv_content, self.effective_options(options))
-
-        # A point the operations already agree with records nothing: that is
-        # what a re-imported file looks like.
-        account = _ledger_account(session, account_id, master_key)
-        if account is not None:
-            from services.bank_ledger import point_adjustments
-
-            entries = [BankHistoryEntry(snapshot_date=p.snapshot_date, value=p.value) for p in points]
-            for point, gap in zip(points, point_adjustments(session, account, entries, master_key)):
-                point.is_duplicate = gap == 0
-
-        return ImportPreviewResponse(
-            source_id=self.source_id,
-            category=self.category.value,
-            total_rows=len(points),
-            duplicates_count=sum(1 for p in points if p.is_duplicate),
-            warnings=warnings,
-            bank_points=points,
-        )
-
-    def execute(
-        self,
-        session: Session,
-        account_id: str,
-        payload: ImportConfirmRequest,
-        master_key: str,
-    ) -> ImportConfirmResponse:
-        from models.bank import BankAccount
-        from services.bank import import_bank_account_history
-
-        account = session.get(BankAccount, account_id)
-        points = payload.bank_points or []
-
-        entries = [
-            BankHistoryEntry(snapshot_date=p.snapshot_date, value=p.value)
-            for p in points
-        ]
-        if _ledger_account(session, account_id, master_key) is not None:
-            from services.bank_ledger import import_balance_points
-
-            written = import_balance_points(session, account, entries, master_key)
-            return ImportConfirmResponse(imported_count=written, skipped_duplicates=len(entries) - written)
-        written = import_bank_account_history(
-            session, account, entries, master_key,
-            overwrite=payload.overwrite, replace_range=True,
-        )
-        return ImportConfirmResponse(imported_count=written)
-
-
-@register
-class GenericBankParser(_BankHistoryParser):
-    """Any bank statement CSV, converted into a balance curve.
-
-    Falls back on the shape CapitalView documents, and recognises it, so a
-    well-formed file goes straight to the preview and the mapping is only
-    asked for when the columns are actually someone else's.
-    """
-
-    source_id = "generic_bank"
-    label = "Soldes — relevé bancaire (vos colonnes)"
-    file_hint = "Trace la courbe du compte. Un solde par date, ou des mouvements cumulés depuis un solde de départ."
-    supports_mapping = True
-    default_mapping = {"date": "snapshot_date", "balance": "value"}
-    template_csv = (
-        "snapshot_date,value\n"
-        "2024-01-31,12500.00\n"
-        "2024-02-29,13200.50\n"
-        "2024-03-31,11800.00\n"
-    )
-
-    def detect(self, csv_content: str) -> float:
-        return 1.0 if header_has(csv_content, "snapshot_date", "value") else 0.0
-
-    def effective_options(self, options: dict) -> dict:
-        if options.get("mapping"):
-            return options
-        # No mapping given: read the documented shape.
-        return {**options, "mapping": self.default_mapping}
-
-
-@register
-class NativeBankParser(GenericBankParser):
-    """Alias kept for the files and saved imports that still name it.
-
-    ``generic_bank`` reads this shape unaided now; nothing offers this source
-    any more.
-    """
-
-    source_id = "native_bank"
-    label = "Soldes — format CapitalView"
-    file_hint = "Trace la courbe du compte. Deux colonnes : snapshot_date, value."
-    supports_mapping = False
-    listed = False
-
-    def detect(self, csv_content: str) -> float:
-        return 0.0  # `generic_bank` owns the shape now; two 1.0 would be a coin toss
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +178,15 @@ def curve_preview(entries: list[BankHistoryEntry], opening: Decimal) -> BankImpo
     )
 
 
+def _warn_below_zero(curve: BankImportCurvePreview | None, warnings: list[str]) -> None:
+    if curve and curve.first_negative_date:
+        warnings.append(
+            f"Le compte passe sous zéro le {curve.first_negative_date.strftime('%d/%m/%Y')} : "
+            f"il manque sans doute des opérations plus anciennes, comme l'argent déjà "
+            f"présent sur le compte avant ce relevé."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Accounts a bank already feeds
 # ---------------------------------------------------------------------------
@@ -482,14 +310,11 @@ def _account_currency(session: Session, account_id: str, master_key: str) -> str
 
 @register
 class GenericBankTransactionsParser(ImportParser):
-    """A bank statement CSV read as movements, not as a balance curve.
+    """A bank statement CSV read as movements.
 
-    For the accounts no bank API reaches — a Livret A, a passbook. It writes
-    both halves a synced account gets: the movements themselves, through
-    `store_transactions` (whose two deduplication levels make a re-import a
-    no-op), and the balance curve they describe, anchored on the balance held
-    before the first one. A statement carries no balance of its own, so that
-    anchor is asked for — zero unless said otherwise.
+    For the accounts no bank API reaches — a Livret A, a passbook — it stores
+    the movements through `store_transactions`, whose two deduplication levels
+    make a re-import a no-op, and the balance follows from them.
 
     On a bank-linked account it fills what the bank never served, and only
     that: the rows the bank already holds are left out, and the curve is
@@ -525,7 +350,7 @@ class GenericBankTransactionsParser(ImportParser):
         rows, warnings = parse_bank_transactions(csv_content, self._options_for(session, options, account_id, master_key))
 
         if _ledger_account(session, account_id, master_key) is not None:
-            return self._ledger_preview(session, account_id, master_key, rows, options, warnings)
+            return self._ledger_preview(session, account_id, master_key, rows, warnings)
 
         coverage = None
         covered = 0
@@ -538,14 +363,9 @@ class GenericBankTransactionsParser(ImportParser):
             rows = [row for row, _ in kept]
         duplicates = sum(1 for row in rows if row.is_duplicate)
 
-        opening = self._opening_for(session, options, rows, account_id, master_key, coverage)
+        opening = self._opening_for(session, rows, account_id, master_key, coverage)
         curve = curve_preview(transactions_to_curve(rows, opening, _curve_end(coverage)), opening)
-        if curve and curve.first_negative_date:
-            warnings.append(
-                f"Avec ce solde de départ, le compte passe sous zéro le "
-                f"{curve.first_negative_date.strftime('%d/%m/%Y')} : c'est sans doute "
-                f"le solde d'avant la première opération qu'il faut corriger."
-            )
+        _warn_below_zero(curve, warnings)
 
         return ImportPreviewResponse(
             source_id=self.source_id,
@@ -578,7 +398,7 @@ class GenericBankTransactionsParser(ImportParser):
             session, account_id, master_key, payload.bank_transactions or []
         )
         inserted, updated, skipped = store_transactions(session, master_key, account_id, _raws(kept, currency))
-        self._write_curve(session, account_id, [row for row, _ in kept], payload.options, master_key, coverage)
+        self._write_curve(session, account_id, [row for row, _ in kept], master_key, coverage)
         return ImportConfirmResponse(
             imported_count=inserted,
             # Already there, under the same reference: the re-import case.
@@ -592,7 +412,6 @@ class GenericBankTransactionsParser(ImportParser):
         account_id: str,
         master_key: str,
         rows: list[BankImportTransactionPreview],
-        options: dict,
         warnings: list[str],
     ) -> ImportPreviewResponse:
         """What the file does to an account whose operations are its truth: each
@@ -618,12 +437,10 @@ class GenericBankTransactionsParser(ImportParser):
         replaced: list[BankImportReplacedEntry] = []
         balance_after = None
         last = None
-        opening = opening_balance(options)
+        opening = Decimal("0")
         if rows:
             first, last = rows[0].day, rows[-1].day
-            stored_opening = balance_at(session, account, first - timedelta(days=1), master_key)
-            if options.get("initial_balance") is None:
-                opening = stored_opening
+            opening = balance_at(session, account, first - timedelta(days=1), master_key)
             synthetic = synthetic_between(session, account, master_key, first, last)
             replaced = [
                 BankImportReplacedEntry(
@@ -637,16 +454,9 @@ class GenericBankTransactionsParser(ImportParser):
                 balance_at(session, account, last, master_key)
                 - sum((e.amount for e in replaced), Decimal("0"))
                 + added
-                + (opening - stored_opening)
             )
 
-        curve = curve_preview(transactions_to_curve(rows, opening), opening)
-        if curve and curve.first_negative_date:
-            warnings.append(
-                f"Avec ce solde de départ, le compte passe sous zéro le "
-                f"{curve.first_negative_date.strftime('%d/%m/%Y')} : c'est sans doute "
-                f"le solde d'avant la première opération qu'il faut corriger."
-            )
+        _warn_below_zero(curve_preview(transactions_to_curve(rows, opening), opening), warnings)
         return ImportPreviewResponse(
             source_id=self.source_id,
             category=self.category.value,
@@ -654,7 +464,6 @@ class GenericBankTransactionsParser(ImportParser):
             duplicates_count=sum(1 for row in rows if row.is_duplicate),
             warnings=warnings,
             bank_transactions=rows,
-            bank_curve=curve,
             bank_replaced=replaced,
             bank_balance_after=balance_after,
             bank_balance_after_date=last,
@@ -664,9 +473,8 @@ class GenericBankTransactionsParser(ImportParser):
         self, session: Session, account_id: str, payload: ImportConfirmRequest, master_key: str
     ) -> ImportConfirmResponse:
         """Replace the adjustments and forecasts of the file's period, store its
-        operations, record a corrected opening balance as an adjustment, and
-        rebuild the balance from the whole."""
-        from services.bank_ledger import adjust_to, drop_synthetic, ensure_ledgers, rebuild_from_operations
+        operations, and rebuild the balance from the whole."""
+        from services.bank_ledger import drop_synthetic, ensure_ledgers, rebuild_from_operations
         from services.banking.transactions import store_transactions
 
         account = _ledger_account(session, account_id, master_key)
@@ -683,9 +491,6 @@ class GenericBankTransactionsParser(ImportParser):
         inserted, updated, skipped = store_transactions(
             session, master_key, account_id, _raws(kept, _account_currency(session, account_id, master_key))
         )
-        if payload.options.get("initial_balance") is not None:
-            adjust_to(session, account, first - timedelta(days=1), opening_balance(payload.options), master_key)
-            session.commit()
         # The movements already hold what the linked cashflows would add.
         account.balance_updated_at = date.today()
         session.add(account)
@@ -717,66 +522,39 @@ class GenericBankTransactionsParser(ImportParser):
         session: Session,
         account_id: str,
         rows: list[BankImportTransactionPreview],
-        options: dict,
         master_key: str,
         coverage: BankCoverage | None,
     ) -> None:
-        """Write the balance curve the movements describe, and the balance they end on.
+        """Write the curve the movements describe on a linked account, up to the
+        eve of the bank's history. The balance stays the bank's.
 
         Only the window the file covers is touched — `replace_history_window`,
-        the same call the bank sync uses — so a manual snapshot outside it
-        survives, and the file takes precedence inside it.
+        the same call the bank sync uses — and the file takes precedence inside it.
         """
         from models.bank import BankAccount
-        from services.bank import (
-            get_bank_account_history,
-            replace_history_window,
-        )
+        from services.bank import replace_history_window
 
-        opening = self._opening_for(session, options, rows, account_id, master_key, coverage)
+        opening = self._opening_for(session, rows, account_id, master_key, coverage)
         entries = transactions_to_curve(rows, opening, _curve_end(coverage))
         account = session.get(BankAccount, account_id)
         if not entries or account is None:
             return
-
-        # Read before writing: the account's last known day tells whether this
-        # file is the most recent word on the balance or an older one.
-        last_known = get_bank_account_history(session, account_id, master_key)
-        latest_known_date = last_known[-1].snapshot_date if last_known else None
-
         replace_history_window(
             session, account, entries, master_key, entries[0].snapshot_date, entries[-1].snapshot_date
         )
 
-        # An old statement rebuilds its own stretch of the curve but says nothing
-        # about today: overwriting the balance with it would walk the account
-        # back in time. On a linked account the balance is the bank's, always.
-        if coverage is None and (latest_known_date is None or entries[-1].snapshot_date >= latest_known_date):
-            account.balance_enc = encrypt_data(str(entries[-1].value), master_key)
-            # The movements already contain what the linked cashflows would add:
-            # stamping today stops them being applied on top.
-            account.balance_updated_at = date.today()
-            session.add(account)
-            session.commit()
-
     def _opening_for(
         self,
         session: Session,
-        options: dict,
         rows: list[BankImportTransactionPreview],
         account_id: str | None,
         master_key: str | None,
         coverage: BankCoverage | None = None,
     ) -> Decimal:
-        """The balance the curve starts from — asked for, met with the bank's
-        curve, or picked up where the account's own history left off.
-
-        Importing month after month, the anchor is never zero after the first
-        file: it is the balance the account already stood at the day before this
-        one opens. Re-typing it every time is how a curve gets a false step.
-        """
-        if options.get("initial_balance") is not None or not rows or not (account_id and master_key):
-            return opening_balance(options)
+        """The balance the curve starts from: met with the bank's curve, or
+        picked up where the account's own history left off."""
+        if not rows or not (account_id and master_key):
+            return Decimal("0")
 
         if coverage is not None and coverage.starts is not None:
             joined = _bank_balance_before(session, account_id, coverage.starts, master_key)

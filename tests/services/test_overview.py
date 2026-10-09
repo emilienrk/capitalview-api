@@ -219,22 +219,30 @@ class TestBalanceAtADate:
     def _bank_account(self, session, master_key, user_uuid):
         from unittest.mock import patch
 
-        from dtos.bank import BankAccountCreate
+        from datetime import date
+
+        from dtos.bank import BankAccountCreate, BankEntryRequest
+        from models.bank import BankAccount
         from models.enums import BankAccountType
         from services.bank import create_bank_account
+        from services.bank_ledger import add_entry
 
         with patch("services.bank.has_exchange_rate", return_value=True):
-            return create_bank_account(
+            created = create_bank_account(
                 session,
                 BankAccountCreate(
                     name="Compte courant",
-                    balance=Decimal("300"),
                     account_type=BankAccountType.CHECKING,
                     currency="EUR",
                 ),
                 user_uuid,
                 master_key,
             )
+        add_entry(
+            session, session.get(BankAccount, created.id),
+            BankEntryRequest(day=date(2026, 1, 2), amount=Decimal("300")), master_key,
+        )
+        return created
 
     def test_a_dated_balance_does_not_raise_when_an_account_exists(self, session, master_key):
         from datetime import date

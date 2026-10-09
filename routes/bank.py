@@ -1,5 +1,6 @@
 """Bank account routes."""
 
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,13 +14,12 @@ from dtos import (
     BankAccountUpdate,
     BankAccountResponse,
     BankSummaryResponse,
-    BankHistoryImportRequest,
+    BankBalanceResponse,
     BankEntryRequest,
     BankEntryResponse,
     SavingsInterestResponse,
 )
 from services.bank import (
-    LedgerBalanceError,
     LinkedAccountFieldLockedError,
     UnconvertibleCurrencyError,
     create_bank_account,
@@ -30,7 +30,6 @@ from services.bank import (
     get_bank_account_history,
     get_all_bank_accounts_history,
     delete_bank_account_history,
-    import_bank_account_history,
     confirm_up_to_date,
 )
 from dtos.transaction import AccountHistorySnapshotResponse
@@ -110,39 +109,6 @@ def delete_account_history(
     delete_bank_account_history(session, account_id, master_key)
 
 
-@router.post("/accounts/{account_id}/history/import", status_code=200)
-def import_account_history(
-    account_id: str,
-    payload: BankHistoryImportRequest,
-    current_user: Annotated[User, Depends(get_current_user)],
-    master_key: Annotated[str, Depends(get_master_key)],
-    session: Session = Depends(get_session),
-) -> dict:
-    """Import historical balance snapshots for a bank account.
-
-    Entries: a list of {snapshot_date, value} pairs.
-    On an account no bank feeds, each becomes an adjustment operation. On a
-    linked one, overwrite=True deletes all existing history before import;
-    overwrite=False (default) preserves existing rows.
-    """
-    from models import BankAccount as BankAccountModel
-
-    if not get_bank_account(session, account_id, current_user.uuid, master_key):
-        raise HTTPException(status_code=404, detail="Account not found")
-
-    from services.bank_ledger import import_balance_points, is_synced
-
-    account = session.get(BankAccountModel, account_id)
-    if not is_synced(session, account, master_key):
-        # The operations are this account's truth: each balance becomes the
-        # adjustment that agrees with it (docs/bank-ledger.md).
-        return {"inserted": import_balance_points(session, account, payload.entries, master_key)}
-    count = import_bank_account_history(
-        session, account, payload.entries, master_key, overwrite=payload.overwrite
-    )
-    return {"inserted": count}
-
-
 @router.post("/accounts/{account_id}/up-to-date", status_code=204)
 def confirm_account_up_to_date(
     account_id: str,
@@ -207,7 +173,7 @@ def update_account(
         return update_bank_account(session, account, account_data, master_key)
     except UnconvertibleCurrencyError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except (LinkedAccountFieldLockedError, LedgerBalanceError) as exc:
+    except LinkedAccountFieldLockedError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         # Interest terms the account cannot carry once merged with its own.
@@ -236,17 +202,36 @@ def add_account_entry(
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
-    dry_run: bool = False,
 ):
-    """An operation typed by hand, or a balance read on a statement, on an
-    account no bank feeds (docs/bank-ledger.md)."""
+    """An operation typed by hand on an account no bank feeds (docs/bank-ledger.md)."""
     from models import BankAccount as BankAccountModel
     from services.bank_ledger import SyncedAccountError, add_entry
 
     if not get_bank_account(session, account_id, current_user.uuid, master_key):
         raise HTTPException(status_code=404, detail="Account not found")
     try:
-        return add_entry(session, session.get(BankAccountModel, account_id), entry, master_key, dry_run)
+        return add_entry(session, session.get(BankAccountModel, account_id), entry, master_key)
+    except SyncedAccountError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.get("/accounts/{account_id}/balance", response_model=BankBalanceResponse)
+def get_account_balance(
+    account_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+    day: date | None = None,
+):
+    """What the operations of an account no bank feeds add up to, at the end of
+    `day` (today by default) and today."""
+    from models import BankAccount as BankAccountModel
+    from services.bank_ledger import SyncedAccountError, balance_on
+
+    if not get_bank_account(session, account_id, current_user.uuid, master_key):
+        raise HTTPException(status_code=404, detail="Account not found")
+    try:
+        return balance_on(session, session.get(BankAccountModel, account_id), day or date.today(), master_key)
     except SyncedAccountError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 

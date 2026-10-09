@@ -1,5 +1,5 @@
 import uuid as uuid_mod
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -8,19 +8,18 @@ from sqlmodel import Session, select
 from models.account_history import AccountHistory
 from models.bank import BankAccount
 from models.enums import AccountCategory, BankAccountType
-from dtos.bank import BankAccountCreate, BankAccountUpdate, BankHistoryEntry
+from dtos.bank import BankAccountCreate, BankAccountUpdate, BankEntryRequest, BankHistoryEntry
 from services.bank import (
-    LedgerBalanceError,
     create_bank_account,
     delete_bank_account,
     delete_bank_account_history,
     UnconvertibleCurrencyError,
     get_bank_account,
     get_user_bank_accounts,
-    import_bank_account_history,
     replace_history_window,
     update_bank_account,
 )
+from services.bank_ledger import add_entry
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 
@@ -53,6 +52,16 @@ def sqlite_pg_insert(monkeypatch):
     monkeypatch.setattr("services.bank.pg_insert", _fake)
 
 
+def _opened(session: Session, user_uuid: str, master_key: str, amount: str, **fields):
+    """An account with money on it: its first operation, as nobody types a balance."""
+    created = create_bank_account(session, BankAccountCreate(**fields), user_uuid, master_key)
+    add_entry(
+        session, session.get(BankAccount, created.id),
+        BankEntryRequest(day=date(2025, 1, 2), amount=Decimal(amount)), master_key,
+    )
+    return created
+
+
 def _get_history_rows(session: Session, account_id_bidx: str) -> list[AccountHistory]:
     return session.exec(
         select(AccountHistory)
@@ -72,27 +81,26 @@ def test_create_bank_account(session: Session, master_key: str):
     user_uuid = "user_1"
     data = BankAccountCreate(
         name="Main Checking",
-        balance=Decimal("1500.50"),
         account_type=BankAccountType.CHECKING,
         institution_name="Big Bank",
         identifier="FR76"
     )
     resp = create_bank_account(session, data, user_uuid, master_key)
     assert resp.name == "Main Checking"
-    assert resp.balance == Decimal("1500.50")
+    assert resp.balance == Decimal("0")
     assert resp.account_type == BankAccountType.CHECKING
     assert resp.institution_name == "Big Bank"
     assert resp.identifier == "FR76"
     db_acc = session.get(BankAccount, resp.id)
     assert db_acc is not None
     assert db_acc.user_uuid_bidx == hash_index(user_uuid, master_key)
-    assert db_acc.balance_enc != "1500.50"
+    assert db_acc.balance_enc != "0"
 
 
 def test_get_user_bank_accounts(session: Session, master_key: str):
     user_uuid = "user_1"
-    create_bank_account(session, BankAccountCreate(name="Acc 1", balance=Decimal("100"), account_type=BankAccountType.CHECKING), user_uuid, master_key)
-    create_bank_account(session, BankAccountCreate(name="Acc 2", balance=Decimal("200"), account_type=BankAccountType.SAVINGS), user_uuid, master_key)
+    _opened(session, user_uuid, master_key, "100", name="Acc 1", account_type=BankAccountType.CHECKING)
+    _opened(session, user_uuid, master_key, "200", name="Acc 2", account_type=BankAccountType.SAVINGS)
     summary = get_user_bank_accounts(session, user_uuid, master_key)
     assert len(summary.accounts) == 2
     assert summary.total_balance == Decimal("300")
@@ -100,7 +108,7 @@ def test_get_user_bank_accounts(session: Session, master_key: str):
 
 def test_get_bank_account(session: Session, master_key: str):
     user_uuid = "user_1"
-    created = create_bank_account(session, BankAccountCreate(name="My Acc", balance=Decimal("0"), account_type=BankAccountType.CHECKING), user_uuid, master_key)
+    created = create_bank_account(session, BankAccountCreate(name="My Acc", account_type=BankAccountType.CHECKING), user_uuid, master_key)
     fetched = get_bank_account(session, created.id, user_uuid, master_key)
     assert fetched.name == "My Acc"
     assert get_bank_account(session, created.id, "user_2", master_key) is None
@@ -109,27 +117,18 @@ def test_get_bank_account(session: Session, master_key: str):
 
 def test_update_bank_account(session: Session, master_key: str):
     user_uuid = "user_1"
-    created = create_bank_account(session, BankAccountCreate(name="Old Name", balance=Decimal("100"), account_type=BankAccountType.CHECKING), user_uuid, master_key)
+    created = _opened(session, user_uuid, master_key, "100", name="Old Name", account_type=BankAccountType.CHECKING)
     db_acc = session.get(BankAccount, created.id)
-    updated = update_bank_account(session, db_acc, BankAccountUpdate(name="New Name", balance=Decimal("100"), institution_name="New Inst", identifier="New ID"), master_key)
+    updated = update_bank_account(session, db_acc, BankAccountUpdate(name="New Name", institution_name="New Inst", identifier="New ID"), master_key)
     assert updated.name == "New Name"
     assert updated.balance == Decimal("100")
     assert updated.institution_name == "New Inst"
     assert updated.identifier == "New ID"
 
 
-def test_a_typed_balance_is_refused_on_an_unsynced_account(session: Session, master_key: str):
-    """Its balance is the sum of its operations: a statement's balance goes
-    through /entries, as an adjustment (docs/bank-ledger.md)."""
-    created = create_bank_account(session, BankAccountCreate(name="Livret", balance=Decimal("100"), account_type=BankAccountType.CHECKING), "user_1", master_key)
-    db_acc = session.get(BankAccount, created.id)
-    with pytest.raises(LedgerBalanceError):
-        update_bank_account(session, db_acc, BankAccountUpdate(balance=Decimal("500")), master_key)
-
-
 def test_delete_bank_account(session: Session, master_key: str):
     user_uuid = "user_1"
-    created = create_bank_account(session, BankAccountCreate(name="Del", balance=Decimal("0"), account_type=BankAccountType.CHECKING), user_uuid, master_key)
+    created = create_bank_account(session, BankAccountCreate(name="Del", account_type=BankAccountType.CHECKING), user_uuid, master_key)
     account_id_bidx = hash_index(created.id, master_key)
     user_bidx = hash_index(user_uuid, master_key)
     session.add(AccountHistory(
@@ -159,7 +158,7 @@ def test_delete_bank_account_history(session: Session, master_key: str):
     user_uuid = "user_del_hist"
     acc = create_bank_account(
         session,
-        BankAccountCreate(name="Del Hist", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        BankAccountCreate(name="Del Hist", account_type=BankAccountType.CHECKING),
         user_uuid,
         master_key,
     )
@@ -182,179 +181,6 @@ def test_delete_bank_account_history(session: Session, master_key: str):
     deleted = delete_bank_account_history(session, acc.id, master_key)
     assert deleted == 3
     assert len(_get_history_rows(session, account_id_bidx)) == 0
-
-
-def test_import_bank_account_history_empty_returns_zero(session: Session, master_key: str, sqlite_pg_insert):
-    """Importing an empty list does nothing and returns 0."""
-    user_uuid = "user_import_empty"
-    acc = create_bank_account(
-        session,
-        BankAccountCreate(name="Empty Import", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
-        user_uuid,
-        master_key,
-    )
-    db_acc = session.get(BankAccount, acc.id)
-    assert import_bank_account_history(session, db_acc, [], master_key) == 0
-
-
-def test_import_bank_account_history_fills_gaps(session: Session, master_key: str, sqlite_pg_insert):
-    """Gaps between known entries are forward-filled with the last known value."""
-    user_uuid = "user_import_gaps"
-    acc = create_bank_account(
-        session,
-        BankAccountCreate(name="Gap Fill", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
-        user_uuid,
-        master_key,
-    )
-    db_acc = session.get(BankAccount, acc.id)
-    account_id_bidx = hash_index(acc.id, master_key)
-
-    entries = [
-        BankHistoryEntry(snapshot_date=date(2025, 1, 1), value=Decimal("1000")),
-        BankHistoryEntry(snapshot_date=date(2025, 1, 5), value=Decimal("2000")),
-    ]
-    count = import_bank_account_history(session, db_acc, entries, master_key)
-    assert count > 0
-
-    rows = _get_history_rows(session, account_id_bidx)
-    # Jan 1 entry
-    assert _value_on_date(rows, date(2025, 1, 1), master_key) == Decimal("1000")
-    # Jan 2-4: forward-filled from Jan 1
-    assert _value_on_date(rows, date(2025, 1, 2), master_key) == Decimal("1000")
-    assert _value_on_date(rows, date(2025, 1, 4), master_key) == Decimal("1000")
-    # Jan 5 entry
-    assert _value_on_date(rows, date(2025, 1, 5), master_key) == Decimal("2000")
-    # Jan 6+: forward-filled from Jan 5
-    assert _value_on_date(rows, date(2025, 1, 6), master_key) == Decimal("2000")
-
-
-def test_import_bank_account_history_zeros_before_first_entry(session: Session, master_key: str, sqlite_pg_insert):
-    """Days between account creation and first entry are set to 0."""
-    user_uuid = "user_import_zeros"
-    acc = create_bank_account(
-        session,
-        BankAccountCreate(name="Zeros Before", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
-        user_uuid,
-        master_key,
-    )
-    # Backdate account creation so fill_start < first_entry_date
-    db_acc = session.get(BankAccount, acc.id)
-    db_acc.created_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
-    session.add(db_acc)
-    session.commit()
-    session.refresh(db_acc)
-
-    account_id_bidx = hash_index(acc.id, master_key)
-    entries = [BankHistoryEntry(snapshot_date=date(2025, 1, 10), value=Decimal("500"))]
-    import_bank_account_history(session, db_acc, entries, master_key)
-
-    rows = _get_history_rows(session, account_id_bidx)
-    assert _value_on_date(rows, date(2025, 1, 1), master_key) == Decimal("0")
-    assert _value_on_date(rows, date(2025, 1, 9), master_key) == Decimal("0")
-    assert _value_on_date(rows, date(2025, 1, 10), master_key) == Decimal("500")
-    assert _value_on_date(rows, date(2025, 1, 11), master_key) == Decimal("500")
-
-
-def test_import_bank_account_history_does_not_zero_a_gap_it_did_not_open(
-    session: Session, master_key: str, sqlite_pg_insert
-):
-    """A partial import must not draw a fall to zero over days it says nothing about.
-
-    Zero before the first entry is only the truth for an account with no history
-    at all. With a known balance behind the range, the gap carries that balance.
-    """
-    user_uuid = "user_import_gap"
-    acc = create_bank_account(
-        session,
-        BankAccountCreate(name="Gap", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
-        user_uuid,
-        master_key,
-    )
-    db_acc = session.get(BankAccount, acc.id)
-    db_acc.created_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
-    session.add(db_acc)
-    session.commit()
-    session.refresh(db_acc)
-
-    account_id_bidx = hash_index(acc.id, master_key)
-    # What a bank sync leaves behind: a closed window, and nothing after it.
-    replace_history_window(
-        session, db_acc,
-        [
-            BankHistoryEntry(snapshot_date=date(2025, 1, 4), value=Decimal("407")),
-            BankHistoryEntry(snapshot_date=date(2025, 1, 5), value=Decimal("407")),
-        ],
-        master_key, date(2025, 1, 4), date(2025, 1, 5),
-    )
-    # Then an import whose own range starts much later.
-    import_bank_account_history(
-        session, db_acc,
-        [BankHistoryEntry(snapshot_date=date(2025, 1, 20), value=Decimal("1300"))],
-        master_key,
-    )
-
-    rows = _get_history_rows(session, account_id_bidx)
-    assert _value_on_date(rows, date(2025, 1, 5), master_key) == Decimal("407")
-    # The days in between are unknown, not empty: they carry the balance in.
-    assert _value_on_date(rows, date(2025, 1, 12), master_key) == Decimal("407")
-    assert _value_on_date(rows, date(2025, 1, 19), master_key) == Decimal("407")
-    assert _value_on_date(rows, date(2025, 1, 20), master_key) == Decimal("1300")
-
-
-def test_import_bank_account_history_entries_before_account_creation(session: Session, master_key: str, sqlite_pg_insert):
-    """Entries dated before account creation extend fill_start backwards."""
-    user_uuid = "user_import_before"
-    acc = create_bank_account(
-        session,
-        BankAccountCreate(name="Before Creation", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
-        user_uuid,
-        master_key,
-    )
-    # Account created today; entry is from 2024 — fill_start must go back to 2024
-    db_acc = session.get(BankAccount, acc.id)
-    account_id_bidx = hash_index(acc.id, master_key)
-
-    entries = [BankHistoryEntry(snapshot_date=date(2024, 6, 1), value=Decimal("3000"))]
-    import_bank_account_history(session, db_acc, entries, master_key)
-
-    rows = _get_history_rows(session, account_id_bidx)
-    assert _value_on_date(rows, date(2024, 6, 1), master_key) == Decimal("3000")
-    assert _value_on_date(rows, date(2024, 6, 2), master_key) == Decimal("3000")
-
-
-def test_import_bank_account_history_overwrite(session: Session, master_key: str, sqlite_pg_insert):
-    """overwrite=True deletes existing rows then inserts fresh ones."""
-    user_uuid = "user_import_ow"
-    acc = create_bank_account(
-        session,
-        BankAccountCreate(name="Overwrite", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
-        user_uuid,
-        master_key,
-    )
-    db_acc = session.get(BankAccount, acc.id)
-    account_id_bidx = hash_index(acc.id, master_key)
-    user_bidx = hash_index(user_uuid, master_key)
-
-    # Insert stale rows that overwrite should clear
-    for d in [date(2025, 3, 1), date(2025, 3, 2)]:
-        session.add(AccountHistory(
-            uuid=str(uuid_mod.uuid4()),
-            user_uuid_bidx=user_bidx,
-            account_id_bidx=account_id_bidx,
-            account_type=AccountCategory.BANK,
-            snapshot_date=d,
-            total_value_enc=encrypt_data("9999", master_key),
-            total_invested_enc=encrypt_data("9999", master_key),
-        ))
-    session.commit()
-
-    entries = [BankHistoryEntry(snapshot_date=date(2025, 3, 1), value=Decimal("1234"))]
-    import_bank_account_history(session, db_acc, entries, master_key, overwrite=True)
-
-    rows = _get_history_rows(session, account_id_bidx)
-    # Old value (9999) must be replaced with new (1234)
-    assert _value_on_date(rows, date(2025, 3, 1), master_key) == Decimal("1234")
-    assert _value_on_date(rows, date(2025, 3, 2), master_key) == Decimal("1234")
 
 
 # ---------------------------------------------------------------------------
@@ -380,11 +206,10 @@ def _seed_snapshot(session: Session, account, master_key: str, day: date, value:
 def test_replace_history_window_touches_nothing_outside_the_window(
     session: Session, master_key: str, sqlite_pg_insert
 ):
-    """The whole reason this function exists: import_bank_account_history's
-    overwrite=True would have deleted every row below."""
+    """The rows before and after the window are left as they are."""
     acc = create_bank_account(
         session,
-        BankAccountCreate(name="Windowed", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        BankAccountCreate(name="Windowed", account_type=BankAccountType.CHECKING),
         "user_window",
         master_key,
     )
@@ -423,7 +248,7 @@ def test_replace_history_window_never_writes_today_or_later(
 ):
     acc = create_bank_account(
         session,
-        BankAccountCreate(name="Yesterday", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        BankAccountCreate(name="Yesterday", account_type=BankAccountType.CHECKING),
         "user_yesterday",
         master_key,
     )
@@ -455,7 +280,7 @@ def test_replace_history_window_clears_a_window_it_has_no_entries_for(
     built on a movement the bank later withdrew disappears."""
     acc = create_bank_account(
         session,
-        BankAccountCreate(name="Cleared", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        BankAccountCreate(name="Cleared", account_type=BankAccountType.CHECKING),
         "user_cleared",
         master_key,
     )
@@ -479,23 +304,11 @@ def test_the_total_adds_up_in_euros_not_across_currencies(session: Session, mast
 
     user_uuid = "user_1"
 
-    create_bank_account(
-        session,
-        BankAccountCreate(name="Courant", balance=Decimal("100"), account_type=BankAccountType.CHECKING),
-        user_uuid,
-        master_key,
-    )
+    _opened(session, user_uuid, master_key, "100", name="Courant", account_type=BankAccountType.CHECKING)
     with patch("services.bank.has_exchange_rate", return_value=True):
-        create_bank_account(
-            session,
-            BankAccountCreate(
-                name="Dollars",
-                balance=Decimal("200"),
-                account_type=BankAccountType.CHECKING,
-                currency="USD",
-            ),
-            user_uuid,
-            master_key,
+        _opened(
+            session, user_uuid, master_key, "200",
+            name="Dollars", account_type=BankAccountType.CHECKING, currency="USD",
         )
 
     with patch("services.bank.has_exchange_rate", return_value=True):
@@ -520,7 +333,6 @@ def test_a_currency_with_no_published_rate_is_refused(session: Session, master_k
                 session,
                 BankAccountCreate(
                     name="Exotique",
-                    balance=Decimal("10"),
                     account_type=BankAccountType.CHECKING,
                     currency="XAF",
                 ),
@@ -539,9 +351,7 @@ def test_euros_never_need_a_rate_lookup(session: Session, master_key: str):
     with patch("services.market._get_market_info_internal", _fail):
         account = create_bank_account(
             session,
-            BankAccountCreate(
-                name="Courant", balance=Decimal("10"), account_type=BankAccountType.CHECKING
-            ),
+            BankAccountCreate(name="Courant", account_type=BankAccountType.CHECKING),
             "user_1",
             master_key,
         )
@@ -555,16 +365,9 @@ def test_the_total_is_withheld_when_a_currency_lost_its_rate(session: Session, m
     from unittest.mock import patch
 
     with patch("services.bank.has_exchange_rate", return_value=True):
-        create_bank_account(
-            session,
-            BankAccountCreate(
-                name="Exotique",
-                balance=Decimal("500"),
-                account_type=BankAccountType.CHECKING,
-                currency="XAF",
-            ),
-            "user_1",
-            master_key,
+        _opened(
+            session, "user_1", master_key, "500",
+            name="Exotique", account_type=BankAccountType.CHECKING, currency="XAF",
         )
 
     with patch("services.bank.has_exchange_rate", return_value=False):
@@ -578,8 +381,8 @@ def test_the_total_is_withheld_when_a_currency_lost_its_rate(session: Session, m
 def test_an_imported_curve_is_stored_in_euros(
     session: Session, master_key: str, sqlite_pg_insert, monkeypatch
 ):
-    """`account_history` is a euro store, and the CSV and manual imports write
-    into it. A statement in francs must not land there at face value."""
+    """`account_history` is a euro store. A curve in francs must not land
+    there at face value."""
     from unittest.mock import patch
 
     user_uuid = "user_import_currency"
@@ -588,7 +391,6 @@ def test_an_imported_curve_is_stored_in_euros(
             session,
             BankAccountCreate(
                 name="Suisse",
-                balance=Decimal("0"),
                 account_type=BankAccountType.CHECKING,
                 currency="CHF",
             ),
@@ -609,11 +411,11 @@ def test_an_imported_curve_is_stored_in_euros(
         },
     )
 
-    import_bank_account_history(
+    replace_history_window(
         session,
         db_acc,
-        [BankHistoryEntry(snapshot_date=date(2025, 1, 1), value=Decimal("1000"))],
-        master_key,
+        [BankHistoryEntry(snapshot_date=day, value=Decimal("1000")) for day in rates],
+        master_key, date(2025, 1, 1), date(2025, 1, 2),
     )
 
     rows = _get_history_rows(session, account_id_bidx)
@@ -634,15 +436,15 @@ def test_a_euro_import_never_looks_a_rate_up(
 
     acc = create_bank_account(
         session,
-        BankAccountCreate(name="Courant", balance=Decimal("0"), account_type=BankAccountType.CHECKING),
+        BankAccountCreate(name="Courant", account_type=BankAccountType.CHECKING),
         "user_import_eur",
         master_key,
     )
-    written = import_bank_account_history(
+    written = replace_history_window(
         session,
         session.get(BankAccount, acc.id),
         [BankHistoryEntry(snapshot_date=date(2025, 1, 1), value=Decimal("1000"))],
-        master_key,
+        master_key, date(2025, 1, 1), date(2025, 1, 1),
     )
     assert written > 0
 

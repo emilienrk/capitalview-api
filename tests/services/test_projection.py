@@ -125,18 +125,26 @@ def test_the_curve_starts_from_the_whole_net_worth(session: Session, master_key:
     from unittest.mock import patch
 
     from dtos.asset import AssetCreate
-    from dtos.bank import BankAccountCreate
+    from datetime import date
+
+    from dtos.bank import BankAccountCreate, BankEntryRequest
+    from models.bank import BankAccount
     from models.enums import BankAccountType
     from services.asset import create_asset
     from services.bank import create_bank_account
+    from services.bank_ledger import add_entry
 
     user = _make_user()
     with patch("services.bank.has_exchange_rate", return_value=True):
-        create_bank_account(
+        created = create_bank_account(
             session,
-            BankAccountCreate(name="Courant", balance=Decimal("3000"), account_type=BankAccountType.CHECKING),
+            BankAccountCreate(name="Courant", account_type=BankAccountType.CHECKING),
             user.uuid, master_key,
         )
+    add_entry(
+        session, session.get(BankAccount, created.id),
+        BankEntryRequest(day=date(2026, 1, 2), amount=Decimal("3000")), master_key,
+    )
     create_asset(
         session, AssetCreate(name="Montre", category="Bijoux", estimated_value=Decimal("500")), user.uuid, master_key
     )
