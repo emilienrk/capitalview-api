@@ -166,6 +166,11 @@ class LabelRequiredError(ValueError):
     """Only an operation with a label can type the operations reading like it."""
 
 
+class OutsideLabelError(ValueError):
+    """Operations ticked together share an account and a direction, as the
+    operations of one label do."""
+
+
 class _Movement(NamedTuple):
     row: BankTransaction
     account_bidx: str
@@ -1571,12 +1576,16 @@ def set_transaction_type(
     transaction_id: str,
     kind: CashflowType,
     scope: TypeScope,
+    also: Collection[str] = (),
 ) -> BankTransactionTypeResult:
-    """Type one operation, or write the rule of its label for every operation
-    reading like it on its account and direction.
+    """Type one operation, the others the user ticked beside it, or write the
+    rule of its label for every operation reading like it on its account and
+    direction.
 
     A rule drops the operation's own override, so the rule is what types it
-    from then on — correcting the rule later corrects it too.
+    from then on — correcting the rule later corrects it too. Ticked
+    operations are typed one by one, as many answers would: nothing is
+    learned for the operations to come (docs/bank-sorting.md).
     """
     accounts = _user_accounts(session, user_uuid, master_key)
     row = _readable_row(session, accounts, transaction_id)
@@ -1585,11 +1594,13 @@ def set_transaction_type(
         raise PairedOperationError(transaction_id)
 
     if scope is TypeScope.OPERATION:
-        row.type_override_enc = encrypt_data(kind.value, master_key)
-        session.add(row)
+        ticked = [row, *_ticked_beside(session, user_uuid, master_key, accounts, row, also)]
+        for typed in ticked:
+            typed.type_override_enc = encrypt_data(kind.value, master_key)
+            session.add(typed)
         session.commit()
         return BankTransactionTypeResult(
-            transaction=_transaction_item(session, user_uuid, master_key, accounts, row), covered_count=1,
+            transaction=_transaction_item(session, user_uuid, master_key, accounts, row), covered_count=len(ticked),
         )
 
     signature = label_signature(current.label)
@@ -1607,6 +1618,35 @@ def set_transaction_type(
     return BankTransactionTypeResult(
         transaction=_transaction_item(session, user_uuid, master_key, accounts, row), covered_count=covered,
     )
+
+
+def _ticked_beside(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    accounts: _Accounts,
+    row: BankTransaction,
+    also: Collection[str],
+) -> list[BankTransaction]:
+    """The other operations ticked with `row`, each checked as `row` was."""
+    others = [_readable_row(session, accounts, other) for other in dict.fromkeys(also) if other != row.uuid]
+    if not others:
+        return []
+    direction = decrypt_data(row.credit_debit_enc, master_key)
+    for other in others:
+        if other.account_id_bidx != row.account_id_bidx or decrypt_data(other.credit_debit_enc, master_key) != direction:
+            raise OutsideLabelError(other.uuid)
+    pairing = _pairing(session, user_uuid, master_key, accounts)
+    movements = _load_movements(session, master_key, accounts.readable, None)
+    paired = {
+        movements[index].row.uuid
+        for index, leg in _internal_transfer_legs(movements, pairing).items()
+        if leg.status is not BankTransferStatus.SUGGESTED
+    }
+    for other in others:
+        if other.uuid in paired:
+            raise PairedOperationError(other.uuid)
+    return others
 
 
 def clear_transaction_type(

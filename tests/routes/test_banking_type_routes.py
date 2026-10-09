@@ -90,6 +90,69 @@ def test_a_label_correction_drops_the_operation_s_own_override(client, session, 
     assert (response.json()["transaction"]["cashflow_type"], response.json()["transaction"]["type_source"]) == ("NEUTRAL", "rule")
 
 
+def _month_all(client: TestClient, period: str = "2026-03") -> list[dict]:
+    return client.get(f"/banking/transactions?period={period}").json()["transactions"]
+
+
+def test_ticked_operations_are_typed_together_and_nothing_else_is(client, session, master_key):
+    """Ticked operations ("celles que je coche") are typed one by one: no rule for the next ones."""
+    _link(session, master_key, "current")
+    for day, amount in (("2026-03-05", "400.00"), ("2026-03-12", "60.00"), ("2026-03-19", "150.00")):
+        _op(session, master_key, "current", day, amount, "CRDT", "VIR INST ROUKINE EMILIEN")
+    first, second, third = sorted(_month_all(client), key=lambda tx: tx["operation_date"])
+
+    response = client.put(
+        f"/banking/transactions/{third['id']}/type",
+        json={"type": "SAVING", "scope": "operation", "also": [first["id"], third["id"]]},
+    )
+
+    assert (response.status_code, response.json()["covered_count"]) == (200, 2)
+    typed = {tx["id"]: (tx["cashflow_type"], tx["type_source"]) for tx in _month_all(client)}
+    assert typed[first["id"]] == typed[third["id"]] == ("SAVING", "override")
+    assert typed[second["id"]][1] != "override"
+    assert client.get("/banking/type-rules").json() == []
+    _op(session, master_key, "current", "2026-04-02", "90.00", "CRDT", "VIR INST ROUKINE EMILIEN")
+    [later] = _month_all(client, "2026-04")
+    assert later["type_source"] != "override" and later["cashflow_type"] != "SAVING"
+
+
+def test_an_operation_of_another_account_or_direction_cannot_be_ticked(client, session, master_key):
+    _seed(session, master_key)
+    _link(session, master_key, "neobank")
+    _op(session, master_key, "neobank", "2026-03-07", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN")
+    _op(session, master_key, "current", "2026-03-08", "20.00", "CRDT", "VIR INST ROUKINE EMILIEN")
+    ops = _month_all(client)
+    asked = next(tx for tx in ops if tx["operation_date"] == "2026-03-05")
+    elsewhere = next(tx for tx in ops if tx["operation_date"] == "2026-03-07")
+    credit = next(tx for tx in ops if tx["operation_date"] == "2026-03-08")
+
+    for other in (elsewhere, credit):
+        response = client.put(
+            f"/banking/transactions/{asked['id']}/type",
+            json={"type": "SAVING", "scope": "operation", "also": [other["id"]]},
+        )
+        assert response.status_code == 400
+    assert next(tx for tx in _month_all(client) if tx["id"] == asked["id"])["type_source"] != "override"
+
+
+def test_a_ticked_paired_operation_is_a_409(client, session, master_key):
+    _link(session, master_key, "current")
+    _link(session, master_key, "savings")  # a Livret A
+    _op(session, master_key, "current", "2026-03-05", "300.00", "DBIT", "VIR Virement depuis Compte courant")
+    _op(session, master_key, "savings", "2026-03-05", "300.00", "CRDT", "VIR Virement depuis Compte courant")
+    _op(session, master_key, "current", "2026-03-09", "80.00", "DBIT", "VIR Virement depuis Compte courant")
+    ops = _month_all(client)
+    paired = next(tx for tx in ops if not tx["is_credit"] and float(tx["amount"]) == 300)
+    alone = next(tx for tx in ops if float(tx["amount"]) == 80)
+
+    response = client.put(
+        f"/banking/transactions/{alone['id']}/type",
+        json={"type": "SAVING", "scope": "operation", "also": [paired["id"]]},
+    )
+
+    assert response.status_code == 409
+
+
 def test_a_paired_operation_is_a_409(client, session, master_key):
     _link(session, master_key, "current")
     _link(session, master_key, "savings")  # a Livret A

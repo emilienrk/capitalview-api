@@ -68,6 +68,7 @@ from services.banking.credentials import (
 from services.banking.export_import import import_enablebanking_export
 from services.banking.flows import (
     LabelRequiredError,
+    OutsideLabelError,
     PairedOperationError,
     UnknownAccountError,
     clear_transaction_type,
@@ -624,7 +625,7 @@ def put_transaction_type(
     and direction. Ungated, like /transactions."""
     try:
         return set_transaction_type(
-            session, current_user.uuid, master_key, transaction_id, body.type, body.scope,
+            session, current_user.uuid, master_key, transaction_id, body.type, body.scope, body.also,
         )
     except TransactionNotFoundError:
         raise HTTPException(status_code=404, detail="Opération introuvable.")
@@ -635,6 +636,8 @@ def put_transaction_type(
         )
     except LabelRequiredError:
         raise HTTPException(status_code=400, detail="Une opération sans libellé ne se corrige qu'à l'unité.")
+    except OutsideLabelError:
+        raise HTTPException(status_code=400, detail="Les opérations cochées doivent être du même compte et du même sens.")
 
 
 @router.delete("/transactions/{transaction_id}/type", response_model=BankTransactionItem)

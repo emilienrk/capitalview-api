@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from dtos.bank import ReconciliationStatus
 
@@ -696,6 +696,9 @@ class BankTransactionTypeUpdate(BaseModel):
     """PUT /banking/transactions/{id}/type."""
     type: CashflowType
     scope: TypeScope = TypeScope.LABEL
+    # With the operation scope, the other operations the user ticked in the
+    # label's list, typed alike: same account and direction, no rule written.
+    also: list[str] = Field(default_factory=list, max_length=1000)
 
 
 class BankTransactionTypeResult(BaseModel):

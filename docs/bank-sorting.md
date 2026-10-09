@@ -77,7 +77,10 @@ ne reçoivent pas de question et ne changent aucun total.
 ## Répondre
 
 - **Celle-ci** : le choix par défaut.
-- **Celles que je coche** : parmi les opérations du même nom, listées. Ne crée aucune règle.
+- **Celles que je coche** : parmi les opérations du même nom, listées (« Choisir parmi les N opérations de ce
+  libellé »). Liste ouverte, la réponse porte sur les opérations cochées, celle de la question cochée d'avance ;
+  fermée, sur celle-ci. Chacune reçoit son propre type, comme si on avait répondu une par une : aucune règle, rien
+  pour les prochaines. Seules des opérations du même compte et du même sens peuvent être cochées ensemble.
 - **Les prochaines aussi** : case explicite, qui crée une règle visible dans les réglages, supprimable.
 - Une règle par nom n'empêche **jamais** une paire trouvée plus tard : la paire passe avant.
 - Une règle par nom écrite à la main (second temps) : « contient » ou « commence par », jamais de regex, toujours avec
@@ -124,7 +127,7 @@ l'utilisateur valide ou refuse. Mesurer sur le dump avant de changer quoi que ce
 | Réponse « celle-ci » par défaut, case « toutes celles de ce libellé, et les prochaines » | fait |
 | Une sortie n'est demandée que lorsqu'un dépôt ou un retrait lui fait face | fait |
 | Dépôt du même jour : question, puis automatique pour le même libellé vers le même compte | fait |
-| « Celles que je coche » dans la liste | à faire |
+| « Celles que je coche » dans la liste | fait |
 | Sortie sans contrepartie au-dessus du seuil = question, curseur (500 € par défaut, Paramètres › Modules) | fait |
 | Dépôts sans contrepartie, « X € à trier », phrase à l'ajout d'une banque | fait |
 | Paire proposée et dépôt possibles en même temps : une seule question | à faire |
