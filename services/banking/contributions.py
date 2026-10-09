@@ -43,7 +43,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import NamedTuple
 
@@ -327,6 +327,48 @@ def _match_fees(
             ref, contribution = found[0]
             matches[index] = Match(contribution, exact=True)
             claimed.add(ref)
+
+
+def unfaced(candidates: list[Candidate], contributions: Contributions) -> list[Contribution]:
+    """The declared movements no bank movement can be, oldest first: nothing of
+    the opposite direction within TOLERANCE_DAYS, at the amount or a fee apart.
+    The money came from, or went to, an account the app does not hold.
+
+    Read the other way round from `match_candidates`: any movement may stand
+    for a contribution here, however it is typed, and a near day is enough —
+    only one nothing could be is reported. Still one for one: two 200 €
+    deposits of a day are not both faced by one 200 € debit. Only the
+    contributions the bank history spans are judged, `TOLERANCE_DAYS` short of
+    its last day, where the other leg may not be booked yet.
+    """
+    if not contributions or not candidates:
+        return []
+    first = min(candidate.day for candidate in candidates)
+    last = max(candidate.day for candidate in candidates)
+    by_day: dict[tuple[bool, date], list[Candidate]] = defaultdict(list)
+    for candidate in candidates:
+        by_day[(candidate.is_credit, candidate.day)].append(candidate)
+
+    spent: set[int] = set()
+    found: list[Contribution] = []
+    for contribution in sorted(
+        (c for items in contributions.by_amount.values() for c in items), key=lambda c: (c.day, c.amount),
+    ):
+        if contribution.day < first or (last - contribution.day).days < TOLERANCE_DAYS:
+            continue
+        fits = [
+            (candidate.amount != contribution.amount, gap, candidate.index)
+            for gap in range(TOLERANCE_DAYS + 1)
+            for day in {contribution.day - timedelta(days=gap), contribution.day + timedelta(days=gap)}
+            for candidate in by_day.get((not contribution.is_deposit, day), ())
+            if candidate.index not in spent
+            and (candidate.amount == contribution.amount or _a_fee_apart(candidate, contribution))
+        ]
+        if fits:
+            spent.add(min(fits)[2])
+        else:
+            found.append(contribution)
+    return found
 
 
 def _a_fee_apart(candidate: Candidate, contribution: Contribution) -> bool:

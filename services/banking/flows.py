@@ -42,6 +42,7 @@ from dtos.banking import (
     BankQuestionThreshold,
     BankReviewQueue,
     BankReviewYear,
+    BankUnfacedContribution,
     BankRecurringQuestion,
     BankRecurringTag,
     RecurringDirection,
@@ -66,10 +67,12 @@ from services.banking import transfer_patterns as stored_patterns
 from services.banking.cashflow_types import Resolution, resolve_type
 from services.banking.contributions import (
     Candidate,
+    Contribution,
     Contributions,
     Match,
     load_contributions,
     match_candidates,
+    unfaced,
 )
 from services.banking.labels import label_signature, label_words
 from services.banking.linking import readable_account_bidxs
@@ -219,6 +222,8 @@ class _Filing(NamedTuple):
     validated: frozenset[tuple[str, str, str]] = frozenset()
     # A debit nothing faces asks past this amount (the user's setting).
     threshold: Decimal = DEFAULT_QUESTION_THRESHOLD
+    # Every deposit and withdrawal the user declared, faced or not.
+    declared: Contributions = Contributions()
 
 
 @dataclass
@@ -608,7 +613,8 @@ def _filing(
     the same way — the whole point of `_filed`.
     """
     rules = load_rules(session, user_uuid, master_key)
-    contributions = _contributions(movements, transfer_legs, load_contributions(session, user_uuid, master_key))
+    declared = load_contributions(session, user_uuid, master_key)
+    contributions = _contributions(movements, transfer_legs, declared)
     return _Filing(
         master_key=master_key,
         savings=_savings_accounts(accounts, master_key),
@@ -617,6 +623,7 @@ def _filing(
         contributions=contributions,
         validated=_validated_deposits(movements, contributions, rules, patterns, master_key),
         threshold=question_threshold(session, user_uuid, master_key),
+        declared=declared,
     )
 
 
@@ -1412,9 +1419,8 @@ def review_queue(
     pairing = _pairing(session, user_uuid, master_key, accounts)
     movements = _load_movements(session, master_key, accounts.readable, None)
     transfer_legs = _internal_transfer_legs(movements, pairing)
-    item = _item_builder(
-        movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs),
-    )
+    filing = _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs)
+    item = _item_builder(movements, transfer_legs, accounts, filing)
 
     questions: list[BankReviewItem] = []
     for index, movement in enumerate(movements):
@@ -1448,6 +1454,33 @@ def review_queue(
         recurring_count=sum(1 for stored in pairing.patterns.recurring if stored.question),
         years=sorted(years.values(), key=lambda entry: -entry.year),
         questions=questions,
+        unfaced=[
+            BankUnfacedContribution(
+                day=c.day, account_name=c.account_name, amount=c.amount, is_deposit=c.is_deposit,
+            )
+            for c in reversed(_unfaced(movements, transfer_legs, filing.declared))
+            if year is None or c.day.year == year
+        ],
+    )
+
+
+def _unfaced(
+    movements: list[_Movement], transfer_legs: dict[int, _TransferLeg], contributions: Contributions,
+) -> list[Contribution]:
+    """The declared deposits and withdrawals no bank movement faces. A pair the
+    pairing settled moved money between two bank accounts and stands for no
+    deposit; a suggested one still may."""
+    return unfaced(
+        [
+            Candidate(index, movement.day, movement.amount, movement.is_credit)
+            for index, movement in enumerate(movements)
+            if movement.is_final
+            and not movement.synthetic
+            and movement.day is not None
+            and movement.currency == BASE_CURRENCY
+            and (index not in transfer_legs or transfer_legs[index].status is BankTransferStatus.SUGGESTED)
+        ],
+        contributions,
     )
 
 

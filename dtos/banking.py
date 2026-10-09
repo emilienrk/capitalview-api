@@ -591,6 +591,16 @@ class BankQuestionThreshold(BaseModel):
     amounts: list[Decimal]
 
 
+class BankUnfacedContribution(BaseModel):
+    """A deposit or a withdrawal declared on an investment account that no bank
+    operation faces: the money came from, or went to, an account the app does
+    not hold. Shown, never asked: no answer would change a total."""
+    day: date
+    account_name: str
+    amount: Decimal
+    is_deposit: bool
+
+
 class BankReviewQueue(BaseModel):
     """GET /banking/review-queue — every open question, heaviest first."""
     # What the flow and transfer questions can still move.
@@ -601,6 +611,8 @@ class BankReviewQueue(BaseModel):
     # Over the whole history, whatever the year asked for.
     years: list[BankReviewYear]
     questions: list[BankReviewItem]
+    # Narrowed to the year as the questions are, newest first.
+    unfaced: list[BankUnfacedContribution] = []
 
 
 class BankLedgerAccount(BaseModel):

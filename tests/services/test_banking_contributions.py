@@ -21,8 +21,11 @@ from services.banking.contributions import (
     Contributions,
     load_contributions,
     match_candidates,
+    unfaced,
 )
-from services.banking.flows import clear_transaction_type, list_month_transactions, set_transaction_type
+from services.banking.flows import (
+    clear_transaction_type, list_month_transactions, review_queue, set_transaction_type,
+)
 from services.banking.real_cashflow import real_cashflow_month
 from services.crypto_transaction import create_composite_crypto_transaction
 from services.encryption import encrypt_data, hash_index
@@ -172,6 +175,49 @@ class TestMatching:
         withdrawal = Contribution("PEA", date(2026, 6, 2), Decimal("100"), is_deposit=False)
         contributions = Contributions(by_amount={(False, Decimal("100")): [withdrawal]})
         assert match_candidates(candidates, contributions)[0].exact
+
+
+# ---------------------------------------------------------------------------
+# The declared movements no bank movement faces
+# ---------------------------------------------------------------------------
+
+def _debit(index: int, day: str, amount: str) -> Candidate:
+    return Candidate(index, date.fromisoformat(day), Decimal(amount), False)
+
+
+# The bank history spans March: every deposit below is judged.
+_SPAN = [_debit(90, "2026-03-01", "1"), _debit(91, "2026-03-31", "1")]
+
+
+class TestUnfaced:
+    def test_a_deposit_no_debit_faces_is_reported(self):
+        [found] = unfaced([*_SPAN, _debit(0, "2026-03-05", "150")], _contributions(("2026-03-05", "200")))
+        assert (found.day, found.amount) == (date(2026, 3, 5), Decimal("200"))
+
+    def test_a_debit_three_days_off_faces_it(self):
+        assert unfaced([*_SPAN, _debit(0, "2026-03-08", "200")], _contributions(("2026-03-05", "200"))) == []
+
+    def test_a_debit_four_days_off_does_not(self):
+        assert len(unfaced([*_SPAN, _debit(0, "2026-03-09", "200")], _contributions(("2026-03-05", "200")))) == 1
+
+    def test_a_fee_kept_on_the_way_still_faces_it(self):
+        assert unfaced([*_SPAN, _debit(0, "2026-03-05", "100")], _contributions(("2026-03-05", "99"))) == []
+
+    def test_a_credit_never_faces_a_deposit(self):
+        credit = Candidate(0, date(2026, 3, 5), Decimal("200"), True)
+        assert len(unfaced([*_SPAN, credit], _contributions(("2026-03-05", "200")))) == 1
+
+    def test_one_debit_faces_one_deposit_only(self):
+        found = unfaced(
+            [*_SPAN, _debit(0, "2026-03-05", "200")], _contributions(("2026-03-05", "200"), ("2026-03-06", "200")),
+        )
+        assert [c.day for c in found] == [date(2026, 3, 6)]
+
+    def test_outside_the_bank_history_nothing_is_judged(self):
+        """Before the first operation no debit can be read; too close to the
+        last one, it may not be booked yet."""
+        found = unfaced(_SPAN, _contributions(("2026-02-27", "200"), ("2026-03-29", "200"), ("2026-03-28", "300")))
+        assert [c.day for c in found] == [date(2026, 3, 28)]
 
 
 # ---------------------------------------------------------------------------
@@ -400,3 +446,27 @@ class TestOperations:
         [tx] = _month(session, master_key).values()
         assert (tx.cashflow_type, tx.type_source) == (Type.EXPENSE, Source.RULE)
         assert tx.flow_question is not None
+
+
+class TestReviewQueue:
+    def test_a_deposit_no_bank_account_paid_is_listed_newest_first(self, session: Session, master_key: str):
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-02-01", "20.00", "DBIT", "CARTE BOULANGERIE"),
+            (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR Virement vers PEA"),
+            (CURRENT, "2026-03-31", "20.00", "DBIT", "CARTE BOULANGERIE"),
+        )
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-02-10", "500")
+        _deposit(session, master_key, "2026-03-05", "200")
+        _deposit(session, master_key, "2026-03-12", "180")
+
+        queue = review_queue(session, USER, master_key)
+        assert [(u.day, u.account_name, u.amount, u.is_deposit) for u in queue.unfaced] == [
+            (date(2026, 3, 12), "PEA", Decimal("180.00"), True),
+            (date(2026, 2, 10), "PEA", Decimal("500.00"), True),
+        ]
+        assert [u.day for u in review_queue(session, USER, master_key, 2026).unfaced] == [
+            date(2026, 3, 12), date(2026, 2, 10),
+        ]
+        assert review_queue(session, USER, master_key, 2025).unfaced == []

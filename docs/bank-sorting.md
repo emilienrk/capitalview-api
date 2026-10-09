@@ -56,12 +56,23 @@ Les questions sont rangées par année, les plus récentes d'abord.
 sont dans l'appli, elle ne peut être que ça. Le curseur sert à ça : en le bougeant, on voit combien de sorties
 passeraient en question, et on attrape un compte oublié (3 000 € partis vers un PEA ouvert ailleurs). Autour :
 
-- à l'ajout d'une banque, une phrase qu'on peut fermer : « ajoute aussi tes livrets et comptes de bourse, sinon les
-  virements vers eux compteront en dépense » ;
-- à côté des totaux : « X € à trier ».
+- dans l'onglet Comptes, dès qu'il y a un compte, une phrase qu'on peut fermer (fermée pour de bon sur ce
+  navigateur) : « Ajoutez aussi vos livrets et vos comptes de bourse : sinon, les virements vers eux compteront comme
+  des dépenses. » ;
+- à côté des totaux du Réel : « X € à trier (N opérations) », avec un lien vers « À trier ».
 
-**Les dépôts sans contrepartie** sont listés aussi : les dépôts déclarés sur un compte Bourse ou Crypto pour lesquels
-aucune sortie bancaire n'a été trouvée.
+**Les dépôts sans contrepartie** sont listés aussi, sous les questions d'« À trier » : les dépôts (et les retraits)
+déclarés sur un compte Bourse, Crypto ou un placement pour lesquels aucune opération bancaire n'a été trouvée. C'est
+l'inverse du curseur : il attrape un compte d'investissement oublié, cette liste attrape un compte bancaire oublié. Ils
+ne reçoivent pas de question et ne changent aucun total.
+
+- Est « en face » toute opération de sens opposé, même montant ou un écart de frais, à 3 jours au plus, quel que soit
+  son type. Une paire déjà reconnue entre deux comptes bancaires ne compte pas ; une paire seulement proposée, si.
+- Un pour un : une sortie de 200 € ne couvre pas deux dépôts de 200 €.
+- Seuls les dépôts compris dans l'historique bancaire sont jugés, et pas les 3 derniers jours, où l'autre côté peut
+  ne pas être encore passé.
+- Mesuré sur le dump : 64 dépôts déclarés, 3 sans contrepartie (500 € sur un compte « trst », 90,17 € et 180 € sur le
+  portefeuille crypto).
 
 ## Répondre
 
@@ -115,7 +126,7 @@ l'utilisateur valide ou refuse. Mesurer sur le dump avant de changer quoi que ce
 | Dépôt du même jour : question, puis automatique pour le même libellé vers le même compte | fait |
 | « Celles que je coche » dans la liste | à faire |
 | Sortie sans contrepartie au-dessus du seuil = question, curseur (500 € par défaut, Paramètres › Modules) | fait |
-| Dépôts sans contrepartie, « X € à trier », phrase à l'ajout d'une banque | à faire |
+| Dépôts sans contrepartie, « X € à trier », phrase à l'ajout d'une banque | fait |
 | Paire proposée et dépôt possibles en même temps : une seule question | à faire |
 | Historique et annulation, texte du bouton | à faire |
 | Récurrents sans dictionnaire | second temps |
