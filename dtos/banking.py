@@ -615,6 +615,50 @@ class BankReviewQueue(BaseModel):
     unfaced: list[BankUnfacedContribution] = []
 
 
+class BankHistoryKind(str, Enum):
+    """What the user did, as the history of their answers lists it."""
+    TRANSFER = "transfer"
+    NOT_TRANSFER = "not_transfer"
+    REVERSAL = "reversal"
+    # A type forced on one operation.
+    TYPE = "type"
+    # A type given to a label, and the operations to come.
+    RULE = "rule"
+    RECURRING = "recurring"
+
+
+class BankHistoryOperation(BaseModel):
+    id: str
+    operation_date: date | None
+    label: str | None
+    amount: Decimal
+    currency: str
+    is_credit: bool
+    account_name: str
+
+
+class BankHistoryItem(BaseModel):
+    """One decision of the user still in force: withdrawing it undoes it."""
+    kind: BankHistoryKind
+    id: str
+    # None for a type forced before the date was kept.
+    at: datetime | None
+    type: CashflowType | None = None
+    # The two legs of a pair, the operation of a type; a leg since deleted is
+    # left out.
+    operations: list[BankHistoryOperation] = []
+    # A rule's label, a recurring payment's name.
+    name: str | None = None
+    account_name: str | None = None
+    # What a rule types across the history.
+    operation_count: int | None = None
+    # A recurring payment confirmed, or refused.
+    confirmed: bool | None = None
+    # A type chosen by hand that a pair recognised since outranks: said, never
+    # replaced in silence.
+    overridden_by_pair: bool = False
+
+
 class BankLedgerAccount(BaseModel):
     id: str
     name: str

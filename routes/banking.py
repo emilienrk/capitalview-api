@@ -32,6 +32,8 @@ from dtos.banking import (
     BankConnectionUpdate,
     BankExportImportResponse,
     BankFlowsResponse,
+    BankHistoryItem,
+    BankHistoryKind,
     BankLedger,
     BankQuestionThreshold,
     BankReviewQueue,
@@ -66,6 +68,7 @@ from services.banking.credentials import (
     upsert_connection,
 )
 from services.banking.export_import import import_enablebanking_export
+from services.banking.history import HistoryItemNotFoundError, action_history, undo_action
 from services.banking.flows import (
     LabelRequiredError,
     OutsideLabelError,
@@ -652,6 +655,32 @@ def delete_transaction_type(
         return clear_transaction_type(session, current_user.uuid, master_key, transaction_id)
     except TransactionNotFoundError:
         raise HTTPException(status_code=404, detail="Opération introuvable.")
+
+
+@router.get("/history", response_model=list[BankHistoryItem])
+def get_history(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Every answer of the user still in force, newest first. Ungated, like
+    /review-queue."""
+    return action_history(session, current_user.uuid, master_key)
+
+
+@router.delete("/history/{kind}/{item_id}", status_code=204)
+def delete_history_item(
+    kind: BankHistoryKind,
+    item_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Withdraw one answer: the operations read as they did before it."""
+    try:
+        undo_action(session, current_user.uuid, master_key, kind, item_id)
+    except HistoryItemNotFoundError:
+        raise HTTPException(status_code=404, detail="Cette réponse n'existe plus.")
 
 
 @router.get("/type-rules", response_model=list[BankTypeRuleItem])

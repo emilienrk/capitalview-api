@@ -98,6 +98,13 @@ ne reçoivent pas de question et ne changent aucun total.
   toutes les paires aux libellés semblables, livrets compris : 8 virements vers le Compte plaisir perdus.)
 - **Historique de toutes les actions** (paires liées et déliées, réponses, règles), chacune annulable. Une paire
   reconnue après coup ne remplace jamais en silence un type choisi à la main.
+  - « Historique de mes réponses », en bas d'« À trier » : chaque décision encore en vigueur (paires liées, refusées,
+    annulations ; types choisis sur une opération ; règles par libellé ; récurrents confirmés ou refusés), la plus
+    récente d'abord. Validé le 09/10 : lue là où chaque décision est déjà rangée, pas dans un journal à part.
+    « Annuler » supprime la décision, donc tout revient exactement comme avant ; une décision annulée quitte la liste.
+  - Un type choisi à la main garde sa date (`type_override_at`, vide pour ceux d'avant le 09/10).
+  - Quand une paire reconnue depuis passe avant un type choisi à la main, l'historique le dit sur ce choix. Sur le
+    dump du 25/09, aucun type choisi à la main ni décision de paire : rien à mesurer.
 
 ## Ordre de priorité d'un type
 
@@ -136,5 +143,5 @@ l'utilisateur valide ou refuse. Mesurer sur le dump avant de changer quoi que ce
 | Dépôts sans contrepartie, « X € à trier », phrase à l'ajout d'une banque | fait |
 | Paire proposée et dépôt possibles en même temps : une seule question | fait |
 | Texte du bouton : « Pas ensemble », question écrite sur la ligne | fait |
-| Historique et annulation | à faire |
+| Historique et annulation | fait |
 | Récurrents sans dictionnaire | second temps |

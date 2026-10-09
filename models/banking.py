@@ -241,8 +241,12 @@ class BankTransaction(SQLModel, table=True):
     # An OperationType (services/banking/operation_types.py). NULL on rows
     # stored before it existed, until transfer patterns backfill it.
     operation_type_enc: str | None = Field(default=None, sa_column=Column(TEXT))
-    # A CashflowType the user forced on this one operation, over any rule.
+    # A CashflowType the user forced on this one operation, over any rule, and
+    # when: the history of the user's answers lists it (NULL before it was kept).
     type_override_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    type_override_at: datetime | None = Field(
+        default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True)
+    )
     # "manual", "adjustment" or "forecast"; NULL for an operation the bank or a
     # statement reported (docs/bank-ledger.md).
     origin_enc: str | None = Field(default=None, sa_column=Column(TEXT))

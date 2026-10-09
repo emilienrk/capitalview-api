@@ -25,7 +25,7 @@ from collections import defaultdict
 from collections.abc import Collection
 from dataclasses import dataclass
 from functools import lru_cache
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import NamedTuple
 
@@ -1598,8 +1598,10 @@ def set_transaction_type(
 
     if scope is TypeScope.OPERATION:
         ticked = [row, *_ticked_beside(session, user_uuid, master_key, accounts, row, also)]
+        now = datetime.now(timezone.utc)
         for typed in ticked:
             typed.type_override_enc = encrypt_data(kind.value, master_key)
+            typed.type_override_at = now
             session.add(typed)
         session.commit()
         return BankTransactionTypeResult(
@@ -1610,6 +1612,7 @@ def set_transaction_type(
     if signature is None:
         raise LabelRequiredError(transaction_id)
     row.type_override_enc = None
+    row.type_override_at = None
     session.add(row)
     rule = save_rule(
         session, user_uuid, master_key, accounts.by_bidx[row.account_id_bidx].uuid, current.is_credit, current.label, kind,
@@ -1659,6 +1662,7 @@ def clear_transaction_type(
     accounts = _user_accounts(session, user_uuid, master_key)
     row = _readable_row(session, accounts, transaction_id)
     row.type_override_enc = None
+    row.type_override_at = None
     session.add(row)
     session.commit()
     return _transaction_item(session, user_uuid, master_key, accounts, row)
