@@ -92,7 +92,8 @@ ne reçoivent pas de question et ne changent aucun total.
 ## Délier, annuler
 
 - Le bouton qui refuse une paire dit ce qu'il fait : « Pas ensemble », et dessous « chacune restera comptée de son
-  côté ». Il ne veut pas dire « compter en dépense ».
+  côté ». Il ne veut pas dire « compter en dépense ». La paire proposée est posée en toutes lettres sur la ligne
+  (« C'est… vers <compte> / Pas ensemble »), plus par deux icônes ✓ ✗.
 - Un refus ne vaut que pour **sa** paire. Il n'apprend rien sur les libellés. (Avant le 08/10, un seul refus bloquait
   toutes les paires aux libellés semblables, livrets compris : 8 virements vers le Compte plaisir perdus.)
 - **Historique de toutes les actions** (paires liées et déliées, réponses, règles), chacune annulable. Une paire
@@ -134,5 +135,6 @@ l'utilisateur valide ou refuse. Mesurer sur le dump avant de changer quoi que ce
 | Sortie sans contrepartie au-dessus du seuil = question, curseur (500 € par défaut, Paramètres › Modules) | fait |
 | Dépôts sans contrepartie, « X € à trier », phrase à l'ajout d'une banque | fait |
 | Paire proposée et dépôt possibles en même temps : une seule question | fait |
-| Historique et annulation, texte du bouton | à faire |
+| Texte du bouton : « Pas ensemble », question écrite sur la ligne | fait |
+| Historique et annulation | à faire |
 | Récurrents sans dictionnaire | second temps |
