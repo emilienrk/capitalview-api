@@ -300,8 +300,10 @@ class TestOperations:
         assert (tx.cashflow_type, tx.type_source) == (Type.EXPENSE, Source.DEFAULT)
         assert tx.flow_question is not None
 
-    def test_a_debit_nothing_faces_is_spending_and_asks_nothing(self, session: Session, master_key: str):
-        _ops(session, master_key, (CURRENT, "2026-03-05", "900.00", "DBIT", "VIR Virement vers PEA"))
+    def test_a_debit_nothing_faces_under_the_threshold_is_spending_and_asks_nothing(
+        self, session: Session, master_key: str
+    ):
+        _ops(session, master_key, (CURRENT, "2026-03-05", "300.00", "DBIT", "VIR Virement vers PEA"))
 
         [tx] = _month(session, master_key).values()
         assert (tx.cashflow_type, tx.type_source, tx.flow_question) == (Type.EXPENSE, Source.DEFAULT, None)

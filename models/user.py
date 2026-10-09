@@ -99,6 +99,9 @@ class UserSettings(SQLModel, table=True):
     # Off by default: a forecast moving a real balance on its own surprises more
     # than it helps, and a linked account gets its truth from the bank anyway.
     bank_auto_sync_enabled: bool = Field(default=False, nullable=False)
+    # A debit nothing faces asks past this amount, the user's own trade-off
+    # between questions and precision (docs/bank-sorting.md).
+    bank_question_threshold: Decimal = Field(default=Decimal("500"), max_digits=12, decimal_places=2)
     # Opt-in: linking a real bank through Enable Banking. Off by default — it
     # costs the user their own Enable Banking application and a strong
     # authentication, and every other bank feature works without it.

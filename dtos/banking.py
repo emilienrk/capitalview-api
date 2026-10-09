@@ -583,6 +583,14 @@ class BankReviewYear(BaseModel):
     count: int
 
 
+class BankQuestionThreshold(BaseModel):
+    """GET /banking/question-threshold — what moving the threshold would ask."""
+    threshold: Decimal
+    # Every debit nothing faces that the user has not typed, largest first: a
+    # threshold asks those at or above it.
+    amounts: list[Decimal]
+
+
 class BankReviewQueue(BaseModel):
     """GET /banking/review-queue — every open question, heaviest first."""
     # What the flow and transfer questions can still move.

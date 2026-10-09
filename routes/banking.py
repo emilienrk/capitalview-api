@@ -33,6 +33,7 @@ from dtos.banking import (
     BankExportImportResponse,
     BankFlowsResponse,
     BankLedger,
+    BankQuestionThreshold,
     BankReviewQueue,
     BankSessionAccount,
     BankSessionSummary,
@@ -75,6 +76,7 @@ from services.banking.flows import (
     list_month_transactions,
     list_transfer_counterparts,
     list_type_rules,
+    question_threshold_preview,
     review_queue,
     set_transaction_type,
     transfer_patterns,
@@ -701,6 +703,17 @@ def get_review_queue(
 ):
     """Every open question, the heaviest first. Ungated, like /transactions."""
     return review_queue(session, current_user.uuid, master_key, year)
+
+
+@router.get("/question-threshold", response_model=BankQuestionThreshold)
+def get_question_threshold(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """The current threshold and what any other would ask about. Ungated, like
+    /review-queue: the setting sits beside it."""
+    return question_threshold_preview(session, current_user.uuid, master_key)
 
 
 @router.get("/ledger", response_model=BankLedger)

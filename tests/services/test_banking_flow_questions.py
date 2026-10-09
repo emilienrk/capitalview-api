@@ -16,13 +16,17 @@ from services.banking.flows import (
     CREDIT_CHOICES,
     _regulated_savings,
     _user_accounts,
+    DEBIT_CHOICES,
     list_flow_group,
     list_month_transactions,
+    question_threshold_preview,
     set_transaction_type,
     transfer_patterns,
 )
 from services.banking.real_cashflow import real_cashflow_month
+from dtos.settings import UserSettingsUpdate
 from services.banking.transfer_decisions import record_decision
+from services.settings import update_settings
 from services.encryption import hash_index
 from tests.services.test_banking_flows import USER, _raw, _store
 from tests.services.test_banking_real_cashflow import CURRENT, _ops
@@ -47,15 +51,45 @@ def test_a_credit_asks_whatever_its_payment_means(session: Session, master_key: 
     assert _questions(session, master_key) == {"AVOIR 11/03/26 ZALANDO PAYMENTS CB*08": (CREDIT_CHOICES, 1)}
 
 
-def test_a_debit_nothing_faces_never_asks_whatever_its_label_says(session: Session, master_key: str):
-    """No answer could change it: with every savings and investment account
-    linked, it is spending (docs/bank-sorting.md)."""
+def test_a_debit_nothing_faces_under_the_threshold_never_asks_whatever_its_label_says(
+    session: Session, master_key: str
+):
+    """With every savings and investment account linked, it is spending
+    (docs/bank-sorting.md)."""
     _ops(
         session, master_key,
         (CURRENT, "2026-03-02", "42.10", "DBIT", "CARTE 01/03/26 CARREFOUR ANNECY CB*08"),
-        (CURRENT, "2026-03-05", "19000.00", "DBIT", "VIR SEPA JEAN TIERS"),
+        (CURRENT, "2026-03-05", "499.99", "DBIT", "VIR SEPA JEAN TIERS"),
     )
     assert _questions(session, master_key) == {}
+
+
+def test_a_debit_past_the_threshold_asks_whatever_its_label_says(session: Session, master_key: str):
+    """A card and a transfer look alike without reading words: both ask."""
+    _ops(
+        session, master_key,
+        (CURRENT, "2026-03-02", "900.00", "DBIT", "CARTE 01/03/26 VELO CB*08"),
+        (CURRENT, "2026-03-05", "19000.00", "DBIT", "VIR SEPA JEAN TIERS"),
+    )
+    assert _questions(session, master_key) == {
+        "CARTE 01/03/26 VELO CB*08": (DEBIT_CHOICES, 1), "VIR SEPA JEAN TIERS": (DEBIT_CHOICES, 1),
+    }
+
+
+def test_the_user_s_threshold_decides_which_debits_ask(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        (CURRENT, "2026-03-02", "150.00", "DBIT", "CARTE 01/03/26 VELO CB*08"),
+        (CURRENT, "2026-03-05", "600.00", "DBIT", "VIR SEPA JEAN TIERS"),
+    )
+    preview = question_threshold_preview(session, USER, master_key)
+    assert (preview.threshold, preview.amounts) == (Decimal("500"), [Decimal("600.00"), Decimal("150.00")])
+    assert set(_questions(session, master_key)) == {"VIR SEPA JEAN TIERS"}
+
+    update_settings(session, USER, master_key, UserSettingsUpdate(bank_question_threshold=100))
+
+    assert set(_questions(session, master_key)) == {"VIR SEPA JEAN TIERS", "CARTE 01/03/26 VELO CB*08"}
+    assert _total(session, master_key) == 2
 
 
 def test_a_label_asks_once_on_its_last_operation(session: Session, master_key: str):

@@ -69,6 +69,7 @@ class UserSettingsUpdate(BaseModel):
     crypto_auto_deposits: bool | None = None
     bank_module_enabled: bool | None = None
     bank_auto_sync_enabled: bool | None = None
+    bank_question_threshold: float | None = Field(None, ge=0, le=1_000_000)
     open_banking_enabled: bool | None = None
     cashflow_module_enabled: bool | None = None
     wealth_module_enabled: bool | None = None
@@ -101,6 +102,7 @@ class UserSettingsResponse(BaseModel):
     crypto_auto_deposits: bool = False
     bank_module_enabled: bool = False
     bank_auto_sync_enabled: bool = False
+    bank_question_threshold: float = 500
     open_banking_enabled: bool = False
     cashflow_module_enabled: bool = True
     wealth_module_enabled: bool = False

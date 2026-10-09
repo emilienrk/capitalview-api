@@ -49,6 +49,7 @@ from models.banking import (
 from models.crypto import CryptoAccount, CryptoTransaction
 from models.placement import PlacementAccount, PlacementEntry
 from models.stock import StockAccount, StockTransaction
+from models.user import UserSettings
 from services.banking.recurring_decisions import REFUSED
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
@@ -58,7 +59,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "24"
+_VERSION = "25"
 
 
 class FlowCarrier(NamedTuple):
@@ -303,10 +304,14 @@ def source_digest(
         )
     ).one()
     investments = _investment_rows(session, user_bidx, master_key)
+    # Moving it asks more or fewer debits (services/banking/flows.py).
+    threshold = session.exec(
+        select(UserSettings.bank_question_threshold).where(UserSettings.user_uuid_bidx == user_bidx)
+    ).first()
     raw = json.dumps(
         [
             _VERSION, sorted(readable), sorted(savings),
-            list(rows), list(decisions), list(rules), list(recurring), investments,
+            list(rows), list(decisions), list(rules), list(recurring), investments, threshold,
         ],
         default=str,
     )

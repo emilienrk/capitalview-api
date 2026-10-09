@@ -105,8 +105,8 @@ def test_three_transfers_ask_on_the_last_one(session: Session, master_key: str):
 
 
 def test_rent_by_transfer_is_asked_as_recurring_only(session: Session, master_key: str):
-    """« Récurrents » asks; refused, it is spending nothing faces, which « À
-    trier » never asks about (docs/bank-sorting.md)."""
+    """One place at a time: « Récurrents » asks, « À trier » waits for a
+    refusal — the rent being past the threshold a debit asks from."""
     _ops(session, master_key, *_months(CURRENT, "2026-01", 4, 3, "530.00", "VIR SEPA TRANSALP'DOME S.A.S."))
 
     [stored] = _recurring(session, master_key)
@@ -118,7 +118,8 @@ def test_rent_by_transfer_is_asked_as_recurring_only(session: Session, master_ke
 
     decide(session, USER, master_key, stored.carrier, RecurringDecisionKind.REFUSE)
 
-    assert [q for q in review_queue(session, USER, master_key).questions if q.kind.value == "flow"] == []
+    flows = [q for q in review_queue(session, USER, master_key).questions if q.kind.value == "flow"]
+    assert [q.operation_count for q in flows] == [4]
 
 
 def test_rent_the_user_typed_neutral_is_not_offered(session: Session, master_key: str):

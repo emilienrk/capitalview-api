@@ -39,6 +39,7 @@ from dtos.banking import (
     BankFlowsResponse,
     BankReviewItem,
     BankReviewKind,
+    BankQuestionThreshold,
     BankReviewQueue,
     BankReviewYear,
     BankRecurringQuestion,
@@ -59,6 +60,7 @@ from models.bank import BankAccount
 from models.banking import BankAccountLink, BankTransaction
 from models.currency import BASE_CURRENCY
 from models.enums import BankAccountType
+from models.user import UserSettings
 from services.banking import recurring_series
 from services.banking import transfer_patterns as stored_patterns
 from services.banking.cashflow_types import Resolution, resolve_type
@@ -140,6 +142,11 @@ DEBIT_CHOICES = [CashflowType.EXPENSE, CashflowType.SAVING, CashflowType.INVESTM
 # questions weighed. A label that grows past it later starts asking.
 FLOW_QUESTION_MIN_AMOUNT = Decimal("100")
 
+# A debit nothing faces asks from this amount unless the user moves it. Measured
+# on four years of one history: 20 operations at 500 €, 139 at 100 €, 6 at
+# 1 000 € — a quarter of a median monthly wage, past most everyday spending.
+DEFAULT_QUESTION_THRESHOLD = Decimal("500")
+
 DEFAULT_MONTHS = 12
 MAX_MONTHS = 120
 
@@ -210,6 +217,8 @@ class _Filing(NamedTuple):
     # (bank account, label signature, investment account) the user once typed
     # as facing its deposit: the next exact match of that shape proves itself.
     validated: frozenset[tuple[str, str, str]] = frozenset()
+    # A debit nothing faces asks past this amount (the user's setting).
+    threshold: Decimal = DEFAULT_QUESTION_THRESHOLD
 
 
 @dataclass
@@ -607,7 +616,18 @@ def _filing(
         patterns=patterns,
         contributions=contributions,
         validated=_validated_deposits(movements, contributions, rules, patterns, master_key),
+        threshold=question_threshold(session, user_uuid, master_key),
     )
+
+
+def question_threshold(session: Session, user_uuid: str, master_key: str) -> Decimal:
+    """The amount past which a debit nothing faces asks, as the user set it."""
+    stored = session.exec(
+        select(UserSettings.bank_question_threshold).where(
+            UserSettings.user_uuid_bidx == hash_index(user_uuid, master_key)
+        )
+    ).first()
+    return Decimal(stored) if stored is not None else DEFAULT_QUESTION_THRESHOLD
 
 
 def _contributions(
@@ -846,7 +866,9 @@ def transfer_patterns(
     resolutions = [
         _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
     ]
-    asking_groups = _asking_groups(movements, transfer_legs, labels, resolutions, filing.contributions)
+    asking_groups = _asking_groups(
+        movements, transfer_legs, labels, resolutions, filing.contributions, filing.threshold
+    )
     heavy = [members for members in asking_groups if _heavy(movements, members)]
 
     flow_questions: dict[str, int] = defaultdict(int)
@@ -890,6 +912,7 @@ def _flow_groups(
     labels: dict[int, str | None],
     resolutions: list[Resolution],
     facing: dict[int, Match],
+    threshold: Decimal,
     carriers: Collection[str] = frozenset(),
 ) -> list[list[int]]:
     """The labels only the user can type, each as its operations in date order:
@@ -897,7 +920,7 @@ def _flow_groups(
     carrying a question the rebuild asked all the same (`carriers`, the stored
     `TransferPatterns.flow_carriers`)."""
     return [
-        members for members in _asking_groups(movements, transfer_legs, labels, resolutions, facing)
+        members for members in _asking_groups(movements, transfer_legs, labels, resolutions, facing, threshold)
         if _heavy(movements, members) or movements[members[-1]].row.uuid in carriers
     ]
 
@@ -908,18 +931,19 @@ def _asking_groups(
     labels: dict[int, str | None],
     resolutions: list[Resolution],
     facing: dict[int, Match],
+    threshold: Decimal,
 ) -> list[list[int]]:
     groups: dict[tuple[str, bool, str], list[int]] = defaultdict(list)
     for index, movement in enumerate(movements):
         label = labels[index]
-        if _asks_flow(movement, transfer_legs.get(index), label, resolutions[index], facing.get(index)):
+        if _asks_flow(movement, transfer_legs.get(index), label, resolutions[index], facing.get(index), threshold):
             groups[(movement.account_bidx, movement.is_credit, label_signature(label))].append(index)
     return list(groups.values())
 
 
 def _heavy(movements: list[_Movement], members: list[int]) -> bool:
-    """Credits ask past a minimum; a debit facing a deposit always asks, since
-    otherwise it would count as spending money the user says they invested."""
+    """Credits ask past a minimum; a debit asks on its own terms — facing a
+    deposit, or past the user's threshold — whatever its label adds up to."""
     if not movements[members[0]].is_credit:
         return True
     return sum((movements[i].amount for i in members), Decimal("0")) >= FLOW_QUESTION_MIN_AMOUNT
@@ -1133,16 +1157,22 @@ def _filed(
 
 
 def _asks_flow(
-    movement: _Movement, leg: _TransferLeg | None, label: str | None, resolution: Resolution, facing: Match | None
+    movement: _Movement,
+    leg: _TransferLeg | None,
+    label: str | None,
+    resolution: Resolution,
+    facing: Match | None,
+    threshold: Decimal,
 ) -> bool:
     """Whether only the user can say how this operation counts: nothing pairs
     or types it, and the user can actually answer (docs/bank-sorting.md).
 
-    A credit always can: only they know a friend paid them back. A debit only
-    when something faces it — a deposit or a withdrawal they declared: with all
-    their savings and investment accounts linked, a debit nothing faces is
-    spending, which no answer could change. A suggested pair keeps its own
-    question until the user settles it.
+    A credit always can: only they know a friend paid them back. A debit when
+    something faces it — a deposit or a withdrawal they declared — or past the
+    user's threshold: with all their savings and investment accounts linked, a
+    debit nothing faces is spending, and the threshold is how far the user
+    wants to check that (an account they forgot, a PEA opened elsewhere). A
+    suggested pair keeps its own question until the user settles it.
 
     A deposit on the very day asks even past a rule: the rule speaks for a
     label, and one label may go to the investment account one day and anywhere
@@ -1154,7 +1184,7 @@ def _asks_flow(
         return facing is not None and facing.exact
     if resolution.source is not TypeSource.DEFAULT:
         return False
-    return movement.is_credit or facing is not None
+    return movement.is_credit or facing is not None or movement.amount >= threshold
 
 
 def _item_builder(
@@ -1177,7 +1207,9 @@ def _item_builder(
         label = _label(movement, master_key)
         resolution = _filed(movements, transfer_legs, index, label, filing)
         settles = filing.patterns.flow_carriers.get(row.uuid)
-        asks = settles is not None and _asks_flow(movement, leg, label, resolution, filing.contributions.get(index))
+        asks = settles is not None and _asks_flow(
+            movement, leg, label, resolution, filing.contributions.get(index), filing.threshold
+        )
         stored, member = filing.patterns.recurring_of(row.uuid) or (None, None)
         offered = counterpart if leg and leg.status is BankTransferStatus.SUGGESTED else None
         return BankTransactionItem(
@@ -1343,6 +1375,28 @@ def list_operations(
     return sorted(items, key=lambda tx: tx.operation_date or date.min, reverse=True)
 
 
+def question_threshold_preview(session: Session, user_uuid: str, master_key: str) -> BankQuestionThreshold:
+    """The debits a threshold would ask about, for the setting to show what
+    moving it costs before the user commits to it."""
+    accounts = _user_accounts(session, user_uuid, master_key)
+    pairing = _pairing(session, user_uuid, master_key, accounts)
+    movements = _load_movements(session, master_key, accounts.readable, None)
+    transfer_legs = _internal_transfer_legs(movements, pairing)
+    filing = _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs)
+    amounts = [
+        movement.amount
+        for index, movement in enumerate(movements)
+        if not movement.is_credit
+        and movement.currency == BASE_CURRENCY
+        and index not in filing.contributions
+        and _asks_flow(
+            movement, transfer_legs.get(index), _label(movement, master_key),
+            _filed(movements, transfer_legs, index, _label(movement, master_key), filing), None, Decimal("0"),
+        )
+    ]
+    return BankQuestionThreshold(threshold=filing.threshold, amounts=sorted(amounts, reverse=True))
+
+
 def review_queue(
     session: Session, user_uuid: str, master_key: str, year: int | None = None
 ) -> BankReviewQueue:
@@ -1466,7 +1520,8 @@ def list_flow_group(
     ]
 
     groups = _flow_groups(
-        movements, transfer_legs, labels, resolutions, filing.contributions, pairing.patterns.flow_carriers
+        movements, transfer_legs, labels, resolutions, filing.contributions, filing.threshold,
+        pairing.patterns.flow_carriers,
     )
     members = next(
         (group for group in groups if any(movements[i].row.uuid == transaction_id for i in group)),

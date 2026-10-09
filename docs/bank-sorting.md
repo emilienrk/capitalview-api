@@ -32,13 +32,19 @@ libellés. Une opération n'a qu'une paire, et un dépôt ne justifie qu'une seu
 
 ## Ce qui reçoit une question
 
-Une question n'est posée que lorsque **quelque chose est en face** : l'utilisateur peut alors réellement répondre.
+Une question n'est posée que lorsque **quelque chose est en face**, ou qu'une sortie **dépasse le seuil** choisi par
+l'utilisateur.
 
 - **Paire possible** entre deux comptes (sens opposés, même montant, au plus 2 jours ouvrés d'écart), qu'aucune règle
   ci-dessus ne confirme. Y compris entre deux comptes courants, même avec le même libellé, le même jour et le même
   montant. Une paire seulement proposée ne change aucun total.
 - **Dépôt Bourse/Crypto possible** : même montant, dans les 3 jours, ou avec un écart de frais. Si une paire et un
   dépôt sont tous deux possibles, la même question montre les deux.
+- **Sortie sans rien en face, au-dessus du seuil** du curseur (500 € par défaut, réglable). Le seuil porte sur
+  l'opération, pas sur le total du libellé. Les questions restent regroupées par libellé, « celle-ci » par défaut.
+  Mesuré sur un historique de 4 ans : 6 opérations à 1 000 €, 20 à 500 €, 54 à 250 €, 139 à 100 €. À 100 €, on
+  retrouve à peu près les questions d'avant le 09/10, cartes comprises : sans dictionnaire, un achat carte et un
+  virement ne se distinguent pas.
 - **Entrée sans rien en face** (« revenu ou remboursement ? »), groupée par nom, si le groupe dépasse 100 €. Seul
   l'utilisateur sait si les 50 € d'un ami sont un remboursement.
 
@@ -46,12 +52,10 @@ Les questions sont rangées par année, les plus récentes d'abord.
 
 ## Ce qui ne reçoit pas de question
 
-**Une sortie sans rien en face** est une dépense : si tous les comptes d'épargne et d'investissement sont dans l'appli,
-elle ne peut être que ça. Elle n'est pas posée en question, mais :
+**Une sortie sans rien en face, sous le seuil**, est une dépense : si tous les comptes d'épargne et d'investissement
+sont dans l'appli, elle ne peut être que ça. Le curseur sert à ça : en le bougeant, on voit combien de sorties
+passeraient en question, et on attrape un compte oublié (3 000 € partis vers un PEA ouvert ailleurs). Autour :
 
-- la liste **« Sorties sans contrepartie »**, dans « À trier », les montre au-dessus d'un montant choisi avec un curseur.
-  En bougeant le curseur, on voit combien d'opérations la liste contient. On peut les classer à la main ; sinon, elles
-  restent des dépenses. Elle sert à repérer un compte oublié (3 000 € partis vers un PEA ouvert ailleurs) ;
 - à l'ajout d'une banque, une phrase qu'on peut fermer : « ajoute aussi tes livrets et comptes de bourse, sinon les
   virements vers eux compteront en dépense » ;
 - à côté des totaux : « X € à trier ».
@@ -110,7 +114,8 @@ l'utilisateur valide ou refuse. Mesurer sur le dump avant de changer quoi que ce
 | Une sortie n'est demandée que lorsqu'un dépôt ou un retrait lui fait face | fait |
 | Dépôt du même jour : question, puis automatique pour le même libellé vers le même compte | fait |
 | « Celles que je coche » dans la liste | à faire |
-| Liste « Sorties sans contrepartie » avec curseur (500 € par défaut), dépôts sans contrepartie, « X € à trier », phrase à l'ajout d'une banque | à faire |
+| Sortie sans contrepartie au-dessus du seuil = question, curseur (500 € par défaut, Paramètres › Modules) | fait |
+| Dépôts sans contrepartie, « X € à trier », phrase à l'ajout d'une banque | à faire |
 | Paire proposée et dépôt possibles en même temps : une seule question | à faire |
 | Historique et annulation, texte du bouton | à faire |
 | Récurrents sans dictionnaire | second temps |
