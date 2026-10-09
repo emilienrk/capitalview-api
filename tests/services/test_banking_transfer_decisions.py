@@ -13,6 +13,7 @@ from sqlmodel import Session, select
 
 from dtos.banking import BankTransferDecisionKind as Kind
 from dtos.banking import BankTransferStatus as Status
+from models.bank import BankAccount
 from models.banking import BankTransaction, BankTransferDecision
 from services.bank import delete_bank_account
 from services.banking.flows import (
@@ -25,7 +26,7 @@ from services.banking.transfer_decisions import (
     TransactionNotFoundError,
     record_decision,
 )
-from services.encryption import decrypt_data
+from services.encryption import decrypt_data, encrypt_data
 from tests.services.test_banking_flows import USER, _link, _raw, _store
 
 CURRENT, NEOBANK, SAVINGS = "current", "neobank", "savings"
@@ -135,21 +136,41 @@ class TestReview:
 
 
 class TestLearning:
-    def test_a_refund_from_a_rejected_third_party_is_never_paired_again(
-        self, session: Session, master_key: str
-    ):
+    def test_a_rejection_keeps_only_its_own_pair_apart(self, session: Session, master_key: str):
+        """One label covers movements of different natures: refusing one pair
+        says nothing about the next pair its legs' labels read like."""
         _ops(
             session, master_key,
-            (CURRENT, "2023-04-18", "85.00", "DBIT", "CARTE 17/04/23 DECATHLON 4 CB*88"),
+            (CURRENT, "2023-04-18", "85.00", "DBIT", "VIR INST vers Marie Tiers"),
             (NEOBANK, "2023-04-19", "85.00", "CRDT", "Virement de : Jean Tiers"),
-            (CURRENT, "2023-08-10", "35.04", "DBIT", "CARTE 08/08/23 GRAND FRAIS 4 CB*88"),
+            (CURRENT, "2023-08-10", "35.04", "DBIT", "VIR INST VERS MARIE TIERS"),
             (NEOBANK, "2023-08-08", "35.04", "CRDT", "VIREMENT DE : JEAN TIERS"),
         )
-        _decide(session, master_key, "CARTE 17/04/23 DECATHLON 4 CB*88", "Virement de : Jean Tiers", Kind.NOT_TRANSFER)
+        _decide(session, master_key, "VIR INST vers Marie Tiers", "Virement de : Jean Tiers", Kind.NOT_TRANSFER)
 
-        month = _month(session, master_key, "2023-08")
-        assert month.internal_transfers_excluded == 0
-        assert month.inflow == month.outflow
+        assert _status(_month(session, master_key, "2023-04"), "Virement de : Jean Tiers") is None
+        assert _status(_month(session, master_key, "2023-08"), "VIREMENT DE : JEAN TIERS") is Status.SUGGESTED
+
+    def test_a_rejection_never_undoes_a_transfer_to_a_livret(self, session: Session, master_key: str):
+        """A real case: one wrong pair refused, and every top-up of the livret
+        sharing the refused debit's label had stopped pairing."""
+        _ops(
+            session, master_key,
+            (CURRENT, "2024-08-05", "450.00", "DBIT", "VIR Virement interne depuis BoursoBank"),
+            (NEOBANK, "2024-08-05", "450.00", "CRDT", "Paiement envoyé par Thomas Tiers"),
+            (CURRENT, "2024-10-01", "750.00", "DBIT", "VIR VIREMENT INTERNE DEPUIS BOURSOBANK"),
+            (SAVINGS, "2024-10-01", "750.00", "CRDT", "VIR Virement interne depuis BoursoBa"),
+        )
+        account = session.get(BankAccount, SAVINGS)
+        account.account_type_enc = encrypt_data("LIVRET_DEVE", master_key)
+        session.add(account)
+        session.commit()
+        _decide(
+            session, master_key,
+            "VIR Virement interne depuis BoursoBank", "Paiement envoyé par Thomas Tiers", Kind.NOT_TRANSFER,
+        )
+
+        assert _status(_month(session, master_key, "2024-10"), "VIR Virement interne depuis BoursoBa") is Status.SAVINGS
 
     def test_a_top_up_reading_like_a_confirmed_one_is_trusted(self, session: Session, master_key: str):
         _ops(
@@ -184,18 +205,18 @@ class TestLearning:
         assert _status(month, "PRLV SEPA Salle de sport") is None
 
     def test_withdrawing_a_decision_withdraws_what_it_taught(self, session: Session, master_key: str):
-        """The rejection, replaced, no longer keeps the next refund apart."""
+        """The confirmation, replaced, no longer vouches for the next top-up."""
         _ops(
             session, master_key,
-            (CURRENT, "2023-04-18", "85.00", "DBIT", "VIR INST vers Marie Tiers"),
-            (NEOBANK, "2023-04-19", "85.00", "CRDT", "Virement de : Jean Tiers"),
-            (CURRENT, "2023-08-10", "35.04", "DBIT", "VIREMENT LOCATION CHALET"),
-            (NEOBANK, "2023-08-08", "35.04", "CRDT", "VIREMENT DE : JEAN TIERS"),
+            (NEOBANK, "2023-12-14", "18.58", "CRDT", "Recharge sur Apple Pay via *0733"),
+            (CURRENT, "2023-12-18", "18.58", "DBIT", "CARTE 14/12/23 NEOBANK**6169 CB*88"),
+            (NEOBANK, "2024-12-16", "10.00", "CRDT", "Recharge sur Apple Pay via *6969"),
+            (CURRENT, "2024-12-17", "10.00", "DBIT", "CARTE 16/12/24 NEOBANK**7500 CB*08"),
         )
-        _decide(session, master_key, "VIR INST vers Marie Tiers", "Virement de : Jean Tiers", Kind.NOT_TRANSFER)
-        _decide(session, master_key, "VIR INST vers Marie Tiers", "Virement de : Jean Tiers", Kind.TRANSFER)
+        _decide(session, master_key, "CARTE 14/12/23 NEOBANK**6169 CB*88", "Recharge sur Apple Pay via *0733", Kind.TRANSFER)
+        _decide(session, master_key, "CARTE 14/12/23 NEOBANK**6169 CB*88", "Recharge sur Apple Pay via *0733", Kind.NOT_TRANSFER)
 
-        assert _status(_month(session, master_key, "2023-08"), "VIREMENT DE : JEAN TIERS") is Status.SUGGESTED
+        assert _status(_month(session, master_key, "2024-12"), "Recharge sur Apple Pay via *6969") is Status.SUGGESTED
 
 
 class TestBinding:

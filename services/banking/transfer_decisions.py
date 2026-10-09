@@ -10,14 +10,13 @@ right. So the user decides, and each decision is kept for two uses:
   movement and its cancellation on one account (a rejected instant transfer, a
   card refund), which no amount-and-date rule can spot among the same-day
   coincidences of an active account;
-- **the labels** — each leg's label is reduced to its words, digits dropped,
-  and remembered per account and direction as one of the user's own movements
-  or not. A later pair whose two legs read like confirmed ones is trusted
-  without asking; one with a leg reading like a rejected one is never formed.
+- **the labels** — each leg of a confirmed transfer is reduced to its words,
+  digits dropped, and remembered per account and direction. A later pair whose
+  two legs read like confirmed ones is trusted without asking. A rejection
+  teaches nothing beyond its own pair.
 
 No bank's label format is known here: the comparison is between labels of the
-same account, and the words both kinds share on that account — a "CARTE" or a
-"VIR" prefix — are ignored because they tell nothing apart.
+same account.
 """
 
 from __future__ import annotations
@@ -53,14 +52,12 @@ class TransactionNotFoundError(LookupError):
 
 class Verdict(str, Enum):
     OWN = "own"
-    OTHER = "other"
 
 
 @dataclass(frozen=True)
 class _Exemplar:
     # The movement it was read from: a decision proves nothing about its own
-    # legs taken one by one — rejecting a pair says one of them is foreign, and
-    # the true top-up it was wrongly paired with must stay free to pair again.
+    # legs, which the pair itself already settles.
     ref_bidx: str
     tokens: frozenset[str]
 
@@ -68,27 +65,15 @@ class _Exemplar:
 @dataclass
 class _Exemplars:
     own: list[_Exemplar] = field(default_factory=list)
-    other: list[_Exemplar] = field(default_factory=list)
 
     def verdict(self, tokens: frozenset[str], ref_bidx: str | None) -> Verdict | None:
-        own = [e.tokens for e in self.own if e.ref_bidx != ref_bidx]
-        other = [e.tokens for e in self.other if e.ref_bidx != ref_bidx]
-        shared = frozenset().union(*own) & frozenset().union(*other) if own and other else frozenset()
-        informative = tokens - shared
-        if not informative:
+        if not tokens:
             return None
-        best = {Verdict.OWN: 0.0, Verdict.OTHER: 0.0}
-        for verdict, exemplars in ((Verdict.OWN, own), (Verdict.OTHER, other)):
-            for exemplar in exemplars:
-                words = exemplar - shared
-                if words:
-                    best[verdict] = max(best[verdict], similarity(informative, words))
-        own_score, other_score = best[Verdict.OWN], best[Verdict.OTHER]
-        if own_score >= SIMILARITY_THRESHOLD and own_score > other_score:
-            return Verdict.OWN
-        if other_score >= SIMILARITY_THRESHOLD and other_score > own_score:
-            return Verdict.OTHER
-        return None
+        best = max(
+            (similarity(tokens, e.tokens) for e in self.own if e.ref_bidx != ref_bidx),
+            default=0.0,
+        )
+        return Verdict.OWN if best >= SIMILARITY_THRESHOLD else None
 
 
 @dataclass
@@ -105,13 +90,10 @@ class LabelMemory:
         bucket = self._buckets.get((account_bidx, is_credit))
         return bucket.verdict(tokens, ref_bidx) if bucket else None
 
-    def learn(
-        self, account_bidx: str, is_credit: bool, tokens: frozenset[str], ref_bidx: str, verdict: Verdict
-    ) -> None:
+    def learn(self, account_bidx: str, is_credit: bool, tokens: frozenset[str], ref_bidx: str) -> None:
         if not tokens:
             return
-        bucket = self._buckets.setdefault((account_bidx, is_credit), _Exemplars())
-        (bucket.own if verdict is Verdict.OWN else bucket.other).append(_Exemplar(ref_bidx, tokens))
+        self._buckets.setdefault((account_bidx, is_credit), _Exemplars()).own.append(_Exemplar(ref_bidx, tokens))
 
 
 @dataclass
@@ -128,9 +110,6 @@ class Decisions:
 def load_decisions(session: Session, user_uuid: str, master_key: str) -> Decisions:
     """Every decision of the user, replayed in the order they were taken.
 
-    A rejected pair teaches that one of its legs is not the user's own — not
-    which. The leg that already reads like a confirmed one is taken to be the
-    user's; the other, or both when neither does, is remembered as foreign.
     Replayed rather than stored, so withdrawing a decision withdraws what it
     taught.
     """
@@ -148,19 +127,16 @@ def load_decisions(session: Session, user_uuid: str, master_key: str) -> Decisio
             (row.credit_account_bidx, True, _tokens(row.credit_tokens_enc, master_key), row.credit_ref_bidx),
         )
         if kind is BankTransferDecisionKind.NOT_TRANSFER:
+            # Kept to the pair: one label covers movements of different natures
+            # ("VIR Virement interne" to a livret, to a friend), so refusing one
+            # pair once vetoed every true transfer sharing a leg's label.
             decisions.rejected.add(pair)
-            # Undoing a cancellation on one account says nothing about transfers.
-            if row.debit_account_bidx == row.credit_account_bidx:
-                continue
-            for account, is_credit, tokens, ref in legs:
-                if decisions.memory.verdict(account, is_credit, tokens, ref) is not Verdict.OWN:
-                    decisions.memory.learn(account, is_credit, tokens, ref, Verdict.OTHER)
             continue
         decisions.bound[pair] = kind
         # A cancellation says nothing about transfers.
         if kind is BankTransferDecisionKind.TRANSFER:
             for account, is_credit, tokens, ref in legs:
-                decisions.memory.learn(account, is_credit, tokens, ref, Verdict.OWN)
+                decisions.memory.learn(account, is_credit, tokens, ref)
     return decisions
 
 

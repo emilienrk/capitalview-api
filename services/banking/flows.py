@@ -445,21 +445,14 @@ _PAID_TO_A_THIRD_PARTY = frozenset({OperationType.CARD, OperationType.DIRECT_DEB
 def _transfer_status(
     pairing: _Pairing, d: _Movement, c: _Movement, debit: int, credit: int, verdict
 ) -> BankTransferStatus | None:
-    """How sure a candidate transfer is; None when a leg reads like one the user
-    said was not theirs, and it is not even offered."""
-    if pairing.decisions.memory:
-        legs = (verdict(debit), verdict(credit))
-        if Verdict.OTHER in legs:
-            return None
-    else:
-        legs = (None, None)
+    """How sure a candidate transfer is; None when it is not even offered."""
     if d.account_bidx in pairing.savings or c.account_bidx in pairing.savings:
         return BankTransferStatus.SAVINGS
     if pairing.patterns.recurs(
         d.account_bidx, c.account_bidx, d.row.label_signature_bidx, c.row.label_signature_bidx
     ):
         return BankTransferStatus.RECURRING
-    if legs == (Verdict.OWN, Verdict.OWN):
+    if pairing.decisions.memory and (verdict(debit), verdict(credit)) == (Verdict.OWN, Verdict.OWN):
         return BankTransferStatus.LEARNED
     # A card payment or a direct debit answered by a transfer received on
     # another account is someone paying the user back, not the user moving
