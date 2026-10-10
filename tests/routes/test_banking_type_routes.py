@@ -215,6 +215,37 @@ def test_rules_are_listed_with_what_they_type_and_can_be_deleted(client, session
     assert _month(client)["VIR INST ROUKINE EMILIEN"]["cashflow_type"] == "EXPENSE"
 
 
+def test_a_rule_takes_another_type_under_a_new_id(client, session, master_key):
+    from services.auth import get_current_user
+
+    _link(session, master_key, "current")
+    _op(session, master_key, "current", "2026-03-05", "400.00", "DBIT", "VIR INST ROUKINE EMILIEN")
+    _op(session, master_key, "current", "2026-03-25", "60.00", "DBIT", "VIR INST ROUKINE EMILIEN LIVRET")
+    target = _month(client)["VIR INST ROUKINE EMILIEN"]
+    client.put(f"/banking/transactions/{target['id']}/type", json={"type": "SAVING", "scope": "label"})
+    [rule] = client.get("/banking/type-rules").json()
+
+    owner = app.dependency_overrides[get_current_user]
+    app.dependency_overrides[get_current_user] = lambda: User(
+        uuid="someone-else", auth_salt="salt", username="o", email="o@test", password_hash="x"
+    )
+    assert client.patch(f"/banking/type-rules/{rule['id']}", json={"type": "INVESTMENT"}).status_code == 404
+    app.dependency_overrides[get_current_user] = owner
+
+    response = client.patch(f"/banking/type-rules/{rule['id']}", json={"type": "INVESTMENT"})
+
+    assert response.status_code == 200
+    retyped = response.json()
+    assert retyped["id"] != rule["id"]
+    assert (retyped["type"], retyped["operation_count"], retyped["signature"]) == ("INVESTMENT", 2, rule["signature"])
+    assert [r["id"] for r in client.get("/banking/type-rules").json()] == [retyped["id"]]
+    month = _month(client)
+    assert {month[label]["cashflow_type"] for label in ("VIR INST ROUKINE EMILIEN", "VIR INST ROUKINE EMILIEN LIVRET")} == {
+        "INVESTMENT"
+    }
+    assert client.patch(f"/banking/type-rules/{rule['id']}", json={"type": "SAVING"}).status_code == 404
+
+
 def test_flow_questions_count_with_the_transfer_questions_until_answered(client, session, master_key):
     _seed_asking(session, master_key)
     assert client.get("/banking/transfer-questions").json() == {"total": 1, "months": [{"period": "2026-03", "count": 1}], "recurring": 0}

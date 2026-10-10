@@ -84,7 +84,10 @@ ne reçoivent pas de question et ne changent aucun total.
   libellé »). Liste ouverte, la réponse porte sur les opérations cochées, celle de la question cochée d'avance ;
   fermée, sur celle-ci. Chacune reçoit son propre type, comme si on avait répondu une par une : aucune règle, rien
   pour les prochaines. Seules des opérations du même compte et du même sens peuvent être cochées ensemble.
-- **Les prochaines aussi** : case explicite, qui crée une règle visible dans les réglages, supprimable.
+- **Les prochaines aussi** : case explicite, qui crée une règle. Les règles sont le dictionnaire de l'utilisateur :
+  page « Règles de tri » de Paramètres › Banque, chacune avec son libellé, son compte, son sens et le nombre
+  d'opérations qu'elle type ; on y change son type ou on la supprime. Validé le 10/10 : une règle parle des
+  opérations à venir, elle n'a pas sa place dans l'historique des réponses.
 - Une règle par nom n'empêche **jamais** une paire trouvée plus tard : la paire passe avant.
 - Une règle par nom écrite à la main (second temps) : « contient » ou « commence par », jamais de regex, toujours avec
   l'aperçu des opérations touchées avant d'enregistrer.
@@ -96,10 +99,10 @@ ne reçoivent pas de question et ne changent aucun total.
   (« C'est… vers <compte> / Pas ensemble »), plus par deux icônes ✓ ✗.
 - Un refus ne vaut que pour **sa** paire. Il n'apprend rien sur les libellés. (Avant le 08/10, un seul refus bloquait
   toutes les paires aux libellés semblables, livrets compris : 8 virements vers le Compte plaisir perdus.)
-- **Historique de toutes les actions** (paires liées et déliées, réponses, règles), chacune annulable. Une paire
+- **Historique de toutes les actions** (paires liées et déliées, réponses), chacune annulable ; les règles ont leur page. Une paire
   reconnue après coup ne remplace jamais en silence un type choisi à la main.
   - « Historique de mes réponses », en bas d'« À trier » : chaque décision encore en vigueur (paires liées, refusées,
-    annulations ; types choisis sur une opération ; règles par libellé ; récurrents confirmés ou refusés), la plus
+    annulations ; types choisis sur une opération ; récurrents confirmés ou refusés), la plus
     récente d'abord. Validé le 09/10 : lue là où chaque décision est déjà rangée, pas dans un journal à part.
     « Annuler » supprime la décision, donc tout revient exactement comme avant ; une décision annulée quitte la liste.
   - Un type choisi à la main garde sa date (`type_override_at`, vide pour ceux d'avant le 09/10).
@@ -144,4 +147,5 @@ l'utilisateur valide ou refuse. Mesurer sur le dump avant de changer quoi que ce
 | Paire proposée et dépôt possibles en même temps : une seule question | fait |
 | Texte du bouton : « Pas ensemble », question écrite sur la ligne | fait |
 | Historique et annulation | fait |
+| Page « Règles de tri » (les règles sortent de l'historique) | fait |
 | Récurrents sans dictionnaire | second temps |

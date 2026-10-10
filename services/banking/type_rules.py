@@ -162,12 +162,39 @@ def save_rule(
     return row
 
 
+def retype_rule(session: Session, user_uuid: str, master_key: str, rule_id: str, kind: CashflowType) -> BankTypeRule:
+    """Give a rule another type. Replaced by a new row, as `save_rule` does:
+    its creation time is what tells the stored transfer patterns that the
+    rules moved."""
+    row = _owned(session, user_uuid, master_key, rule_id)
+    retyped = BankTypeRule(
+        user_uuid_bidx=row.user_uuid_bidx,
+        rule_bidx=row.rule_bidx,
+        signature_enc=row.signature_enc,
+        account_ref_enc=row.account_ref_enc,
+        credit_enc=row.credit_enc,
+        words_enc=row.words_enc,
+        type_enc=encrypt_data(kind.value, master_key),
+        created_at=datetime.now(timezone.utc),
+    )
+    session.delete(row)
+    # Before the insert: both rows share the rule's blind index, unique per user.
+    session.flush()
+    session.add(retyped)
+    session.commit()
+    return retyped
+
+
 def delete_rule(session: Session, user_uuid: str, master_key: str, rule_id: str) -> None:
+    session.delete(_owned(session, user_uuid, master_key, rule_id))
+    session.commit()
+
+
+def _owned(session: Session, user_uuid: str, master_key: str, rule_id: str) -> BankTypeRule:
     row = session.get(BankTypeRule, rule_id)
     if row is None or row.user_uuid_bidx != hash_index(user_uuid, master_key):
         raise RuleNotFoundError(rule_id)
-    session.delete(row)
-    session.commit()
+    return row
 
 
 def _flag(is_credit: bool) -> str:

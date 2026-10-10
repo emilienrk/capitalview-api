@@ -61,19 +61,20 @@ def test_answers_are_listed_newest_first_and_each_one_withdrawn(client, session,
 
     history = _history(client)
 
-    assert [item["kind"] for item in history] == ["transfer", "rule", "type"]
-    transfer, rule, typed = history
+    # The rule speaks for the operations to come: it lives on the rules page.
+    assert [item["kind"] for item in history] == ["transfer", "type"]
+    transfer, typed = history
     assert sorted(op["label"] for op in transfer["operations"]) == ["To Emilien Roukine", "VIR Virement de Emilien ROUKINE"]
-    assert (rule["type"], rule["operation_count"], rule["name"]) == ("NEUTRAL", 1, "VIR INST JEAN TIERS")
     assert (typed["type"], typed["operations"][0]["label"], typed["overridden_by_pair"]) == ("SAVING", "CARTE BOULANGERIE", False)
     assert typed["at"] is not None
+    assert [rule["label"] for rule in client.get("/banking/type-rules").json()] == ["VIR INST JEAN TIERS"]
 
     for item in history:
         assert client.delete(f"/banking/history/{item['kind']}/{item['id']}").status_code == 204
     assert _history(client) == []
     after = _ops(client)
     assert after["CARTE BOULANGERIE"]["type_source"] == "default"
-    assert after["VIR INST JEAN TIERS"]["type_source"] == "default"
+    assert after["VIR INST JEAN TIERS"]["type_source"] == "rule"
     assert after["To Emilien Roukine"]["transfer_status"] == "suggested"
 
 
@@ -111,6 +112,7 @@ def test_a_type_a_pair_recognised_since_outranks_says_so(client, session, master
 
 def test_an_unknown_answer_is_a_404(client, session, master_key):
     _link(session, master_key, "current")
-    for kind in ("transfer", "type", "rule", "recurring"):
+    for kind in ("transfer", "type", "recurring"):
         assert client.delete(f"/banking/history/{kind}/nope").status_code == 404
-    assert client.delete("/banking/history/elsewhere/nope").status_code == 422
+    for kind in ("rule", "elsewhere"):
+        assert client.delete(f"/banking/history/{kind}/nope").status_code == 422

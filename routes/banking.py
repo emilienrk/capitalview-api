@@ -55,6 +55,7 @@ from dtos.banking import (
     BankTransferQuestionMonth,
     BankTransferQuestionsResponse,
     BankTypeRuleItem,
+    BankTypeRuleUpdate,
     RealCashflowCurrent,
     RealCashflowMonthDetail,
     RealCashflowYear,
@@ -93,7 +94,7 @@ from services.banking.transfer_decisions import (
 from services.banking.errors import BankingApiError
 from services.banking import recurring as recurring_service
 from services.banking.recurring_decisions import RecurringNotFoundError
-from services.banking.type_rules import RuleNotFoundError, delete_rule
+from services.banking.type_rules import RuleNotFoundError, delete_rule, retype_rule
 from services.banking.ledger import build_ledger, ledger_etag
 from services.banking.real_cashflow import (
     PeriodNotCompletedError,
@@ -689,7 +690,28 @@ def get_type_rules(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
+    """The user's sorting rules: the labels they typed, operations to come included."""
     return list_type_rules(session, current_user.uuid, master_key)
+
+
+@router.patch("/type-rules/{rule_id}", response_model=BankTypeRuleItem)
+def patch_type_rule(
+    rule_id: str,
+    data: BankTypeRuleUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Give a rule another type. It comes back under a new id."""
+    try:
+        row = retype_rule(session, current_user.uuid, master_key, rule_id, data.type)
+    except RuleNotFoundError:
+        raise HTTPException(status_code=404, detail="Règle introuvable.")
+    # Listed only while its account exists, as GET /type-rules lists it.
+    rule = next((rule for rule in list_type_rules(session, current_user.uuid, master_key) if rule.id == row.uuid), None)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Règle introuvable.")
+    return rule
 
 
 @router.delete("/type-rules/{rule_id}", status_code=204)

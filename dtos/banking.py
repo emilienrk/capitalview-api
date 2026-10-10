@@ -622,8 +622,6 @@ class BankHistoryKind(str, Enum):
     REVERSAL = "reversal"
     # A type forced on one operation.
     TYPE = "type"
-    # A type given to a label, and the operations to come.
-    RULE = "rule"
     RECURRING = "recurring"
 
 
@@ -647,11 +645,8 @@ class BankHistoryItem(BaseModel):
     # The two legs of a pair, the operation of a type; a leg since deleted is
     # left out.
     operations: list[BankHistoryOperation] = []
-    # A rule's label, a recurring payment's name.
+    # A recurring payment's name.
     name: str | None = None
-    account_name: str | None = None
-    # What a rule types across the history.
-    operation_count: int | None = None
     # A recurring payment confirmed, or refused.
     confirmed: bool | None = None
     # A type chosen by hand that a pair recognised since outranks: said, never
@@ -765,6 +760,11 @@ class BankTypeRuleItem(BaseModel):
     type: CashflowType
     operation_count: int
     created_at: datetime
+
+
+class BankTypeRuleUpdate(BaseModel):
+    """PATCH /banking/type-rules/{id}."""
+    type: CashflowType
 
 
 class RecurringDecisionKind(str, Enum):

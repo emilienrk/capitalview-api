@@ -2,10 +2,13 @@
 The history of the user's answers: every decision still in force, newest first,
 each one withdrawable (docs/bank-sorting.md).
 
-Read from where each decision already lives — the pair decisions, the rules,
-the types forced on operations, the recurring decisions — rather than from a
-log of its own: withdrawing a decision deletes it, and every reading of the
-operations is back to what it was before, with nothing to keep in step.
+Read from where each decision already lives — the pair decisions, the types
+forced on operations, the recurring decisions — rather than from a log of its
+own: withdrawing a decision deletes it, and every reading of the operations is
+back to what it was before, with nothing to keep in step.
+
+A rule is not an answer about operations but about those to come: it has its
+own page, the user's sorting rules (GET /banking/type-rules).
 """
 
 from __future__ import annotations
@@ -33,11 +36,9 @@ from services.banking.flows import (
     _pairing,
     _user_accounts,
     clear_transaction_type,
-    list_type_rules,
 )
 from services.banking.recurring_decisions import CONFIRMED, RecurringNotFoundError, load_decisions
 from services.banking.transfer_decisions import TransactionNotFoundError
-from services.banking.type_rules import RuleNotFoundError, delete_rule
 from services.encryption import decrypt_data, hash_index
 
 _PAIR_KINDS = {
@@ -95,17 +96,6 @@ def action_history(session: Session, user_uuid: str, master_key: str) -> list[Ba
             overridden_by_pair=leg is not None and leg.status is not BankTransferStatus.SUGGESTED,
         ))
 
-    for rule in list_type_rules(session, user_uuid, master_key):
-        items.append(BankHistoryItem(
-            kind=BankHistoryKind.RULE,
-            id=rule.id,
-            at=rule.created_at,
-            type=rule.type,
-            name=rule.label or rule.signature,
-            account_name=rule.account_name,
-            operation_count=rule.operation_count,
-        ))
-
     for decision in load_decisions(session, user_uuid, master_key):
         items.append(BankHistoryItem(
             kind=BankHistoryKind.RECURRING,
@@ -125,8 +115,6 @@ def undo_action(session: Session, user_uuid: str, master_key: str, kind: BankHis
     try:
         if kind is BankHistoryKind.TYPE:
             clear_transaction_type(session, user_uuid, master_key, item_id)
-        elif kind is BankHistoryKind.RULE:
-            delete_rule(session, user_uuid, master_key, item_id)
         elif kind is BankHistoryKind.RECURRING:
             recurring_service.forget(session, user_uuid, master_key, item_id)
         else:
@@ -139,7 +127,7 @@ def undo_action(session: Session, user_uuid: str, master_key: str, kind: BankHis
             if not deleted.rowcount:
                 raise HistoryItemNotFoundError(item_id)
             session.commit()
-    except (TransactionNotFoundError, RuleNotFoundError, RecurringNotFoundError) as exc:
+    except (TransactionNotFoundError, RecurringNotFoundError) as exc:
         raise HistoryItemNotFoundError(item_id) from exc
 
 
