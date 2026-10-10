@@ -29,7 +29,6 @@ from dtos.banking import (
     BankTransactionItem,
     BankTransferStatus,
     CashflowType,
-    OperationType,
     RecurringCadence,
     RecurringDecisionKind,
     RecurringDirection,
@@ -219,7 +218,6 @@ class _Reader:
             occurrence_count=occurrence_count(stored),
             extra_count=sum(1 for m in stored.members if m.role == EXTRA),
             accounts=[self.names.get(account, account) for account in stored.accounts],
-            payment_method=OperationType(stored.method),
             price_changes=[
                 BankRecurringPriceChange(
                     date=after[0], before=before[2], after=after[2],
@@ -325,7 +323,7 @@ def mark(
             uuid=str(uuid.uuid4()), status=CONFIRMED, anchors=frozenset({ref}), includes=frozenset({ref}),
             identity=Identity(
                 merchant_words(current.label), (current.account_id,), (cadence or RecurringCadence.MONTHLY).value,
-                current.amount, current.operation_type.value, direction.value,
+                current.amount, direction.value,
             ),
         )
     if cadence is not None:
@@ -428,7 +426,7 @@ def _decided(session: Session, user_uuid: str, master_key: str, stored: StoredRe
         uuid=str(uuid.uuid4()), status=CONFIRMED, anchors=anchors,
         identity=Identity(
             tuple(stored.words), tuple(stored.accounts), stored.cadence,
-            stored.amount, stored.method, stored.direction,
+            stored.amount, stored.direction,
         ),
     )
 

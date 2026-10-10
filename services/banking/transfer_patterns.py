@@ -59,7 +59,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "27"
+_VERSION = "28"
 
 
 class FlowCarrier(NamedTuple):
@@ -119,7 +119,6 @@ class StoredRecurring:
     accounts: list[str]
     # The account of the last regular debit: whose coverage says whether it still runs.
     last_account: str
-    method: str
     # The operation a question sits on, and whether it asks.
     carrier: str | None
     question: bool
@@ -148,7 +147,7 @@ class StoredRecurring:
             "episodes": [[a.isoformat(), b.isoformat()] for a, b in self.episodes],
             "first": self.first.isoformat(), "last": self.last.isoformat(), "amount": str(self.amount),
             "name": self.name, "renamed": [[day.isoformat(), before, after] for day, before, after in self.renamed],
-            "accounts": self.accounts, "last_account": self.last_account, "method": self.method,
+            "accounts": self.accounts, "last_account": self.last_account,
             "carrier": self.carrier, "question": self.question, "counted": self.counted, "words": self.words,
             "nature": self.nature,
             "ended_on": self.ended_on.isoformat() if self.ended_on else None,
@@ -172,7 +171,7 @@ class StoredRecurring:
             first=date.fromisoformat(content["first"]), last=date.fromisoformat(content["last"]),
             amount=Decimal(content["amount"]), name=content["name"],
             renamed=[(date.fromisoformat(day), before, after) for day, before, after in content["renamed"]],
-            accounts=content["accounts"], last_account=content["last_account"], method=content["method"],
+            accounts=content["accounts"], last_account=content["last_account"],
             carrier=content["carrier"], question=content["question"], counted=content["counted"],
             words=content["words"],
             nature=content["nature"],

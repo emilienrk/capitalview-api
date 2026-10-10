@@ -19,13 +19,13 @@ merged by the user.
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from typing import NamedTuple
 
-from dtos.banking import BankTransferStatus, CashflowType, OperationType, RecurringDirection
+from dtos.banking import BankTransferStatus, CashflowType, RecurringDirection
 from services.banking import recurrence
 from services.banking.cashflow_types import CANCELLATIONS, TRANSFERS
 from services.banking.label_groups import group_name
@@ -71,7 +71,8 @@ class Movement(NamedTuple):
     label: str | None
     leg: BankTransferStatus | None
     type: CashflowType
-    method: OperationType
+    # On a regulated savings account.
+    regulated: bool = False
 
 
 @dataclass
@@ -162,9 +163,9 @@ def occurrence_count(stored: StoredRecurring) -> int:
 
 
 def _eligible(movements: list[Movement]) -> tuple[list[Movement], list[Movement]]:
-    """Final debits outside internal transfers and cash withdrawals, a debit
-    its refund or rejection cancelled included for its rhythm; unpaired final
-    credits, for income and for refunds."""
+    """Final debits outside internal transfers, a debit its refund or rejection
+    cancelled included for its rhythm; unpaired final credits, for income and
+    for refunds."""
     debits, credits = [], []
     for m in movements:
         if not m.is_final or m.day is None or m.amount <= 0:
@@ -172,15 +173,15 @@ def _eligible(movements: list[Movement]) -> tuple[list[Movement], list[Movement]
         if m.is_credit:
             if m.leg is None:
                 credits.append(m)
-        elif m.leg not in TRANSFERS and m.method is not OperationType.WITHDRAWAL:
+        elif m.leg not in TRANSFERS:
             debits.append(m)
     return debits, credits
 
 
 def _op(m: Movement, merchant: int) -> RecurrenceOp:
     return RecurrenceOp(
-        m.uuid, m.account, m.paid_on or m.day, m.amount, m.currency, m.method, m.type,
-        m.leg in CANCELLATIONS, merchant,
+        m.uuid, m.account, m.paid_on or m.day, m.amount, m.currency, m.type,
+        m.leg in CANCELLATIONS, merchant, m.regulated,
     )
 
 
@@ -359,11 +360,9 @@ def _stored(
         state = CONFIRMED if decision.status == CONFIRMED else REFUSED
     counted = state == CONFIRMED
 
-    method = Counter(op.method for op in series.regular).most_common(1)[0][0]
     # An income is never refunded on its own: a payer the user also pays
-    # (a parent, a friend) would read as taking it back. Nor is a payment made
-    # by transfer: its payee may well be someone the user owes, and pays back.
-    linked = [] if income or method is OperationType.TRANSFER else [
+    # (a parent, a friend) would read as taking it back.
+    linked = [] if income else [
         op for op in recurrence.linked_refunds(series, credit_ops, _refunding(series, heads))
         if op.id not in taken_refunds and op.id not in entry.excluded
     ]
@@ -397,7 +396,6 @@ def _stored(
         renamed=renamed,
         accounts=sorted({account_uuids.get(op.account, op.account) for op in series.regular + series.extras}),
         last_account=series.last.account,
-        method=method.value,
         carrier=carrier.id if carrier else None,
         question=question,
         counted=counted,

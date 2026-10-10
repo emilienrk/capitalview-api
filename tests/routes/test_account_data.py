@@ -557,7 +557,7 @@ def _recurring(session, user_uuid: str, bank_account_uuid: str, master_key: str)
 
     save_decision(session, user_uuid, master_key, Decision(
         uuid="sub-1", status=CONFIRMED, anchors=frozenset({hash_index("tx-1", master_key)}),
-        identity=Identity(("edf", "clients"), (bank_account_uuid,), "monthly", Decimal("60.00"), "DIRECT_DEBIT"),
+        identity=Identity(("edf", "clients"), (bank_account_uuid,), "monthly", Decimal("60.00")),
         name="Électricité",
     ))
 

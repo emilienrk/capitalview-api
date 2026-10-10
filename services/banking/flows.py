@@ -785,7 +785,6 @@ def transfer_patterns(
         for i, m in enumerate(movements)
     }
     backfilled = False
-    kinds: list[OperationType] = []
     for i, movement in enumerate(movements):
         row = movement.row
         changed = False
@@ -798,8 +797,7 @@ def transfer_patterns(
             changed = True
         # Every row, not only those stored before types existed: this is how a
         # change to the lexicon reaches the history.
-        kinds.append(operation_type(labels[i]))
-        kind = kinds[-1].value
+        kind = operation_type(labels[i]).value
         if row.operation_type_enc is None or decrypt_data(row.operation_type_enc, master_key) != kind:
             row.operation_type_enc = encrypt_data(kind, master_key)
             changed = True
@@ -879,7 +877,7 @@ def transfer_patterns(
     derived = recurring_series.derive(
         [
             _recurring_movement(index, movement, labels[index], transfer_legs.get(index), resolutions[index],
-                                   kinds[index], master_key)
+                                movement.account_bidx in savings, master_key)
             for index, movement in enumerate(movements)
             if not movement.synthetic
         ],
@@ -983,7 +981,7 @@ def _recurring_movement(
     label: str | None,
     leg: _TransferLeg | None,
     resolution: Resolution,
-    kind: OperationType,
+    regulated: bool,
     master_key: str,
 ) -> recurring_series.Movement:
     # The card payment's own date keeps a recurring payment's rhythm through the
@@ -996,7 +994,7 @@ def _recurring_movement(
         index=index, uuid=movement.row.uuid, account=movement.account_bidx, period=movement.period,
         day=movement.day, paid_on=paid_on, amount=movement.amount, currency=movement.currency,
         is_credit=movement.is_credit, is_final=movement.is_final, label=label,
-        leg=leg.status if leg else None, type=resolution.type, method=kind,
+        leg=leg.status if leg else None, type=resolution.type, regulated=regulated,
     )
 
 

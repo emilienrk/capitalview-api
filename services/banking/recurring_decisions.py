@@ -37,12 +37,12 @@ class RecurringNotFoundError(LookupError):
 
 @dataclass(frozen=True)
 class Identity:
-    """Who was paid or who paid, how and how much, when the decision was made."""
+    """Who was paid or who paid, and how much, when the decision was made.
+    Decisions stored before 2026-10-10 also hold a means of payment, never read."""
     words: tuple[str, ...]
     accounts: tuple[str, ...]
     cadence: str
     amount: Decimal
-    method: str
     # expense | income. Decisions stored before income was detected hold none,
     # and were all about payments.
     direction: str = RecurringDirection.EXPENSE.value
@@ -50,14 +50,14 @@ class Identity:
     def to_json(self) -> dict:
         return {
             "words": list(self.words), "accounts": list(self.accounts), "cadence": self.cadence,
-            "amount": str(self.amount), "method": self.method, "direction": self.direction,
+            "amount": str(self.amount), "direction": self.direction,
         }
 
     @classmethod
     def from_json(cls, content: dict) -> Identity:
         return cls(
             tuple(content["words"]), tuple(content["accounts"]), content["cadence"],
-            Decimal(content["amount"]), content["method"],
+            Decimal(content["amount"]),
             content.get("direction", RecurringDirection.EXPENSE.value),
         )
 
@@ -144,7 +144,7 @@ def forget_account(session: Session, user_bidx: str, account_uuid: str, master_k
         if not remaining:
             session.delete(row)
             continue
-        kept = Identity(identity.words, remaining, identity.cadence, identity.amount, identity.method, identity.direction)
+        kept = Identity(identity.words, remaining, identity.cadence, identity.amount, identity.direction)
         row.identity_enc = encrypt_data(json.dumps(kept.to_json()), master_key)
         row.updated_at = datetime.now(timezone.utc)
         session.add(row)

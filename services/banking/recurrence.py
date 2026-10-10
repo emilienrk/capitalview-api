@@ -5,7 +5,9 @@ missed month, a pause, a refund, a rejected debit, a new label, a new account,
 a new means of payment.
 
 Pure: operations in, series out. Nothing here reads a label (the merchant comes
-from `merchants.py`) nor a type rule (each operation carries its resolved type).
+from `merchants.py`) nor a type rule (each operation carries its resolved type),
+nor a means of payment: only words in a label tell a card from a direct debit
+or a transfer, and no word decides here (docs/bank-sorting.md).
 Debits and credits run through the same layers, apart: a series is one or the
 other (its `kind`), and only whether it is offered reads differently.
 
@@ -27,7 +29,8 @@ the user confirms it (`recurring_series.py`).
 Measured on the real dump of 2026-09-18 (15 recurring payments, no false one) and
 on 29 synthetic edge cases, all kept as tests. Income measured on the dump of
 2026-09-23: 440 credits, 56 chains, the salaries, allowances and family
-transfers kept, the friends paying back left out.
+transfers kept, the friends paying back left out. Without the means of payment,
+measured again on the dump of 2026-09-25: the same 25 series, no new one.
 """
 
 from __future__ import annotations
@@ -44,7 +47,7 @@ from enum import Enum
 from statistics import median
 from typing import NamedTuple
 
-from dtos.banking import CashflowType, OperationType
+from dtos.banking import CashflowType
 
 # ---------------------------------------------------------------------------
 # Cadences
@@ -117,12 +120,14 @@ class RecurrenceOp:
     day: date
     amount: Decimal
     currency: str
-    method: OperationType
     type: CashflowType
     # Its refund or its rejection is paired with it: it keeps the rhythm and
     # never counts for an amount.
     cancelled: bool
     merchant: int
+    # Booked on a regulated savings account (Livret A, LDDS, LEP, PEL, CEL):
+    # money only ever comes there from its holder, or from the bank as interest.
+    regulated: bool = False
     ordinal: int = field(init=False)
     month: float = field(init=False)
     value: float = field(init=False)
@@ -326,16 +331,6 @@ def compatible(a: Cadence, b: Cadence) -> bool:
 _MONTH_LIKE = frozenset({"monthly", "fourweekly"})
 
 
-def _family(method: OperationType) -> str:
-    """How sure a means of payment can make a series: a mandate, a transfer,
-    or anything else (a card, or a bank that names none)."""
-    if method is OperationType.DIRECT_DEBIT:
-        return "direct_debit"
-    if method is OperationType.TRANSFER:
-        return "transfer"
-    return "card"
-
-
 # A merchant is the series' own when its regular debits are most of what it
 # was paid over the series' span: only then are its other debits the series'
 # (a prorata, a regularisation) rather than purchases at a shop that also
@@ -524,13 +519,13 @@ def _near(amount: Decimal) -> tuple[Decimal, ...]:
 
 def _hand_offs(series: list[Series]) -> None:
     """A merchant renamed: the same amount, to the cent, carried on at the next
-    due date, on the same account and the same kind of payment."""
+    due date, on the same account."""
     series.sort(key=lambda s: (s.first.day, s.first.id))
     # Looked up by how a series starts rather than compared pair by pair:
     # a real history holds a few hundred series.
-    starts: dict[tuple[str, str, Decimal], list[Series]] = defaultdict(list)
+    starts: dict[tuple[str, Decimal], list[Series]] = defaultdict(list)
     for s in series:
-        starts[(s.first.account, _family(s.first.method), s.first.amount)].append(s)
+        starts[(s.first.account, s.first.amount)].append(s)
     changed = True
     while changed:
         changed = False
@@ -540,7 +535,7 @@ def _hand_offs(series: list[Series]) -> None:
                 continue
             last = before.last
             candidates = sorted(
-                (after for amount in _near(last.amount) for after in starts.get((last.account, _family(last.method), amount), ())),
+                (after for amount in _near(last.amount) for after in starts.get((last.account, amount), ())),
                 key=lambda after: position[id(after)],
             )
             for after in candidates:
@@ -559,7 +554,7 @@ def _hand_offs(series: list[Series]) -> None:
                 before.variable = before.variable or after.variable
                 before.sort()
                 series.remove(after)
-                starts[(after.first.account, _family(after.first.method), after.first.amount)].remove(after)
+                starts[(after.first.account, after.first.amount)].remove(after)
                 changed = True
                 break
             if changed:
@@ -571,9 +566,9 @@ def _renamed_once(
 ) -> None:
     """The same, seen only once so far under its new name: the only debit of
     that amount at the next due date."""
-    by_payment: dict[tuple[str, OperationType, Decimal], list[RecurrenceOp]] = defaultdict(list)
+    by_payment: dict[tuple[str, Decimal], list[RecurrenceOp]] = defaultdict(list)
     for op in debits:
-        by_payment[(op.account, op.method, op.amount)].append(op)
+        by_payment[(op.account, op.amount)].append(op)
     position = {op.id: n for n, op in enumerate(debits)}
     for s in series:
         s.sort()
@@ -587,7 +582,7 @@ def _renamed_once(
         successors = []
         last = s.last
         candidates = sorted(
-            (op for amount in _near(last.amount) for op in by_payment.get((last.account, last.method, amount), ())),
+            (op for amount in _near(last.amount) for op in by_payment.get((last.account, amount), ())),
             key=lambda op: position[op.id],
         )
         for op in candidates:
@@ -671,8 +666,6 @@ class Features:
     deviation: float
     flat: float
     exact: float
-    method: OperationType
-    family: str
     amount: Decimal
     round: bool
     # Regular debits over the merchant's debits across the series' span.
@@ -680,6 +673,8 @@ class Features:
     # The share typed as the series' kind.
     typed: float
     cancelled: float
+    # Every regular credit on a regulated savings account.
+    regulated: bool
 
 
 def carrier(series: Series) -> RecurrenceOp | None:
@@ -781,7 +776,6 @@ def features(series: Series, detection: Detection) -> Features:
     _, expected = episodes(series)
     residuals = [stepped[1] for a, b in zip(regular, regular[1:]) if (stepped := step(c, a, b)) is not None]
     pairs = list(zip(regular, regular[1:]))
-    method = Counter(op.method for op in regular).most_common(1)[0][0]
     others = detection.others.get(id(series), set())
     span = [
         op for op in detection.merchant_ops(series)
@@ -796,25 +790,33 @@ def features(series: Series, detection: Detection) -> Features:
         deviation=median(residuals) if residuals else 0.0,
         flat=sum(flat(a.value, b.value) for a, b in pairs) / max(len(pairs), 1),
         exact=sum(exact(a.amount, b.amount) for a, b in pairs) / max(len(pairs), 1),
-        method=method,
-        family=_family(method),
         amount=amount,
         round=is_round(amount),
         exclusive=len(regular) / max(len(span), 1),
         typed=types[series.kind] / sum(types.values()),
         cancelled=sum(op.cancelled for op in regular) / len(regular),
+        regulated=all(op.regulated for op in regular),
     )
 
 
-# Transfers to a friend: chains of three or four alike amounts formed by
-# chance held a quarter of the transfers over their span. The real rent held
-# three quarters.
-TRANSFER_MIN_EXCLUSIVE = 0.5
+# The share of what a merchant was paid over the series' span that the series
+# holds. Below it, a shop the user also buys from now and then. A payment of a
+# variable amount, and one paid every week or two, need the merchant nearly to
+# themselves: on the dump, two coffee machines held three quarters of theirs.
+EXCLUSIVE = 0.7
+VARIABLE_EXCLUSIVE = 0.75
+FREQUENT_EXCLUSIVE = 0.9
+# A premium revised once a year stays within a tenth.
+REVISED_SHARE = Decimal("0.10")
 
 
 def offered(series: Series, f: Features) -> bool:
     """Whether the series is offered to the user as a recurring payment, or a
-    recurring income. Never counted before they confirm it."""
+    recurring income. Never counted before they confirm it.
+
+    One rule for every payment, whatever pays it: a steady rhythm, and an
+    amount fixed to the cent between its price changes — or moving, at a
+    merchant paid nothing else."""
     if series.kind is CashflowType.INCOME:
         return _income_offered(series, f)
     c, n = series.cadence, f.count
@@ -822,40 +824,34 @@ def offered(series: Series, f: Features) -> bool:
     # Only an expense is a recurring payment; a debit refunded every time is not one.
     if f.cancelled >= 0.5 or f.typed < 0.5 or last is None or last.type is not CashflowType.EXPENSE:
         return False
+    if c.name in ("weekly", "biweekly") and f.exclusive < FREQUENT_EXCLUSIVE:
+        return False
     if c.name in ("annual", "semiannual") and n == 2:
         a, b = series.regular[0].amount, series.regular[1].amount
-        if f.family == "direct_debit":
-            # A premium revised within a tenth.
-            return abs(a - b) <= Decimal("0.10") * max(a, b) and f.deviation <= 15 and f.exclusive >= 0.5
-        return exact(a, b) and not f.round and f.amount >= 10 and f.deviation <= 7 and f.exclusive >= 0.7
-    if f.family == "direct_debit":
-        # A mandate: the amount may vary.
-        return n >= 2 and n + f.extras >= 3 and f.coverage >= 0.6 and f.deviation <= 5
-    if f.family == "transfer":
-        # Paid to someone the user also sends other amounts to, a few alike
-        # ones fall into step by chance.
-        if series.variable or f.flat < 0.75 or f.exclusive < TRANSFER_MIN_EXCLUSIVE:
-            return False
-        return n >= 3 and f.coverage >= 0.6 and f.deviation <= 5
-    # A card, or a bank that names no means of payment: habits look regular too.
-    if c.name in ("weekly", "biweekly"):
-        return False
-    if series.variable:
-        return c in (MONTHLY, FOURWEEKLY) and f.exclusive >= 0.75 and f.coverage >= 0.8 and (
-            (n >= 4 and f.deviation <= 2.5) or (n >= 3 and f.deviation <= 1)
+        return (
+            abs(a - b) <= REVISED_SHARE * max(a, b) and not f.round and f.amount >= 10 and f.deviation <= 7
+            and f.exclusive >= EXCLUSIVE
         )
+    if series.variable:
+        # A bill following what was used: monthly or quarterly. Every other
+        # month, a barber's and a pizzeria's amounts came back as regularly.
+        return (
+            c.name in ("monthly", "fourweekly", "quarterly") and n >= 4 and f.coverage >= 0.8 and f.deviation <= 2.5
+            and f.exclusive >= VARIABLE_EXCLUSIVE
+        )
+    # Two steps in three to the cent let a price change now and then (MACIF
+    # rose five times in 24 debits); within 3 %, an exchange rate.
     if not (f.exact >= 0.6 or (f.flat >= 0.9 and not f.round)):
         return False
-    if f.deviation > 3 or f.coverage < 0.6 or f.exclusive < 0.7:
+    if f.deviation > 3 or f.coverage < 0.6 or f.exclusive < EXCLUSIVE:
         return False
-    needed = 2 if c.name in ("annual", "semiannual") and f.amount >= 10 and not f.round else 3
+    needed = 3
     if f.amount < 2:
-        needed = max(needed, 6)
-    if f.round:
-        # Bets, top-ups, tickets: round amounts come back by habit.
-        needed = max(needed, 5)
-        if f.deviation > 1:
-            return False
+        needed = 6
+    elif f.round:
+        # Bets, top-ups, a pizzeria: round amounts come back by habit. Three
+        # at 12 € a month apart did on the dump; four never did.
+        needed = 4
     return n >= needed
 
 
@@ -885,8 +881,9 @@ def _income_offered(series: Series, f: Features) -> bool:
     last = carrier(series)
     if f.cancelled >= 0.5 or f.typed < 0.5 or last is None or last.type is not CashflowType.INCOME:
         return False
-    if f.method is OperationType.INTEREST:
-        # The bank's own interest: no habit looks like it.
+    if f.regulated:
+        # A regulated savings account takes money only from its holder: a
+        # credit nothing pairs there is the bank's interest, once a year.
         return f.deviation <= 7
     if c.name in ("weekly", "biweekly"):
         return False

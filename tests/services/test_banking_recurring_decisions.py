@@ -29,7 +29,7 @@ from tests.services.test_banking_real_cashflow import CURRENT, LIVRET, _ops
 def _decision(uuid: str, *accounts: str, status: str = CONFIRMED) -> Decision:
     return Decision(
         uuid=uuid, status=status, anchors=frozenset({f"anchor-{uuid}"}),
-        identity=Identity(("edf", "clients"), accounts, "monthly", Decimal("60.00"), "DIRECT_DEBIT"),
+        identity=Identity(("edf", "clients"), accounts, "monthly", Decimal("60.00")),
     )
 
 

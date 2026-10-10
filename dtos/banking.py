@@ -960,7 +960,6 @@ class BankRecurringItem(BaseModel):
     occurrence_count: int
     extra_count: int
     accounts: list[str]
-    payment_method: OperationType
     price_changes: list[BankRecurringPriceChange] = []
     episodes: list[BankRecurringEpisode] = []
     renamed: list[BankRecurringRename] = []

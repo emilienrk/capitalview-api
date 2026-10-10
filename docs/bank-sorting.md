@@ -133,8 +133,8 @@ elle n'est pas comptée.
 ## Ce qui ne décide jamais
 
 Le dictionnaire de moyens de paiement (« CARTE », « VIR », « PRLV »…, `services/banking/operation_types.py`) ne décide
-plus rien : ni quelle paire est proposée, ni quelle opération reçoit une question, ni quel dépôt est rapproché. Il
-peut rester pour l'affichage. Les mots ignorés pour grouper les marchands servent à l'affichage, pas à décider d'un
+plus rien : ni quelle paire est proposée, ni quelle opération reçoit une question, ni quel dépôt est rapproché, ni
+quel récurrent est proposé. Il ne sert plus qu'à l'affichage et au filtre des opérations. Les mots ignorés pour grouper les marchands servent à l'affichage, pas à décider d'un
 regroupement de réponses.
 
 ## Récurrents (second temps)
@@ -152,6 +152,33 @@ séries restent, les 15 qui comptaient seules (« auto ») deviennent des propos
 
 **Pas de seuil dans les récurrents** : une dépense proposée n'apparaît que dans Récurrents, pas dans « À trier ».
 Refusée, ses opérations au-dessus du seuil tombent dans « À trier ».
+
+**Aucun moyen de paiement** (décidé le 10/10) : carte, prélèvement ou virement, on ne les lit pas, et aucun mot n'est
+appris. La ressemblance des libellés (`merchants.py`) reste telle quelle : un abonnement garde la même forme de
+libellé. Une seule règle pour toutes les dépenses (`recurrence.offered`) :
+
+- un rythme régulier (mensuel, 4 semaines, bimestriel, trimestriel, semestriel, annuel), à 3 jours près, les deux
+  tiers des échéances au moins ;
+- un montant fixe au centime entre ses hausses (deux pas sur trois au centime : MACIF et ses 5 hausses en 24
+  prélèvements), ou stable à 3 % s'il n'est pas rond (un abonnement payé en devise) ; 3 échéances, 4 pour un montant
+  rond (3 pizzas à 12 € à un mois d'écart sur le dump), 6 sous 2 € ;
+- ou un montant variable (une facture d'énergie, de téléphone) : mensuel ou trimestriel, 4 échéances, chez un
+  marchand qui ne reçoit presque rien d'autre (les trois quarts) ; tous les deux mois, un coiffeur et une pizzeria
+  passaient ;
+- le marchand reçoit surtout la série (70 %) : sinon c'est un magasin où l'on achète aussi ;
+- chaque semaine ou toutes les deux semaines (un ménage, de l'argent de poche), le marchand ne reçoit presque rien
+  d'autre (90 %) : sur le dump, deux machines à café en recevaient les trois quarts ;
+- une cotisation annuelle vue deux fois : à un dixième près (révisée), pas ronde, 10 € au moins.
+
+Les intérêts ne passent plus par le mot « INTER » : un crédit sans paire sur un livret réglementé (le type du compte)
+ne peut venir que de la banque, une fois l'an. Un renommage (EDF, OVH) se reconnaît au même montant au centime, sur le
+même compte, à l'échéance suivante. Les retraits ne sont plus écartés d'avance : sans régularité, ils ne forment pas de
+série. Un paiement par virement prend ses remboursements comme les autres, une fois confirmé.
+
+Mesuré sur le dump du 25/09 : les mêmes 25 séries, EDF, Olness et les intérêts compris (sans dictionnaire, l'ancienne
+règle carte les perdait : un montant rond devait tomber au jour près), aucune nouvelle ; « À trier » ne bouge pas. Un
+effet : le loyer confirmé « Frederic Durand », payé par virement, prend comme remboursement le crédit de 345 € du
+29/07/2026 venu du même nom.
 
 ## État au 9 octobre 2026
 
@@ -172,4 +199,4 @@ Refusée, ses opérations au-dessus du seuil tombent dans « À trier ».
 | Page « Règles de tri » (les règles sortent de l'historique) | fait |
 | Règles écrites à la main, « contient » / « commence par », avec aperçu, sans option | fait |
 | Récurrents : rien compté seul, toute série proposée | fait |
-| Récurrents sans dictionnaire | second temps |
+| Récurrents sans dictionnaire ni moyen de paiement, une seule règle | fait |

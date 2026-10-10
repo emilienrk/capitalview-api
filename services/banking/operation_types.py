@@ -2,14 +2,12 @@
 What kind of operation a label describes: a card payment, a transfer, a direct
 debit, a cash withdrawal, interest.
 
-The one place a label is read with banking vocabulary. `flows.py` refuses to,
-and rightly: a bank's label format is its own invention, and no total may rest
-on guessing it. The type is the assumed exception, and stays harmless by
-construction — it feeds display and filtering, and otherwise only ever holds
-a question back: the pairing never offers a card payment or a direct debit
-against a transfer received. No total and no nature reads it, so a bank format
-this lexicon misses yields an incomplete filter or one more question, never a
-wrong figure.
+The one place a label is read with banking vocabulary. Nothing that decides
+reads it, and rightly: a bank's label format is its own invention, and no total
+may rest on guessing it. It feeds the display and the filter of the operations
+only — no pairing, no question, no recurring payment (since 2026-10-10) and no
+nature reads it, so a bank format this lexicon misses yields an incomplete
+filter, never a wrong figure (docs/bank-sorting.md).
 
 It answers only when the label is unambiguous, keyword first, and says UNKNOWN
 otherwise — not "other", which would claim the operation was identified. A

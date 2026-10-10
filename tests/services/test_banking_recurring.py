@@ -96,9 +96,12 @@ def test_three_card_payments_of_one_amount_are_offered(session: Session, master_
     assert (stored.state, stored.counted, stored.question) == ("candidate", False, True)
 
 
-def test_a_card_payment_whose_amount_moves_still_asks(session: Session, master_key: str):
-    _ops(session, master_key, *_months(CURRENT, "2026-01", 3, 2, lambda k: f"{7 + k}.79", "CARTE OVH SAS CB*0837"))
+def test_a_payment_whose_amount_moves_is_offered_from_its_fourth(session: Session, master_key: str):
+    moving = _months(CURRENT, "2026-01", 4, 2, lambda k: f"{7 + k}.79", "CARTE OVH SAS CB*0837")
+    _ops(session, master_key, *moving[:3])
+    assert _recurring(session, master_key) == []
 
+    _ops(session, master_key, moving[3])
     [stored] = _recurring(session, master_key)
     assert (stored.state, stored.variable, stored.counted, stored.question) == ("candidate", True, False, True)
 
@@ -263,8 +266,9 @@ def test_a_refund_from_a_counted_recurring_payment_comes_off_its_spending_unaske
     assert review_queue(session, USER, master_key).questions == []
 
 
-def test_a_payment_made_by_transfer_takes_no_refund_on_its_own(session: Session, master_key: str):
-    """Its payee may be someone the user owes: a credit from them is theirs to sort."""
+def test_a_payment_made_by_transfer_takes_its_refund_once_confirmed(session: Session, master_key: str):
+    """No means of payment is read: a rent's regularisation is its refund, as
+    any payment's, once the user confirmed it."""
     rent = "VIR SEPA TRANSALP'DOME S.A.S."
     _ops(
         session, master_key,
@@ -275,9 +279,8 @@ def test_a_payment_made_by_transfer_takes_no_refund_on_its_own(session: Session,
     decide(session, USER, master_key, stored.carrier, RecurringDecisionKind.CONFIRM)
 
     [credit] = [tx for tx in _month_items(session, master_key, "2026-02") if tx.is_credit]
-    assert credit.recurring is None
-    assert (credit.cashflow_type, credit.type_source) == (Type.INCOME, TypeSource.DEFAULT)
-    assert credit.flow_question is not None
+    assert credit.recurring.role == "refund"
+    assert (credit.cashflow_type, credit.type_source, credit.flow_question) == (Type.EXPENSE, TypeSource.RECURRING, None)
 
 
 def test_recurring_payments_are_part_of_the_expenses_month_by_month_as_the_ledger_adds_them(session: Session, master_key: str):
