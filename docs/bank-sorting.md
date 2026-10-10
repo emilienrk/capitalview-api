@@ -11,8 +11,9 @@ de l'utilisateur, la loi, ou une répétition mesurée. **Jamais un mot du libel
 standardisés, ils changent d'une banque et d'une langue à l'autre, et un même libellé couvre des opérations de natures
 différentes (« VIR Virement interne » vers un livret, vers un ami, vers un PEA).
 
-Quand il n'y a pas de preuve, l'opération est comptée comme le dit la banque, et l'incertitude se voit. Les
-accélérateurs (règles par nom, mots appris) viendront ensuite, **en option** dans les réglages, jamais par défaut.
+Quand il n'y a pas de preuve, l'opération est comptée comme le dit la banque, et l'incertitude se voit. Les règles
+que l'utilisateur écrit lui-même (« contient », « commence par ») sont sa parole, pas une devinette : elles ne sont
+derrière aucune option, rien ne se passe tant qu'il n'en écrit pas (décidé le 10/10). Les mots appris sont abandonnés.
 
 Chaque changement de règle se mesure sur un dump réel, avant et après : paires, types, questions, totaux.
 
@@ -89,8 +90,14 @@ ne reçoivent pas de question et ne changent aucun total.
   d'opérations qu'elle type ; on y change son type ou on la supprime. Validé le 10/10 : une règle parle des
   opérations à venir, elle n'a pas sa place dans l'historique des réponses.
 - Une règle par nom n'empêche **jamais** une paire trouvée plus tard : la paire passe avant.
-- Une règle par nom écrite à la main (second temps) : « contient » ou « commence par », jamais de regex, toujours avec
-  l'aperçu des opérations touchées avant d'enregistrer.
+- **Une règle écrite à la main**, bouton « Nouvelle règle » de la page « Règles de tri » : le libellé « contient » ou
+  « commence par » un texte, sur un compte ou sur tous (ceux ajoutés plus tard compris), en entrées ou en sorties, et
+  le type. Jamais de regex : le texte est pris tel quel, casse, accents et espaces répétés repliés ; 3 caractères au
+  moins. L'aperçu est obligatoire avant d'enregistrer : les opérations qu'elle comptera, celles qu'une paire, un
+  choix à la main, un dépôt ou une règle plus précise gardent, et un avertissement quand elle touche plus de la
+  moitié des opérations de ce côté. Toute règle, même née d'une réponse, peut être réécrite ainsi.
+- Entre deux règles : celle née d'une réponse (ce libellé-là, et les libellés proches) passe avant une règle écrite ;
+  entre règles écrites, le texte le plus long, puis celle d'un seul compte, puis la plus récente.
 
 ## Délier, annuler
 
@@ -111,8 +118,8 @@ ne reçoivent pas de question et ne changent aucun total.
 
 ## Ordre de priorité d'un type
 
-Ajustement de solde > paire reconnue > choix sur cette opération > dépôt prouvé > règle par nom > récurrent > défaut
-(entrée = revenu, sortie = dépense).
+Ajustement de solde > paire reconnue > choix sur cette opération > dépôt prouvé > règle (née d'une réponse, puis
+écrite) > récurrent > défaut (entrée = revenu, sortie = dépense).
 
 Une paire avec exactement un compte d'épargne compte en Épargne ; entre deux comptes courants, ou entre deux épargnes,
 elle n'est pas comptée.
@@ -148,4 +155,5 @@ l'utilisateur valide ou refuse. Mesurer sur le dump avant de changer quoi que ce
 | Texte du bouton : « Pas ensemble », question écrite sur la ligne | fait |
 | Historique et annulation | fait |
 | Page « Règles de tri » (les règles sortent de l'historique) | fait |
+| Règles écrites à la main, « contient » / « commence par », avec aperçu, sans option | fait |
 | Récurrents sans dictionnaire | second temps |

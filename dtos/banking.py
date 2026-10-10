@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from dtos.bank import ReconciliationStatus
 
@@ -747,13 +747,25 @@ class BankTransactionTypeResult(BaseModel):
     covered_count: int
 
 
+class RuleMatch(str, Enum):
+    """How a rule reaches labels: a rule given from an answer reaches its label
+    and nearby ones; a rule written by hand, every label containing its text,
+    or starting with it."""
+    SIMILAR = "similar"
+    CONTAINS = "contains"
+    STARTS_WITH = "starts_with"
+
+
 class BankTypeRuleItem(BaseModel):
     """GET /banking/type-rules."""
     id: str
-    account_id: str
-    account_name: str
+    # None for a rule written over every account.
+    account_id: str | None
+    account_name: str | None
     is_credit: bool
+    # The label's words, or the text of a rule written by hand, folded.
     signature: str
+    match: RuleMatch = RuleMatch.SIMILAR
     # The most recent operation it types, to read the rule by; None when it
     # types nothing any more.
     label: str | None = None
@@ -765,6 +777,58 @@ class BankTypeRuleItem(BaseModel):
 class BankTypeRuleUpdate(BaseModel):
     """PATCH /banking/type-rules/{id}."""
     type: CashflowType
+
+
+class BankTypeRuleWrite(BaseModel):
+    """A rule written by hand: POST /banking/type-rules, PUT
+    /banking/type-rules/{id} and their preview."""
+    match: RuleMatch
+    text: str = Field(max_length=200)
+    # None: every account, those added later included.
+    account_id: str | None = None
+    is_credit: bool
+    type: CashflowType
+
+    @field_validator("match")
+    @classmethod
+    def _written(cls, value: RuleMatch) -> RuleMatch:
+        if value is RuleMatch.SIMILAR:
+            raise ValueError("Une règle écrite contient un texte ou commence par lui.")
+        return value
+
+
+class BankRulePreviewOperation(BaseModel):
+    id: str
+    operation_date: date | None
+    label: str | None
+    amount: Decimal
+    currency: str
+    is_credit: bool
+    account_name: str
+    # How it counts now, before the rule.
+    cashflow_type: CashflowType
+
+
+class BankRulePreviewKept(BaseModel):
+    """Operations the rule reaches but does not type, and what keeps them."""
+    reason: TypeSource
+    count: int
+
+
+class BankTypeRulePreview(BaseModel):
+    """POST /banking/type-rules/preview: what a rule would do, nothing written."""
+    # The text as it is matched: case, accents and runs of spaces folded.
+    pattern: str
+    touched_count: int
+    # Those counted otherwise until now: what the rule actually changes.
+    changed_count: int
+    # Newest first, the first few only.
+    touched: list[BankRulePreviewOperation]
+    kept_count: int
+    kept: list[BankRulePreviewKept]
+    # Every operation on the rule's side (its account or all, its direction):
+    # a rule reaching most of them is said to be one.
+    side_count: int
 
 
 class RecurringDecisionKind(str, Enum):

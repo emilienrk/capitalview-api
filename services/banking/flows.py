@@ -51,7 +51,11 @@ from dtos.banking import (
     BankTransferDecisionKind,
     BankTransactionTypeResult,
     BankTransferStatus,
+    BankRulePreviewKept,
+    BankRulePreviewOperation,
     BankTypeRuleItem,
+    BankTypeRulePreview,
+    BankTypeRuleWrite,
     CashflowType,
     OperationType,
     TypeScope,
@@ -87,7 +91,15 @@ from services.banking.transfer_decisions import (
     load_decisions,
 )
 from services.banking.transfer_patterns import FlowCarrier, TransferPatterns
-from services.banking.type_rules import TypeRules, load_rules, save_rule
+from services.banking.type_rules import (
+    TypeRule,
+    TypeRules,
+    fold_text,
+    load_rules,
+    save_rule,
+    save_written_rule,
+    written_pattern,
+)
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 logger = logging.getLogger(__name__)
@@ -1678,22 +1690,116 @@ def list_type_rules(session: Session, user_uuid: str, master_key: str) -> list[B
         if resolution.rule_id is not None:
             counts[resolution.rule_id] += 1
             labels[resolution.rule_id] = label
-    items = [
-        BankTypeRuleItem(
+    items = []
+    for rule in rules.all():
+        account = accounts.by_bidx.get(rule.account_bidx) if rule.account_bidx else None
+        # A rule of a deleted account types nothing and names no account.
+        if rule.account_bidx is not None and account is None:
+            continue
+        items.append(BankTypeRuleItem(
             id=rule.uuid,
-            account_id=accounts.by_bidx[rule.account_bidx].uuid,
-            account_name=decrypt_data(accounts.by_bidx[rule.account_bidx].name_enc, master_key),
+            account_id=account.uuid if account else None,
+            account_name=decrypt_data(account.name_enc, master_key) if account else None,
             is_credit=rule.is_credit,
             signature=rule.signature,
+            match=rule.match,
             label=labels.get(rule.uuid),
             type=rule.type,
             operation_count=counts[rule.uuid],
             created_at=rule.created_at,
-        )
-        # A rule of a deleted account types nothing and names no account.
-        for rule in rules.exact.values() if rule.account_bidx in accounts.by_bidx
-    ]
+        ))
     return sorted(items, key=lambda item: (-item.operation_count, item.signature))
+
+
+class RuleAccountNotFoundError(LookupError):
+    """A rule written for an account the user does not have."""
+
+
+# What a rule never overrides (cashflow_types.resolve_type).
+_ABOVE_RULES = frozenset({TypeSource.PAIR, TypeSource.OVERRIDE, TypeSource.CONTRIBUTION, TypeSource.ADJUSTMENT})
+PREVIEW_OPERATIONS = 50
+
+
+def preview_rule(
+    session: Session, user_uuid: str, master_key: str, rule: BankTypeRuleWrite, replacing: str | None = None
+) -> BankTypeRulePreview:
+    """What a rule written by hand would type, nothing written: the operations
+    it would count, and those it reaches that something stronger keeps — a
+    pair, the user's own choice, a deposit, a more precise rule."""
+    accounts = _user_accounts(session, user_uuid, master_key)
+    account_bidx = _rule_account_bidx(accounts, rule.account_id, master_key)
+    candidate = TypeRule(
+        uuid="", account_bidx=account_bidx, is_credit=rule.is_credit, signature=written_pattern(rule.text),
+        words=frozenset(), type=rule.type, created_at=datetime.now(timezone.utc), match=rule.match,
+    )
+    pairing = _pairing(session, user_uuid, master_key, accounts)
+    movements = _load_movements(session, master_key, accounts.readable, None)
+    transfer_legs = _internal_transfer_legs(movements, pairing)
+    filing = _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs)
+    simulated = filing.rules.replaced(candidate, without=replacing)
+    names = {bidx: decrypt_data(account.name_enc, master_key) for bidx, account in accounts.by_bidx.items()}
+
+    touched: list[tuple[_Movement, str | None, CashflowType]] = []
+    kept: dict[TypeSource, int] = defaultdict(int)
+    side = 0
+    for index, movement in enumerate(movements):
+        if movement.synthetic or movement.is_credit != rule.is_credit:
+            continue
+        if account_bidx is not None and movement.account_bidx != account_bidx:
+            continue
+        side += 1
+        label = _label(movement, master_key)
+        if not candidate.matches(fold_text(label)):
+            continue
+        resolution = _filed(movements, transfer_legs, index, label, filing)
+        if resolution.source in _ABOVE_RULES:
+            kept[resolution.source] += 1
+        elif simulated.reach(
+            movement.account_bidx, movement.is_credit, label,
+            filing.patterns.label_common(movement.account_bidx, movement.is_credit),
+        ) is not candidate:
+            kept[TypeSource.RULE] += 1
+        else:
+            touched.append((movement, label, resolution.type))
+
+    touched.sort(key=lambda found: found[0].day or date.min, reverse=True)
+    return BankTypeRulePreview(
+        pattern=candidate.signature,
+        touched_count=len(touched),
+        changed_count=sum(kind is not rule.type for _, _, kind in touched),
+        touched=[
+            BankRulePreviewOperation(
+                id=movement.row.uuid, operation_date=movement.day, label=label, amount=movement.amount,
+                currency=movement.currency, is_credit=movement.is_credit,
+                account_name=names.get(movement.account_bidx, ""), cashflow_type=kind,
+            )
+            for movement, label, kind in touched[:PREVIEW_OPERATIONS]
+        ],
+        kept_count=sum(kept.values()),
+        kept=[BankRulePreviewKept(reason=reason, count=count) for reason, count in kept.items()],
+        side_count=side,
+    )
+
+
+def write_rule(
+    session: Session, user_uuid: str, master_key: str, rule: BankTypeRuleWrite, replacing: str | None = None
+) -> BankTypeRuleItem:
+    """Save a rule written by hand, in place of `replacing` when it edits one."""
+    accounts = _user_accounts(session, user_uuid, master_key)
+    _rule_account_bidx(accounts, rule.account_id, master_key)
+    row = save_written_rule(
+        session, user_uuid, master_key, rule.match, rule.text, rule.account_id, rule.is_credit, rule.type, replacing,
+    )
+    return next(item for item in list_type_rules(session, user_uuid, master_key) if item.id == row.uuid)
+
+
+def _rule_account_bidx(accounts: _Accounts, account_id: str | None, master_key: str) -> str | None:
+    if account_id is None:
+        return None
+    bidx = hash_index(account_id, master_key)
+    if bidx not in accounts.by_bidx:
+        raise RuleAccountNotFoundError(account_id)
+    return bidx
 
 
 def _readable_row(session: Session, accounts: _Accounts, transaction_id: str) -> BankTransaction:

@@ -55,7 +55,9 @@ from dtos.banking import (
     BankTransferQuestionMonth,
     BankTransferQuestionsResponse,
     BankTypeRuleItem,
+    BankTypeRulePreview,
     BankTypeRuleUpdate,
+    BankTypeRuleWrite,
     RealCashflowCurrent,
     RealCashflowMonthDetail,
     RealCashflowYear,
@@ -80,7 +82,10 @@ from services.banking.flows import (
     list_flow_group,
     list_month_transactions,
     list_transfer_counterparts,
+    RuleAccountNotFoundError,
     list_type_rules,
+    preview_rule,
+    write_rule,
     question_threshold_preview,
     review_queue,
     set_transaction_type,
@@ -94,7 +99,7 @@ from services.banking.transfer_decisions import (
 from services.banking.errors import BankingApiError
 from services.banking import recurring as recurring_service
 from services.banking.recurring_decisions import RecurringNotFoundError
-from services.banking.type_rules import RuleNotFoundError, delete_rule, retype_rule
+from services.banking.type_rules import RuleNotFoundError, RulePatternError, delete_rule, retype_rule
 from services.banking.ledger import build_ledger, ledger_etag
 from services.banking.real_cashflow import (
     PeriodNotCompletedError,
@@ -692,6 +697,61 @@ def get_type_rules(
 ):
     """The user's sorting rules: the labels they typed, operations to come included."""
     return list_type_rules(session, current_user.uuid, master_key)
+
+
+@router.post("/type-rules/preview", response_model=BankTypeRulePreview)
+def post_type_rule_preview(
+    data: BankTypeRuleWrite,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+    replacing: str | None = None,
+):
+    """What a rule written by hand would type, nothing written. `replacing`: the
+    rule it would take the place of, when editing one."""
+    try:
+        return preview_rule(session, current_user.uuid, master_key, data, replacing)
+    except RulePatternError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except RuleAccountNotFoundError:
+        raise HTTPException(status_code=404, detail="Compte introuvable.")
+
+
+@router.post("/type-rules", response_model=BankTypeRuleItem, status_code=201)
+def post_type_rule(
+    data: BankTypeRuleWrite,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Write a rule by hand: every label containing a text, or starting with it."""
+    return _write_rule(session, current_user, master_key, data, None)
+
+
+@router.put("/type-rules/{rule_id}", response_model=BankTypeRuleItem)
+def put_type_rule(
+    rule_id: str,
+    data: BankTypeRuleWrite,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Rewrite a rule, one given from an answer included, as a rule written by
+    hand. It comes back under a new id."""
+    return _write_rule(session, current_user, master_key, data, rule_id)
+
+
+def _write_rule(
+    session: Session, user: User, master_key: str, data: BankTypeRuleWrite, replacing: str | None
+) -> BankTypeRuleItem:
+    try:
+        return write_rule(session, user.uuid, master_key, data, replacing)
+    except RulePatternError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except RuleAccountNotFoundError:
+        raise HTTPException(status_code=404, detail="Compte introuvable.")
+    except RuleNotFoundError:
+        raise HTTPException(status_code=404, detail="Règle introuvable.")
 
 
 @router.patch("/type-rules/{rule_id}", response_model=BankTypeRuleItem)

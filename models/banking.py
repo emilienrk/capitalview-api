@@ -330,7 +330,8 @@ class BankTransferDecision(SQLModel, table=True):
 class BankTypeRule(SQLModel, table=True):
     """The cashflow type the user gave a label on one account and direction: it
     types every operation reading like it, past and future, as they are read
-    (see services/banking/type_rules.py).
+    (see services/banking/type_rules.py). Or a rule they wrote by hand: every
+    label containing, or starting with, a text, on one account or all of them.
 
     Nothing here is joinable in clear with `bank_transactions`: the account, the
     direction and the label signature are only ever encrypted, and uniqueness
@@ -351,11 +352,16 @@ class BankTypeRule(SQLModel, table=True):
     # The key it was saved under, for the data export: a rule is read by its
     # words, which give its key (services/banking/type_rules.py).
     signature_enc: str = Field(sa_column=Column(TEXT, nullable=False))
-    account_ref_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    # None for a written rule over every account.
+    account_ref_enc: str | None = Field(default=None, sa_column=Column(TEXT, nullable=True))
     credit_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     # JSON list of the label's words, for rules reaching nearby labels.
     words_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     type_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    # A written rule's match ("contains", "starts_with") and folded text; both
+    # None for a rule given from an answer, which reaches nearby labels.
+    match_enc: str | None = Field(default=None, sa_column=Column(TEXT, nullable=True))
+    pattern_enc: str | None = Field(default=None, sa_column=Column(TEXT, nullable=True))
     # Set by the service, to the microsecond: the most recent rule wins a tie.
     created_at: datetime = Field(
         sa_column=Column(sa.DateTime(timezone=True), nullable=False)

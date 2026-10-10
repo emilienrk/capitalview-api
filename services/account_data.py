@@ -151,6 +151,9 @@ def _export_bank_type_rules(session: Session, user_bidx: str, master_key: str) -
         {
             "uuid": row.uuid,
             "signature": _safe_decrypt(row.signature_enc, master_key),
+            # None for a rule given from an answer, which reaches nearby labels.
+            "match": _safe_decrypt(row.match_enc, master_key),
+            # None for a rule written over every account.
             "bank_account_id": _safe_decrypt(row.account_ref_enc, master_key),
             "is_credit": _safe_decrypt(row.credit_enc, master_key) == "true",
             "type": _safe_decrypt(row.type_enc, master_key),
