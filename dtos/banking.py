@@ -788,6 +788,8 @@ class BankTypeRuleWrite(BaseModel):
     account_id: str | None = None
     is_credit: bool
     type: CashflowType
+    # Saving only: hand the rule the operations typed by hand as something else.
+    take_overrides: bool = False
 
     @field_validator("match")
     @classmethod
@@ -809,6 +811,16 @@ class BankRulePreviewOperation(BaseModel):
     cashflow_type: CashflowType
 
 
+class BankRulePreviewRule(BaseModel):
+    """Another rule the new one takes operations from, or yields them to."""
+    id: str
+    match: RuleMatch
+    signature: str
+    # An operation it reads, to name a rule given from an answer by.
+    label: str | None
+    count: int
+
+
 class BankRulePreviewKept(BaseModel):
     """Operations the rule reaches but does not type, and what keeps them."""
     reason: TypeSource
@@ -824,6 +836,15 @@ class BankTypeRulePreview(BaseModel):
     changed_count: int
     # Newest first, the first few only.
     touched: list[BankRulePreviewOperation]
+    # Among the touched, those another rule counted until now.
+    taken: list[BankRulePreviewRule]
+    # Chosen by hand as another type: the choice holds, unless saved with
+    # `take_overrides`. Newest first, the first few only.
+    overridden_count: int
+    overridden: list[BankRulePreviewOperation]
+    # More precise rules that keep some of what it reaches.
+    yielded: list[BankRulePreviewRule]
+    # Everything it reaches and does not type, the overridden included.
     kept_count: int
     kept: list[BankRulePreviewKept]
     # Every operation on the rule's side (its account or all, its direction):

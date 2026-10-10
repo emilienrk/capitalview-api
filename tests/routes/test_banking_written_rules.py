@@ -109,10 +109,54 @@ def test_the_preview_counts_what_a_rule_would_type_and_what_keeps_the_rest(clien
     assert preview["touched"][0]["cashflow_type"] == "EXPENSE"
     # Both are expenses until now: the rule makes them NEUTRAL.
     assert preview["changed_count"] == 2
-    assert (preview["kept_count"], preview["kept"]) == (1, [{"reason": "override", "count": 1}])
+    # The choice made by hand holds, and is said: the rule would have counted it otherwise.
+    assert (preview["overridden_count"], [op["label"] for op in preview["overridden"]]) == (1, ["Spotify"])
+    assert (preview["kept_count"], preview["kept"]) == (1, [])
     assert preview["side_count"] == 4
     assert client.get("/banking/type-rules").json() == []
 
+
+def test_a_choice_by_hand_of_the_rules_own_type_is_not_worth_saying(client, session, master_key):
+    _seed(session, master_key)
+    spotify = _month(client)["Spotify"]
+    client.put(f"/banking/transactions/{spotify['id']}/type", json={"type": "NEUTRAL", "scope": "operation"})
+
+    preview = client.post("/banking/type-rules/preview", json=_rule()).json()
+
+    assert (preview["overridden_count"], preview["kept"]) == (0, [{"reason": "override", "count": 1}])
+
+
+def test_saved_with_take_overrides_the_rule_takes_the_choices_made_by_hand(client, session, master_key):
+    _seed(session, master_key)
+    spotify = _month(client)["Spotify"]
+    client.put(f"/banking/transactions/{spotify['id']}/type", json={"type": "EXPENSE", "scope": "operation"})
+
+    client.post("/banking/type-rules", json=_rule())
+    assert _month(client)["Spotify"]["type_source"] == "override"
+
+    client.post("/banking/type-rules", json=_rule(take_overrides=True))
+    assert (_month(client)["Spotify"]["type_source"], _month(client)["Spotify"]["cashflow_type"]) == ("rule", "NEUTRAL")
+    assert client.get("/banking/history").json() == []
+
+
+def test_the_preview_names_the_rules_it_takes_from_and_yields_to(client, session, master_key):
+    _seed(session, master_key)
+    broad = client.post("/banking/type-rules", json=_rule(text="carte", type="EXPENSE")).json()
+    precise = client.post("/banking/type-rules", json=_rule(text="carte 11/03", type="SAVING")).json()
+
+    preview = client.post("/banking/type-rules/preview", json=_rule(text="carte 19/03/26 spot")).json()
+
+    assert preview["touched_count"] == 1
+    assert [(rule["id"], rule["match"], rule["count"]) for rule in preview["taken"]] == [(broad["id"], "contains", 1)]
+    assert preview["yielded"] == []
+
+    # The same rule again, another type: it replaces the broad one rather than taking from it.
+    preview = client.post("/banking/type-rules/preview", json=_rule(text="carte")).json()
+
+    assert (preview["touched_count"], preview["taken"]) == (1, [])
+    assert [(rule["id"], rule["signature"], rule["count"]) for rule in preview["yielded"]] == [
+        (precise["id"], "carte 11/03", 1),
+    ]
 
 def test_a_rule_given_from_an_answer_outranks_a_written_one(client, session, master_key):
     _seed(session, master_key)

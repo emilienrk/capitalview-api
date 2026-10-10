@@ -53,6 +53,7 @@ from dtos.banking import (
     BankTransferStatus,
     BankRulePreviewKept,
     BankRulePreviewOperation,
+    BankRulePreviewRule,
     BankTypeRuleItem,
     BankTypeRulePreview,
     BankTypeRuleWrite,
@@ -92,6 +93,7 @@ from services.banking.transfer_decisions import (
 )
 from services.banking.transfer_patterns import FlowCarrier, TransferPatterns
 from services.banking.type_rules import (
+    RuleNotFoundError,
     TypeRule,
     TypeRules,
     fold_text,
@@ -1715,17 +1717,32 @@ class RuleAccountNotFoundError(LookupError):
     """A rule written for an account the user does not have."""
 
 
-# What a rule never overrides (cashflow_types.resolve_type).
-_ABOVE_RULES = frozenset({TypeSource.PAIR, TypeSource.OVERRIDE, TypeSource.CONTRIBUTION, TypeSource.ADJUSTMENT})
 PREVIEW_OPERATIONS = 50
 
 
-def preview_rule(
-    session: Session, user_uuid: str, master_key: str, rule: BankTypeRuleWrite, replacing: str | None = None
-) -> BankTypeRulePreview:
-    """What a rule written by hand would type, nothing written: the operations
-    it would count, and those it reaches that something stronger keeps — a
-    pair, the user's own choice, a deposit, a more precise rule."""
+@dataclass
+class _RuleReach:
+    """What a rule written by hand would do to the history, nothing written."""
+    candidate: TypeRule
+    names: dict[str, str]
+    # Typed by the rule, with how each counts until now.
+    touched: list[tuple[_Movement, str | None, CashflowType]]
+    # Chosen by hand as another type: the choice holds, unless the user hands
+    # them to the rule.
+    overridden: list[tuple[_Movement, str | None, CashflowType]]
+    # The rules it takes operations from, and those that keep theirs, by id.
+    taken: dict[str, int]
+    yielded: dict[str, int]
+    # Kept by a pair, a deposit, or a choice by hand of the rule's own type.
+    kept: dict[TypeSource, int]
+    side: int
+    rules: dict[str, TypeRule]
+    labels: dict[str, str | None]
+
+
+def _rule_reach(
+    session: Session, user_uuid: str, master_key: str, rule: BankTypeRuleWrite, replacing: str | None
+) -> _RuleReach:
     accounts = _user_accounts(session, user_uuid, master_key)
     account_bidx = _rule_account_bidx(accounts, rule.account_id, master_key)
     candidate = TypeRule(
@@ -1736,57 +1753,116 @@ def preview_rule(
     movements = _load_movements(session, master_key, accounts.readable, None)
     transfer_legs = _internal_transfer_legs(movements, pairing)
     filing = _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs)
-    simulated = filing.rules.replaced(candidate, without=replacing)
-    names = {bidx: decrypt_data(account.name_enc, master_key) for bidx, account in accounts.by_bidx.items()}
-
-    touched: list[tuple[_Movement, str | None, CashflowType]] = []
-    kept: dict[TypeSource, int] = defaultdict(int)
-    side = 0
+    # The rule edited, and the same rule written before: saving replaces both.
+    replaced = filing.rules.same_as(candidate) | ({replacing} if replacing else set())
+    simulated = filing.rules.replaced(candidate, without=frozenset(replaced))
+    reach = _RuleReach(
+        candidate=candidate,
+        names={bidx: decrypt_data(account.name_enc, master_key) for bidx, account in accounts.by_bidx.items()},
+        touched=[], overridden=[], taken=defaultdict(int), yielded=defaultdict(int), kept=defaultdict(int), side=0,
+        rules={known.uuid: known for known in filing.rules.all()}, labels={},
+    )
     for index, movement in enumerate(movements):
         if movement.synthetic or movement.is_credit != rule.is_credit:
             continue
         if account_bidx is not None and movement.account_bidx != account_bidx:
             continue
-        side += 1
+        reach.side += 1
         label = _label(movement, master_key)
         if not candidate.matches(fold_text(label)):
             continue
         resolution = _filed(movements, transfer_legs, index, label, filing)
-        if resolution.source in _ABOVE_RULES:
-            kept[resolution.source] += 1
-        elif simulated.reach(
+        if resolution.rule_id is not None:
+            reach.labels[resolution.rule_id] = label
+        if resolution.source in (TypeSource.PAIR, TypeSource.CONTRIBUTION, TypeSource.ADJUSTMENT):
+            reach.kept[resolution.source] += 1
+            continue
+        reached = simulated.reach(
             movement.account_bidx, movement.is_credit, label,
             filing.patterns.label_common(movement.account_bidx, movement.is_credit),
-        ) is not candidate:
-            kept[TypeSource.RULE] += 1
+        )
+        if resolution.source is TypeSource.OVERRIDE:
+            # Only a choice the rule would have made otherwise is worth saying.
+            if reached is candidate and resolution.type is not rule.type:
+                reach.overridden.append((movement, label, resolution.type))
+            else:
+                reach.kept[TypeSource.OVERRIDE] += 1
+        elif reached is not candidate:
+            reach.yielded[reached.uuid] += 1
+            reach.labels.setdefault(reached.uuid, label)
         else:
-            touched.append((movement, label, resolution.type))
+            reach.touched.append((movement, label, resolution.type))
+            if resolution.source is TypeSource.RULE and resolution.rule_id not in replaced:
+                reach.taken[resolution.rule_id] += 1
+    newest_first = lambda found: found[0].day or date.min  # noqa: E731
+    reach.touched.sort(key=newest_first, reverse=True)
+    reach.overridden.sort(key=newest_first, reverse=True)
+    return reach
 
-    touched.sort(key=lambda found: found[0].day or date.min, reverse=True)
-    return BankTypeRulePreview(
-        pattern=candidate.signature,
-        touched_count=len(touched),
-        changed_count=sum(kind is not rule.type for _, _, kind in touched),
-        touched=[
+
+def preview_rule(
+    session: Session, user_uuid: str, master_key: str, rule: BankTypeRuleWrite, replacing: str | None = None
+) -> BankTypeRulePreview:
+    """What a rule written by hand would type, nothing written: the operations
+    it would count, the rules it takes them from, and those it reaches that
+    something stronger keeps — a pair, a deposit, a more precise rule, a choice
+    made by hand."""
+    reach = _rule_reach(session, user_uuid, master_key, rule, replacing)
+
+    def operations(found: list[tuple[_Movement, str | None, CashflowType]]) -> list[BankRulePreviewOperation]:
+        return [
             BankRulePreviewOperation(
                 id=movement.row.uuid, operation_date=movement.day, label=label, amount=movement.amount,
                 currency=movement.currency, is_credit=movement.is_credit,
-                account_name=names.get(movement.account_bidx, ""), cashflow_type=kind,
+                account_name=reach.names.get(movement.account_bidx, ""), cashflow_type=kind,
             )
-            for movement, label, kind in touched[:PREVIEW_OPERATIONS]
-        ],
-        kept_count=sum(kept.values()),
+            for movement, label, kind in found[:PREVIEW_OPERATIONS]
+        ]
+
+    def rules(counts: dict[str, int]) -> list[BankRulePreviewRule]:
+        return [
+            BankRulePreviewRule(
+                id=uuid, match=reach.rules[uuid].match, signature=reach.rules[uuid].signature,
+                label=reach.labels.get(uuid), count=count,
+            )
+            for uuid, count in sorted(counts.items(), key=lambda item: -item[1])
+        ]
+
+    kept = dict(reach.kept)
+    if reach.yielded:
+        kept[TypeSource.RULE] = sum(reach.yielded.values())
+    return BankTypeRulePreview(
+        pattern=reach.candidate.signature,
+        touched_count=len(reach.touched),
+        changed_count=sum(kind is not rule.type for _, _, kind in reach.touched),
+        touched=operations(reach.touched),
+        taken=rules(reach.taken),
+        overridden_count=len(reach.overridden),
+        overridden=operations(reach.overridden),
+        yielded=rules(reach.yielded),
+        kept_count=sum(kept.values()) + len(reach.overridden),
         kept=[BankRulePreviewKept(reason=reason, count=count) for reason, count in kept.items()],
-        side_count=side,
+        side_count=reach.side,
     )
 
 
 def write_rule(
     session: Session, user_uuid: str, master_key: str, rule: BankTypeRuleWrite, replacing: str | None = None
 ) -> BankTypeRuleItem:
-    """Save a rule written by hand, in place of `replacing` when it edits one."""
-    accounts = _user_accounts(session, user_uuid, master_key)
-    _rule_account_bidx(accounts, rule.account_id, master_key)
+    """Save a rule written by hand, in place of `replacing` when it edits one.
+
+    With `take_overrides`, the operations the user had typed by hand as
+    something else are handed to the rule: their own choice is withdrawn, as
+    « Annuler » in the history would.
+    """
+    reach = _rule_reach(session, user_uuid, master_key, rule, replacing)
+    if replacing is not None and replacing not in reach.rules:
+        raise RuleNotFoundError(replacing)
+    if rule.take_overrides:
+        for movement, _, _ in reach.overridden:
+            movement.row.type_override_enc = None
+            movement.row.type_override_at = None
+            session.add(movement.row)
     row = save_written_rule(
         session, user_uuid, master_key, rule.match, rule.text, rule.account_id, rule.is_credit, rule.type, replacing,
     )

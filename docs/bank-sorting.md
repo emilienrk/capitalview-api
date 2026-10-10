@@ -93,9 +93,15 @@ ne reçoivent pas de question et ne changent aucun total.
 - **Une règle écrite à la main**, bouton « Nouvelle règle » de la page « Règles de tri » : le libellé « contient » ou
   « commence par » un texte, sur un compte ou sur tous (ceux ajoutés plus tard compris), en entrées ou en sorties, et
   le type. Jamais de regex : le texte est pris tel quel, casse, accents et espaces répétés repliés ; 3 caractères au
-  moins. L'aperçu est obligatoire avant d'enregistrer : les opérations qu'elle comptera, celles qu'une paire, un
-  choix à la main, un dépôt ou une règle plus précise gardent, et un avertissement quand elle touche plus de la
-  moitié des opérations de ce côté. Toute règle, même née d'une réponse, peut être réécrite ainsi.
+  moins. L'aperçu est obligatoire avant d'enregistrer : les opérations qu'elle comptera et combien changent de type,
+  les règles à qui elle en prend et celles, plus précises, qui gardent les leurs (nommées), ce qu'une paire ou un
+  dépôt garde, et un avertissement quand elle touche plus de la moitié des opérations de ce côté. Toute règle, même
+  née d'une réponse, peut être réécrite ainsi ; la même règle écrite deux fois remplace la première.
+- **Un choix fait à la main l'emporte toujours sur une règle.** L'aperçu liste ceux d'un autre type que la règle (les
+  autres ne disent rien) ; une case, décochée par défaut, « Les passer aussi en … », retire ces choix et les donne à
+  la règle. Les paires ne sont jamais concernées. Validé le 10/10.
+- Dans l'autre sens, un choix à la main ou une règle née d'une réponse qui passe désormais avant une règle écrite le
+  dit dans son message (« Pour ce libellé, elle passe avant la règle Contient « amazon » »).
 - Entre deux règles : celle née d'une réponse (ce libellé-là, et les libellés proches) passe avant une règle écrite ;
   entre règles écrites, le texte le plus long, puis celle d'un seul compte, puis la plus récente.
 

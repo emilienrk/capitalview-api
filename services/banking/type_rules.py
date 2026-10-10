@@ -80,7 +80,11 @@ class TypeRule:
 
 
 def _rank(rule: TypeRule) -> tuple[int, bool, datetime]:
-    return (len(rule.signature), rule.account_bidx is not None, rule.created_at)
+    created = rule.created_at
+    # SQLite hands timestamps back naive; every one was written in UTC.
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return (len(rule.signature), rule.account_bidx is not None, created)
 
 
 def fold_text(text: str | None) -> str:
@@ -137,15 +141,24 @@ class TypeRules:
             self._written_reached[key] = best
         return self._written_reached[key]
 
-    def replaced(self, rule: TypeRule, without: str | None = None) -> TypeRules:
-        """These rules with one written rule added, and the one it replaces
-        gone: what a rule would do before it is saved."""
+    def replaced(self, rule: TypeRule, without: frozenset[str] = frozenset()) -> TypeRules:
+        """These rules with one written rule added, and those it replaces gone:
+        what a rule would do before it is saved."""
         rules = TypeRules()
         for kept in self.all():
-            if kept.uuid != without:
+            if kept.uuid not in without:
                 rules._add(kept)
         rules._add(rule)
         return rules
+
+    def same_as(self, rule: TypeRule) -> frozenset[str]:
+        """The written rules saving this one replaces: the same text, match,
+        account and direction."""
+        return frozenset(
+            other.uuid for other in self.written
+            if (other.match, other.signature, other.account_bidx, other.is_credit)
+            == (rule.match, rule.signature, rule.account_bidx, rule.is_credit)
+        )
 
     def _add(self, rule: TypeRule) -> None:
         if rule.match is not RuleMatch.SIMILAR:
