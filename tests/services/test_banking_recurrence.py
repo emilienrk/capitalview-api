@@ -35,7 +35,6 @@ class _Debit(NamedTuple):
 
 
 class Found(NamedTuple):
-    confidence: str
     cadence: str
     variable: bool
     count: int
@@ -61,11 +60,10 @@ def _found(debits: list[_Debit], today: date = TODAY, kind: CashflowType = EXPEN
     detection = R.detect(_ops(debits), kind)
     found = []
     for series in detection.series:
-        confidence = R.confidence(series, R.features(series, detection))
-        if confidence is None:
+        if not R.offered(series, R.features(series, detection)):
             continue
         found.append(Found(
-            confidence.value, series.cadence.name, series.variable, len(series.regular), len(series.extras),
+            series.cadence.name, series.variable, len(series.regular), len(series.extras),
             R.current_amount(series), R.status(series, today, today).value,
             len(R.episodes(series)[0]), len(R.levels(series)),
         ))
@@ -111,7 +109,7 @@ def _one(debits, today: date = TODAY) -> Found:
 
 def test_a_price_rise_under_card_lag_is_two_levels_of_one_series():
     found = _one(_monthly(START, 16, lambda k: "13.49" if k < 9 else "15.99", "CARTE NETFLIX.COM", day=15, lag=(0, 3)))
-    assert found[:4] == ("certain", "monthly", False, 16)
+    assert found[:3] == ("monthly", False, 16)
     assert (found.amount, found.levels) == (Decimal("15.99"), 2)
 
 
@@ -120,15 +118,15 @@ def test_a_rename_carries_the_series_on():
         _monthly(START, 5, "4.02", "CARTE AllSecur", day=4)
         + _monthly(R.add_months(START, 5), 5, "4.02", "CARTE Allianz Direct", day=4)
     )
-    assert found[:4] == ("probable", "monthly", False, 10)
+    assert found[:3] == ("monthly", False, 10)
 
 
 def test_a_missed_month():
-    assert _one(_monthly(START, 12, "9.99", "CARTE SPOTIFY", day=8, skip={5}))[:4] == ("probable", "monthly", False, 11)
+    assert _one(_monthly(START, 12, "9.99", "CARTE SPOTIFY", day=8, skip={5}))[:3] == ("monthly", False, 11)
 
 
 def test_two_missed_months_in_a_row():
-    assert _one(_monthly(START, 12, "9.99", "CARTE SPOTIFY", day=8, skip={5, 6}))[:4] == ("probable", "monthly", False, 10)
+    assert _one(_monthly(START, 12, "9.99", "CARTE SPOTIFY", day=8, skip={5, 6}))[:3] == ("monthly", False, 10)
 
 
 def test_a_refunded_month_keeps_the_rhythm_and_not_the_amount():
@@ -137,7 +135,7 @@ def test_a_refunded_month_keeps_the_rhythm_and_not_the_amount():
         for d in _monthly(START, 12, "9.99", "CARTE DEEZER", day=8)
     ]
     found = _one(debits)
-    assert found[:4] == ("certain", "monthly", False, 12)
+    assert found[:3] == ("monthly", False, 12)
     [series] = R.detect(_ops(debits)).series
     assert sum(not op.cancelled for op in series.regular) == 11
 
@@ -147,7 +145,7 @@ def test_a_pause_is_a_second_episode_of_the_same_series():
         _monthly(START, 6, "39.00", "PRLV SEPA BASIC FIT", day=10, method=DD)
         + _monthly(R.add_months(START, 11), 6, "39.00", "PRLV SEPA BASIC FIT", day=10, method=DD)
     )
-    assert found[:4] == ("certain", "monthly", False, 12)
+    assert found[:3] == ("monthly", False, 12)
     assert found.episodes == 2
 
 
@@ -156,8 +154,8 @@ def test_two_recurring_payments_under_one_label_on_different_days():
         _monthly(START, 12, "2.99", "CARTE APPLE.COM/BILL", day=3)
         + _monthly(START, 12, "9.99", "CARTE APPLE.COM/BILL", day=18)
     )
-    assert [(f.confidence, f.amount, f.count) for f in found] == [
-        ("certain", Decimal("2.99"), 12), ("certain", Decimal("9.99"), 12),
+    assert [(f.amount, f.count) for f in found] == [
+        (Decimal("2.99"), 12), (Decimal("9.99"), 12),
     ]
 
 
@@ -166,8 +164,8 @@ def test_two_recurring_payments_under_one_label_on_the_same_day():
         _monthly(START, 12, "2.99", "CARTE APPLE.COM/BILL", day=3)
         + _monthly(START, 12, "10.99", "CARTE APPLE.COM/BILL", day=3)
     )
-    assert [(f.confidence, f.amount, f.count) for f in found] == [
-        ("certain", Decimal("2.99"), 12), ("certain", Decimal("10.99"), 12),
+    assert [(f.amount, f.count) for f in found] == [
+        (Decimal("2.99"), 12), (Decimal("10.99"), 12),
     ]
 
 
@@ -176,7 +174,7 @@ def test_two_lines_at_the_same_price():
         _monthly(START, 10, "9.99", "PRLV SEPA FREE MOBILE", day=6, method=DD)
         + _monthly(START, 10, "9.99", "PRLV SEPA FREE MOBILE", day=6, method=DD)
     )
-    assert [(f.confidence, f.count) for f in found] == [("certain", 10), ("certain", 10)]
+    assert [f.count for f in found] == [10, 10]
 
 
 def test_an_annual_recurring_payment_among_a_shops_purchases():
@@ -187,7 +185,7 @@ def test_an_annual_recurring_payment_among_a_shops_purchases():
          _Debit(date(2025, 3, 10), "69.90", "CARTE AMAZON PRIME FR")]
         + _noise(date(2023, 1, 1), 900, 1, "CARTE AMAZON EU SARL", 8, 120, rng)
     )
-    assert found[:5] == ("probable", "annual", False, 3, 0)
+    assert found[:4] == ("annual", False, 3, 0)
 
 
 def test_an_annual_insurance_seen_twice():
@@ -195,21 +193,21 @@ def test_an_annual_insurance_seen_twice():
         _Debit(date(2024, 11, 2), "119.00", "PRLV SEPA ASSURANCE HABITATION MAAF", method=DD),
         _Debit(date(2025, 11, 3), "124.50", "PRLV SEPA ASSURANCE HABITATION MAAF", method=DD),
     ])
-    assert found[:4] == ("probable", "annual", False, 2)
+    assert found[:3] == ("annual", False, 2)
     assert found.status == "active"
 
 
-def test_a_weekly_standing_order_is_asked():
+def test_a_weekly_standing_order_is_offered():
     found = _one([
         _Debit(START + timedelta(weeks=k), "45.00", "VIR PERMANENT MME DUPONT MENAGE", method=TRANSFER) for k in range(20)
     ])
-    assert found[:4] == ("probable", "weekly", False, 20)
+    assert found[:3] == ("weekly", False, 20)
 
 
-def test_a_variable_utility_debit_is_counted():
+def test_a_variable_utility_debit_is_offered():
     rng = random.Random(2)
     found = _one(_monthly(START, 14, lambda k: f"{rng.uniform(40, 90):.2f}", "PRLV SEPA ENGIE", day=5, method=DD))
-    assert found[:3] == ("certain", "monthly", True)
+    assert found[:2] == ("monthly", True)
 
 
 def test_a_quarterly_water_bill():
@@ -217,18 +215,18 @@ def test_a_quarterly_water_bill():
         _Debit(R.add_months(date(2024, 1, 20), 3 * k), amount, "PRLV SEPA VEOLIA EAU", method=DD)
         for k, amount in enumerate(["85.10", "92.30", "88.00", "90.20", "86.70"])
     ])
-    assert found[:4] == ("probable", "quarterly", True, 5)
+    assert found[:3] == ("quarterly", True, 5)
 
 
-def test_four_instalments_then_nothing_are_asked_not_counted():
+def test_four_instalments_then_nothing_are_offered():
     found = _one(_monthly(date(2026, 1, 12), 4, "62.50", "PRLV SEPA ALMA 4X", method=DD))
-    assert found[:4] == ("probable", "monthly", False, 4)
+    assert found[:3] == ("monthly", False, 4)
     assert found.status == "ended"
 
 
 def test_a_loan():
-    assert _one(_monthly(date(2024, 6, 5), 24, "350.00", "PRLV SEPA ECHEANCE PRET IMMO", day=5, method=DD))[:4] == (
-        "certain", "monthly", False, 24,
+    assert _one(_monthly(date(2024, 6, 5), 24, "350.00", "PRLV SEPA ECHEANCE PRET IMMO", day=5, method=DD))[:3] == (
+        "monthly", False, 24,
     )
 
 
@@ -236,24 +234,24 @@ def test_a_loan():
 def test_an_amount_floating_with_the_exchange_rate_is_one_price(seed):
     rng = random.Random(seed)
     found = _one(_monthly(START, 10, lambda k: f"{10.2 + rng.uniform(-0.15, 0.15):.2f}", "CARTE SPOTIFY USD", day=20))
-    assert found[:4] == ("probable", "monthly", False, 10)
+    assert found[:3] == ("monthly", False, 10)
     assert found.levels == 1
 
 
 def test_month_ends():
-    assert _one(_monthly(START, 14, "12.00", "PRLV SEPA SFR", day=31, method=DD))[:4] == ("certain", "monthly", False, 14)
+    assert _one(_monthly(START, 14, "12.00", "PRLV SEPA SFR", day=31, method=DD))[:3] == ("monthly", False, 14)
 
 
 def test_every_four_weeks():
     found = _one([
         _Debit(START + timedelta(days=28 * k), "29.99", "PRLV SEPA FITNESS PARK", method=DD) for k in range(9)
     ])
-    assert found[:4] == ("certain", "fourweekly", False, 9)
+    assert found[:3] == ("fourweekly", False, 9)
 
 
-def test_biweekly_pocket_money_is_asked():
+def test_biweekly_pocket_money_is_offered():
     found = _one([_Debit(START + timedelta(days=14 * k), "20.00", "VIR PERMANENT LEO MARTIN", method=TRANSFER) for k in range(12)])
-    assert found[:4] == ("probable", "biweekly", False, 12)
+    assert found[:3] == ("biweekly", False, 12)
 
 
 def test_a_trial_then_the_full_price():
@@ -261,7 +259,7 @@ def test_a_trial_then_the_full_price():
         [_Debit(date(2026, 3, 2), "1.00", "CARTE CANAL PLUS FR")]
         + _monthly(date(2026, 4, 2), 6, "11.99", "CARTE CANAL PLUS FR", day=2)
     )
-    assert found[:4] == ("probable", "monthly", False, 6)
+    assert found[:3] == ("monthly", False, 6)
     assert (found.amount, found.status) == (Decimal("11.99"), "active")
 
 
@@ -270,7 +268,7 @@ def test_a_card_payment_then_a_direct_debit():
         [_Debit(date(2025, 1, 9), "39.00", "CARTE OLNESS'")]
         + _monthly(date(2025, 2, 10), 8, "39.00", "PRLV SEPA OLNESS-OLNESS'", day=10, method=DD)
     )
-    assert found[:4] == ("certain", "monthly", False, 9)
+    assert found[:3] == ("monthly", False, 9)
 
 
 def test_a_move_to_another_account():
@@ -278,7 +276,7 @@ def test_a_move_to_another_account():
         _monthly(START, 6, "21.60", "CARTE ANTHROPIC* CLAUDE", day=2, account="A")
         + _monthly(R.add_months(START, 6), 6, "21.60", "Anthropic Claude", day=2, account="B", method=UNKNOWN)
     )
-    assert found[:4] == ("certain", "monthly", False, 12)
+    assert found[:3] == ("monthly", False, 12)
 
 
 def test_a_label_that_grows():
@@ -287,7 +285,7 @@ def test_a_label_that_grows():
         + _monthly(R.add_months(START, 6), 6, "72.96",
                    "PRLV SEPA MACIF Production-MACIF -PRELEV 0306072026 01450093118 RUM MA02", day=5, method=DD)
     )
-    assert found[:4] == ("certain", "monthly", False, 12)
+    assert found[:3] == ("monthly", False, 12)
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +388,7 @@ def test_a_rejected_last_debit_leaves_the_question_on_the_one_before():
     debits[-1] = debits[-1]._replace(cancelled=True, type=NEUTRAL)
     [series] = R.detect(_ops(debits)).series
     assert R.carrier(series).day == debits[-2].day
-    assert _one(debits).confidence == "certain"
+    assert _one(debits).count == 7
     # What it costs now: the last three debits paid, the rejected one aside.
     assert R.current_amount(series) == Decimal("30.00")
 
@@ -558,16 +556,14 @@ def _salary(n: int, amount="1380.71", **kw) -> list[_Debit]:
 
 def _offered(credits: list[_Debit]) -> list[R.Series]:
     detection = R.detect(_ops(credits), INCOME)
-    return [s for s in detection.series if R.confidence(s, R.features(s, detection))]
+    return [s for s in detection.series if R.offered(s, R.features(s, detection))]
 
 
-def test_a_salary_paid_by_transfer_for_half_a_year_is_counted_unasked():
+def test_a_salary_paid_by_transfer_for_half_a_year_is_offered():
     detection = R.detect(_ops(_salary(8, lag=(0, 3))), INCOME)
     [series] = detection.series
-    features = R.features(series, detection)
-    level = R.confidence(series, features)
-    assert (level, series.cadence.name, len(series.regular)) == (R.Confidence.CERTAIN, "monthly", 8)
-    assert R.counted_unasked(series, level, features)
+    assert R.offered(series, R.features(series, detection))
+    assert (series.cadence.name, len(series.regular)) == ("monthly", 8)
 
 
 def test_a_first_partial_salary_and_one_paid_early_for_the_holidays_are_extras():
@@ -590,15 +586,13 @@ def test_a_salary_whose_cents_move_keeps_its_first_months():
     assert series.first.day == date(2025, 1, 28)
 
 
-def test_a_salary_that_moves_is_asked():
+def test_a_salary_that_moves_is_offered():
     amounts = ["487.20", "456.75", "609.00", "1196.24", "1286.76", "1369.20", "1245.04", "1237.24"]
     detection = R.detect(_ops(_salary(8, lambda k: amounts[k])), INCOME)
     [series] = detection.series
-    features = R.features(series, detection)
-    level = R.confidence(series, features)
+    assert R.offered(series, R.features(series, detection))
     # The first, partial months stay: the employer pays nothing else.
-    assert (level, len(series.regular)) == (R.Confidence.PROBABLE, 8)
-    assert not R.counted_unasked(series, level, features)
+    assert len(series.regular) == 8
 
 
 @pytest.mark.parametrize("seed", range(10))
@@ -618,14 +612,14 @@ def test_a_parent_s_allowance_starts_at_its_first_repeated_amount(seed):
     assert {op.amount for op in series.regular} == {Decimal("250")}
 
 
-def test_a_parent_s_allowance_is_asked_not_counted():
+def test_a_parent_s_allowance_is_offered():
     label = "VIR SEPA MME MARIE DUPONT"
     [found] = _income(_monthly(START, 14, "250", label, day=28, method=TRANSFER, type=INCOME) + [
         _Debit(date(2025, 6, 12), "80", label, TRANSFER, type=INCOME),
         _Debit(date(2025, 9, 2), "35", label, TRANSFER, type=INCOME),
     ])
-    # Other transfers from the same payer: sure enough to ask, never to count.
-    assert (found.confidence, found.count, found.amount) == ("probable", 14, Decimal("250"))
+    # Other transfers from the same payer: offered all the same.
+    assert (found.count, found.amount) == (14, Decimal("250"))
 
 
 @pytest.mark.parametrize("seed", range(10))
@@ -639,13 +633,13 @@ def test_friends_paying_back_are_no_income(seed):
     assert _income(credits) == []
 
 
-def test_bank_interest_once_a_year_is_counted_unasked():
+def test_bank_interest_once_a_year_is_offered():
     credits = [
         _Debit(date(2025, 1, 2), "13.50", "*INTER.BRUTS 31/12/24", INTEREST, type=INCOME),
         _Debit(date(2026, 1, 2), "9.29", "*INTER.BRUTS 31/12/25", INTEREST, type=INCOME),
     ]
     [found] = _income(credits)
-    assert (found.confidence, found.cadence, found.amount) == ("certain", "annual", Decimal("9.29"))
+    assert (found.cadence, found.amount) == ("annual", Decimal("9.29"))
 
 
 def test_weekly_pocket_money_is_no_recurring_income():

@@ -642,11 +642,10 @@ def _recurring_note(item) -> str | None:
 
 
 def _recurring_side(response, include_inactive: bool) -> dict:
-    counted = (RecurringState.AUTO, RecurringState.CONFIRMED)
     items = [
         item for item in response.items
         if include_inactive
-        or (item.state in counted and item.status is not RecurringStatus.ENDED)
+        or (item.state is RecurringState.CONFIRMED and item.status is not RecurringStatus.ENDED)
     ]
     return {
         "monthly_total": _money(response.monthly_total),

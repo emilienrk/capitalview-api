@@ -356,10 +356,8 @@ class RecurringCadence(str, Enum):
 
 
 class RecurringState(str, Enum):
-    # Found sure enough to count without asking; not decided by the user.
-    AUTO = "auto"
     CONFIRMED = "confirmed"
-    # Found, asked about.
+    # Found, offered: counted once the user confirms it.
     CANDIDATE = "candidate"
     REFUSED = "refused"
 
@@ -941,7 +939,6 @@ class BankRecurringItem(BaseModel):
     # What it is for, or where it comes from; None until the user files it.
     nature: RecurringNature | None = None
     state: RecurringState
-    confidence: str | None
     status: RecurringStatus
     # When `status` is stale: the day its account is known complete up to.
     covered_until: date | None = None

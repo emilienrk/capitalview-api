@@ -140,9 +140,18 @@ regroupement de réponses.
 ## Récurrents (second temps)
 
 Détection sans dictionnaire, par marchand, rythme et montant : un prix qui change, un nom qui change, une pause restent
-le même récurrent. Les couches actuelles, mesurées sur des cas réels, sont gardées. Tant qu'un récurrent n'est pas
-validé par l'utilisateur, il est proposé, jamais compté seul. Un loyer ou de l'argent de poche détecté est acceptable :
-l'utilisateur valide ou refuse. Mesurer sur le dump avant de changer quoi que ce soit.
+le même récurrent. Les couches actuelles, mesurées sur des cas réels, sont gardées. Mesurer sur le dump avant de changer
+quoi que ce soit.
+
+**Rien n'est compté seul** (décidé le 10/10) : toute série détectée est proposée dans l'onglet Récurrents, et ne compte
+qu'une fois confirmée ; ses remboursements liés aussi. Détecter large : une fausse proposition ne coûte qu'un « non », un
+récurrent raté coûte en silence. Un loyer ou de l'argent de poche détecté est acceptable. Mesuré sur le dump : les 25
+séries restent, les 15 qui comptaient seules (« auto ») deviennent des propositions ; les charges fixes passent de
+686,88 € à 624,56 € par mois (les 5 confirmées) et les revenus récurrents de 251,27 € à 0 € jusqu'à validation ;
+« À trier » ne bouge pas.
+
+**Pas de seuil dans les récurrents** : une dépense proposée n'apparaît que dans Récurrents, pas dans « À trier ».
+Refusée, ses opérations au-dessus du seuil tombent dans « À trier ».
 
 ## État au 9 octobre 2026
 
@@ -162,4 +171,5 @@ l'utilisateur valide ou refuse. Mesurer sur le dump avant de changer quoi que ce
 | Historique et annulation | fait |
 | Page « Règles de tri » (les règles sortent de l'historique) | fait |
 | Règles écrites à la main, « contient » / « commence par », avec aperçu, sans option | fait |
+| Récurrents : rien compté seul, toute série proposée | fait |
 | Récurrents sans dictionnaire | second temps |

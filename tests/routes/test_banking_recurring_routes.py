@@ -18,7 +18,7 @@ from tests.services.test_banking_recurring import _months
 
 EDF = "PRLV SEPA EDF clients particuliers"
 CLAUDE = "CARTE ANTHROPIC* CLAUDE CB*0837"
-# A transfer to a person: never counted unasked, so it carries a question.
+# A transfer to a person.
 POCKET_MONEY = "VIR SEPA MARIE DUPONT"
 
 
@@ -137,7 +137,7 @@ def test_a_decision_is_found_again_once_its_operations_are_imported_again(client
         _store(session, master_key, account, _raw(again, direction, day, ref=f"again-{n}", label=label))
 
     assert {Decimal(item["amount"]): (item["id"], item["state"]) for item in _items(client)} == {
-        Decimal("61.20"): (refused["id"], "refused"), Decimal("15"): (None, "auto"),
+        Decimal("61.20"): (refused["id"], "refused"), Decimal("15"): (None, "candidate"),
     }
 
 

@@ -7,7 +7,7 @@ a new means of payment.
 Pure: operations in, series out. Nothing here reads a label (the merchant comes
 from `merchants.py`) nor a type rule (each operation carries its resolved type).
 Debits and credits run through the same layers, apart: a series is one or the
-other (its `kind`), and only how sure it is reads differently.
+other (its `kind`), and only whether it is offered reads differently.
 
 Layers, each catching what the one before lets through:
 
@@ -19,7 +19,10 @@ Layers, each catching what the one before lets through:
    next due date on the same account;
 4. extras: a prorata, a regularisation, a late debit at a merchant the series
    has to itself;
-5. reading: how sure, what it costs now, whether it still runs.
+5. reading: whether it is offered, what it costs now, whether it still runs.
+
+Nothing found is counted on its own: every series is offered, and counts once
+the user confirms it (`recurring_series.py`).
 
 Measured on the real dump of 2026-09-18 (15 recurring payments, no false one) and
 on 29 synthetic edge cases, all kept as tests. Income measured on the dump of
@@ -642,13 +645,6 @@ def _clean_neighbours(series: list[Series]) -> dict[int, set[str]]:
 # ---------------------------------------------------------------------------
 
 
-class Confidence(str, Enum):
-    # Counted without asking, whatever pays it.
-    CERTAIN = "certain"
-    # Counted without asking too, unless a habit could look the same (`counted_unasked`).
-    PROBABLE = "probable"
-
-
 class Status(str, Enum):
     ACTIVE = "active"
     LATE = "late"
@@ -816,53 +812,42 @@ def features(series: Series, detection: Detection) -> Features:
 TRANSFER_MIN_EXCLUSIVE = 0.5
 
 
-def confidence(series: Series, f: Features) -> Confidence | None:
-    """How sure the series is a recurring payment, or a recurring income, by
-    what the means of payment can prove; None when it is not offered at all."""
+def offered(series: Series, f: Features) -> bool:
+    """Whether the series is offered to the user as a recurring payment, or a
+    recurring income. Never counted before they confirm it."""
     if series.kind is CashflowType.INCOME:
-        return _income_confidence(series, f)
+        return _income_offered(series, f)
     c, n = series.cadence, f.count
     last = carrier(series)
     # Only an expense is a recurring payment; a debit refunded every time is not one.
     if f.cancelled >= 0.5 or f.typed < 0.5 or last is None or last.type is not CashflowType.EXPENSE:
-        return None
+        return False
     if c.name in ("annual", "semiannual") and n == 2:
         a, b = series.regular[0].amount, series.regular[1].amount
         if f.family == "direct_debit":
             # A premium revised within a tenth.
-            ok = abs(a - b) <= Decimal("0.10") * max(a, b) and f.deviation <= 15 and f.exclusive >= 0.5
-        else:
-            ok = exact(a, b) and not f.round and f.amount >= 10 and f.deviation <= 7 and f.exclusive >= 0.7
-        return Confidence.PROBABLE if ok else None
+            return abs(a - b) <= Decimal("0.10") * max(a, b) and f.deviation <= 15 and f.exclusive >= 0.5
+        return exact(a, b) and not f.round and f.amount >= 10 and f.deviation <= 7 and f.exclusive >= 0.7
     if f.family == "direct_debit":
-        # A mandate: the amount may vary. Four or five instalments then nothing
-        # is never counted unasked.
-        if n >= 6 and f.coverage >= 0.75 and f.deviation <= 3:
-            return Confidence.CERTAIN
-        if n >= 2 and n + f.extras >= 3 and f.coverage >= 0.6 and f.deviation <= 5:
-            return Confidence.PROBABLE
-        return None
+        # A mandate: the amount may vary.
+        return n >= 2 and n + f.extras >= 3 and f.coverage >= 0.6 and f.deviation <= 5
     if f.family == "transfer":
-        # Rent, pocket money and savings elsewhere look alike: always asked.
-        # And paid to someone the user also sends other amounts to, a few
-        # alike ones fall into step by chance.
+        # Paid to someone the user also sends other amounts to, a few alike
+        # ones fall into step by chance.
         if series.variable or f.flat < 0.75 or f.exclusive < TRANSFER_MIN_EXCLUSIVE:
-            return None
-        if n >= 3 and f.coverage >= 0.6 and f.deviation <= 5:
-            return Confidence.PROBABLE
-        return None
+            return False
+        return n >= 3 and f.coverage >= 0.6 and f.deviation <= 5
     # A card, or a bank that names no means of payment: habits look regular too.
     if c.name in ("weekly", "biweekly"):
-        return None
+        return False
     if series.variable:
-        ok = c in (MONTHLY, FOURWEEKLY) and f.exclusive >= 0.75 and f.coverage >= 0.8 and (
+        return c in (MONTHLY, FOURWEEKLY) and f.exclusive >= 0.75 and f.coverage >= 0.8 and (
             (n >= 4 and f.deviation <= 2.5) or (n >= 3 and f.deviation <= 1)
         )
-        return Confidence.PROBABLE if ok else None
     if not (f.exact >= 0.6 or (f.flat >= 0.9 and not f.round)):
-        return None
+        return False
     if f.deviation > 3 or f.coverage < 0.6 or f.exclusive < 0.7:
-        return None
+        return False
     needed = 2 if c.name in ("annual", "semiannual") and f.amount >= 10 and not f.round else 3
     if f.amount < 2:
         needed = max(needed, 6)
@@ -870,12 +855,8 @@ def confidence(series: Series, f: Features) -> Confidence | None:
         # Bets, top-ups, tickets: round amounts come back by habit.
         needed = max(needed, 5)
         if f.deviation > 1:
-            return None
-    if n < needed:
-        return None
-    if n >= 12 and f.exact >= 0.9 and f.deviation <= 2 and f.coverage >= 0.9 and f.exclusive >= 0.9:
-        return Confidence.CERTAIN
-    return Confidence.PROBABLE
+            return False
+    return n >= needed
 
 
 # Income from a payer who also sends other amounts: chains of alike transfers
@@ -896,59 +877,39 @@ INCOME_VARIABLE_MIN_EXCLUSIVE = 0.75
 INCOME_STEP_SHARE, INCOME_STEP_RATIO = 0.7, 1.25
 
 
-def _income_confidence(series: Series, f: Features) -> Confidence | None:
+def _income_offered(series: Series, f: Features) -> bool:
     """Income is nearly always a transfer, which a mandate never vouches for:
     a salary, an allowance and a friend paying back a loan all look alike. So
-    it rests on the amounts and on the payer paying nothing else; certain only
-    over half a year, hardly a due date missed."""
+    it rests on the amounts and on the payer paying nothing else."""
     c, n = series.cadence, f.count
     last = carrier(series)
     if f.cancelled >= 0.5 or f.typed < 0.5 or last is None or last.type is not CashflowType.INCOME:
-        return None
+        return False
     if f.method is OperationType.INTEREST:
         # The bank's own interest: no habit looks like it.
-        return Confidence.CERTAIN if f.deviation <= 7 else None
+        return f.deviation <= 7
     if c.name in ("weekly", "biweekly"):
-        return None
+        return False
     if n < 3 or f.coverage < 0.6 or f.exclusive < INCOME_MIN_EXCLUSIVE:
-        return None
+        return False
     if f.amount < 10 and n < 6:
-        return None
+        return False
     # Judged on the steps rather than `series.variable`, which a stitched
     # series keeps from any stream it took in.
     if f.flat >= INCOME_FLAT_SHARE:
         if f.deviation > 5:
-            return None
+            return False
         # Within 3 %, a few of a friend's amounts fall in step by chance; to
         # the cent they never do, and a salary, an allowance or a parent's
         # transfer repeats to the cent.
-        if n < INCOME_SHORT and f.exact < 0.5:
-            return None
-        if n >= 6 and f.coverage >= 0.9 and f.deviation <= 3 and f.exclusive >= 0.9:
-            return Confidence.CERTAIN
-        return Confidence.PROBABLE
+        return n >= INCOME_SHORT or f.exact >= 0.5
     paid = [op.value for op in series.regular if not op.cancelled]
     steps = list(zip(paid, paid[1:]))
     small = sum(max(a, b) <= INCOME_STEP_RATIO * min(a, b) for a, b in steps)
-    ok = (
+    return (
         c in (MONTHLY, FOURWEEKLY) and n >= INCOME_VARIABLE_MIN_COUNT and f.coverage >= 0.75 and f.deviation <= 3
         and f.exclusive >= INCOME_VARIABLE_MIN_EXCLUSIVE and small >= INCOME_STEP_SHARE * len(steps)
     )
-    return Confidence.PROBABLE if ok else None
-
-
-def counted_unasked(series: Series, level: Confidence | None, f: Features) -> bool:
-    """Whether a series is counted without a question: a certain one, a probable
-    mandate, a probable card payment of a steady amount. The rest asks, being
-    what a habit looks like too: a transfer (rent, pocket money and savings
-    elsewhere alike), a card payment whose amount moves (a monthly shop). Counted
-    unasked, either would be spending nobody sees was never recurring. Income
-    asks unless certain: a friend paying back monthly is no salary."""
-    if level is Confidence.CERTAIN:
-        return True
-    if level is not Confidence.PROBABLE or series.kind is CashflowType.INCOME:
-        return False
-    return f.family == "direct_debit" or (f.family == "card" and not series.variable)
 
 
 # A refund comes back within this long of the series' last debit.

@@ -36,7 +36,7 @@ from services.banking.merchants import (
     merchant_words,
     same_merchant,
 )
-from services.banking.recurrence import CADENCE, Confidence, RecurrenceOp, Series
+from services.banking.recurrence import CADENCE, RecurrenceOp, Series
 from services.banking.recurring_decisions import CONFIRMED, REFUSED, Decision, kind_of
 from services.banking.transfer_patterns import (
     CANCELLED,
@@ -49,7 +49,7 @@ from services.banking.transfer_patterns import (
 )
 from services.encryption import hash_index
 
-AUTO, CANDIDATE = "auto", "candidate"
+CANDIDATE = "candidate"
 # A decision found again by its identity: an amount within a quarter of the
 # one recorded, since a price moves between an import and the next.
 IDENTITY_AMOUNT_SHARE = Decimal("0.25")
@@ -86,9 +86,9 @@ class _Held:
     """A series and the decision laid over it, if any."""
     series: Series
     decision: Decision | None = None
-    confidence: Confidence | None = None
-    # Counted without a question while nothing is decided.
-    unasked: bool = False
+    # Found sure enough to offer: a series nobody offers is kept only when a
+    # decision holds it.
+    offered: bool = False
     manual: list[RecurrenceOp] = field(default_factory=list)
     # What its decision detached: never a member, not even a refund.
     excluded: set[str] = field(default_factory=set)
@@ -147,9 +147,7 @@ def _held(ops: list[RecurrenceOp], kind: CashflowType) -> list[_Held]:
     detection = recurrence.detect(ops, kind)
     held = []
     for series in detection.series:
-        features = recurrence.features(series, detection)
-        level = recurrence.confidence(series, features)
-        held.append(_Held(series, confidence=level, unasked=recurrence.counted_unasked(series, level, features)))
+        held.append(_Held(series, offered=recurrence.offered(series, recurrence.features(series, detection))))
     return held
 
 
@@ -251,7 +249,7 @@ def _seeds(
     operation of its direction: an operation marked by hand, or a series the
     detection no longer finds."""
     attached = {entry.decision.uuid for entry in held if entry.decision}
-    in_series = {op.id for entry in held if entry.decision or entry.confidence for op in entry.series.regular + entry.series.extras}
+    in_series = {op.id for entry in held if entry.decision or entry.offered for op in entry.series.regular + entry.series.extras}
     pools = {kind: [op for op in side if op.id not in in_series] for kind, side in sides.items()}
     seeds = []
     for decision in decisions:
@@ -281,7 +279,7 @@ def _merged(held: list[_Held]) -> list[_Held]:
     kept: list[_Held] = []
     for entry in held:
         if entry.decision is None:
-            if entry.confidence is not None:
+            if entry.offered:
                 kept.append(entry)
         else:
             by_decision[entry.decision.uuid].append(entry)
@@ -300,8 +298,7 @@ def _merged(held: list[_Held]) -> list[_Held]:
             kind=latest.series.kind,
         )
         series.sort()
-        confidences = [e.confidence for e in entries if e.confidence]
-        kept.append(_Held(series, latest.decision, confidences[0] if confidences else None))
+        kept.append(_Held(series, latest.decision, any(e.offered for e in entries)))
     return kept
 
 
@@ -357,10 +354,10 @@ def _stored(
         series.regular = own_side
         own_side = []
     if decision is None:
-        state = AUTO if entry.unasked else CANDIDATE
+        state = CANDIDATE
     else:
         state = CONFIRMED if decision.status == CONFIRMED else REFUSED
-    counted = state in (AUTO, CONFIRMED)
+    counted = state == CONFIRMED
 
     method = Counter(op.method for op in series.regular).most_common(1)[0][0]
     # An income is never refunded on its own: a payer the user also pays
@@ -387,7 +384,6 @@ def _stored(
         decision=decision.uuid if decision else None,
         direction=(RecurringDirection.INCOME if income else RecurringDirection.EXPENSE).value,
         state=state,
-        confidence=entry.confidence.value if entry.confidence else None,
         cadence=series.cadence.name,
         variable=series.variable,
         currency=series.currency,

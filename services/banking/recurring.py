@@ -119,7 +119,7 @@ def list_recurring(
 
     counted = [
         item for item in items
-        if item.state in (RecurringState.AUTO, RecurringState.CONFIRMED)
+        if item.state is RecurringState.CONFIRMED
         and item.status in (RecurringStatus.ACTIVE, RecurringStatus.STALE)
     ]
     currencies = [item.currency for item in counted] or [item.currency for item in items]
@@ -201,7 +201,6 @@ class _Reader:
             name=stored.name,
             nature=nature,
             state=stored.state,
-            confidence=stored.confidence,
             status=status.value,
             covered_until=covered_until if status is recurrence.Status.STALE else None,
             cadence=stored.cadence,

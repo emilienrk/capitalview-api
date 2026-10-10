@@ -59,7 +59,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "26"
+_VERSION = "27"
 
 
 class FlowCarrier(NamedTuple):
@@ -102,9 +102,8 @@ class StoredRecurring:
     decision: str | None
     # expense | income
     direction: str
-    # auto | confirmed | candidate | refused
+    # confirmed | candidate | refused
     state: str
-    confidence: str | None
     cadence: str
     variable: bool
     currency: str
@@ -139,7 +138,7 @@ class StoredRecurring:
     def to_json(self) -> dict:
         return {
             "key": self.key, "decision": self.decision, "direction": self.direction,
-            "state": self.state, "confidence": self.confidence,
+            "state": self.state,
             "cadence": self.cadence, "variable": self.variable, "currency": self.currency,
             "members": [
                 [m.uuid, m.role, m.day.isoformat(), str(m.amount), m.is_credit, m.typed, m.label]
@@ -159,7 +158,7 @@ class StoredRecurring:
     def from_json(cls, content: dict) -> StoredRecurring:
         return cls(
             key=content["key"], decision=content["decision"], direction=content["direction"], state=content["state"],
-            confidence=content["confidence"], cadence=content["cadence"], variable=content["variable"],
+            cadence=content["cadence"], variable=content["variable"],
             currency=content["currency"],
             members=[
                 RecurringMember(uuid, role, date.fromisoformat(day), Decimal(amount), is_credit, typed, label)
