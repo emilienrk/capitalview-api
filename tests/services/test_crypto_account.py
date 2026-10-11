@@ -121,3 +121,36 @@ def test_delete_crypto_account_cascade(session: Session, master_key: str):
 
 def test_delete_crypto_account_not_found(session: Session, master_key: str):
     assert delete_crypto_account(session, "non_existent", master_key) is False
+
+
+def test_default_account_is_named_for_what_it_holds(session: Session, master_key: str):
+    from services.crypto_account import get_or_create_default_account
+
+    account = get_or_create_default_account(session, "user_single_new", master_key)
+    assert decrypt_data(account.name_enc, master_key) == "Portefeuille crypto"
+
+
+def test_default_account_drops_its_former_name(session: Session, master_key: str):
+    from services.crypto_account import get_or_create_default_account
+
+    session.add(CryptoAccount(
+        user_uuid_bidx=hash_index("user_single_old", master_key),
+        name_enc=encrypt_data("Mon Portefeuille", master_key),
+    ))
+    session.commit()
+
+    account = get_or_create_default_account(session, "user_single_old", master_key)
+    assert decrypt_data(account.name_enc, master_key) == "Portefeuille crypto"
+
+
+def test_default_account_keeps_a_name_the_user_chose(session: Session, master_key: str):
+    from services.crypto_account import get_or_create_default_account
+
+    session.add(CryptoAccount(
+        user_uuid_bidx=hash_index("user_single_named", master_key),
+        name_enc=encrypt_data("Binance", master_key),
+    ))
+    session.commit()
+
+    account = get_or_create_default_account(session, "user_single_named", master_key)
+    assert decrypt_data(account.name_enc, master_key) == "Binance"

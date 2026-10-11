@@ -22,6 +22,11 @@ from services.crypto_transaction import get_account_transactions, get_crypto_acc
 from services.broker_cash import counted_cash, uncounted_cash
 from services.encryption import encrypt_data, decrypt_data, hash_index
 
+# Shown wherever the account is named, the bank review among them: it must say
+# what the account is to someone who never opened the crypto page.
+DEFAULT_ACCOUNT_NAME = "Portefeuille crypto"
+_FORMER_DEFAULT_ACCOUNT_NAME = "Mon Portefeuille"
+
 
 def _map_account_to_response(account: CryptoAccount, master_key: str) -> CryptoAccountBasicResponse:
     """Decrypt and map CryptoAccount to basic response."""
@@ -97,12 +102,18 @@ def get_or_create_default_account(
     ).first()
 
     if existing:
+        # Names are encrypted, so the former default is renamed here, not by a migration.
+        if decrypt_data(existing.name_enc, master_key) == _FORMER_DEFAULT_ACCOUNT_NAME:
+            existing.name_enc = encrypt_data(DEFAULT_ACCOUNT_NAME, master_key)
+            session.add(existing)
+            session.commit()
+            session.refresh(existing)
         return existing
 
     # Auto-create a transparent default account
     account = CryptoAccount(
         user_uuid_bidx=user_bidx,
-        name_enc=encrypt_data("Mon Portefeuille", master_key),
+        name_enc=encrypt_data(DEFAULT_ACCOUNT_NAME, master_key),
     )
     session.add(account)
     session.commit()
