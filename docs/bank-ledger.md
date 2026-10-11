@@ -29,7 +29,7 @@ Les relevés de solde saisis, l'import de fichiers de soldes et le solde
 d'ouverture ont été retirés le 2026-10-09 : leur écart calculé à une date
 compliquait tout le reste pour un cas que personne n'utilisait.
 
-## Trois sortes d'opérations
+## Quatre sortes d'opérations
 
 Une colonne chiffrée `bank_transactions.origin_enc` les distingue :
 

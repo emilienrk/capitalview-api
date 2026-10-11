@@ -34,7 +34,6 @@ from services.banking.recurring_decisions import forget_account
 from services.bank_ledger import (
     LEDGER_VERSION,
     ensure_ledgers,
-    on_ledger,
     rebuild_from_operations,
 )
 from services.banking.transactions import ORIGIN_FORECAST, first_operation_day, store_entry
@@ -447,14 +446,15 @@ def _apply_pending_cashflows(
     auto_sync_enabled: bool,
     is_linked: bool = False,
 ) -> None:
-    """Apply cashflow occurrences that have fired since balance_updated_at.
+    """Turn the cashflow occurrences fired since balance_updated_at into
+    forecast operations.
 
     On the first call (balance_updated_at is None), we just stamp today without
-    applying anything — this prevents retroactively adjusting a manually-entered balance.
-    Subsequent calls apply all occurrences in (balance_updated_at, today].
+    creating anything: nothing fired before is created after the fact.
+    Subsequent calls create every occurrence in (balance_updated_at, today].
 
-    Inactive cashflows, a disabled global switch and a bank-linked account skip
-    the balance update but still advance the stamp: a paused period must never
+    Inactive cashflows, a disabled global switch and a bank-linked account
+    create nothing but still advance the stamp: a paused period must never
     be caught up later.
 
     Amounts are added as they stand, in the account's own currency: a flow is
@@ -495,30 +495,7 @@ def _apply_pending_cashflows(
         session.commit()
         return
 
-    if on_ledger(session, account, master_key):
-        _forecast(session, account, linked, from_date, today, master_key, get_cashflow_occurrences_fn)
-        return
-
-    # Compute net delta from all occurrences in (from_date, today]
-    current_balance = Decimal(decrypt_data(account.balance_enc, master_key))
-    delta = Decimal("0")
-
-    for cf in linked:
-        occurrences = get_cashflow_occurrences_fn(cf, from_date, today)
-        if not occurrences:
-            continue
-        amount_per_occurrence = cf.amount
-        count = Decimal(str(len(occurrences)))
-        if cf.flow_type == FlowType.INFLOW:
-            delta += amount_per_occurrence * count
-        else:
-            delta -= amount_per_occurrence * count
-
-    new_balance = current_balance + delta
-    account.balance_enc = encrypt_data(str(new_balance), master_key)
-    account.balance_updated_at = today
-    session.add(account)
-    session.commit()
+    _forecast(session, account, linked, from_date, today, master_key, get_cashflow_occurrences_fn)
 
 
 def _forecast(
