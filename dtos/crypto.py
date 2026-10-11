@@ -66,10 +66,11 @@ class CryptoTransactionCreate(BaseModel):
 
 
 class CryptoTransactionUpdate(BaseModel):
-    asset_key: str | None = None
-    type: CryptoTransactionType | None = None
-    amount: Decimal | None = Field(None, gt=0)
-    price_per_unit: Decimal | None = Field(None, ge=0)
+    """What a stored row may still change. A row is one leg of a group: its asset,
+    type, quantity or price change the whole operation, which is recreated
+    instead (docs/crypto-ledger.md)."""
+    # Only on an ANCHOR: the group's euro value, which no other leg repeats.
+    amount: Decimal | None = Field(None, ge=0)
     executed_at: ValidDatetimeOpt = None
     tx_hash: str | None = None
     notes: str | None = None

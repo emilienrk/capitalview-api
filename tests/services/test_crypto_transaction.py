@@ -111,25 +111,66 @@ def test_update_crypto_transaction(session: Session, master_key: str):
     tx_db = session.get(CryptoTransaction, created.id)
     new_date = datetime(2023, 2, 2, 12, 0, 0)
     update_data = CryptoTransactionUpdate(
-        asset_key="SOLO",
-        type=CryptoTransactionType.SPEND,
-        amount=Decimal("5"),
-        price_per_unit=Decimal("25"),
         executed_at=new_date,
         notes="New Note",
         tx_hash="0xABC"
     )
     assert update_crypto_transaction(session, tx_db, update_data, "some_other_user", master_key) is None
     updated = update_crypto_transaction(session, tx_db, update_data, user_uuid, master_key)
-    assert updated.asset_key == "SOLO"
-    assert updated.type == "SPEND"
-    assert updated.amount == Decimal("5")
-    assert updated.price_per_unit == Decimal("25")
+    assert updated.asset_key == "SOL"
+    assert updated.amount == Decimal("10")
     assert updated.executed_at == new_date
     session.refresh(tx_db)
     from services.encryption import decrypt_data
     assert decrypt_data(tx_db.notes_enc, master_key) == "New Note"
     assert decrypt_data(tx_db.tx_hash_enc, master_key) == "0xABC"
+
+
+def _swap(session: Session, master_key: str) -> list:
+    """BTC bought with 1 ETH, worth 2 000 € — BUY + crypto SPEND + ANCHOR."""
+    return create_composite_crypto_transaction(
+        session,
+        CryptoCompositeTransactionCreate(
+            account_id="acc_crypto",
+            type="BUY",
+            asset_key="BTC",
+            amount=Decimal("0.1"),
+            quote_asset_key="ETH",
+            quote_amount=Decimal("1"),
+            eur_amount=Decimal("2000"),
+            executed_at=datetime(2024, 3, 1, 10, 0, 0),
+        ),
+        master_key,
+    )
+
+
+def test_update_refuses_a_leg_quantity(session: Session, master_key: str):
+    from services.crypto_transaction import ImmutableLegError
+
+    user_uuid = "user_update_leg"
+    _make_crypto_account(session, "acc_crypto", user_uuid, master_key)
+    buy = next(row for row in _swap(session, master_key) if row.type == "BUY")
+
+    with pytest.raises(ImmutableLegError):
+        update_crypto_transaction(
+            session, session.get(CryptoTransaction, buy.id),
+            CryptoTransactionUpdate(amount=Decimal("0.2")), user_uuid, master_key,
+        )
+    assert get_crypto_transaction(session, buy.id, user_uuid, master_key).amount == Decimal("0.1")
+
+
+def test_update_anchor_value_reprices_the_group(session: Session, master_key: str):
+    user_uuid = "user_update_anchor"
+    _make_crypto_account(session, "acc_crypto", user_uuid, master_key)
+    anchor = next(row for row in _swap(session, master_key) if row.type == "ANCHOR")
+
+    update_crypto_transaction(
+        session, session.get(CryptoTransaction, anchor.id),
+        CryptoTransactionUpdate(amount=Decimal("2500")), user_uuid, master_key,
+    )
+
+    btc = next(p for p in _crypto_summary(session, "acc_crypto", master_key).positions if p.asset_key == "BTC")
+    assert btc.total_invested == Decimal("2500.00")
 
 
 def test_delete_crypto_transaction(session: Session, master_key: str):

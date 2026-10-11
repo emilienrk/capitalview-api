@@ -606,6 +606,10 @@ def get_crypto_transaction(
     return _decrypt_transaction(transaction, master_key)
 
 
+class ImmutableLegError(ValueError):
+    """A change only the whole operation can make."""
+
+
 def update_crypto_transaction(
     session: Session,
     transaction: CryptoTransaction,
@@ -616,14 +620,13 @@ def update_crypto_transaction(
     if not _account_owned_by_user(session, transaction.account_id_bidx, user_uuid, master_key):
         return None
 
-    if data.asset_key is not None:
-        transaction.asset_key_enc = encrypt_data(data.asset_key.upper(), master_key)
-    if data.type is not None:
-        transaction.type_enc = encrypt_data(data.type.value, master_key)
     if data.amount is not None:
+        if decrypt_data(transaction.type_enc, master_key) != CryptoTransactionType.ANCHOR.value:
+            raise ImmutableLegError(
+                "Seule la valeur en euros d'une opération se modifie : "
+                "supprimez l'opération et recréez-la."
+            )
         transaction.amount_enc = encrypt_data(str(data.amount), master_key)
-    if data.price_per_unit is not None:
-        transaction.price_per_unit_enc = encrypt_data(str(data.price_per_unit), master_key)
     if data.executed_at is not None:
         transaction.executed_at_enc = encrypt_data(data.executed_at.isoformat(), master_key)
         # Propagate the new date to all sibling transactions in the same group

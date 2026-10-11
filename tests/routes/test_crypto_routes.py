@@ -131,8 +131,9 @@ def test_crypto_transactions_crud_and_bulk(session, master_key):
     rget = client.get(f"/crypto/transactions/{tx_id}")
     assert rget.status_code == 200
 
-    rupd = client.put(f"/crypto/transactions/{tx_id}", json={"asset_key": "ETHX", "amount": "1"})
+    rupd = client.put(f"/crypto/transactions/{tx_id}", json={"notes": "edited"})
     assert rupd.status_code == 200
+    assert client.put(f"/crypto/transactions/{tx_id}", json={"amount": "1"}).status_code == 422
 
     rdel = client.delete(f"/crypto/transactions/{tx_id}")
     assert rdel.status_code == 204
@@ -223,6 +224,61 @@ def test_delete_transaction_deletes_whole_group(session, master_key):
     assert remaining.status_code == 200
     remaining_ids = {tx["id"] for tx in remaining.json()}
     assert all_ids.isdisjoint(remaining_ids)
+
+
+def test_update_transaction_refuses_a_leg_quantity(session, master_key):
+    client = TestClient(app)
+    account_id = client.post("/crypto/accounts", json={"name": "EditWallet"}).json()["id"]
+    rows = client.post("/crypto/transactions/composite", json={
+        "account_id": account_id,
+        "asset_key": "BTC",
+        "type": "BUY",
+        "amount": "0.1",
+        "executed_at": "2024-01-01T12:00:00",
+        "quote_asset_key": "EUR",
+        "quote_amount": "3000",
+    }).json()["rows"]
+    buy_id = next(row["id"] for row in rows if row["type"] == "BUY")
+
+    refused = client.put(f"/crypto/transactions/{buy_id}", json={"amount": "0.2"})
+    assert refused.status_code == 422
+
+    moved = client.put(f"/crypto/transactions/{buy_id}", json={"executed_at": "2024-01-02T12:00:00"})
+    assert moved.status_code == 200
+    dates = {tx["executed_at"][:10] for tx in client.get(f"/crypto/transactions/account/{account_id}").json()}
+    assert dates == {"2024-01-02"}
+
+
+def test_delete_cross_account_transfer_rebuilds_both_histories(session, master_key):
+    from services.encryption import hash_index
+
+    client = TestClient(app)
+    source = client.post("/crypto/accounts", json={"name": "Source"}).json()["id"]
+    target = client.post("/crypto/accounts", json={"name": "Target"}).json()["id"]
+    client.post("/crypto/transactions/composite", json={
+        "account_id": source,
+        "asset_key": "BTC",
+        "type": "BUY",
+        "amount": "0.1",
+        "executed_at": "2024-01-01T12:00:00",
+        "quote_asset_key": "EUR",
+        "quote_amount": "3000",
+    })
+    rows = client.post("/crypto/transactions/cross-account-transfer", json={
+        "from_account_id": source,
+        "to_account_id": target,
+        "asset_key": "BTC",
+        "amount": "0.05",
+        "executed_at": "2024-02-01T12:00:00",
+    }).json()["rows"]
+    transfer_out = next(row["id"] for row in rows if row["type"] == "TRANSFER")
+
+    with patch("routes.crypto.trigger_post_transaction_updates") as rebuild:
+        assert client.delete(f"/crypto/transactions/{transfer_out}").status_code == 204
+
+    rebuilt = {call.kwargs["account_id_bidx"] for call in rebuild.call_args_list}
+    assert rebuilt == {hash_index(source, master_key), hash_index(target, master_key)}
+    assert client.get(f"/crypto/transactions/account/{target}").json() == []
 
 
 def test_create_crypto_transaction_negative_validation(session, master_key):

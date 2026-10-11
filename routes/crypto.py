@@ -69,6 +69,7 @@ from services.crypto_transaction import (
     delete_crypto_transaction,
     get_crypto_account_summary,
     compute_balance_warning,
+    ImmutableLegError,
     _account_owned_by_user as _crypto_account_owned_by_user,
 )
 from dtos.crypto import FIAT_ASSET_KEYS
@@ -480,6 +481,58 @@ def get_transaction(
     return transaction
 
 
+def _group_rows(session: Session, tx_model: CryptoTransaction) -> list[CryptoTransaction]:
+    """The row and every other leg of its operation, whatever account holds them."""
+    if not tx_model.group_uuid:
+        return [tx_model]
+    return list(session.exec(
+        select(CryptoTransaction).where(CryptoTransaction.group_uuid == tx_model.group_uuid)
+    ).all())
+
+
+def _history_scope(
+    rows: list[CryptoTransaction], master_key: str
+) -> dict[str, tuple[list[date], set[str]]]:
+    """Dates and crypto assets each account's history must be rebuilt from.
+
+    A transfer between two accounts is one group: both histories hold it.
+    """
+    scope: dict[str, tuple[list[date], set[str]]] = {}
+    for row in rows:
+        dates, assets = scope.setdefault(row.account_id_bidx, ([], set()))
+        try:
+            dates.append(datetime.fromisoformat(
+                decrypt_data(row.executed_at_enc, master_key).replace("Z", "+00:00")
+            ).date())
+        except Exception:
+            dates.append(row.created_at.date())
+        try:
+            asset_key = decrypt_data(row.asset_key_enc, master_key)
+            if asset_key not in FIAT_ASSET_KEYS:
+                assets.add(asset_key)
+        except Exception:
+            pass
+    return scope
+
+
+def _rebuild_histories(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    scope: dict[str, tuple[list[date], set[str]]],
+) -> None:
+    for account_id_bidx, (dates, assets) in scope.items():
+        trigger_post_transaction_updates(
+            session=session,
+            user_uuid=user_uuid,
+            master_key=master_key,
+            account_id_bidx=account_id_bidx,
+            asset_type=AssetType.CRYPTO,
+            affected_dates=list(dict.fromkeys(dates)),
+            affected_assets=sorted(assets),
+        )
+
+
 @router.put("/transactions/{transaction_id}", response_model=CryptoTransactionBasicResponse)
 def update_transaction(
     transaction_id: str,
@@ -488,49 +541,39 @@ def update_transaction(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
 ):
-    """Update a crypto transaction."""
+    """Update a crypto transaction: its date (and its group's), notes, hash, or an ANCHOR's value."""
     tx_model = session.get(CryptoTransaction, transaction_id)
     if not tx_model:
         raise HTTPException(status_code=404, detail="Transaction not found")
     if not _crypto_account_owned_by_user(session, tx_model.account_id_bidx, current_user.uuid, master_key):
         raise HTTPException(status_code=404, detail="Transaction not found")
 
-    # Capture old date before the update so we can rebuild from the earliest affected date.
-    try:
-        old_date = date.fromisoformat(decrypt_data(tx_model.executed_at_enc, master_key)[:10])
-    except Exception:
-        old_date = None
+    # Captured before the update so the rebuild starts from the earliest affected date.
+    scope = _history_scope(_group_rows(session, tx_model), master_key)
 
     try:
         resp = update_crypto_transaction(session, tx_model, data, current_user.uuid, master_key)
+    except ImmutableLegError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if resp is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
 
-        new_date = data.executed_at.date() if data.executed_at and hasattr(data.executed_at, "date") else (
-            data.executed_at if data.executed_at else None
-        )
+    if data.executed_at:
+        for dates, _ in scope.values():
+            dates.append(data.executed_at.date())
+    _rebuild_histories(session, current_user.uuid, master_key, scope)
 
-        trigger_post_transaction_updates(
-            session=session,
-            user_uuid=current_user.uuid,
-            master_key=master_key,
-            account_id_bidx=tx_model.account_id_bidx,
-            asset_type=AssetType.CRYPTO,
-            affected_dates=[old_date, new_date],
-            affected_assets=[resp.asset_key] if resp.asset_key not in FIAT_ASSET_KEYS else [],
-        )
-
-        return CryptoTransactionBasicResponse(
-            id=resp.id,
-            account_id="unknown",  # account_id not stored on tx; caller knows it
-            asset_key=resp.asset_key,
-            type=CryptoTransactionType(resp.type),
-            amount=resp.amount,
-            price_per_unit=resp.price_per_unit,
-            executed_at=resp.executed_at,
-            notes=None,
-            tx_hash=None,
-        )
-    except Exception:
-        raise HTTPException(status_code=403, detail="Access denied")
+    return CryptoTransactionBasicResponse(
+        id=resp.id,
+        account_id="unknown",  # account_id not stored on tx; caller knows it
+        asset_key=resp.asset_key,
+        type=CryptoTransactionType(resp.type),
+        amount=resp.amount,
+        price_per_unit=resp.price_per_unit,
+        executed_at=resp.executed_at,
+        notes=None,
+        tx_hash=None,
+    )
 
 
 @router.delete("/transactions/{transaction_id}", status_code=204)
@@ -540,54 +583,16 @@ def delete_transaction(
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session)
 ):
-    """Delete a crypto transaction."""
+    """Delete a crypto transaction and the rest of its group."""
     tx = get_crypto_transaction(session, transaction_id, current_user.uuid, master_key)
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
-    # Capture impacted account/date/assets before deleting.
     tx_model = session.get(CryptoTransaction, transaction_id)
-    account_id_bidx = tx_model.account_id_bidx if tx_model else None
-
-    group_models: list[CryptoTransaction] = []
-    if tx_model and tx_model.group_uuid:
-        group_models = session.exec(
-            select(CryptoTransaction).where(
-                CryptoTransaction.group_uuid == tx_model.group_uuid,
-            )
-        ).all()
-    elif tx_model:
-        group_models = [tx_model]
-
-    affected_dates: list[date] = []
-    affected_assets: set[str] = set()
-    for grouped_tx in group_models:
-        try:
-            executed_at = datetime.fromisoformat(
-                decrypt_data(grouped_tx.executed_at_enc, master_key).replace("Z", "+00:00")
-            )
-            affected_dates.append(executed_at.date())
-        except Exception:
-            affected_dates.append(grouped_tx.created_at.date())
-
-        try:
-            asset_key = decrypt_data(grouped_tx.asset_key_enc, master_key)
-            if asset_key not in FIAT_ASSET_KEYS:
-                affected_assets.add(asset_key)
-        except Exception:
-            pass
+    scope = _history_scope(_group_rows(session, tx_model), master_key)
 
     delete_crypto_transaction(session, transaction_id, current_user.uuid, master_key)
-
-    trigger_post_transaction_updates(
-        session=session,
-        user_uuid=current_user.uuid,
-        master_key=master_key,
-        account_id_bidx=account_id_bidx,
-        asset_type=AssetType.CRYPTO,
-        affected_dates=list(dict.fromkeys(affected_dates)) if affected_dates else [],
-        affected_assets=sorted(affected_assets),
-    )
+    _rebuild_histories(session, current_user.uuid, master_key, scope)
 
     return None
 
