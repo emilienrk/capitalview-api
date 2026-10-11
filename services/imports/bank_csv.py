@@ -2,9 +2,9 @@
 Bank statement CSV import: a file of movements, one row each.
 
 On an account no bank feeds, the operations are the only source of truth
-(docs/bank-ledger.md): the file adds operations and replaces the forecasts and
-adjustments of its period, then the balance and the curve are rebuilt from the
-operations (services/bank_ledger.py). Money held before the file's first line
+(docs/bank-ledger.md): the file adds operations and replaces the adjustments
+of its period, then the balance and the curve are rebuilt from the operations
+(services/bank_ledger.py). Money held before the file's first line
 is an operation like any other, typed or imported.
 
 On a linked account, the file only fills the days before the bank's history,
@@ -415,12 +415,10 @@ class GenericBankTransactionsParser(ImportParser):
         warnings: list[str],
     ) -> ImportPreviewResponse:
         """What the file does to an account whose operations are its truth: each
-        row's fate, the adjustments and forecasts of its period it replaces, and
-        the balance at its last operation once imported."""
-        from services.bank_ledger import balance_at, ensure_ledgers, synthetic_between
-        from services.banking.transactions import (
-            ROW_AMBIGUOUS, ROW_DUPLICATE, ROW_NEW, classify_transactions, row_origin,
-        )
+        row's fate, the adjustments of its period it replaces, and the balance
+        at its last operation once imported."""
+        from services.bank_ledger import adjustments_between, balance_at, ensure_ledgers
+        from services.banking.transactions import ROW_AMBIGUOUS, ROW_DUPLICATE, ROW_NEW, classify_transactions
         from services.encryption import decrypt_data
 
         account = _ledger_account(session, account_id, master_key)
@@ -441,13 +439,13 @@ class GenericBankTransactionsParser(ImportParser):
         if rows:
             first, last = rows[0].day, rows[-1].day
             opening = balance_at(session, account, first - timedelta(days=1), master_key)
-            synthetic = synthetic_between(session, account, master_key, first, last)
+            adjustments = adjustments_between(session, account, master_key, first, last)
             replaced = [
                 BankImportReplacedEntry(
-                    day=day, amount=amount, origin=row_origin(row, master_key),
+                    day=day, amount=amount,
                     label=decrypt_data(row.remittance_enc, master_key) if row.remittance_enc else None,
                 )
-                for day, amount, row in synthetic
+                for day, amount, row in adjustments
             ]
             added = sum((_signed(r) for r in rows if r.status in (ROW_NEW, ROW_AMBIGUOUS)), Decimal("0"))
             balance_after = (
@@ -472,9 +470,9 @@ class GenericBankTransactionsParser(ImportParser):
     def _ledger_execute(
         self, session: Session, account_id: str, payload: ImportConfirmRequest, master_key: str
     ) -> ImportConfirmResponse:
-        """Replace the adjustments and forecasts of the file's period, store its
+        """Replace the adjustments of the file's period, store its
         operations, and rebuild the balance from the whole."""
-        from services.bank_ledger import drop_synthetic, ensure_ledgers, rebuild_from_operations
+        from services.bank_ledger import drop_adjustments, ensure_ledgers, rebuild_from_operations
         from services.banking.transactions import store_transactions
 
         account = _ledger_account(session, account_id, master_key)
@@ -487,13 +485,10 @@ class GenericBankTransactionsParser(ImportParser):
         kept = [(row, reference) for row, reference in _with_references(rows) if not row.excluded]
         first, last = rows[0].day, rows[-1].day
 
-        replaced = drop_synthetic(session, account, master_key, first, last)
+        replaced = drop_adjustments(session, account, master_key, first, last)
         inserted, updated, skipped = store_transactions(
             session, master_key, account_id, _raws(kept, _account_currency(session, account_id, master_key))
         )
-        # The movements already hold what the linked cashflows would add.
-        account.balance_updated_at = date.today()
-        session.add(account)
         session.commit()
         rebuild_from_operations(session, account, master_key)
         return ImportConfirmResponse(

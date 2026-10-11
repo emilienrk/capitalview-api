@@ -52,8 +52,7 @@ from services.banking.transactions import (
     CREDIT,
     FINAL_STATUSES,
     STATUS_BOOKED,
-    SYNTHETIC_ORIGINS,
-    row_origin,
+    is_adjustment,
     NormalizedTransaction,
     normalize_transaction,
     row_date,
@@ -563,12 +562,12 @@ def _widen_history_served_from(
 
 
 def _drop_ledger_entries(session: Session, account: BankAccount, master_key: str) -> None:
-    """The adjustments and forecasts left from before the account was linked:
+    """The adjustments left from before the account was linked:
     they described a balance the bank now gives (docs/bank-ledger.md)."""
     for row in session.exec(
         select(BankTransaction).where(BankTransaction.account_id_bidx == hash_index(account.uuid, master_key))
     ).all():
-        if row_origin(row, master_key) in SYNTHETIC_ORIGINS:
+        if is_adjustment(row, master_key):
             session.delete(row)
     session.flush()
 
@@ -861,7 +860,7 @@ def _rows_in_range(
     A blind index only supports equality, so the months of the range are
     enumerated and queried with IN, never the whole account.
 
-    Never an adjustment or a forecast left from before the account was linked:
+    Never an adjustment left from before the account was linked:
     the bank's word is its balance (docs/bank-ledger.md).
     """
     return [
@@ -871,7 +870,7 @@ def _rows_in_range(
                 BankTransaction.period_bidx.in_(_period_indexes(start, end, master_key)),
             )
         ).all()
-        if row_origin(row, master_key) not in SYNTHETIC_ORIGINS
+        if not is_adjustment(row, master_key)
     ]
 
 

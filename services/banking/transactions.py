@@ -16,7 +16,7 @@ to the most approximate:
    reference, and the only way to follow a pending operation whose reference
    changes when it books. It is also how a statement replaces an operation the
    user typed by hand (`store_entry`), which has no reference either.
-   Adjustments and forecasts are never claimed (docs/bank-ledger.md).
+   Adjustments are never claimed (docs/bank-ledger.md).
 
 There is deliberately no cross-account level: a card feed republishes the
 current account it debits, but every read filters on one `account_id_bidx`, so a
@@ -72,11 +72,9 @@ CREDIT = "CRDT"
 DEBIT = "DBIT"
 
 # Where a stored operation comes from, beyond the bank or a statement
-# (docs/bank-ledger.md). Adjustments and forecasts only move the balance.
+# (docs/bank-ledger.md). Adjustments only move the balance.
 ORIGIN_MANUAL = "manual"
 ORIGIN_ADJUSTMENT = "adjustment"
-ORIGIN_FORECAST = "forecast"
-SYNTHETIC_ORIGINS = frozenset({ORIGIN_ADJUSTMENT, ORIGIN_FORECAST})
 
 # What an import would do with one of its rows (`classify_transactions`).
 ROW_NEW = "new"
@@ -266,7 +264,7 @@ def classify_transactions(
     hand-typed entry, or a stored one under another reference.
     """
     account_bidx = hash_index(bank_account_uuid, master_key)
-    existing = [row for row in _account_rows(session, account_bidx) if not _is_synthetic(row, master_key)]
+    existing = [row for row in _account_rows(session, account_bidx) if not is_adjustment(row, master_key)]
     matcher = _Matcher(existing, master_key)
 
     statuses: list[str] = []
@@ -334,13 +332,13 @@ def store_entry(
 
 
 def row_origin(row: BankTransaction, master_key: str) -> str | None:
-    """`ORIGIN_MANUAL`, `ORIGIN_ADJUSTMENT`, `ORIGIN_FORECAST`, or None for an
-    operation the bank or a statement reported."""
+    """`ORIGIN_MANUAL`, `ORIGIN_ADJUSTMENT`, or None for an operation the bank
+    or a statement reported."""
     return decrypt_data(row.origin_enc, master_key) if row.origin_enc else None
 
 
-def _is_synthetic(row: BankTransaction, master_key: str) -> bool:
-    return row_origin(row, master_key) in SYNTHETIC_ORIGINS
+def is_adjustment(row: BankTransaction, master_key: str) -> bool:
+    return row_origin(row, master_key) == ORIGIN_ADJUSTMENT
 
 
 def signed_row_amount(row: BankTransaction, master_key: str) -> Decimal:

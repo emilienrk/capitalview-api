@@ -95,10 +95,6 @@ class UserSettings(SQLModel, table=True):
     # them, so a negative EUR balance is never shown as a line.
     crypto_auto_deposits: bool = Field(default=False, nullable=False)
     bank_module_enabled: bool = Field(default=True, nullable=False)
-    # False = linked cashflows no longer adjust bank balances automatically.
-    # Off by default: a forecast moving a real balance on its own surprises more
-    # than it helps, and a linked account gets its truth from the bank anyway.
-    bank_auto_sync_enabled: bool = Field(default=False, nullable=False)
     # A debit nothing faces asks past this amount, the user's own trade-off
     # between questions and precision (docs/bank-sorting.md).
     bank_question_threshold: Decimal = Field(default=Decimal("500"), max_digits=12, decimal_places=2)

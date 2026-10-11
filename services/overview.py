@@ -614,26 +614,20 @@ def get_historical_performance(session: Session, user_uuid: str, master_key: byt
         output["crypto"] = calculate_metrics(get_all_crypto_accounts_history(session, user_uuid, master_key, include_current=True, start_date=start_date))
     return output
 
-def _euros(total: Decimal | None) -> float | None:
-    """A total is None when a currency in play has no published rate; it
-    travels as null rather than as a made-up number."""
-    return round(float(total), 2) if total is not None else None
+def _euros(total: Decimal) -> float:
+    return round(float(total), 2)
 
 
 def _declared_category(category) -> dict:
-    items = []
-    for flow in category.items:
-        item = {
+    items = [
+        {
             "name": flow.name,
             "amount": float(flow.amount),
             "frequency": flow.frequency.value if hasattr(flow.frequency, "value") else flow.frequency,
-            "monthly_eur": _euros(flow.monthly_amount_eur),
+            "monthly": _euros(flow.monthly_amount),
         }
-        if flow.currency != "EUR":
-            item["currency"] = flow.currency
-        if not flow.is_active:
-            item["active"] = False
-        items.append(item)
+        for flow in category.items
+    ]
     return {"category": category.category, "monthly": _euros(category.monthly_total), "items": items}
 
 
@@ -675,7 +669,7 @@ def get_user_cashflow(session: Session, user_uuid: str, master_key: bytes, detai
         output[key] = side
     if parsed_flow is None:
         output["monthly_balance"] = _euros(balance.monthly_balance)
-        output["savings_rate_pct"] = _euros(balance.savings_rate)
+        output["savings_rate_pct"] = _euros(balance.savings_rate) if balance.savings_rate is not None else None
     return output
 
 

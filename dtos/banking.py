@@ -291,7 +291,7 @@ class TypeSource(str, Enum):
     # (services/banking/recurring_series.py): it is reviewed there, not asked.
     RECURRING = "recurring"
     DEFAULT = "default"
-    # An adjustment or a forecast: it only moves the balance (docs/bank-ledger.md).
+    # An adjustment: it only moves the balance (docs/bank-ledger.md).
     ADJUSTMENT = "adjustment"
 
 
@@ -473,7 +473,7 @@ class BankTransactionItem(BaseModel):
     contribution: BankContributionMatch | None = None
     recurring: BankRecurringTag | None = None
     recurring_question: BankRecurringQuestion | None = None
-    # "manual", "adjustment" or "forecast"; None for an operation the bank or a
+    # "manual" or "adjustment"; None for an operation the bank or a
     # statement reported (docs/bank-ledger.md).
     origin: str | None = None
     # Whether DELETE /bank/transactions/{id} accepts it.

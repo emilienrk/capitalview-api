@@ -37,7 +37,8 @@ class BankAccount(SQLModel, table=True):
             nullable=False,
         )
     )
-    # Last date the balance was automatically updated via linked cashflows
+    # The day the balance last changed: read from the bank or an export, or
+    # rebuilt from the operations (services/bank_ledger.py).
     balance_updated_at: date | None = Field(
         default=None,
         sa_column=Column(sa.Date, nullable=True),

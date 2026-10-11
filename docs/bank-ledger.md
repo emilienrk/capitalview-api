@@ -29,7 +29,7 @@ Les relevés de solde saisis, l'import de fichiers de soldes et le solde
 d'ouverture ont été retirés le 2026-10-09 : leur écart calculé à une date
 compliquait tout le reste pour un cas que personne n'utilisait.
 
-## Quatre sortes d'opérations
+## Trois sortes d'opérations
 
 Une colonne chiffrée `bank_transactions.origin_enc` les distingue :
 
@@ -38,25 +38,28 @@ Une colonne chiffrée `bank_transactions.origin_enc` les distingue :
 | `NULL` | la synchronisation ou un import CSV | oui |
 | `manual` | une saisie à la main | oui |
 | `adjustment` | la conversion d'un compte : détaché de sa banque, ou antérieur à ce modèle | non |
-| `forecast` | une prévision récurrente appliquée (option « Synchronisation automatique ») | non |
 
 Un **ajustement** porte le solde qu'un compte avait avant d'être tenu par ses
 opérations : quand on le détache de sa banque, ses opérations ne remontent
 presque jamais à l'ouverture, et le solde lu à la banque la veille de la
-première devient un ajustement d'ouverture. Rien d'autre n'en crée. Ajustements et prévisions sont neutres
-(`TypeSource.ADJUSTMENT`) : jamais rapprochés en virement, jamais récurrents,
-jamais comptés en dépense, revenu ou flux réel. Ils restent visibles dans la
-liste des opérations, avec un badge, et se suppriment.
+première devient un ajustement d'ouverture. Rien d'autre n'en crée. Les
+ajustements sont neutres (`TypeSource.ADJUSTMENT`) : jamais rapprochés en
+virement, jamais récurrents, jamais comptés en dépense, revenu ou flux réel. Ils
+restent visibles dans la liste des opérations, avec un badge, et se suppriment.
+
+Aucune opération n'est inventée à l'avance. Les prévisions récurrentes (option
+« Synchronisation automatique », qui écrivait chaque échéance d'un flux déclaré
+sur son compte) ont été retirées le 2026-10-11 : un solde ne compte que des
+opérations réelles, synchronisées, importées ou saisies.
 
 ## La réalité remplace le reste
 
-- Un import d'opérations supprime les ajustements et les prévisions datés dans
-  sa période (de la première à la dernière opération du fichier). L'aperçu
-  les liste.
+- Un import d'opérations supprime les ajustements datés dans sa période (de la
+  première à la dernière opération du fichier). L'aperçu les liste.
 - Une saisie manuelle n'a pas de référence : le niveau 2 de
   `store_transactions` (même date, montant, sens et devise) la reconnaît, et un
   import qui contient la même opération la **remplace** au lieu de la doubler.
-  Ajustements et prévisions sont exclus de ce niveau 2.
+  Les ajustements sont exclus de ce niveau 2.
 
 ## Limite connue
 

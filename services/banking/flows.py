@@ -83,7 +83,7 @@ from services.banking.labels import label_signature, label_words
 from services.banking.linking import readable_account_bidxs
 from services.banking.operation_types import operation_type
 from services.banking.recurring_decisions import load_decisions as load_recurring_decisions
-from services.banking.transactions import CREDIT, FINAL_STATUSES, SYNTHETIC_ORIGINS, row_date, row_origin
+from services.banking.transactions import CREDIT, FINAL_STATUSES, ORIGIN_ADJUSTMENT, row_date, row_origin
 from services.banking.transfer_decisions import (
     MAX_DECISION_DAYS,
     Decisions,
@@ -197,10 +197,9 @@ class _Movement(NamedTuple):
     origin: str | None = None
 
     @property
-    def synthetic(self) -> bool:
-        """An adjustment or a forecast: it moves the balance and nothing else
-        (docs/bank-ledger.md)."""
-        return self.origin in SYNTHETIC_ORIGINS
+    def adjustment(self) -> bool:
+        """It moves the balance and nothing else (docs/bank-ledger.md)."""
+        return self.origin == ORIGIN_ADJUSTMENT
 
 
 class _TransferLeg(NamedTuple):
@@ -369,7 +368,7 @@ def _internal_transfer_legs(
         # what it used to say no longer holds.
         same_account = d.account_bidx == c.account_bidx
         if (
-            d.synthetic or c.synthetic or d.is_credit or not c.is_credit or d.amount != c.amount or d.currency != c.currency
+            d.adjustment or c.adjustment or d.is_credit or not c.is_credit or d.amount != c.amount or d.currency != c.currency
             or same_account != (kind is BankTransferDecisionKind.REVERSAL)
         ):
             continue
@@ -396,7 +395,7 @@ def _internal_transfer_legs(
 
     by_key: dict[tuple[str, Decimal], tuple[list[int], list[int]]] = defaultdict(lambda: ([], []))
     for index, movement in enumerate(movements):
-        if movement.day is not None and index not in paired and not movement.synthetic:
+        if movement.day is not None and index not in paired and not movement.adjustment:
             by_key[(movement.currency, movement.amount)][movement.is_credit].append(index)
 
     settled: list[tuple[int, int, int, int, BankTransferStatus]] = []
@@ -673,7 +672,7 @@ def _contributions(
         Candidate(index, movement.day, movement.amount, movement.is_credit)
         for index, movement in enumerate(movements)
         if movement.is_final
-        and not movement.synthetic
+        and not movement.adjustment
         and movement.day is not None
         and movement.currency == BASE_CURRENCY
         and (index not in transfer_legs or transfer_legs[index].status is BankTransferStatus.SUGGESTED)
@@ -822,7 +821,7 @@ def transfer_patterns(
     side_words: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     side_labels: dict[str, set[frozenset[str]]] = defaultdict(set)
     for i, movement in enumerate(movements):
-        if movement.synthetic:
+        if movement.adjustment:
             continue
         side = stored_patterns.side_key(movement.account_bidx, movement.is_credit)
         side_rows[side] += 1
@@ -879,7 +878,7 @@ def transfer_patterns(
             _recurring_movement(index, movement, labels[index], transfer_legs.get(index), resolutions[index],
                                 movement.account_bidx in savings, master_key)
             for index, movement in enumerate(movements)
-            if not movement.synthetic
+            if not movement.adjustment
         ],
         load_recurring_decisions(session, user_uuid, master_key),
         {bidx: account.uuid for bidx, account in accounts.by_bidx.items()},
@@ -917,7 +916,7 @@ def transfer_patterns(
 
     # Sorted by day: an account's first movement seen is its earliest.
     for movement in movements:
-        if movement.day is None or movement.synthetic:
+        if movement.day is None or movement.adjustment:
             continue
         first, _ = patterns.coverage.get(movement.account_bidx, (movement.day, movement.day))
         patterns.coverage[movement.account_bidx] = (first, movement.day)
@@ -1015,7 +1014,7 @@ def _aggregate(
         min(i, transfer_legs[i].other) for i in selected
         if i in transfer_legs and transfer_legs[i].status is BankTransferStatus.SUGGESTED
     }
-    kept = [i for i in selected if i not in deducted and not movements[i].synthetic]
+    kept = [i for i in selected if i not in deducted and not movements[i].adjustment]
 
     # The currency the headline totals speak. Picking the most frequent one keeps
     # a stray foreign-currency movement from silently joining a euro total —
@@ -1179,7 +1178,7 @@ def _filed(
             and _deposit_shape(movement, match) in filing.validated
         ),
         recurring=filing.patterns.held_by_recurring(movement.row.uuid),
-        adjustment=movement.synthetic,
+        adjustment=movement.adjustment,
     )
 
 
@@ -1495,7 +1494,7 @@ def _unfaced(
             Candidate(index, movement.day, movement.amount, movement.is_credit)
             for index, movement in enumerate(movements)
             if movement.is_final
-            and not movement.synthetic
+            and not movement.adjustment
             and movement.day is not None
             and movement.currency == BASE_CURRENCY
             and (index not in transfer_legs or transfer_legs[index].status is BankTransferStatus.SUGGESTED)
@@ -1761,7 +1760,7 @@ def _rule_reach(
         rules={known.uuid: known for known in filing.rules.all()}, labels={},
     )
     for index, movement in enumerate(movements):
-        if movement.synthetic or movement.is_credit != rule.is_credit:
+        if movement.adjustment or movement.is_credit != rule.is_credit:
             continue
         if account_bidx is not None and movement.account_bidx != account_bidx:
             continue

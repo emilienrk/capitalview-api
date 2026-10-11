@@ -27,9 +27,8 @@ from models.currency import BASE_CURRENCY
 from services.banking.transactions import (
     ORIGIN_ADJUSTMENT,
     ORIGIN_MANUAL,
-    SYNTHETIC_ORIGINS,
+    is_adjustment,
     row_date,
-    row_origin,
     signed_row_amount,
     store_entry,
 )
@@ -111,29 +110,28 @@ def rebuild_from_operations(session: Session, account: BankAccount, master_key: 
         sa.delete(AccountHistory).where(AccountHistory.account_id_bidx == hash_index(account.uuid, master_key))
     )
     account.balance_enc = encrypt_data(str(sum(by_day.values(), Decimal("0"))), master_key)
+    account.balance_updated_at = date.today()
     session.add(account)
     if entries:
         replace_history_window(session, account, entries, master_key, start, yesterday)
     session.commit()
 
 
-def synthetic_between(
+def adjustments_between(
     session: Session, account: BankAccount, master_key: str, start: date | None, end: date,
-    origins: frozenset[str] = SYNTHETIC_ORIGINS,
 ) -> list[tuple[date, Decimal, BankTransaction]]:
-    """The adjustments and forecasts dated in [start, end] (from the first one
-    when `start` is None): what real operations of that period replace."""
+    """The adjustments dated in [start, end] (from the first one when `start`
+    is None): what real operations of that period replace."""
     return [
         (day, amount, row) for day, amount, row in _dated(session, account, master_key)
-        if row_origin(row, master_key) in origins and (start is None or day >= start) and day <= end
+        if is_adjustment(row, master_key) and (start is None or day >= start) and day <= end
     ]
 
 
-def drop_synthetic(
+def drop_adjustments(
     session: Session, account: BankAccount, master_key: str, start: date | None, end: date,
-    origins: frozenset[str] = SYNTHETIC_ORIGINS,
 ) -> int:
-    rows = synthetic_between(session, account, master_key, start, end, origins)
+    rows = adjustments_between(session, account, master_key, start, end)
     for _, _, row in rows:
         session.delete(row)
     session.flush()
@@ -270,7 +268,7 @@ def _convert(session: Session, account: BankAccount, master_key: str) -> None:
     currency = _currency(account, master_key)
     real = [
         (day, amount) for day, amount, row in _dated(session, account, master_key)
-        if row_origin(row, master_key) not in SYNTHETIC_ORIGINS
+        if not is_adjustment(row, master_key)
     ]
     history = _history(session, account, master_key, currency)
 

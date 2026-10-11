@@ -146,7 +146,7 @@ class BankAccountResponse(BaseModel):
     interest_method: InterestMethod | None = None
     created_at: datetime
     updated_at: datetime
-    balance_updated_at: date | None = None  # Last auto-sync date from cashflows
+    balance_updated_at: date | None = None  # The day the balance last changed
     # Bank link metadata, read by the Banque page to decide whether
     # to trigger POST /banking/sync after the render.
     is_linked: bool = False

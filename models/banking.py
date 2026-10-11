@@ -247,7 +247,7 @@ class BankTransaction(SQLModel, table=True):
     type_override_at: datetime | None = Field(
         default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True)
     )
-    # "manual", "adjustment" or "forecast"; NULL for an operation the bank or a
+    # "manual" or "adjustment"; NULL for an operation the bank or a
     # statement reported (docs/bank-ledger.md).
     origin_enc: str | None = Field(default=None, sa_column=Column(TEXT))
 

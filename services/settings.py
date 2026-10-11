@@ -82,7 +82,6 @@ def _map_settings_to_response(
         crypto_mode=settings.crypto_mode,
         crypto_auto_deposits=settings.crypto_auto_deposits,
         bank_module_enabled=settings.bank_module_enabled,
-        bank_auto_sync_enabled=settings.bank_auto_sync_enabled,
         bank_question_threshold=float(settings.bank_question_threshold),
         open_banking_enabled=settings.open_banking_enabled,
         cashflow_module_enabled=settings.cashflow_module_enabled,
@@ -217,9 +216,6 @@ def update_settings(
 
     if data.bank_module_enabled is not None:
         settings.bank_module_enabled = data.bank_module_enabled
-
-    if data.bank_auto_sync_enabled is not None:
-        settings.bank_auto_sync_enabled = data.bank_auto_sync_enabled
 
     if data.bank_question_threshold is not None:
         settings.bank_question_threshold = Decimal(str(data.bank_question_threshold)).quantize(Decimal("0.01"))

@@ -90,10 +90,9 @@ class BankImportTransactionPreview(BaseModel):
 
 
 class BankImportReplacedEntry(BaseModel):
-    """An adjustment or a forecast the file's operations replace."""
+    """An adjustment the file's operations replace."""
     day: date
     amount: Decimal  # signed
-    origin: str  # "adjustment" | "forecast"
     label: str | None = None
 
 
@@ -153,5 +152,5 @@ class ImportConfirmResponse(BaseModel):
     skipped_duplicates: int = 0
     groups_count: int | None = None
     covered_by_bank_count: int = 0
-    # Adjustments and forecasts the import replaced.
+    # Adjustments the import replaced.
     replaced_count: int = 0

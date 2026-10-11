@@ -18,7 +18,7 @@ from models import BankAccount, BankAccountType
 from models.account_history import AccountHistory
 from models.banking import BankAccountLink, BankSession, BankTransaction, BankTransferDecision
 from models.currency import BASE_CURRENCY
-from models.enums import AccountCategory, FlowType, InterestMethod
+from models.enums import AccountCategory, InterestMethod
 from dtos import BankAccountCreate, BankAccountUpdate, BankAccountResponse, BankSummaryResponse
 from dtos.bank import (
     INTEREST_BEARING_TYPES,
@@ -36,7 +36,7 @@ from services.bank_ledger import (
     ensure_ledgers,
     rebuild_from_operations,
 )
-from services.banking.transactions import ORIGIN_FORECAST, first_operation_day, store_entry
+from services.banking.transactions import first_operation_day
 from services.encryption import encrypt_data, decrypt_data, hash_index
 from services.market import (
     get_exchange_rate,
@@ -437,100 +437,12 @@ def delete_bank_account(
     return True
 
 
-def _apply_pending_cashflows(
-    session: Session,
-    account: BankAccount,
-    cashflows: list,
-    master_key: str,
-    get_cashflow_occurrences_fn,
-    auto_sync_enabled: bool,
-    is_linked: bool = False,
-) -> None:
-    """Turn the cashflow occurrences fired since balance_updated_at into
-    forecast operations.
-
-    On the first call (balance_updated_at is None), we just stamp today without
-    creating anything: nothing fired before is created after the fact.
-    Subsequent calls create every occurrence in (balance_updated_at, today].
-
-    Inactive cashflows, a disabled global switch and a bank-linked account
-    create nothing but still advance the stamp: a paused period must never
-    be caught up later.
-
-    Amounts are added as they stand, in the account's own currency: a flow is
-    denominated by the account it hits (docs/currencies.md), so there is nothing
-    to convert here. Conversion starts one storey up, at the aggregate.
-    """
-    today = date.today()
-
-    if is_linked:
-        # A linked account carries a real balance read from the bank,
-        # so projecting a salary already inside it would double-count.
-        if account.balance_updated_at != today:
-            account.balance_updated_at = today
-            session.add(account)
-            session.commit()
-        return
-
-    if account.balance_updated_at is None:
-        # First run: stamp today, do not touch the balance
-        account.balance_updated_at = today
-        session.add(account)
-        session.commit()
-        return
-
-    from_date = account.balance_updated_at
-    if from_date >= today:
-        return  # Already up to date
-
-    # Filter cashflows linked to this account
-    linked = [
-        cf for cf in cashflows
-        if cf.bank_account_id == account.uuid and cf.is_active
-    ] if auto_sync_enabled else []
-
-    if not linked:
-        account.balance_updated_at = today
-        session.add(account)
-        session.commit()
-        return
-
-    _forecast(session, account, linked, from_date, today, master_key, get_cashflow_occurrences_fn)
-
-
-def _forecast(
-    session: Session,
-    account: BankAccount,
-    cashflows: list,
-    from_date: date,
-    today: date,
-    master_key: str,
-    get_cashflow_occurrences_fn,
-) -> None:
-    """Each occurrence fired since `from_date`, as a forecast operation on its
-    day: the operations stay the account's only truth, and a statement covering
-    that day replaces it (docs/bank-ledger.md)."""
-    currency = account_currency(account, master_key)
-    for cf in cashflows:
-        sign = 1 if cf.flow_type == FlowType.INFLOW else -1
-        for day in get_cashflow_occurrences_fn(cf, from_date, today):
-            store_entry(session, master_key, account.uuid, day, sign * cf.amount, cf.name, currency, ORIGIN_FORECAST)
-    account.balance_updated_at = today
-    session.add(account)
-    session.commit()
-    rebuild_from_operations(session, account, master_key)
-
-
 def get_user_bank_accounts(
     session: Session, 
     user_uuid: str, 
     master_key: str
 ) -> BankSummaryResponse:
-    """Get all bank accounts for a user, applying pending cashflows first."""
-    # Lazy import to avoid circular dependency
-    from services.cashflow import get_all_user_cashflows, get_cashflow_occurrences
-    from services.settings import get_or_create_settings
-
+    """Get all bank accounts for a user."""
     user_bidx = hash_index(user_uuid, master_key)
     # Also run at login; here too, for a request that comes before it ends.
     ensure_ledgers(session, user_bidx, master_key)
@@ -538,22 +450,7 @@ def get_user_bank_accounts(
         select(BankAccount).where(BankAccount.user_uuid_bidx == user_bidx)
     ).all()
 
-    auto_sync_enabled = get_or_create_settings(session, user_uuid, master_key).bank_auto_sync_enabled
     links = _link_metadata(session, user_bidx, master_key)
-
-    # Fetch cashflows once and apply pending ones to each linked account
-    cashflows = get_all_user_cashflows(session, user_uuid, master_key)
-    for account in accounts:
-        _apply_pending_cashflows(
-            session,
-            account,
-            cashflows,
-            master_key,
-            get_cashflow_occurrences,
-            auto_sync_enabled,
-            is_linked=hash_index(account.uuid, master_key) in links,
-        )
-
     responses = [
         _map_to_response(acc, master_key, links.get(hash_index(acc.uuid, master_key)))
         for acc in accounts

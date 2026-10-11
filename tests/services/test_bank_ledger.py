@@ -19,7 +19,7 @@ from models.enums import BankAccountType
 from services.bank import create_bank_account, get_bank_account_history, replace_history_window
 from services.bank_ledger import add_entry, balance_on, delete_operation, ensure_ledgers
 from services.banking.flows import compute_real_flows
-from services.banking.transactions import ORIGIN_ADJUSTMENT, ORIGIN_FORECAST, row_origin, store_entry
+from services.banking.transactions import ORIGIN_ADJUSTMENT, row_origin, store_entry
 from services.encryption import decrypt_data, encrypt_data, hash_index
 from services.imports.bank_csv import parse_bank_transactions
 from services.imports.registry import get_parser
@@ -211,17 +211,17 @@ def test_a_deleted_operation_leaves_the_balance(session, master_key):
 # ─── Reality replaces the rest ───────────────────────────────────────────
 
 
-def test_an_import_replaces_the_adjustments_and_forecasts_of_its_period(session, master_key):
+def test_an_import_replaces_the_adjustments_of_its_period(session, master_key):
     account = _account(session, master_key)
     store_entry(session, master_key, account.uuid, date(2024, 1, 20), Decimal("700"), "Ouverture", "EUR", ORIGIN_ADJUSTMENT)
     # Outside the file's period: kept.
     store_entry(session, master_key, account.uuid, date(2024, 3, 1), Decimal("300"), "Ajustement", "EUR", ORIGIN_ADJUSTMENT)
-    store_entry(session, master_key, account.uuid, date(2024, 2, 1), Decimal("50"), "Loyer", "EUR", ORIGIN_FORECAST)
+    store_entry(session, master_key, account.uuid, date(2024, 2, 1), Decimal("50"), "Ajustement de solde", "EUR", ORIGIN_ADJUSTMENT)
     session.commit()
 
     preview = _preview(session, master_key, account)
-    assert sorted((e.day, e.origin) for e in preview.bank_replaced) == [
-        (date(2024, 1, 20), "adjustment"), (date(2024, 2, 1), "forecast"),
+    assert sorted((e.day, e.label) for e in preview.bank_replaced) == [
+        (date(2024, 1, 20), "Ouverture"), (date(2024, 2, 1), "Ajustement de solde"),
     ]
 
     result = _import(session, master_key, account)
