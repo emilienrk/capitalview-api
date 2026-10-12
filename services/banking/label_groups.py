@@ -3,9 +3,9 @@ Who an operation's money went to or came from, read off its label: the key that
 groups "CARTE 21/06/26 CARREFOUR ANNECY CB*0837" with every other visit, and a
 name a person can read.
 
-Display and grouping only, like `operation_types.py`: no type, no pairing and
-no total depends on it. A label this misses lands in a group of its own and
-shows a rougher name, never a wrong figure.
+Display and grouping only: no type, no pairing and no total depends on it. A
+label this misses lands in a group of its own and shows a rougher name, never a
+wrong figure.
 
 The key knows no bank: it is the label's whole words once the words too common
 on that side of the user's accounts ("carte", "cb", "vir") are set aside — the

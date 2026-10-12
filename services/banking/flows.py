@@ -58,7 +58,6 @@ from dtos.banking import (
     BankTypeRulePreview,
     BankTypeRuleWrite,
     CashflowType,
-    OperationType,
     TypeScope,
     TypeSource,
 )
@@ -81,7 +80,6 @@ from services.banking.contributions import (
 )
 from services.banking.labels import label_signature, label_words
 from services.banking.linking import readable_account_bidxs
-from services.banking.operation_types import operation_type
 from services.banking.recurring_decisions import load_decisions as load_recurring_decisions
 from services.banking.transactions import CREDIT, FINAL_STATUSES, ORIGIN_ADJUSTMENT, row_date, row_origin
 from services.banking.transfer_decisions import (
@@ -718,15 +716,6 @@ def _deposit_shape(movement: _Movement, match: Match) -> tuple[str, str, str]:
     return (movement.account_bidx, movement.row.label_signature_bidx, match.contribution.account_name)
 
 
-def _operation_type(movement: _Movement, master_key: str) -> OperationType:
-    """Read from the stored type, from the label when the rebuild has not
-    reached the row yet."""
-    stored = movement.row.operation_type_enc
-    if stored:
-        return OperationType(decrypt_data(stored, master_key))
-    return operation_type(_label(movement, master_key))
-
-
 def _label(movement: _Movement, master_key: str) -> str | None:
     return decrypt_data(movement.row.remittance_enc, master_key) if movement.row.remittance_enc else None
 
@@ -763,11 +752,10 @@ def transfer_patterns(
 ) -> TransferPatterns:
     """The user's transfer patterns, rebuilt first when the data moved since.
 
-    The rebuild reads the whole history once: it backfills the label signature
-    of rows stored before signatures existed and the operation type of every
-    row the lexicon now reads differently, counts the shape of every
-    candidate pair, finds the words too common on each side of an account, and
-    counts the pairs left for the user to settle once all of that applies.
+    The rebuild reads the whole history once: it re-derives the label signature
+    of every row, counts the shape of every candidate pair, finds the words too
+    common on each side of an account, and counts the pairs left for the user to
+    settle once all of that applies.
     """
     accounts = accounts or _user_accounts(session, user_uuid, master_key)
     user_bidx = hash_index(user_uuid, master_key)
@@ -786,21 +774,12 @@ def transfer_patterns(
     backfilled = False
     for i, movement in enumerate(movements):
         row = movement.row
-        changed = False
-        # Every row, as for its type below: a change to how labels are read
-        # (services/banking/labels.py) reaches the history this way.
+        # Every row: a change to how labels are read (services/banking/labels.py)
+        # reaches the history this way.
         signature = label_signature(labels[i])
         signature_bidx = hash_index(signature, master_key) if signature is not None else None
         if row.label_signature_bidx != signature_bidx:
             row.label_signature_bidx = signature_bidx
-            changed = True
-        # Every row, not only those stored before types existed: this is how a
-        # change to the lexicon reaches the history.
-        kind = operation_type(labels[i]).value
-        if row.operation_type_enc is None or decrypt_data(row.operation_type_enc, master_key) != kind:
-            row.operation_type_enc = encrypt_data(kind, master_key)
-            changed = True
-        if changed:
             session.add(row)
             backfilled = True
     if backfilled:
@@ -1256,7 +1235,6 @@ def _item_builder(
             transfer_status=leg.status if leg else None,
             transfer_label=_label(offered, master_key) if offered else None,
             transfer_date=offered.day if offered else None,
-            operation_type=_operation_type(movement, master_key),
             cashflow_type=resolution.type,
             type_source=resolution.source,
             type_rule_id=resolution.rule_id,

@@ -250,7 +250,6 @@ def export_account_data(session: Session, user: User, master_key: str) -> dict:
                         "value_date": _safe_decrypt(tx.value_date_enc, master_key),
                         "transaction_date": _safe_decrypt(tx.transaction_date_enc, master_key),
                         "remittance": _safe_decrypt(tx.remittance_enc, master_key),
-                        "operation_type": _safe_decrypt(tx.operation_type_enc, master_key),
                         # "manual" or "adjustment" (docs/bank-ledger.md).
                         "origin": _safe_decrypt(tx.origin_enc, master_key),
                     }

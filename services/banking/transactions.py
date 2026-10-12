@@ -47,7 +47,6 @@ from models.banking import BankTransaction
 # Re-exported from here because the banking modules already read it from this one.
 from models.currency import BASE_CURRENCY
 from services.banking.labels import label_signature
-from services.banking.operation_types import operation_type
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 logger = logging.getLogger(__name__)
@@ -461,7 +460,6 @@ def _apply(
     row.remittance_enc = encrypt_data(tx.remittance, master_key) if tx.remittance else None
     signature = label_signature(tx.remittance)
     row.label_signature_bidx = hash_index(signature, master_key) if signature else None
-    row.operation_type_enc = encrypt_data(operation_type(tx.remittance).value, master_key)
     # Whatever it was, the feed has now reported it.
     row.origin_enc = None
 

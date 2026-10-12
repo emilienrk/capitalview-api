@@ -132,10 +132,9 @@ elle n'est pas comptée.
 
 ## Ce qui ne décide jamais
 
-Le dictionnaire de moyens de paiement (« CARTE », « VIR », « PRLV »…, `services/banking/operation_types.py`) ne décide
-plus rien : ni quelle paire est proposée, ni quelle opération reçoit une question, ni quel dépôt est rapproché, ni
-quel récurrent est proposé. Il ne sert plus qu'à l'affichage et au filtre des opérations. Les mots ignorés pour grouper les marchands servent à l'affichage, pas à décider d'un
-regroupement de réponses.
+Le moyen de paiement (« CARTE », « VIR », « PRLV »…) n'est plus lu du tout, ni affiché ni filtré (retiré le 12/10) :
+le libellé le dit déjà, rien ne se décidait dessus, et son dictionnaire dépendait de la banque. Les mots ignorés pour
+grouper les marchands servent à l'affichage, pas à décider d'un regroupement de réponses.
 
 ## Récurrents (second temps)
 
@@ -200,3 +199,4 @@ effet : le loyer confirmé « Frederic Durand », payé par virement, prend comm
 | Règles écrites à la main, « contient » / « commence par », avec aperçu, sans option | fait |
 | Récurrents : rien compté seul, toute série proposée | fait |
 | Récurrents sans dictionnaire ni moyen de paiement, une seule règle | fait |
+| Moyen de paiement retiré partout, affichage et filtre compris | fait |

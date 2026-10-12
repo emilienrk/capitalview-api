@@ -28,7 +28,6 @@ from dtos.banking import (
     BankLedgerRecurring,
     BankReviewKind,
     BankTransferStatus,
-    OperationType,
     RecurringDirection,
     TypeSource,
 )
@@ -48,12 +47,11 @@ from services.banking.flows import (
     _user_accounts,
 )
 from services.banking.label_groups import group_key, group_name, group_words, merge_similar
-from services.banking.operation_types import operation_type
 from services.encryption import decrypt_data, hash_index
 
 # Part of the ETag: a change to how rows are read or grouped must reach a
 # browser holding the previous ledger, even though no data moved.
-LEDGER_VERSION = "5"
+LEDGER_VERSION = "6"
 
 
 def ledger_etag(session: Session, user_uuid: str, master_key: str) -> str:
@@ -169,10 +167,6 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
             is_credit=movement.is_credit,
             is_pending=not movement.is_final,
             label=label,
-            operation_type=(
-                OperationType(decrypt_data(row.operation_type_enc, master_key))
-                if row.operation_type_enc else operation_type(label)
-            ),
             cashflow_type=resolution.type,
             type_source=resolution.source,
             type_rule_id=resolution.rule_id,

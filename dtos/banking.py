@@ -295,17 +295,6 @@ class TypeSource(str, Enum):
     ADJUSTMENT = "adjustment"
 
 
-class OperationType(str, Enum):
-    """How an operation was made, as far as its label tells
-    (services/banking/operation_types.py). Display and filtering only."""
-    CARD = "CARD"
-    TRANSFER = "TRANSFER"
-    DIRECT_DEBIT = "DIRECT_DEBIT"
-    WITHDRAWAL = "WITHDRAWAL"
-    INTEREST = "INTEREST"
-    UNKNOWN = "UNKNOWN"
-
-
 class BankContributionMatch(BaseModel):
     """A movement declared on an investment account that this operation could be.
 
@@ -462,7 +451,6 @@ class BankTransactionItem(BaseModel):
     # label and day, the amount being the same.
     transfer_label: str | None = None
     transfer_date: date | None = None
-    operation_type: OperationType = OperationType.UNKNOWN
     cashflow_type: CashflowType = CashflowType.EXPENSE
     type_source: TypeSource = TypeSource.DEFAULT
     # The rule typing it, exact or reached from a nearby label.
@@ -684,7 +672,6 @@ class BankLedgerRow(BaseModel):
     is_credit: bool
     is_pending: bool
     label: str | None
-    operation_type: OperationType
     cashflow_type: CashflowType
     type_source: TypeSource
     type_rule_id: str | None = None
