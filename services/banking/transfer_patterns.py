@@ -20,7 +20,9 @@ path wrote it.
 Stored alongside, from the same pass: the words too common on each side of an
 account to tell a refund from its purchase ("CARTE", "CB", "VIR"), how many
 pairs are left for the user to settle, month by month, the recurring payments
-(services/banking/recurring_series.py), and the flow questions:
+(services/banking/recurring_series.py), the labels the user vouched for as
+going to an investment account (services/banking/contribution_decisions.py),
+and the flow questions:
 which operation of each label nothing types but the user carries its question,
 since a month's reader cannot tell which occurrence of a label is the last —
 with the amounts still open, so a reader can say what an answer may move — and
@@ -40,6 +42,7 @@ from sqlmodel import Session, select
 
 from dtos.banking import CashflowType, RecurringDirection
 from models.banking import (
+    BankContributionDecision,
     BankRecurringSeries,
     BankTransaction,
     BankTransferDecision,
@@ -59,7 +62,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "29"
+_VERSION = "30"
 
 
 class FlowCarrier(NamedTuple):
@@ -205,6 +208,9 @@ class TransferPatterns:
     recurring: list[StoredRecurring] = field(default_factory=list)
     # "YYYY-MM" -> recurring payment and income questions carried by an operation of that month
     recurring_questions: dict[str, int] = field(default_factory=dict)
+    # (bank account, label signature, investment account uuid) of every yes the
+    # user said to a declared deposit or withdrawal.
+    contribution_shapes: frozenset[tuple[str, str, str]] = frozenset()
     _members: dict[str, tuple[StoredRecurring, RecurringMember]] | None = field(default=None, repr=False)
 
     def set_recurring(self, recurring: list[StoredRecurring]) -> None:
@@ -293,6 +299,11 @@ def source_digest(
             BankTransferDecision.user_uuid_bidx == user_bidx
         )
     ).one()
+    contribution_decisions = session.exec(
+        select(sa.func.count(), sa.func.max(BankContributionDecision.created_at)).where(
+            BankContributionDecision.user_uuid_bidx == user_bidx
+        )
+    ).one()
     rules = session.exec(
         select(sa.func.count(), sa.func.max(BankTypeRule.created_at)).where(BankTypeRule.user_uuid_bidx == user_bidx)
     ).one()
@@ -309,7 +320,8 @@ def source_digest(
     raw = json.dumps(
         [
             _VERSION, sorted(readable), sorted(savings),
-            list(rows), list(decisions), list(rules), list(recurring), investments, threshold,
+            list(rows), list(decisions), list(contribution_decisions), list(rules), list(recurring), investments,
+            threshold,
         ],
         default=str,
     )
@@ -383,6 +395,7 @@ def read_patterns(
         },
         recurring=[StoredRecurring.from_json(item) for item in content["recurring"]],
         recurring_questions=content["recurring_questions"],
+        contribution_shapes=frozenset(tuple(shape) for shape in content["contribution_shapes"]),
     )
 
 
@@ -407,6 +420,7 @@ def write_patterns(
             },
             "recurring": [stored.to_json() for stored in patterns.recurring],
             "recurring_questions": patterns.recurring_questions,
+            "contribution_shapes": sorted(patterns.contribution_shapes),
         }),
         master_key,
     )

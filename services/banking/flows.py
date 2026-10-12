@@ -74,10 +74,12 @@ from services.banking.contributions import (
     Contribution,
     Contributions,
     Match,
+    fits,
     load_contributions,
     match_candidates,
     unfaced,
 )
+from services.banking.contribution_decisions import ContributionDecisions, load_contribution_decisions
 from services.banking.labels import label_signature, label_words
 from services.banking.linking import readable_account_bidxs
 from services.banking.recurring_decisions import load_decisions as load_recurring_decisions
@@ -233,8 +235,10 @@ class _Filing(NamedTuple):
     # Resolved over the whole set of movements, since a deposit proves one of
     # them at most (services/banking/contributions.py).
     contributions: dict[int, Match]
-    # (bank account, label signature, investment account) the user once typed
-    # as facing its deposit: the next exact match of that shape proves itself.
+    # The movements the user said are the declared movement they face.
+    confirmed: frozenset[int] = frozenset()
+    # (bank account, label signature, investment account) of those, drawn from
+    # the whole history: the next exact match of that shape proves itself.
     validated: frozenset[tuple[str, str, str]] = frozenset()
     # A debit nothing faces asks past this amount (the user's setting).
     threshold: Decimal = DEFAULT_QUESTION_THRESHOLD
@@ -628,16 +632,18 @@ def _filing(
     Every reader passes the movements it loaded, so they all read one operation
     the same way — the whole point of `_filed`.
     """
-    rules = load_rules(session, user_uuid, master_key)
     declared = load_contributions(session, user_uuid, master_key)
-    contributions = _contributions(movements, transfer_legs, declared)
+    contributions, confirmed = _contributions(
+        movements, transfer_legs, declared, load_contribution_decisions(session, user_uuid, master_key), master_key,
+    )
     return _Filing(
         master_key=master_key,
         savings=_savings_accounts(accounts, master_key),
-        rules=rules,
+        rules=load_rules(session, user_uuid, master_key),
         patterns=patterns,
         contributions=contributions,
-        validated=_validated_deposits(movements, contributions, rules, patterns, master_key),
+        confirmed=confirmed,
+        validated=patterns.contribution_shapes,
         threshold=question_threshold(session, user_uuid, master_key),
         declared=declared,
     )
@@ -657,63 +663,60 @@ def _contributions(
     movements: list[_Movement],
     transfer_legs: dict[int, _TransferLeg],
     contributions: Contributions,
-) -> dict[int, Match]:
-    """The declared movement facing each bank movement, where there is one.
+    decisions: ContributionDecisions,
+    master_key: str,
+) -> tuple[dict[int, Match], frozenset[int]]:
+    """The declared movement facing each bank movement, where there is one, and
+    the movements the user said are theirs.
 
     Every unpaired operation is offered, whatever its label says: a card and a
     transfer cannot be told apart without reading words (docs/bank-sorting.md).
     What the user or a rule already settled stays typed by them. A pair only
     suggested is offered too: its question shows the deposit beside the other
     leg, and the user picks (`_filed` types nothing from it meanwhile).
+
+    The user's answers come first, while their two sides still face each other
+    (services/banking/contribution_decisions.py): a yes binds the two, a no
+    keeps the operation out; the rest is matched as found.
     """
-    candidates = [
-        Candidate(index, movement.day, movement.amount, movement.is_credit)
+    candidates = {
+        index: Candidate(index, movement.day, movement.amount, movement.is_credit)
         for index, movement in enumerate(movements)
         if movement.is_final
         and not movement.adjustment
         and movement.day is not None
         and movement.currency == BASE_CURRENCY
         and (index not in transfer_legs or transfer_legs[index].status is BankTransferStatus.SUGGESTED)
-    ]
-    return match_candidates(candidates, contributions)
+    }
+    settled: dict[int, Match] = {}
+    if decisions:
+        by_ref = {hash_index(contribution.ref, master_key): contribution for contribution in contributions.all()}
+        for index, candidate in list(candidates.items()):
+            ref = hash_index(movements[index].row.uuid, master_key)
+            confirmed = by_ref.get(decisions.confirmed.get(ref, ""))
+            refused = by_ref.get(decisions.refused.get(ref, ""))
+            if confirmed is not None and fits(candidate, confirmed):
+                settled[index] = Match(confirmed, exact=True)
+                del candidates[index]
+            elif refused is not None and fits(candidate, refused):
+                del candidates[index]
+    taken = {match.contribution for match in settled.values()}
+    found = match_candidates(list(candidates.values()), contributions.without(taken))
+    return {**found, **settled}, frozenset(settled)
 
 
-def _validated_deposits(
-    movements: list[_Movement],
-    contributions: dict[int, Match],
-    rules: TypeRules,
-    patterns: TransferPatterns,
-    master_key: str,
-) -> frozenset[tuple[str, str, str]]:
-    """The shapes the user vouched for: an operation facing a deposit, or a
-    withdrawal, on the very day, that they typed as an investment.
-
-    A match alone is only a coincidence of amount and day — a 200 € card
-    payment the day of a 200 € deposit — so it asks first. Once answered, the
-    same label from the same account to the same investment account is that
-    movement again, as a confirmed transfer pair is.
-    """
-    shapes = set()
-    for index, match in contributions.items():
-        movement = movements[index]
-        if not match.exact or movement.row.label_signature_bidx is None:
-            continue
-        label = _label(movement, master_key)
-        override = movement.row.type_override_enc
-        typed = CashflowType(decrypt_data(override, master_key)) if override else None
-        if typed is None:
-            rule = rules.reach(
-                movement.account_bidx, movement.is_credit, label,
-                patterns.label_common(movement.account_bidx, movement.is_credit),
-            )
-            typed = rule.type if rule else None
-        if typed is CashflowType.INVESTMENT:
-            shapes.add(_deposit_shape(movement, match))
-    return frozenset(shapes)
+def _taught(movements: list[_Movement], filing: _Filing) -> frozenset[tuple[str, str, str]]:
+    """The shapes the user vouched for, across the movements read: the label,
+    from its account, to the investment account of each yes."""
+    return frozenset(
+        _deposit_shape(movements[index], filing.contributions[index])
+        for index in filing.confirmed
+        if movements[index].row.label_signature_bidx is not None
+    )
 
 
 def _deposit_shape(movement: _Movement, match: Match) -> tuple[str, str, str]:
-    return (movement.account_bidx, movement.row.label_signature_bidx, match.contribution.account_name)
+    return (movement.account_bidx, movement.row.label_signature_bidx, match.contribution.account_id)
 
 
 def _label(movement: _Movement, master_key: str) -> str | None:
@@ -849,6 +852,9 @@ def transfer_patterns(
     patterns.questions_amount = dict(sorted(questions_amount.items()))
 
     filing = _filing(session, user_uuid, master_key, accounts, patterns, movements, transfer_legs)
+    # Drawn here, from every movement, never from the months a page loads.
+    patterns.contribution_shapes = _taught(movements, filing)
+    filing = filing._replace(validated=patterns.contribution_shapes)
     resolutions = [
         _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
     ]
@@ -1153,8 +1159,11 @@ def _filed(
         (rule.uuid, rule.type) if rule else None,
         # A suggested pair holds its question: the deposit is only shown beside it.
         contributed=(
-            leg is None and match is not None and match.exact and movement.row.label_signature_bidx is not None
-            and _deposit_shape(movement, match) in filing.validated
+            leg is None and match is not None and match.exact
+            and (
+                index in filing.confirmed
+                or movement.row.label_signature_bidx is not None and _deposit_shape(movement, match) in filing.validated
+            )
         ),
         recurring=filing.patterns.held_by_recurring(movement.row.uuid),
         adjustment=movement.adjustment,
@@ -1288,6 +1297,7 @@ def _contribution_item(match: Match | None) -> BankContributionMatch | None:
     if match is None:
         return None
     return BankContributionMatch(
+        id=match.contribution.ref,
         account_name=match.contribution.account_name,
         day=match.contribution.day,
         amount=match.contribution.amount,

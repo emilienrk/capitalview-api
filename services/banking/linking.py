@@ -36,6 +36,7 @@ from models.bank import BankAccount
 from models.banking import (
     BankAccountLink,
     BankAuthorization,
+    BankContributionDecision,
     BankSession,
     BankTransaction,
     BankTransferDecision,
@@ -901,6 +902,12 @@ def unlink_account(
                     BankTransferDecision.debit_account_bidx == account_bidx,
                     BankTransferDecision.credit_account_bidx == account_bidx,
                 ),
+            )
+        )
+        session.exec(
+            sa.delete(BankContributionDecision).where(
+                BankContributionDecision.user_uuid_bidx == user_bidx,
+                BankContributionDecision.account_bidx == account_bidx,
             )
         )
 

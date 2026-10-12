@@ -28,6 +28,7 @@ from dtos.banking import (
     BankAuthorizeRequest,
     BankAuthorizeResponse,
     BankConfigCheck,
+    BankContributionDecisionCreate,
     BankConnectionStatus,
     BankConnectionUpdate,
     BankExportImportResponse,
@@ -71,6 +72,7 @@ from services.banking.credentials import (
     upsert_connection,
 )
 from services.banking.export_import import import_enablebanking_export
+from services.banking.contribution_decisions import ContributionNotFoundError, record_contribution_decision
 from services.banking.history import HistoryItemNotFoundError, action_history, undo_action
 from services.banking.flows import (
     LabelRequiredError,
@@ -867,6 +869,27 @@ def post_transfer_decision(
         )
     except TransactionNotFoundError:
         raise HTTPException(status_code=404, detail="Opération introuvable.")
+    except DecisionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/contribution-decisions", status_code=204)
+def post_contribution_decision(
+    body: BankContributionDecisionCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Say an operation is, or is not, the deposit or withdrawal declared on an
+    investment account facing it. Replaces what was said of it before."""
+    try:
+        record_contribution_decision(
+            session, current_user.uuid, master_key, body.transaction_id, body.contribution_id, body.kind,
+        )
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail="Opération introuvable.")
+    except ContributionNotFoundError:
+        raise HTTPException(status_code=404, detail="Versement ou retrait introuvable.")
     except DecisionError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

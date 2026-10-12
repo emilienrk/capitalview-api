@@ -26,7 +26,7 @@ Chaque changement de règle se mesure sur un dump réel, avant et après : paire
 | **Paire répétée** : même débit, même crédit, mêmes deux comptes, au moins 3 fois | tes virements Boursorama ↔ Revolut | mesuré : aucun faux virement à 3, un remboursement de tiers passait à 2 |
 | **Paire déjà validée** : les deux côtés ressemblent aux deux côtés d'une paire que tu as validée, sur les mêmes comptes | une recharge Revolut validée une fois, les suivantes passent | ta validation porte sur *cette paire*, pas sur tous les virements d'un des deux noms |
 | **Remboursement sur un même compte** : même montant dans les 30 jours, avec un mot rare commun | −30 € Amazon, puis +30 € Amazon | les mots trop fréquents sont calculés sur ton compte, sans dictionnaire |
-| **Dépôt Bourse/Crypto déjà validé** : même jour, même montant au centime ou un écart de frais (1 € ou 2 % au plus, chacun le seul candidat de l'autre ce jour-là), vers le même compte d'investissement qu'un dépôt que tu as validé avec ce libellé | ton virement mensuel vers le PEA | comme une paire déjà validée |
+| **Dépôt Bourse/Crypto déjà validé** : même jour, même montant au centime ou un écart de frais (1 € ou 2 % au plus, chacun le seul candidat de l'autre ce jour-là), vers le même compte d'investissement qu'un dépôt auquel tu as répondu « oui » pour ce libellé, depuis ce compte | ton virement mensuel vers le PEA | comme une paire déjà validée ; la leçon se tire de tout l'historique, avant comme après ta réponse |
 
 Une paire reconnue n'est **jamais** une règle par nom : elle ne classe pas les autres opérations qui portent un des deux
 libellés. Une opération n'a qu'une paire, et un dépôt ne justifie qu'une seule opération.
@@ -39,11 +39,23 @@ l'utilisateur.
 - **Paire possible** entre deux comptes (sens opposés, même montant, au plus 2 jours ouvrés d'écart), qu'aucune règle
   ci-dessus ne confirme. Y compris entre deux comptes courants, même avec le même libellé, le même jour et le même
   montant. Une paire seulement proposée ne change aucun total.
-- **Dépôt Bourse/Crypto possible** : même montant, dans les 3 jours, ou avec un écart de frais. Si une paire et un
-  dépôt sont tous deux possibles, la même question montre les deux : « C'est… vers <compte> » ou « versement sur
-  <compte d'investissement> » (la paire écartée, l'opération comptée en investissement). Tant que la paire est
-  proposée, le dépôt n'est qu'affiché, même déjà validé pour ce libellé. Mesuré sur le dump : un cas (−20 € du
-  05/02/2024), dont le dépôt s'affichait jusque-là, à tort, sur une autre sortie de 20 € deux jours plus tard.
+- **Dépôt Bourse/Crypto possible** : même montant, dans les 3 jours, ou avec un écart de frais. La question est
+  « est-ce celui-ci ? », Oui / Non, sur chaque opération concernée (`services/banking/contribution_decisions.py`) :
+  - **Oui** lie l'opération à ce dépôt, des deux côtés, et la compte en investissement ; il vaut pour le libellé
+    (ligne « Dépôt déjà validé » plus haut). Un type choisi à la main sur cette opération s'efface : ce qu'elle est
+    décide de comment elle compte.
+  - **Non** la sort du rapprochement : elle se lit comme toute autre opération, et le dépôt peut faire face à une
+    autre opération.
+  - Une réponse tient tant que les deux côtés se font encore face : un dépôt supprimé ou déplacé depuis la laisse
+    sans effet. Ni un type choisi, ni une règle n'apprennent un dépôt : une règle parle d'un libellé, et un libellé
+    peut aller au PEA un jour et ailleurs le lendemain.
+  - Mesuré sur le dump (12/10) : 7 « oui », un par forme, rangent 58 des 59 sorties face à un dépôt le même jour (la
+    dernière attend la réponse sur sa paire proposée), et chaque page mensuelle lit comme l'historique entier. Avant,
+    la leçon ne voyait que les mois chargés par la page : 45 sorties comptaient en dépense sur leur mois.
+  - Si une paire et un dépôt sont tous deux possibles, la même question montre les deux : « C'est… vers <compte> » ou
+    « versement sur <compte d'investissement> » (la paire écartée, l'opération liée au dépôt). Tant que la paire est
+    proposée, le dépôt n'est qu'affiché, même déjà validé pour ce libellé. Mesuré sur le dump : un cas (−20 € du
+    05/02/2024), dont le dépôt s'affichait jusque-là, à tort, sur une autre sortie de 20 € deux jours plus tard.
 - **Sortie sans rien en face, au-dessus du seuil** du curseur (500 € par défaut, réglable). Le seuil porte sur
   l'opération, pas sur le total du libellé. Les questions restent regroupées par libellé, « celle-ci » par défaut.
   Mesuré sur un historique de 4 ans : 6 opérations à 1 000 €, 20 à 500 €, 54 à 250 €, 139 à 100 €. À 100 €, on
@@ -115,7 +127,7 @@ ne reçoivent pas de question et ne changent aucun total.
 - **Historique de toutes les actions** (paires liées et déliées, réponses), chacune annulable ; les règles ont leur page. Une paire
   reconnue après coup ne remplace jamais en silence un type choisi à la main.
   - « Historique de mes réponses », en bas d'« À trier » : chaque décision encore en vigueur (paires liées, refusées,
-    annulations ; types choisis sur une opération ; récurrents confirmés ou refusés), la plus
+    annulations ; réponses sur un dépôt ; types choisis sur une opération ; récurrents confirmés ou refusés), la plus
     récente d'abord. Validé le 09/10 : lue là où chaque décision est déjà rangée, pas dans un journal à part.
     « Annuler » supprime la décision, donc tout revient exactement comme avant ; une décision annulée quitte la liste.
   - Un type choisi à la main garde sa date (`type_override_at`, vide pour ceux d'avant le 09/10).
@@ -189,6 +201,7 @@ effet : le loyer confirmé « Frederic Durand », payé par virement, prend comm
 | Réponse « celle-ci » par défaut, case « toutes celles de ce libellé, et les prochaines » | fait |
 | Une sortie n'est demandée que lorsqu'un dépôt ou un retrait lui fait face | fait |
 | Dépôt du même jour : question, puis automatique pour le même libellé vers le même compte | fait |
+| Dépôt : Oui / Non stockés des deux côtés, leçon tirée de tout l'historique (12/10) | fait |
 | « Celles que je coche » dans la liste | fait |
 | Sortie sans contrepartie au-dessus du seuil = question, curseur (500 € par défaut, Paramètres › Modules) | fait |
 | Dépôts sans contrepartie, « X € à trier », phrase à l'ajout d'une banque | fait |

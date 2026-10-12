@@ -42,6 +42,7 @@ Between two bank accounts nothing is kept on the way: the pairing stays exact.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -79,6 +80,10 @@ class Contribution:
     amount: Decimal
     # A deposit faces a debit on the bank, a withdrawal faces a credit.
     is_deposit: bool
+    # The uuid of the row declaring it, what a decision of the user holds on to.
+    ref: str
+    # The uuid of the investment account holding it.
+    account_id: str
 
 
 @dataclass(frozen=True)
@@ -101,6 +106,16 @@ class Contributions:
     def __bool__(self) -> bool:
         return bool(self.by_amount)
 
+    def all(self) -> list[Contribution]:
+        return [contribution for items in self.by_amount.values() for contribution in items]
+
+    def without(self, taken: Collection[Contribution]) -> Contributions:
+        """These contributions but those already settled elsewhere."""
+        if not taken:
+            return self
+        kept = {key: [c for c in items if c not in taken] for key, items in self.by_amount.items()}
+        return Contributions(by_amount={key: items for key, items in kept.items() if items})
+
 
 def load_contributions(session: Session, user_uuid: str, master_key: str) -> Contributions:
     """Every EUR deposit and withdrawal the user declared, the app's own rows
@@ -113,7 +128,7 @@ def load_contributions(session: Session, user_uuid: str, master_key: str) -> Con
     found: dict[tuple[bool, Decimal], list[Contribution]] = defaultdict(list)
     marked = False
 
-    stock_names = _account_names(session, StockAccount, user_bidx, master_key)
+    stock_names = _accounts(session, StockAccount, user_bidx, master_key)
     if stock_names:
         rows = session.exec(
             select(StockTransaction).where(
@@ -134,7 +149,7 @@ def load_contributions(session: Session, user_uuid: str, master_key: str) -> Con
                 continue
             _collect(found, row, stock_names[row.account_id_bidx], kind == _DEPOSIT, master_key)
 
-    crypto_names = _account_names(session, CryptoAccount, user_bidx, master_key)
+    crypto_names = _accounts(session, CryptoAccount, user_bidx, master_key)
     if crypto_names:
         rows = session.exec(
             select(CryptoTransaction).where(
@@ -182,6 +197,8 @@ def load_contributions(session: Session, user_uuid: str, master_key: str) -> Con
                     day=day,
                     amount=amount,
                     is_deposit=kind == _DEPOSIT,
+                    ref=row.uuid,
+                    account_id=row.account_uuid,
                 )
             )
 
@@ -190,11 +207,11 @@ def load_contributions(session: Session, user_uuid: str, master_key: str) -> Con
     return Contributions(by_amount={key: sorted(items, key=lambda c: c.day) for key, items in found.items()})
 
 
-def _account_names(session: Session, model, user_bidx: str, master_key: str) -> dict[str, str]:
-    """The user's accounts of one kind, keyed by the blind index its rows carry."""
+def _accounts(session: Session, model, user_bidx: str, master_key: str) -> dict[str, tuple[str, str]]:
+    """The user's accounts of one kind, (uuid, name) keyed by the blind index its rows carry."""
     accounts = session.exec(select(model).where(model.user_uuid_bidx == user_bidx)).all()
     return {
-        hash_index(account.uuid, master_key): decrypt_data(account.name_enc, master_key)
+        hash_index(account.uuid, master_key): (account.uuid, decrypt_data(account.name_enc, master_key))
         for account in accounts
     }
 
@@ -202,7 +219,7 @@ def _account_names(session: Session, model, user_bidx: str, master_key: str) -> 
 def _collect(
     found: dict[tuple[bool, Decimal], list[Contribution]],
     row,
-    account_name: str,
+    account: tuple[str, str],
     is_deposit: bool,
     master_key: str,
 ) -> None:
@@ -210,8 +227,12 @@ def _collect(
     amount = _amount(decrypt_data(row.amount_enc, master_key))
     if day is None or amount is None or amount <= 0:
         return
+    account_id, account_name = account
     found[(is_deposit, amount)].append(
-        Contribution(account_name=account_name, day=day, amount=amount, is_deposit=is_deposit)
+        Contribution(
+            account_name=account_name, day=day, amount=amount, is_deposit=is_deposit, ref=row.uuid,
+            account_id=account_id,
+        )
     )
 
 
@@ -369,6 +390,17 @@ def unfaced(candidates: list[Candidate], contributions: Contributions) -> list[C
         else:
             found.append(contribution)
     return found
+
+
+def fits(candidate: Candidate, contribution: Contribution) -> bool:
+    """Whether a movement can be this contribution at all: the other direction,
+    within `TOLERANCE_DAYS`, at the amount or a fee apart. What a decision of
+    the user needs to hold — a deposit moved or changed since no longer does."""
+    return (
+        candidate.is_credit != contribution.is_deposit
+        and abs((contribution.day - candidate.day).days) <= TOLERANCE_DAYS
+        and (candidate.amount == contribution.amount or _a_fee_apart(candidate, contribution))
+    )
 
 
 def _a_fee_apart(candidate: Candidate, contribution: Contribution) -> bool:

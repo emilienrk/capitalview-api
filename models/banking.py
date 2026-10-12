@@ -324,6 +324,36 @@ class BankTransferDecision(SQLModel, table=True):
     )
 
 
+class BankContributionDecision(SQLModel, table=True):
+    """What the user said of one operation facing a deposit or a withdrawal
+    declared on an investment account: it is that movement, or it is not.
+
+    Both sides are referenced by a blind index of their uuid, as a pair decision
+    references its legs. The decision holds while the two still face each other
+    (services/banking/contribution_decisions.py).
+    """
+    __tablename__ = "bank_contribution_decisions"
+    __table_args__ = (
+        UniqueConstraint("user_uuid_bidx", "transaction_ref_bidx", name="uq_bank_contribution_decisions_transaction"),
+        {"extend_existing": True},
+    )
+
+    uuid: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        sa_column=Column(TEXT, primary_key=True, nullable=False),
+    )
+    user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
+    kind_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    transaction_ref_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    # The same blind index as `BankTransaction.account_id_bidx`: the decision
+    # goes with the account.
+    account_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    contribution_ref_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    created_at: datetime = Field(
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False)
+    )
+
+
 class BankTypeRule(SQLModel, table=True):
     """The cashflow type the user gave a label on one account and direction: it
     types every operation reading like it, past and future, as they are read

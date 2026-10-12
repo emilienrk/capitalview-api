@@ -2,8 +2,9 @@
 The history of the user's answers: every decision still in force, newest first,
 each one withdrawable (docs/bank-sorting.md).
 
-Read from where each decision already lives — the pair decisions, the types
-forced on operations, the recurring decisions — rather than from a log of its
+Read from where each decision already lives — the pair decisions, those about a
+declared deposit or withdrawal, the types forced on operations, the recurring
+decisions — rather than from a log of its
 own: withdrawing a decision deletes it, and every reading of the operations is
 back to what it was before, with nothing to keep in step.
 
@@ -19,6 +20,7 @@ import sqlalchemy as sa
 from sqlmodel import Session, select
 
 from dtos.banking import (
+    BankContributionDecisionKind,
     BankHistoryItem,
     BankHistoryKind,
     BankHistoryOperation,
@@ -26,8 +28,10 @@ from dtos.banking import (
     BankTransferStatus,
     CashflowType,
 )
-from models.banking import BankTransferDecision
+from models.banking import BankContributionDecision, BankTransferDecision
 from services.banking import recurring as recurring_service
+from services.banking.contribution_decisions import forget_contribution_decision
+from services.banking.contributions import load_contributions
 from services.banking.flows import (
     _internal_transfer_legs,
     _label,
@@ -45,6 +49,10 @@ _PAIR_KINDS = {
     BankTransferDecisionKind.TRANSFER: BankHistoryKind.TRANSFER,
     BankTransferDecisionKind.NOT_TRANSFER: BankHistoryKind.NOT_TRANSFER,
     BankTransferDecisionKind.REVERSAL: BankHistoryKind.REVERSAL,
+}
+_CONTRIBUTION_KINDS = {
+    BankContributionDecisionKind.CONTRIBUTION: BankHistoryKind.CONTRIBUTION,
+    BankContributionDecisionKind.NOT_CONTRIBUTION: BankHistoryKind.NOT_CONTRIBUTION,
 }
 
 
@@ -82,6 +90,25 @@ def action_history(session: Session, user_uuid: str, master_key: str) -> list[Ba
             operations=[operation(leg) for leg in legs],
         ))
 
+    # Named by the investment account while the declared movement is still
+    # there; a decision outliving it stays listed, to be withdrawn.
+    accounts_by_ref = {
+        hash_index(contribution.ref, master_key): contribution.account_name
+        for contribution in load_contributions(session, user_uuid, master_key).all()
+    }
+    for row in session.exec(
+        select(BankContributionDecision).where(BankContributionDecision.user_uuid_bidx == user_bidx)
+    ).all():
+        movement = by_ref.get(row.transaction_ref_bidx)
+        kind = BankContributionDecisionKind(decrypt_data(row.kind_enc, master_key))
+        items.append(BankHistoryItem(
+            kind=_CONTRIBUTION_KINDS[kind],
+            id=row.uuid,
+            at=row.created_at,
+            operations=[operation(movement)] if movement else [],
+            name=accounts_by_ref.get(row.contribution_ref_bidx),
+        ))
+
     for index, movement in enumerate(movements):
         override = movement.row.type_override_enc
         if not override:
@@ -117,6 +144,9 @@ def undo_action(session: Session, user_uuid: str, master_key: str, kind: BankHis
             clear_transaction_type(session, user_uuid, master_key, item_id)
         elif kind is BankHistoryKind.RECURRING:
             recurring_service.forget(session, user_uuid, master_key, item_id)
+        elif kind in _CONTRIBUTION_KINDS.values():
+            if not forget_contribution_decision(session, user_uuid, master_key, item_id):
+                raise HistoryItemNotFoundError(item_id)
         else:
             deleted = session.exec(
                 sa.delete(BankTransferDecision).where(

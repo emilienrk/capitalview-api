@@ -16,7 +16,13 @@ from sqlmodel import Session, select
 
 from models import BankAccount, BankAccountType
 from models.account_history import AccountHistory
-from models.banking import BankAccountLink, BankSession, BankTransaction, BankTransferDecision
+from models.banking import (
+    BankAccountLink,
+    BankContributionDecision,
+    BankSession,
+    BankTransaction,
+    BankTransferDecision,
+)
 from models.currency import BASE_CURRENCY
 from models.enums import AccountCategory, InterestMethod
 from dtos import BankAccountCreate, BankAccountUpdate, BankAccountResponse, BankSummaryResponse
@@ -429,6 +435,9 @@ def delete_bank_account(
                 BankTransferDecision.credit_account_bidx == account_id_bidx,
             )
         )
+    )
+    session.exec(
+        sa.delete(BankContributionDecision).where(BankContributionDecision.account_bidx == account_id_bidx)
     )
     forget_account(session, account.user_uuid_bidx, account_uuid, master_key)
 

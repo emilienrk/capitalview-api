@@ -22,6 +22,7 @@ from models.bank import BankAccount
 from models.banking import (
     BankAccountLink,
     BankAuthorization,
+    BankContributionDecision,
     BankSession,
     BankRecurringSeries,
     BankTransaction,
@@ -355,6 +356,7 @@ def purge_account(session: Session, user: User, master_key: str) -> dict[str, in
     wipe(BankAuthorization, BankAuthorization.user_uuid_bidx == user_bidx)
     wipe(UserBankConnection, UserBankConnection.user_uuid_bidx == user_bidx)
     wipe(BankTransferDecision, BankTransferDecision.user_uuid_bidx == user_bidx)
+    wipe(BankContributionDecision, BankContributionDecision.user_uuid_bidx == user_bidx)
     wipe(BankTransferPatterns, BankTransferPatterns.user_uuid_bidx == user_bidx)
     wipe(BankTypeRule, BankTypeRule.user_uuid_bidx == user_bidx)
     wipe(BankRecurringSeries, BankRecurringSeries.user_uuid_bidx == user_bidx)

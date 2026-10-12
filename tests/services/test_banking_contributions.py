@@ -8,9 +8,17 @@ Labels are shaped like the real ones, names replaced.
 from datetime import date, datetime
 from decimal import Decimal
 
+import pytest
 from sqlmodel import Session
 
-from dtos.banking import BankTransferDecisionKind, CashflowType as Type, TypeScope, TypeSource as Source
+from dtos.banking import (
+    BankContributionDecisionKind as Said,
+    BankHistoryKind,
+    BankTransferDecisionKind,
+    CashflowType as Type,
+    TypeScope,
+    TypeSource as Source,
+)
 from dtos.crypto import CryptoCompositeTransactionCreate
 from models.crypto import CryptoAccount
 from models.enums import CryptoCompositeTransactionType
@@ -26,8 +34,10 @@ from services.banking.contributions import (
 from services.banking.flows import (
     clear_transaction_type, list_month_transactions, review_queue, set_transaction_type,
 )
+from services.banking.contribution_decisions import record_contribution_decision
+from services.banking.history import action_history, undo_action
 from services.banking.real_cashflow import real_cashflow_month
-from services.banking.transfer_decisions import record_decision
+from services.banking.transfer_decisions import DecisionError, record_decision
 from services.crypto_transaction import create_composite_crypto_transaction
 from services.encryption import encrypt_data, hash_index
 from services.stock_transaction import create_eur_deposit
@@ -84,10 +94,10 @@ def _withdraw(session: Session, master_key: str, day: str, amount: str, account:
 
 def _contributions(*items: tuple[str, str]) -> Contributions:
     by_amount: dict[tuple[bool, Decimal], list[Contribution]] = {}
-    for day, amount in items:
+    for n, (day, amount) in enumerate(items):
         key = (True, Decimal(amount))
         by_amount.setdefault(key, []).append(
-            Contribution("PEA", date.fromisoformat(day), Decimal(amount), is_deposit=True)
+            Contribution("PEA", date.fromisoformat(day), Decimal(amount), is_deposit=True, ref=f"deposit-{n}", account_id=PEA)
         )
     return Contributions(by_amount=by_amount)
 
@@ -173,7 +183,7 @@ class TestMatching:
 
     def test_a_withdrawal_arrives_short_of_itself(self):
         candidates = [Candidate(0, date(2026, 6, 2), Decimal("99"), True)]
-        withdrawal = Contribution("PEA", date(2026, 6, 2), Decimal("100"), is_deposit=False)
+        withdrawal = Contribution("PEA", date(2026, 6, 2), Decimal("100"), is_deposit=False, ref="w", account_id=PEA)
         contributions = Contributions(by_amount={(False, Decimal("100")): [withdrawal]})
         assert match_candidates(candidates, contributions)[0].exact
 
@@ -274,6 +284,11 @@ def _answer(session: Session, master_key: str, tx_id: str, kind: Type = Type.INV
     set_transaction_type(session, USER, master_key, tx_id, kind, TypeScope.OPERATION)
 
 
+def _say(session: Session, master_key: str, tx, kind: Said = Said.CONTRIBUTION) -> None:
+    """The user's yes, or no, to the declared movement shown beside an operation."""
+    record_contribution_decision(session, USER, master_key, tx.id, tx.contribution.id, kind)
+
+
 class TestOperations:
     def test_a_debit_the_day_of_a_deposit_asks_first_and_shows_it(self, session: Session, master_key: str):
         """The same amount on the same day is a coincidence until the user says
@@ -299,7 +314,7 @@ class TestOperations:
         _deposit(session, master_key, "2026-02-05", "200")
         _deposit(session, master_key, "2026-03-05", "300")
         [first] = _month(session, master_key, "2026-02").values()
-        _answer(session, master_key, first.id)
+        _say(session, master_key, first)
 
         [tx] = _month(session, master_key).values()
         assert (tx.cashflow_type, tx.type_source) == (Type.INVESTMENT, Source.CONTRIBUTION)
@@ -322,7 +337,7 @@ class TestOperations:
         _deposit(session, master_key, "2026-02-05", "200")
         _deposit(session, master_key, "2026-03-05", "300", account="cto-account")
         [first] = _month(session, master_key, "2026-02").values()
-        _answer(session, master_key, first.id)
+        _say(session, master_key, first)
 
         [tx] = _month(session, master_key).values()
         assert (tx.type_source, tx.flow_question is not None) == (Source.DEFAULT, True)
@@ -365,7 +380,7 @@ class TestOperations:
         _deposit(session, master_key, "2026-02-05", "200")
         _deposit(session, master_key, "2026-03-05", "300")
         [first] = _month(session, master_key, "2026-02").values()
-        _answer(session, master_key, first.id)
+        _say(session, master_key, first)
         [tx] = _month(session, master_key).values()
 
         forced = set_transaction_type(session, USER, master_key, tx.id, Type.EXPENSE, TypeScope.OPERATION)
@@ -395,7 +410,7 @@ class TestOperations:
         _withdraw(session, master_key, "2026-02-05", "50")
         _withdraw(session, master_key, "2026-03-05", "80")
         [first] = _month(session, master_key, "2026-02").values()
-        _answer(session, master_key, first.id)
+        _say(session, master_key, first)
 
         [tx] = _month(session, master_key).values()
         assert (tx.cashflow_type, tx.type_source) == (Type.INVESTMENT, Source.CONTRIBUTION)
@@ -410,7 +425,7 @@ class TestOperations:
         _deposit(session, master_key, "2026-02-05", "200")
         _deposit(session, master_key, "2026-03-05", "200")
         [first] = _month(session, master_key, "2026-02").values()
-        _answer(session, master_key, first.id)
+        _say(session, master_key, first)
 
         month = real_cashflow_month(session, USER, master_key, "2026-03", today=TODAY)
         assert (month.totals.investment, month.totals.expenses) == (Decimal("200"), Decimal("0"))
@@ -449,6 +464,147 @@ class TestOperations:
         assert tx.flow_question is not None
 
 
+def _operations(session: Session, master_key: str, period: str = "2026-03"):
+    return list_month_transactions(session, USER, master_key, period).transactions
+
+
+class TestDecisions:
+    """What the user says of an operation facing a declared movement
+    (services/banking/contribution_decisions.py)."""
+
+    def test_a_yes_vouches_for_its_label_in_every_month_read(self, session: Session, master_key: str):
+        """The lesson is drawn from the whole history: a month far from the
+        answer reads the same as the month answered."""
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-02-05", "200.00", "DBIT", "VIR Virement vers PEA"),
+            (CURRENT, "2026-06-05", "300.00", "DBIT", "VIR Virement vers PEA"),
+        )
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-02-05", "200")
+        _deposit(session, master_key, "2026-06-05", "300")
+        [last] = _month(session, master_key, "2026-06").values()
+        _say(session, master_key, last)
+
+        [tx] = _month(session, master_key, "2026-02").values()
+        assert (tx.cashflow_type, tx.type_source, tx.flow_question) == (Type.INVESTMENT, Source.CONTRIBUTION, None)
+
+    def test_a_type_given_teaches_its_label_nothing(self, session: Session, master_key: str):
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-02-05", "200.00", "DBIT", "VIR Virement vers PEA"),
+            (CURRENT, "2026-03-05", "300.00", "DBIT", "VIR Virement vers PEA"),
+        )
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-02-05", "200")
+        _deposit(session, master_key, "2026-03-05", "300")
+        [first] = _month(session, master_key, "2026-02").values()
+        _answer(session, master_key, first.id)
+
+        [tx] = _month(session, master_key).values()
+        assert (tx.type_source, tx.contribution.exact) == (Source.DEFAULT, True)
+
+    def test_a_no_reads_the_operation_as_any_other(self, session: Session, master_key: str):
+        _ops(session, master_key, (CURRENT, "2026-03-05", "200.00", "DBIT", "CARTE 04/03/26 DARTY CB*08"))
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "200")
+        [asked] = _month(session, master_key).values()
+        _say(session, master_key, asked, Said.NOT_CONTRIBUTION)
+
+        [tx] = _month(session, master_key).values()
+        assert (tx.cashflow_type, tx.type_source, tx.contribution, tx.flow_question) == (
+            Type.EXPENSE, Source.DEFAULT, None, None,
+        )
+
+    def test_a_no_leaves_the_deposit_to_the_other_operation_of_the_day(self, session: Session, master_key: str):
+        """Two 200 € debits and one 200 € deposit: which one went is unknown
+        until the user rules one out."""
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-03-05", "200.00", "DBIT", "CARTE 04/03/26 DARTY CB*08"),
+            (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR Virement vers PEA"),
+        )
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "200")
+        month = _month(session, master_key)
+        assert not month["VIR Virement vers PEA"].contribution.exact
+        _say(session, master_key, month["CARTE 04/03/26 DARTY CB*08"], Said.NOT_CONTRIBUTION)
+
+        assert _month(session, master_key)["VIR Virement vers PEA"].contribution.exact
+
+    def test_a_yes_settles_a_day_holding_two_candidates(self, session: Session, master_key: str):
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-03-05", "200.00", "DBIT", "CARTE 04/03/26 DARTY CB*08"),
+            (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR Virement vers PEA"),
+        )
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "200")
+        _say(session, master_key, _month(session, master_key)["VIR Virement vers PEA"])
+
+        month = _month(session, master_key)
+        assert month["VIR Virement vers PEA"].type_source == Source.CONTRIBUTION
+        assert month["CARTE 04/03/26 DARTY CB*08"].contribution is None
+
+    def test_a_yes_to_a_deposit_two_days_later_counts_it(self, session: Session, master_key: str):
+        _ops(session, master_key, (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR Virement vers PEA"))
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-07", "200")
+        _say(session, master_key, *_month(session, master_key).values())
+
+        [tx] = _month(session, master_key).values()
+        assert (tx.cashflow_type, tx.type_source, tx.contribution.exact) == (Type.INVESTMENT, Source.CONTRIBUTION, True)
+
+    def test_a_yes_holds_no_longer_once_the_deposit_moved(self, session: Session, master_key: str):
+        _ops(session, master_key, (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR Virement vers PEA"))
+        _pea(session, master_key)
+        deposit = session.get(StockTransaction, _deposit(session, master_key, "2026-03-05", "200").id)
+        _say(session, master_key, *_month(session, master_key).values())
+
+        deposit.executed_at_enc = encrypt_data("2026-03-20T10:00:00", master_key)
+        session.add(deposit)
+        session.commit()
+
+        [tx] = _month(session, master_key).values()
+        assert (tx.type_source, tx.contribution) == (Source.DEFAULT, None)
+
+    def test_a_yes_replaces_the_type_given_by_hand(self, session: Session, master_key: str):
+        _ops(session, master_key, (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR Virement vers PEA"))
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "200")
+        [asked] = _month(session, master_key).values()
+        _answer(session, master_key, asked.id, Type.EXPENSE)
+        _say(session, master_key, asked)
+
+        [tx] = _month(session, master_key).values()
+        assert (tx.cashflow_type, tx.type_source) == (Type.INVESTMENT, Source.CONTRIBUTION)
+
+    def test_a_movement_that_cannot_be_the_operation_is_refused(self, session: Session, master_key: str):
+        _ops(session, master_key, (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR Virement vers PEA"))
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "200")
+        far = _deposit(session, master_key, "2026-03-25", "200")
+        [tx] = _month(session, master_key).values()
+
+        with pytest.raises(DecisionError):
+            record_contribution_decision(session, USER, master_key, tx.id, far.id, Said.CONTRIBUTION)
+
+    def test_the_history_lists_the_answer_and_withdraws_it(self, session: Session, master_key: str):
+        _ops(session, master_key, (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR Virement vers PEA"))
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "200")
+        [asked] = _month(session, master_key).values()
+        _say(session, master_key, asked)
+
+        [item] = action_history(session, USER, master_key)
+        assert (item.kind, item.name, [op.id for op in item.operations]) == (
+            BankHistoryKind.CONTRIBUTION, "PEA", [asked.id],
+        )
+        undo_action(session, USER, master_key, item.kind, item.id)
+        [tx] = _month(session, master_key).values()
+        assert tx.type_source == Source.DEFAULT
+
+
 class TestSuggestedPair:
     def test_a_deposit_facing_a_suggested_pair_shows_in_its_question(self, session: Session, master_key: str):
         """Seen on the dump: the deposit went as a hint to another 20 € debit,
@@ -484,7 +640,7 @@ class TestSuggestedPair:
         pair = month["VIR Virement interne depuis BoursoBank"]
 
         record_decision(session, USER, master_key, pair.id, pair.transfer_id, BankTransferDecisionKind.NOT_TRANSFER)
-        _answer(session, master_key, pair.id)
+        _say(session, master_key, pair)
 
         tx = _month(session, master_key)["VIR Virement interne depuis BoursoBank"]
         assert (tx.transfer_status, tx.cashflow_type, tx.flow_question) == (None, Type.INVESTMENT, None)
@@ -501,7 +657,7 @@ class TestSuggestedPair:
         _deposit(session, master_key, "2026-02-05", "20")
         _deposit(session, master_key, "2026-03-05", "20")
         [first] = _month(session, master_key, "2026-02").values()
-        _answer(session, master_key, first.id)
+        _say(session, master_key, first)
 
         pair = _month(session, master_key)["VIR Virement interne depuis BoursoBank"]
         assert (pair.transfer_status.value, pair.type_source) == ("suggested", Source.DEFAULT)

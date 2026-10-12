@@ -298,10 +298,13 @@ class TypeSource(str, Enum):
 class BankContributionMatch(BaseModel):
     """A movement declared on an investment account that this operation could be.
 
-    `exact` means the same day and a single candidate: the operation is typed as
-    an investment on it. Otherwise it is a nearby amount, shown beside the
-    question for the user to judge — it types nothing.
+    `exact` means the same day and a single candidate, or the user said so.
+    Otherwise it is a nearby amount. Either way the operation counts as an
+    investment only once the user said yes, to it or to its label going to that
+    account (docs/bank-sorting.md).
     """
+    # The declared row, what POST /banking/contribution-decisions names.
+    id: str
     account_name: str
     day: date
     amount: Decimal
@@ -523,6 +526,19 @@ class BankTransferDecisionKind(str, Enum):
     REVERSAL = "reversal"
 
 
+class BankContributionDecisionKind(str, Enum):
+    CONTRIBUTION = "contribution"
+    NOT_CONTRIBUTION = "not_contribution"
+
+
+class BankContributionDecisionCreate(BaseModel):
+    """POST /banking/contribution-decisions — this operation is that declared
+    deposit or withdrawal, or it is not."""
+    transaction_id: str
+    contribution_id: str
+    kind: BankContributionDecisionKind
+
+
 class BankTransferDecisionCreate(BaseModel):
     """POST /banking/transfer-decisions — settle two movements, in either order."""
     transaction_id: str
@@ -606,6 +622,8 @@ class BankHistoryKind(str, Enum):
     TRANSFER = "transfer"
     NOT_TRANSFER = "not_transfer"
     REVERSAL = "reversal"
+    CONTRIBUTION = "contribution"
+    NOT_CONTRIBUTION = "not_contribution"
     # A type forced on one operation.
     TYPE = "type"
     RECURRING = "recurring"
@@ -631,7 +649,7 @@ class BankHistoryItem(BaseModel):
     # The two legs of a pair, the operation of a type; a leg since deleted is
     # left out.
     operations: list[BankHistoryOperation] = []
-    # A recurring payment's name.
+    # A recurring payment's name; the investment account of a contribution decision.
     name: str | None = None
     # A recurring payment confirmed, or refused.
     confirmed: bool | None = None
