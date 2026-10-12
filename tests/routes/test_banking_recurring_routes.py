@@ -240,6 +240,10 @@ def test_two_recurring_payments_merge_into_one(client, session, master_key):
     merged = _one(client)
     assert (merged["id"], merged["occurrence_count"], merged["name"]) == (confirmed["id"], 16, "Bouygues Telecom")
 
+    # Found again by its anchors on every rebuild: the next debits join it.
+    _ops(session, master_key, *_months(CURRENT, "2026-05", 2, 16, "16.99", "PRLV SEPA BOUYGUES TELECOM"))
+    assert (_one(client)["id"], _one(client)["occurrence_count"]) == (confirmed["id"], 18)
+
 
 def test_forgetting_a_decision_asks_again(client, session, master_key):
     _ops(session, master_key, *_months(CURRENT, "2026-01", 3, 2, "21.60", POCKET_MONEY))
