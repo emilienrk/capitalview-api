@@ -119,9 +119,12 @@ ne reçoivent pas de question et ne changent aucun total.
 
 ## Délier, annuler
 
-- Le bouton qui refuse une paire dit ce qu'il fait : « Pas ensemble », et dessous « chacune restera comptée de son
-  côté ». Il ne veut pas dire « compter en dépense ». La paire proposée est posée en toutes lettres sur la ligne
-  (« C'est… vers <compte> / Pas ensemble »), plus par deux icônes ✓ ✗.
+- Une paire proposée se pose en toutes lettres : « C'est… Ensemble / Pas ensemble ». On ne sait pas si c'est un
+  virement entre ses comptes ou un tiers qui rembourse un achat sur l'autre compte (presque toutes les paires proposées
+  du dump, le 12/10) : le badge dit « avec <compte> ? », sans flèche, et la ligne dessous dit seulement ce que fait
+  chaque réponse — « Ensemble : elles s'annulent, aucune n'est comptée » (ou « comptées en épargne » face à un compte
+  épargne non réglementé, `together_type`), « Pas ensemble : chacune restera comptée de son côté ». Une fois liée, la
+  paire reprend sa flèche « vers / depuis <compte> ».
 - Un refus ne vaut que pour **sa** paire. Il n'apprend rien sur les libellés. (Avant le 08/10, un seul refus bloquait
   toutes les paires aux libellés semblables, livrets compris : 8 virements vers le Compte plaisir perdus.)
 - **Historique de toutes les actions** (paires liées et déliées, réponses), chacune annulable ; les règles ont leur page. Une paire

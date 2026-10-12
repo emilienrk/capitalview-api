@@ -13,6 +13,7 @@ from sqlmodel import Session, select
 
 from dtos.banking import BankTransferDecisionKind as Kind
 from dtos.banking import BankTransferStatus as Status
+from dtos.banking import CashflowType
 from models.bank import BankAccount
 from models.banking import BankTransaction, BankTransferDecision
 from services.bank import delete_bank_account
@@ -99,6 +100,25 @@ class TestReview:
         month = _month(session, master_key, "2023-04")
         assert _status(month, "Virement de : Jean Tiers") is Status.SUGGESTED
         assert month.inflow == month.outflow == 85
+        # Together, the refund cancels the purchase: neither counts.
+        assert {tx.together_type for tx in month.transactions} == {CashflowType.NEUTRAL}
+
+    def test_a_pair_offered_with_a_savings_account_says_it_would_be_saving(self, session: Session, master_key: str):
+        """A savings account outside the regulated ones is only offered, and
+        going together puts the money aside rather than cancelling it."""
+        _ops(
+            session, master_key,
+            (CURRENT, "2023-04-18", "85.00", "DBIT", "VIR SEPA vers épargne"),
+            (SAVINGS, "2023-04-19", "85.00", "CRDT", "Virement reçu"),
+        )
+        account = session.get(BankAccount, SAVINGS)
+        account.account_type_enc = encrypt_data("SAVINGS", master_key)
+        session.add(account)
+        session.commit()
+
+        month = _month(session, master_key, "2023-04")
+        assert _status(month, "Virement reçu") is Status.SUGGESTED
+        assert {tx.together_type for tx in month.transactions} == {CashflowType.SAVING}
 
     def test_a_card_top_up_of_another_account_is_still_offered(self, session: Session, master_key: str):
         _ops(

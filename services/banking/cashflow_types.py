@@ -69,10 +69,7 @@ def resolve_type(
     if transfer_status in CANCELLATIONS:
         return Resolution(CashflowType.NEUTRAL, TypeSource.PAIR)
     if transfer_status in TRANSFERS:
-        # Exactly one savings leg puts money aside or takes it back; between two
-        # savings accounts, or two current ones, money only moved.
-        kind = CashflowType.SAVING if savings_legs == 1 else CashflowType.NEUTRAL
-        return Resolution(kind, TypeSource.PAIR)
+        return Resolution(pair_type(savings_legs), TypeSource.PAIR)
     if override is not None:
         return Resolution(override, TypeSource.OVERRIDE)
     if contributed:
@@ -84,6 +81,13 @@ def resolve_type(
     if recurring is not None:
         return Resolution(recurring, TypeSource.RECURRING)
     return Resolution(CashflowType.INCOME if is_credit else CashflowType.EXPENSE, TypeSource.DEFAULT)
+
+
+def pair_type(savings_legs: int) -> CashflowType:
+    """What both legs of a transfer count as. Exactly one savings leg puts
+    money aside or takes it back; between two savings accounts, or two current
+    ones, money only moved — or came back, a third party paying the user back."""
+    return CashflowType.SAVING if savings_legs == 1 else CashflowType.NEUTRAL
 
 
 def counted_leg(is_credit: bool, on_savings_account: bool, kind: CashflowType, paired: bool) -> bool:

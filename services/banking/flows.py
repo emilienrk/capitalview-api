@@ -68,7 +68,7 @@ from models.enums import BankAccountType
 from models.user import UserSettings
 from services.banking import recurring_series
 from services.banking import transfer_patterns as stored_patterns
-from services.banking.cashflow_types import Resolution, resolve_type
+from services.banking.cashflow_types import Resolution, pair_type, resolve_type
 from services.banking.contributions import (
     Candidate,
     Contribution,
@@ -1140,10 +1140,7 @@ def _filed(
     operations shares."""
     movement = movements[index]
     leg = transfer_legs.get(index)
-    savings_legs = (
-        (movement.account_bidx in filing.savings) + (movements[leg.other].account_bidx in filing.savings)
-        if leg else 0
-    )
+    savings_legs = _savings_legs(movement, movements[leg.other], filing) if leg else 0
     override = movement.row.type_override_enc
     rule = filing.rules.reach(
         movement.account_bidx, movement.is_credit, label,
@@ -1167,6 +1164,10 @@ def _filed(
         recurring=filing.patterns.held_by_recurring(movement.row.uuid),
         adjustment=movement.adjustment,
     )
+
+
+def _savings_legs(movement: _Movement, other: _Movement, filing: _Filing) -> int:
+    return (movement.account_bidx in filing.savings) + (other.account_bidx in filing.savings)
 
 
 def _asks_flow(
@@ -1243,6 +1244,7 @@ def _item_builder(
             transfer_status=leg.status if leg else None,
             transfer_label=_label(offered, master_key) if offered else None,
             transfer_date=offered.day if offered else None,
+            together_type=pair_type(_savings_legs(movement, offered, filing)) if offered else None,
             cashflow_type=resolution.type,
             type_source=resolution.source,
             type_rule_id=resolution.rule_id,

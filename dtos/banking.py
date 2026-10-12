@@ -454,6 +454,9 @@ class BankTransactionItem(BaseModel):
     # label and day, the amount being the same.
     transfer_label: str | None = None
     transfer_date: date | None = None
+    # Only on a pair offered: what both legs count as once the user says they
+    # go together — nowhere, or as saving when one side is a savings account.
+    together_type: CashflowType | None = None
     cashflow_type: CashflowType = CashflowType.EXPENSE
     type_source: TypeSource = TypeSource.DEFAULT
     # The rule typing it, exact or reached from a nearby label.
