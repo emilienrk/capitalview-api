@@ -393,7 +393,7 @@ class BankRecurringSeries(SQLModel, table=True):
     anchors_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     includes_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     excludes_enc: str | None = Field(default=None, sa_column=Column(TEXT))
-    # JSON: merchant words, account uuids, cadence, amount, means of payment.
+    # JSON: merchant words, account uuids, cadence, amount, direction.
     identity_enc: str = Field(sa_column=Column(TEXT, nullable=False))
     # What the user set: a name, a cadence, what it is for, the day they ended it.
     name_enc: str | None = Field(default=None, sa_column=Column(TEXT))
