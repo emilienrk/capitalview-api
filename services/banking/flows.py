@@ -335,9 +335,8 @@ def _internal_transfer_legs(
     2. it touches a regulated savings account;
     3. its shape recurs across the history (services/banking/transfer_patterns.py);
     4. both labels read like pairs the user confirmed;
-    5. a card payment or direct debit against a transfer received is not
-       even offered: a third party paying the user back;
-    6. otherwise it is only suggested, and both legs keep counting.
+    5. otherwise it is only suggested, and both legs keep counting — most often
+       a third party paying back a purchase, which the pair cancels as well.
 
     Refunds on one account come between the last two: same amount, the credit
     within a month of the debit, and a word the two labels share that the
