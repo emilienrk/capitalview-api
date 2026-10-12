@@ -26,7 +26,7 @@ Chaque changement de règle se mesure sur un dump réel, avant et après : paire
 | **Paire répétée** : même débit, même crédit, mêmes deux comptes, au moins 3 fois | tes virements Boursorama ↔ Revolut | mesuré : aucun faux virement à 3, un remboursement de tiers passait à 2 |
 | **Paire déjà validée** : les deux côtés ressemblent aux deux côtés d'une paire que tu as validée, sur les mêmes comptes | une recharge Revolut validée une fois, les suivantes passent | ta validation porte sur *cette paire*, pas sur tous les virements d'un des deux noms |
 | **Remboursement sur un même compte** : même montant dans les 30 jours, avec un mot rare commun | −30 € Amazon, puis +30 € Amazon | les mots trop fréquents sont calculés sur ton compte, sans dictionnaire |
-| **Dépôt Bourse/Crypto déjà validé** : même jour, même montant au centime, vers le même compte d'investissement qu'un dépôt que tu as validé avec ce libellé | ton virement mensuel vers le PEA | comme une paire déjà validée |
+| **Dépôt Bourse/Crypto déjà validé** : même jour, même montant au centime ou un écart de frais (1 € ou 2 % au plus, chacun le seul candidat de l'autre ce jour-là), vers le même compte d'investissement qu'un dépôt que tu as validé avec ce libellé | ton virement mensuel vers le PEA | comme une paire déjà validée |
 
 Une paire reconnue n'est **jamais** une règle par nom : elle ne classe pas les autres opérations qui portent un des deux
 libellés. Une opération n'a qu'une paire, et un dépôt ne justifie qu'une seule opération.
