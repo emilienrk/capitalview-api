@@ -11,6 +11,7 @@ import pytest
 from sqlmodel import Session, select
 
 from dtos.banking import (
+    BankContributionDecisionKind,
     BankTransferDecisionKind,
     RecurringDecisionKind,
     RecurringDirection,
@@ -21,6 +22,7 @@ from dtos.banking import (
 )
 from dtos.banking import CashflowType as Type
 from models.banking import BankAccountLink
+from services.banking.contribution_decisions import record_contribution_decision
 from services.banking.flows import (
     list_flow_group,
     list_month_transactions,
@@ -28,6 +30,7 @@ from services.banking.flows import (
     set_transaction_type,
     transfer_patterns,
 )
+from services.banking.history import action_history, undo_action
 from services.banking.ledger import build_ledger
 from services.banking.real_cashflow import (
     real_cashflow_current,
@@ -44,6 +47,7 @@ from services.banking.recurring import (
 )
 from services.banking.transfer_decisions import record_decision
 from services.encryption import hash_index
+from tests.services.test_banking_contributions import _deposit, _pea
 from tests.services.test_banking_flows import USER, _raw, _store
 from tests.services.test_banking_real_cashflow import CURRENT, LIVRET, TODAY, _ops
 
@@ -634,3 +638,41 @@ def test_a_refused_income_past_the_threshold_waits_to_be_sorted(session: Session
     queue = review_queue(session, USER, master_key)
     flows = {q.transaction.label: q.operation_count for q in queue.questions if q.kind.value == "flow"}
     assert flows == {ALLOWANCE: 10}
+
+
+def test_a_monthly_transfer_to_the_pea_asks_past_its_recurring_and_leaves_it_on_yes(session: Session, master_key: str):
+    """A yes counts it as an investment, whatever rhythm it keeps, even once
+    confirmed as a recurring payment; undone, that one comes back by itself."""
+    _ops(session, master_key, *_months(CURRENT, "2025-11", 4, 5, "200.00", "VIR Virement vers PEA"))
+    _pea(session, master_key)
+    for period in ("2025-11", "2025-12", "2026-01", "2026-02"):
+        _deposit(session, master_key, f"{period}-05", "200")
+    _confirm_all(session, master_key)
+    [asked] = [tx for tx in _month_items(session, master_key, "2026-02") if tx.flow_question]
+    assert (asked.type_source, asked.flow_question.operation_count) == (TypeSource.RECURRING, 4)
+
+    record_contribution_decision(
+        session, USER, master_key, asked.id, asked.contribution.id, BankContributionDecisionKind.CONTRIBUTION,
+    )
+
+    assert _recurring(session, master_key) == []
+    [tx] = _month_items(session, master_key, "2025-11")
+    assert (tx.type_source, tx.recurring) == (TypeSource.CONTRIBUTION, None)
+    said = next(item for item in action_history(session, USER, master_key) if item.kind.value == "contribution")
+    undo_action(session, USER, master_key, said.kind, said.id)
+    assert [(s.state, len(s.members)) for s in _recurring(session, master_key)] == [("confirmed", 4)]
+
+
+def test_a_no_leaves_the_transfer_in_its_recurring(session: Session, master_key: str):
+    _ops(session, master_key, *_months(CURRENT, "2025-11", 4, 5, "200.00", "VIR Virement vers PEA"))
+    _pea(session, master_key)
+    _deposit(session, master_key, "2026-02-05", "200")
+    [asked] = [tx for tx in _month_items(session, master_key, "2026-02") if tx.flow_question]
+
+    record_contribution_decision(
+        session, USER, master_key, asked.id, asked.contribution.id, BankContributionDecisionKind.NOT_CONTRIBUTION,
+    )
+
+    [stored] = _recurring(session, master_key)
+    [tx] = _month_items(session, master_key, "2026-02")
+    assert (len(stored.members), tx.type_source, tx.flow_question) == (4, TypeSource.RECURRING, None)

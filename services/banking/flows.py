@@ -1017,6 +1017,7 @@ def _recurring_movement(
         day=movement.day, paid_on=paid_on, amount=movement.amount, currency=movement.currency,
         is_credit=movement.is_credit, is_final=movement.is_final, label=label,
         leg=leg.status if leg else None, type=resolution.type, regulated=regulated,
+        deposit=resolution.source is TypeSource.CONTRIBUTION,
     )
 
 
@@ -1227,13 +1228,13 @@ def _asks_flow(
     wants to check that (an account they forgot, a PEA opened elsewhere). A
     suggested pair keeps its own question until the user settles it.
 
-    A deposit on the very day asks even past a rule: the rule speaks for a
-    label, and one label may go to the investment account one day and anywhere
-    the next.
+    A deposit on the very day asks even past a rule or a recurring payment: the
+    rule speaks for a label, one label may go to the investment account one day
+    and anywhere the next, and a monthly transfer to it keeps a rhythm.
     """
     if not movement.is_final or leg is not None or label_signature(label) is None:
         return False
-    if resolution.source is TypeSource.RULE:
+    if resolution.source in (TypeSource.RULE, TypeSource.RECURRING):
         return facing is not None and facing.exact
     if resolution.source is not TypeSource.DEFAULT:
         return False

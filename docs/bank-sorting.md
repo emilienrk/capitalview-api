@@ -169,6 +169,12 @@ séries restent, les 15 qui comptaient seules (« auto ») deviennent des propos
 **Pas de seuil dans les récurrents** : une dépense proposée n'apparaît que dans Récurrents, pas dans « À trier ».
 Refusée, ses opérations au-dessus du seuil tombent dans « À trier ».
 
+**Un dépôt en face, le même jour, passe devant le récurrent** (décidé le 13/10) : l'opération pose sa question « est-ce
+celui-ci ? » dans « À trier », comme sous une règle. Oui = comptée en investissement et sortie de la détection des
+récurrents (un récurrent fait de ces seules opérations disparaît de l'onglet, même confirmé ; il reste dans
+l'historique, et revient si le Oui est annulé). Non = elle reste dans son récurrent. Seul le Oui sort une opération des
+récurrents : ni une règle ni un type choisi à la main. Mesuré sur le dump : aucun cas, rien ne bouge.
+
 **Aucun moyen de paiement** (décidé le 10/10) : carte, prélèvement ou virement, on ne les lit pas, et aucun mot n'est
 appris. La ressemblance des libellés (`merchants.py`) reste telle quelle : un abonnement garde la même forme de
 libellé. Une seule règle pour toutes les dépenses (`recurrence.offered`) :

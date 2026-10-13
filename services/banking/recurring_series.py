@@ -73,6 +73,9 @@ class Movement(NamedTuple):
     type: CashflowType
     # On a regulated savings account.
     regulated: bool = False
+    # Counted as the deposit or withdrawal the user said it is: an investment,
+    # whatever rhythm it keeps.
+    deposit: bool = False
 
 
 @dataclass
@@ -165,10 +168,10 @@ def occurrence_count(stored: StoredRecurring) -> int:
 def _eligible(movements: list[Movement]) -> tuple[list[Movement], list[Movement]]:
     """Final debits outside internal transfers, a debit its refund or rejection
     cancelled included for its rhythm; unpaired final credits, for income and
-    for refunds."""
+    for refunds. None the user said is a deposit or withdrawal."""
     debits, credits = [], []
     for m in movements:
-        if not m.is_final or m.day is None or m.amount <= 0:
+        if not m.is_final or m.day is None or m.amount <= 0 or m.deposit:
             continue
         if m.is_credit:
             if m.leg is None:
