@@ -32,7 +32,7 @@ from services.banking.contributions import (
     unfaced,
 )
 from services.banking.flows import (
-    clear_transaction_type, list_month_transactions, review_queue, set_transaction_type,
+    clear_transaction_type, list_flow_group, list_month_transactions, review_queue, set_transaction_type,
 )
 from services.banking.contribution_decisions import record_contribution_decision
 from services.banking.history import action_history, undo_action
@@ -430,10 +430,47 @@ class TestOperations:
         month = real_cashflow_month(session, USER, master_key, "2026-03", today=TODAY)
         assert (month.totals.investment, month.totals.expenses) == (Decimal("200"), Decimal("0"))
 
-    def test_the_question_of_a_label_counts_the_hints_its_other_operations_carry(
-        self, session: Session, master_key: str
-    ):
-        """Asked on the last operation, the hint of an earlier one would go unseen."""
+    def test_the_operations_facing_a_deposit_ask_apart_from_their_label(self, session: Session, master_key: str):
+        """Seen on the dump: the label's question sat on its last operation,
+        which faced nothing, and only said that 21 others might be deposits."""
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR INST JEAN MARTIN"),
+            (CURRENT, "2026-03-20", "150.00", "DBIT", "VIR INST JEAN MARTIN"),
+            (CURRENT, "2026-03-25", "600.00", "DBIT", "VIR INST JEAN MARTIN"),
+        )
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "200")
+        _deposit(session, master_key, "2026-03-21", "150")
+
+        asked = {tx.amount: tx for tx in _operations(session, master_key) if tx.flow_question}
+        assert {amount: (tx.asks_contribution, tx.flow_question.operation_count) for amount, tx in asked.items()} == {
+            Decimal("150.00"): (True, 2), Decimal("600.00"): (False, 1),
+        }
+        assert [tx.amount for tx in list_flow_group(session, USER, master_key, asked[Decimal("150.00")].id)] == [
+            Decimal("150.00"), Decimal("200.00"),
+        ]
+
+    def test_each_investment_account_asks_on_its_own(self, session: Session, master_key: str):
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR INST JEAN MARTIN"),
+            (CURRENT, "2026-03-20", "150.00", "DBIT", "VIR INST JEAN MARTIN"),
+        )
+        _pea(session, master_key)
+        session.add(StockAccount(
+            uuid="cto-account",
+            user_uuid_bidx=hash_index(USER, master_key),
+            name_enc=encrypt_data("CTO", master_key),
+            account_type_enc=encrypt_data("CTO", master_key),
+        ))
+        session.commit()
+        _deposit(session, master_key, "2026-03-05", "200")
+        _deposit(session, master_key, "2026-03-20", "150", account="cto-account")
+
+        assert sorted(tx.flow_question.operation_count for tx in _operations(session, master_key) if tx.flow_question) == [1, 1]
+
+    def test_the_ticked_operations_take_the_answer_each_with_its_own_deposit(self, session: Session, master_key: str):
         _ops(
             session, master_key,
             (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR INST JEAN MARTIN"),
@@ -442,9 +479,29 @@ class TestOperations:
         _pea(session, master_key)
         _deposit(session, master_key, "2026-03-07", "200")
         _deposit(session, master_key, "2026-03-21", "150")
+        first, last = sorted(_operations(session, master_key), key=lambda tx: tx.operation_date)
 
-        [tx] = [tx for tx in list_month_transactions(session, USER, master_key, "2026-03").transactions if tx.flow_question]
-        assert (tx.amount, tx.contribution.day, tx.flow_question.hints) == (Decimal("150.00"), date(2026, 3, 21), 2)
+        record_contribution_decision(
+            session, USER, master_key, last.id, last.contribution.id, Said.CONTRIBUTION,
+            [(first.id, first.contribution.id)],
+        )
+
+        assert {tx.type_source for tx in _operations(session, master_key)} == {Source.CONTRIBUTION}
+
+    def test_one_ticked_operation_that_faces_nothing_refuses_them_all(self, session: Session, master_key: str):
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR INST JEAN MARTIN"),
+            (CURRENT, "2026-03-20", "150.00", "DBIT", "VIR INST JEAN MARTIN"),
+        )
+        _pea(session, master_key)
+        deposit = _deposit(session, master_key, "2026-03-05", "200")
+        first, last = sorted(_operations(session, master_key), key=lambda tx: tx.operation_date)
+
+        with pytest.raises(DecisionError):
+            record_contribution_decision(
+                session, USER, master_key, first.id, deposit.id, Said.CONTRIBUTION, [(last.id, deposit.id)],
+            )
 
     def test_a_rule_on_its_label_still_asks_the_day_a_deposit_faces_it(self, session: Session, master_key: str):
         """One label may go to the investment account one day and anywhere the next."""
@@ -461,7 +518,17 @@ class TestOperations:
 
         [tx] = _month(session, master_key).values()
         assert (tx.cashflow_type, tx.type_source) == (Type.EXPENSE, Source.RULE)
-        assert tx.flow_question is not None
+        assert (tx.flow_question is not None, tx.asks_contribution) == (True, True)
+
+    def test_a_rule_on_its_label_asks_nothing_of_a_deposit_days_away(self, session: Session, master_key: str):
+        _ops(session, master_key, (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR INST JEAN MARTIN"))
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-07", "200")
+        [asked] = _month(session, master_key).values()
+        set_transaction_type(session, USER, master_key, asked.id, Type.EXPENSE, TypeScope.LABEL)
+
+        [tx] = _month(session, master_key).values()
+        assert (tx.type_source, tx.contribution.exact, tx.asks_contribution) == (Source.RULE, False, False)
 
 
 def _operations(session: Session, master_key: str, period: str = "2026-03"):

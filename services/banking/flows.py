@@ -917,7 +917,7 @@ def transfer_patterns(
     asking_groups = _asking_groups(
         movements, transfer_legs, labels, resolutions, filing.contributions, filing.threshold
     )
-    heavy = [members for members in asking_groups if _heavy(movements, members)]
+    heavy = [members for members in asking_groups if _heavy(movements, members, filing.contributions)]
 
     flow_questions: dict[str, int] = defaultdict(int)
     flow_open: dict[str, int] = defaultdict(int)
@@ -927,7 +927,6 @@ def transfer_patterns(
         carrier = movements[members[-1]]
         patterns.flow_carriers[carrier.row.uuid] = FlowCarrier(
             len(members), sum((movements[i].amount for i in members), Decimal("0")),
-            sum(1 for i in members if i in filing.contributions),
         )
         flow_questions[carrier.period] += 1
         for index in members:
@@ -964,12 +963,13 @@ def _flow_groups(
     carriers: Collection[str] = frozenset(),
 ) -> list[list[int]]:
     """The labels only the user can type, each as its operations in date order:
-    one group per account, direction and signature, heavy enough to ask — or
+    one group per account, direction and signature — those facing a deposit or
+    a withdrawal apart, by investment account — heavy enough to ask, or
     carrying a question the rebuild asked all the same (`carriers`, the stored
     `TransferPatterns.flow_carriers`)."""
     return [
         members for members in _asking_groups(movements, transfer_legs, labels, resolutions, facing, threshold)
-        if _heavy(movements, members) or movements[members[-1]].row.uuid in carriers
+        if _heavy(movements, members, facing) or movements[members[-1]].row.uuid in carriers
     ]
 
 
@@ -981,18 +981,23 @@ def _asking_groups(
     facing: dict[int, Match],
     threshold: Decimal,
 ) -> list[list[int]]:
-    groups: dict[tuple[str, bool, str], list[int]] = defaultdict(list)
+    """The operations asking, by account, direction and signature. Those asked
+    whether they are the deposit or withdrawal facing them group apart, by its
+    investment account: their answer is a yes or a no, never a type."""
+    groups: dict[tuple[str, bool, str, str | None], list[int]] = defaultdict(list)
     for index, movement in enumerate(movements):
-        label = labels[index]
-        if _asks_flow(movement, transfer_legs.get(index), label, resolutions[index], facing.get(index), threshold):
-            groups[(movement.account_bidx, movement.is_credit, label_signature(label))].append(index)
+        label, leg, match = labels[index], transfer_legs.get(index), facing.get(index)
+        if _asks_flow(movement, leg, label, resolutions[index], match, threshold):
+            investment = match.contribution.account_id if _asks_deposit(movement, leg, label, resolutions[index], match) else None
+            groups[(movement.account_bidx, movement.is_credit, label_signature(label), investment)].append(index)
     return list(groups.values())
 
 
-def _heavy(movements: list[_Movement], members: list[int]) -> bool:
+def _heavy(movements: list[_Movement], members: list[int], facing: dict[int, Match]) -> bool:
     """Credits ask past a minimum; a debit asks on its own terms — facing a
-    deposit, or past the user's threshold — whatever its label adds up to."""
-    if not movements[members[0]].is_credit:
+    deposit, or past the user's threshold — whatever its label adds up to, and
+    so does a credit facing a withdrawal."""
+    if not movements[members[0]].is_credit or members[0] in facing:
         return True
     return sum((movements[i].amount for i in members), Decimal("0")) >= FLOW_QUESTION_MIN_AMOUNT
 
@@ -1241,6 +1246,14 @@ def _asks_flow(
     return movement.is_credit or facing is not None or movement.amount >= threshold
 
 
+def _asks_deposit(
+    movement: _Movement, leg: _TransferLeg | None, label: str | None, resolution: Resolution, facing: Match | None,
+) -> bool:
+    """Whether the operation asks if it is the deposit or withdrawal facing it,
+    yes or no, in place of a type."""
+    return facing is not None and _asks_flow(movement, leg, label, resolution, facing, Decimal("0"))
+
+
 def _item_builder(
     movements: list[_Movement],
     transfer_legs: dict[int, _TransferLeg],
@@ -1292,8 +1305,8 @@ def _item_builder(
                 choices=CREDIT_CHOICES if movement.is_credit else DEBIT_CHOICES,
                 operation_count=settles.count,
                 amount=settles.amount,
-                hints=settles.hints,
             ) if asks else None,
+            asks_contribution=_asks_deposit(movement, leg, label, resolution, filing.contributions.get(index)),
             contribution=_contribution_item(filing.contributions.get(index)),
             recurring=BankRecurringTag(
                 id=stored.decision, key=stored.key, direction=RecurringDirection(stored.direction), name=stored.name,

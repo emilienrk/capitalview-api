@@ -315,14 +315,13 @@ class BankContributionMatch(BaseModel):
 
 class BankFlowQuestion(BaseModel):
     """Asked on the last operation of a label nothing types but the user: a
-    credit, or a transfer sent. Answered by typing the label."""
+    credit, or a transfer sent. Answered by typing the label — or, for the
+    operations facing a deposit or a withdrawal, yes or no to each."""
     choices: list[CashflowType]
     # The operations of the label the answer types.
     operation_count: int
     # What those operations add up to: what the answer can move.
     amount: Decimal
-    # How many of them a deposit declared a few days away could be.
-    hints: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -465,6 +464,8 @@ class BankTransactionItem(BaseModel):
     # What the user's investment accounts say about it: the evidence that typed
     # it, or a nearby deposit to judge the question by.
     contribution: BankContributionMatch | None = None
+    # Asked whether it is that deposit or withdrawal, yes or no.
+    asks_contribution: bool = False
     recurring: BankRecurringTag | None = None
     recurring_question: BankRecurringQuestion | None = None
     # "manual" or "adjustment"; None for an operation the bank or a
@@ -534,12 +535,17 @@ class BankContributionDecisionKind(str, Enum):
     NOT_CONTRIBUTION = "not_contribution"
 
 
-class BankContributionDecisionCreate(BaseModel):
-    """POST /banking/contribution-decisions — this operation is that declared
-    deposit or withdrawal, or it is not."""
+class BankContributionAnswer(BaseModel):
+    """An operation, and the declared deposit or withdrawal facing it."""
     transaction_id: str
     contribution_id: str
+
+
+class BankContributionDecisionCreate(BankContributionAnswer):
+    """POST /banking/contribution-decisions — this operation is that declared
+    deposit or withdrawal, or it is not; and so are those ticked beside it."""
     kind: BankContributionDecisionKind
+    also: list[BankContributionAnswer] = []
 
 
 class BankTransferDecisionCreate(BaseModel):

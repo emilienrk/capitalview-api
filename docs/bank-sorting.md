@@ -48,6 +48,11 @@ l'utilisateur.
     opération. L'opération d'en face libérée compte seule (une entrée pose sa question à partir de 100 €).
   - **Non** la sort du rapprochement : elle se lit comme toute autre opération, et le dépôt peut faire face à une
     autre opération.
+  - Dans « À trier », ces opérations forment leur propre groupe par compte, libellé et compte d'investissement (décidé
+    le 13/10), à part de la question de type du libellé. La question s'affiche sur la plus récente d'entre elles :
+    Oui / Non pour celle-ci, ou « Choisir » pour répondre aux cochées, chacune avec son propre dépôt. Un libellé qui
+    change demande un Oui par libellé. Mesuré sur le dump : les 17 « VIR Virement depuis Compte courant » portées par
+    un virement de 500 € sans rien en face deviennent 16 face au PEA et 1 question de type ; même montant à trier.
   - Une réponse tient tant que les deux côtés se font encore face : un dépôt supprimé ou déplacé depuis la laisse
     sans effet. Ni un type choisi, ni une règle n'apprennent un dépôt : une règle parle d'un libellé, et un libellé
     peut aller au PEA un jour et ailleurs le lendemain.

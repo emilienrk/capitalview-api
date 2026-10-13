@@ -881,10 +881,12 @@ def post_contribution_decision(
     session: Session = Depends(get_session),
 ):
     """Say an operation is, or is not, the deposit or withdrawal declared on an
-    investment account facing it. Replaces what was said of it before."""
+    investment account facing it — the ticked ones too, all or none. Replaces
+    what was said of them before."""
     try:
         record_contribution_decision(
             session, current_user.uuid, master_key, body.transaction_id, body.contribution_id, body.kind,
+            [(answer.transaction_id, answer.contribution_id) for answer in body.also],
         )
     except TransactionNotFoundError:
         raise HTTPException(status_code=404, detail="Opération introuvable.")

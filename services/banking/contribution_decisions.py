@@ -26,6 +26,7 @@ go to the investment account one day and anywhere the next.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -38,7 +39,7 @@ from models.currency import BASE_CURRENCY
 from services.banking.contributions import Candidate, Contribution, fits, load_contributions
 from services.banking.linking import readable_account_bidxs
 from services.banking.transactions import row_date
-from services.banking.transfer_decisions import DecisionError, _readable_leg
+from services.banking.transfer_decisions import DecisionError, _Leg, _readable_leg
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 
@@ -76,9 +77,11 @@ def record_contribution_decision(
     transaction_id: str,
     contribution_id: str,
     kind: BankContributionDecisionKind,
+    also: Collection[tuple[str, str]] = (),
 ) -> None:
     """Say this operation is, or is not, that declared movement, replacing what
-    was said of it before.
+    was said of it before — and the same of the (operation, movement) pairs the
+    user ticked beside it, all or none.
 
     A yes also drops the yes another operation held on the same movement: a
     deposit stands for one operation at most. And the type forced on the
@@ -86,8 +89,19 @@ def record_contribution_decision(
     """
     user_bidx = hash_index(user_uuid, master_key)
     readable = set(readable_account_bidxs(session, user_bidx, master_key))
-    leg = _readable_leg(session, transaction_id, readable, master_key)
-    contribution = _contribution(session, user_uuid, master_key, contribution_id)
+    declared = {contribution.ref: contribution for contribution in load_contributions(session, user_uuid, master_key).all()}
+    for answered, answered_contribution in dict([(transaction_id, contribution_id), *also]).items():
+        leg = _readable_leg(session, answered, readable, master_key)
+        if answered_contribution not in declared:
+            raise ContributionNotFoundError(answered_contribution)
+        _record(session, user_bidx, master_key, leg, declared[answered_contribution], kind)
+    session.commit()
+
+
+def _record(
+    session: Session, user_bidx: str, master_key: str, leg: _Leg, contribution: Contribution,
+    kind: BankContributionDecisionKind,
+) -> None:
     day = row_date(leg.row, master_key)
     if (
         day is None
@@ -125,7 +139,8 @@ def record_contribution_decision(
             created_at=datetime.now(timezone.utc),
         )
     )
-    session.commit()
+    # The next answer of the batch looks for the yes this one replaced.
+    session.flush()
 
 
 def drop_yes(session: Session, user_bidx: str, transaction_refs: list[str], master_key: str) -> None:
@@ -152,10 +167,3 @@ def forget_contribution_decision(session: Session, user_uuid: str, master_key: s
     )
     session.commit()
     return bool(deleted.rowcount)
-
-
-def _contribution(session: Session, user_uuid: str, master_key: str, contribution_id: str) -> Contribution:
-    for contribution in load_contributions(session, user_uuid, master_key).all():
-        if contribution.ref == contribution_id:
-            return contribution
-    raise ContributionNotFoundError(contribution_id)
