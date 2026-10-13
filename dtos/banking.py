@@ -578,6 +578,9 @@ class BankReviewKind(str, Enum):
 class BankReviewItem(BaseModel):
     """One question waiting for the user, on the operation that carries it."""
     kind: BankReviewKind
+    # Opaque, and the same while the question is: a label's question keeps it
+    # when its operations are answered one at a time and the next one carries it.
+    group: str
     transaction: BankTransactionItem
     # What the answer can move: the operations of the label for a flow
     # question, the pair's amount for a suggested transfer. For a

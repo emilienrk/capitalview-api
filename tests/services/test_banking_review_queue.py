@@ -109,6 +109,26 @@ def test_an_operation_facing_a_deposit_comes_first(session: Session, master_key:
     ]
 
 
+def test_a_label_answered_one_operation_at_a_time_stays_the_same_question(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        (CURRENT, "2026-01-05", "300.00", "CRDT", "VIR SEPA JEAN TIERS"),
+        (CURRENT, "2026-02-05", "300.00", "CRDT", "VIR SEPA JEAN TIERS"),
+        (CURRENT, "2026-03-05", "300.00", "CRDT", "VIR SEPA PAUL TIERS"),
+    )
+    before = {q.transaction.label: q for q in review_queue(session, USER, master_key).questions}
+
+    set_transaction_type(
+        session, USER, master_key, before["VIR SEPA JEAN TIERS"].transaction.id, Type.EXPENSE, TypeScope.OPERATION,
+    )
+    transfer_patterns(session, USER, master_key, rebuild=True)
+
+    after = {q.transaction.label: q for q in review_queue(session, USER, master_key).questions}
+    jean = after["VIR SEPA JEAN TIERS"]
+    assert (jean.operation_count, jean.transaction.operation_date.month) == (1, 1)
+    assert jean.group == before["VIR SEPA JEAN TIERS"].group != after["VIR SEPA PAUL TIERS"].group
+
+
 def test_a_stored_carrier_nothing_asks_about_is_not_queued(session: Session, master_key: str):
     _ops(session, master_key, (CURRENT, "2026-03-02", "420.10", "DBIT", "CARTE 01/03/26 CARREFOUR ANNECY CB*08"))
     [card] = list_month_transactions(session, USER, master_key, "2026-03").transactions

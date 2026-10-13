@@ -20,6 +20,7 @@ structured fields — `merchant_category_code`, `bank_transaction_code`,
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import defaultdict
 from collections.abc import Collection
@@ -1490,12 +1491,20 @@ def review_queue(
         if carrier is not None:
             built = item(index)
             if built.flow_question:
+                # The key _asking_groups grouped it by: the next carrier of the group keeps it.
+                investment = filing.contributions[index].contribution.account_id if built.asks_contribution else None
+                group = json.dumps([
+                    movement.account_bidx, movement.is_credit, label_signature(_label(movement, master_key)), investment,
+                ])
                 questions.append(BankReviewItem(
-                    kind=BankReviewKind.FLOW, transaction=built, amount=carrier.amount, operation_count=carrier.count,
+                    kind=BankReviewKind.FLOW, group=hash_index(group, master_key), transaction=built,
+                    amount=carrier.amount, operation_count=carrier.count,
                 ))
         elif leg is not None and leg.status is BankTransferStatus.SUGGESTED and not movement.is_credit:
+            built = item(index)
             questions.append(BankReviewItem(
-                kind=BankReviewKind.TRANSFER, transaction=item(index), amount=movement.amount, operation_count=2,
+                kind=BankReviewKind.TRANSFER, group=built.id, transaction=built, amount=movement.amount,
+                operation_count=2,
             ))
 
     years: dict[int, BankReviewYear] = {}
