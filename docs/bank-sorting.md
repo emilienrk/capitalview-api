@@ -107,11 +107,11 @@ ne reçoivent pas de question et ne changent aucun total.
   fermée, sur celle-ci. Chacune reçoit son propre type, comme si on avait répondu une par une : aucune règle, rien
   pour les prochaines. Seules des opérations du même compte et du même sens peuvent être cochées ensemble.
 - **Les prochaines aussi** : case explicite, qui crée une règle. Les règles sont le dictionnaire de l'utilisateur :
-  page « Règles de tri » de Paramètres › Banque, chacune avec son libellé, son compte, son sens et le nombre
-  d'opérations qu'elle type ; on y change son type ou on la supprime. Validé le 10/10 : une règle parle des
+  onglet « Règles » de Banque (Paramètres › Banque jusqu'au 13/10), chacune avec son libellé, son compte, son sens
+  et le nombre d'opérations qu'elle type ; on y change son type ou on la supprime. Validé le 10/10 : une règle parle des
   opérations à venir, elle n'a pas sa place dans l'historique des réponses.
 - Une règle par nom n'empêche **jamais** une paire trouvée plus tard : la paire passe avant.
-- **Une règle écrite à la main**, bouton « Nouvelle règle » de la page « Règles de tri » : le libellé « contient » ou
+- **Une règle écrite à la main**, bouton « Nouvelle règle » de l'onglet « Règles » : le libellé « contient » ou
   « commence par » un texte, sur un compte ou sur tous (ceux ajoutés plus tard compris), en entrées ou en sorties, et
   le type. Jamais de regex : le texte est pris tel quel, casse, accents et espaces répétés repliés ; 3 caractères au
   moins. L'aperçu est obligatoire avant d'enregistrer : les opérations qu'elle comptera et combien changent de type,
@@ -221,7 +221,7 @@ effet : le loyer confirmé « Frederic Durand », payé par virement, prend comm
 | Dépôt du même jour : question, puis automatique pour le même libellé vers le même compte | fait |
 | Dépôt : Oui / Non stockés des deux côtés, leçon tirée de tout l'historique (12/10) | fait |
 | « Celles que je coche » dans la liste | fait |
-| Sortie sans contrepartie au-dessus du seuil = question, curseur (500 € par défaut, Paramètres › Modules) | fait |
+| Sortie sans contrepartie au-dessus du seuil = question, curseur (500 € par défaut, onglet « Règles » de Banque) | fait |
 | Dépôts sans contrepartie, « X € à trier », phrase à l'ajout d'une banque | fait |
 | Paire proposée et dépôt possibles en même temps : une seule question | fait |
 | Texte du bouton : « Pas ensemble », question écrite sur la ligne | fait |
