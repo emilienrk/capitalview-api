@@ -1468,10 +1468,10 @@ def question_threshold_preview(session: Session, user_uuid: str, master_key: str
 def review_queue(
     session: Session, user_uuid: str, master_key: str, year: int | None = None
 ) -> BankReviewQueue:
-    """Every question left to the user across the history, the one an answer
-    moves most money with first. A recurring payment or income to confirm is
-    asked in the Récurrent tab only, and merely counted here: an answer moves
-    no total.
+    """Every question left to the user across the history: an operation facing
+    a deposit first, then the one an answer moves most money with. A recurring
+    payment or income to confirm is asked in the Récurrent tab only, and merely
+    counted here: an answer moves no total.
 
     Read over the whole history in one pass, as the questions were counted:
     building each carrier from its own month would load a month per question.
@@ -1508,7 +1508,10 @@ def review_queue(
         entry.count += 1
     if year is not None:
         questions = [q for q in questions if q.transaction.operation_date and q.transaction.operation_date.year == year]
-    questions.sort(key=lambda q: (-q.amount, -(q.transaction.operation_date or date.min).toordinal()))
+    # A yes teaches its shape and settles the next operations of it: those first.
+    questions.sort(key=lambda q: (
+        not q.transaction.asks_contribution, -q.amount, -(q.transaction.operation_date or date.min).toordinal(),
+    ))
     return BankReviewQueue(
         total_amount=sum((q.amount for q in questions), Decimal("0")),
         total_count=len(questions),

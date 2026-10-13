@@ -53,6 +53,8 @@ l'utilisateur.
     Oui / Non pour celle-ci, ou « Choisir » pour répondre aux cochées, chacune avec son propre dépôt. Un libellé qui
     change demande un Oui par libellé. Mesuré sur le dump : les 17 « VIR Virement depuis Compte courant » portées par
     un virement de 500 € sans rien en face deviennent 16 face au PEA et 1 question de type ; même montant à trier.
+    Ces questions passent en tête d'« À trier », le reste suit par montant (décidé le 13/10) : un Oui apprend la
+    forme et range seules les opérations suivantes qui la suivent.
   - Une réponse tient tant que les deux côtés se font encore face : un dépôt supprimé ou déplacé depuis la laisse
     sans effet. Ni un type choisi, ni une règle n'apprennent un dépôt : une règle parle d'un libellé, et un libellé
     peut aller au PEA un jour et ailleurs le lendemain.

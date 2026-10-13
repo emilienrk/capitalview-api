@@ -1,6 +1,6 @@
 """
 The review queue (flows.review_queue): every open question of the history,
-the one an answer moves most money with first.
+an operation facing a deposit first, then the one an answer moves most money with.
 """
 from decimal import Decimal
 
@@ -18,6 +18,7 @@ from services.banking.flows import (
 )
 from services.banking.transfer_patterns import FlowCarrier
 from services.encryption import hash_index
+from tests.services.test_banking_contributions import _deposit, _pea
 from tests.services.test_banking_flows import USER
 from tests.services.test_banking_real_cashflow import CURRENT, _ops
 
@@ -93,6 +94,19 @@ def test_equal_amounts_come_latest_first(session: Session, master_key: str):
         (CURRENT, "2026-03-05", "300.00", "CRDT", "VIR SEPA PAUL TIERS"),
     )
     assert [label for _, label, _, _ in _queue(session, master_key)[0]] == ["VIR SEPA PAUL TIERS", "VIR SEPA JEAN TIERS"]
+
+
+def test_an_operation_facing_a_deposit_comes_first(session: Session, master_key: str):
+    _pea(session, master_key)
+    _deposit(session, master_key, "2026-03-10", "200.00")
+    _ops(
+        session, master_key,
+        (CURRENT, "2026-02-05", "1000.00", "CRDT", "VIR SEPA JEAN TIERS"),
+        (CURRENT, "2026-03-10", "200.00", "DBIT", "VIR INST ROUKINE EMILIEN"),
+    )
+    assert [label for _, label, _, _ in _queue(session, master_key)[0]] == [
+        "VIR INST ROUKINE EMILIEN", "VIR SEPA JEAN TIERS",
+    ]
 
 
 def test_a_stored_carrier_nothing_asks_about_is_not_queued(session: Session, master_key: str):
