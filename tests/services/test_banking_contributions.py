@@ -42,7 +42,7 @@ from services.crypto_transaction import create_composite_crypto_transaction
 from services.encryption import encrypt_data, hash_index
 from services.stock_transaction import create_eur_deposit
 from tests.services.test_banking_flows import USER
-from tests.services.test_banking_real_cashflow import CURRENT, TODAY, _month, _ops
+from tests.services.test_banking_real_cashflow import CURRENT, LIVRET, TODAY, _month, _ops
 
 PEA = "pea-account"
 WALLET = "wallet-account"
@@ -568,6 +568,19 @@ class TestDecisions:
         [tx] = _month(session, master_key).values()
         assert (tx.type_source, tx.contribution) == (Source.DEFAULT, None)
 
+    def test_a_type_given_by_hand_withdraws_the_yes(self, session: Session, master_key: str):
+        _ops(session, master_key, (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR Virement vers PEA"))
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "200")
+        [asked] = _month(session, master_key).values()
+        _say(session, master_key, asked)
+
+        _answer(session, master_key, asked.id, Type.EXPENSE)
+
+        assert [item.kind for item in action_history(session, USER, master_key)] == [BankHistoryKind.TYPE]
+        back = clear_transaction_type(session, USER, master_key, asked.id)
+        assert (back.cashflow_type, back.type_source) == (Type.EXPENSE, Source.DEFAULT)
+
     def test_a_yes_replaces_the_type_given_by_hand(self, session: Session, master_key: str):
         _ops(session, master_key, (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR Virement vers PEA"))
         _pea(session, master_key)
@@ -628,7 +641,76 @@ class TestSuggestedPair:
         assert (question.kind.value, question.transaction.id) == ("transfer", pair.id)
 
     def test_answered_as_the_deposit_it_asks_nothing_more(self, session: Session, master_key: str):
-        """What "Versement sur PEA" does: the pair set aside, the operation typed."""
+        """What "Versement sur PEA" does: the yes alone sets the pair aside, and
+        the other leg counts as any credit nothing pairs."""
+        _ops(
+            session, master_key,
+            ("neobank", "2026-03-05", "20.00", "DBIT", "VIR Virement interne depuis BoursoBank"),
+            (CURRENT, "2026-03-06", "20.00", "CRDT", "Paiement envoye par M. TIERS"),
+        )
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "20")
+        pair = _month(session, master_key)["VIR Virement interne depuis BoursoBank"]
+
+        _say(session, master_key, pair)
+
+        month = _month(session, master_key)
+        tx = month["VIR Virement interne depuis BoursoBank"]
+        assert (tx.transfer_status, tx.cashflow_type, tx.flow_question) == (None, Type.INVESTMENT, None)
+        assert (month["Paiement envoye par M. TIERS"].transfer_status, month["Paiement envoye par M. TIERS"].cashflow_type) == (
+            None, Type.INCOME,
+        )
+        assert pair.id not in {q.transaction.id for q in review_queue(session, USER, master_key).questions}
+
+    def test_a_pair_offered_after_the_yes_asks_nothing(self, session: Session, master_key: str):
+        """Seen as a flaw: a credit of the amount booked later on another account
+        offered a pair again, and the yes stopped counting meanwhile."""
+        _ops(session, master_key, ("neobank", "2026-03-05", "20.00", "DBIT", "VIR Virement interne depuis BoursoBank"))
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "20")
+        _say(session, master_key, *_month(session, master_key).values())
+
+        _ops(session, master_key, (CURRENT, "2026-03-06", "20.00", "CRDT", "Paiement envoye par M. TIERS"))
+
+        tx = _month(session, master_key)["VIR Virement interne depuis BoursoBank"]
+        assert (tx.transfer_status, tx.cashflow_type, tx.type_source) == (None, Type.INVESTMENT, Source.CONTRIBUTION)
+
+    def test_no_pair_found_on_its_own_takes_a_yes(self, session: Session, master_key: str):
+        """Even one the pairing trusts: what the operation is was said."""
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR Virement vers PEA"),
+            (LIVRET, "2026-03-05", "200.00", "CRDT", "VIR Virement depuis compte courant"),
+        )
+        _pea(session, master_key)
+        tx = _month(session, master_key)["VIR Virement vers PEA"]
+        assert tx.transfer_status.value == "savings"
+        deposit = _deposit(session, master_key, "2026-03-05", "200")
+
+        record_contribution_decision(session, USER, master_key, tx.id, deposit.id, Said.CONTRIBUTION)
+
+        tx = _month(session, master_key)["VIR Virement vers PEA"]
+        assert (tx.transfer_status, tx.cashflow_type) == (None, Type.INVESTMENT)
+
+    def test_once_the_deposit_moved_the_pair_comes_back(self, session: Session, master_key: str):
+        _ops(
+            session, master_key,
+            ("neobank", "2026-03-05", "20.00", "DBIT", "VIR Virement interne depuis BoursoBank"),
+            (CURRENT, "2026-03-06", "20.00", "CRDT", "Paiement envoye par M. TIERS"),
+        )
+        _pea(session, master_key)
+        deposit = session.get(StockTransaction, _deposit(session, master_key, "2026-03-05", "20").id)
+        _say(session, master_key, _month(session, master_key)["VIR Virement interne depuis BoursoBank"])
+
+        deposit.executed_at_enc = encrypt_data("2026-03-20T10:00:00", master_key)
+        session.add(deposit)
+        session.commit()
+
+        tx = _month(session, master_key)["VIR Virement interne depuis BoursoBank"]
+        assert (tx.transfer_status.value, tx.type_source) == ("suggested", Source.DEFAULT)
+
+    def test_binding_the_operation_by_hand_withdraws_its_yes(self, session: Session, master_key: str):
+        """One decision per operation: the history keeps no yes that no longer counts."""
         _ops(
             session, master_key,
             ("neobank", "2026-03-05", "20.00", "DBIT", "VIR Virement interne depuis BoursoBank"),
@@ -638,13 +720,13 @@ class TestSuggestedPair:
         _deposit(session, master_key, "2026-03-05", "20")
         month = _month(session, master_key)
         pair = month["VIR Virement interne depuis BoursoBank"]
-
-        record_decision(session, USER, master_key, pair.id, pair.transfer_id, BankTransferDecisionKind.NOT_TRANSFER)
         _say(session, master_key, pair)
 
+        record_decision(session, USER, master_key, pair.id, month["Paiement envoye par M. TIERS"].id, BankTransferDecisionKind.TRANSFER)
+
         tx = _month(session, master_key)["VIR Virement interne depuis BoursoBank"]
-        assert (tx.transfer_status, tx.cashflow_type, tx.flow_question) == (None, Type.INVESTMENT, None)
-        assert pair.id not in {q.transaction.id for q in review_queue(session, USER, master_key).questions}
+        assert (tx.transfer_status.value, tx.type_source) == ("confirmed", Source.PAIR)
+        assert [item.kind for item in action_history(session, USER, master_key)] == [BankHistoryKind.TRANSFER]
 
     def test_a_validated_deposit_shape_waits_for_the_pair_to_be_settled(self, session: Session, master_key: str):
         _ops(

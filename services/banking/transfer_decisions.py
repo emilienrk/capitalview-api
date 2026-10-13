@@ -182,8 +182,12 @@ def record_decision(
     """Settle two movements, replacing whatever was decided about them before.
 
     Binding them — as a transfer or a cancellation — also drops any other pair
-    either leg was bound into: a movement is one leg of one pair at most.
+    either leg was bound into: a movement is one leg of one pair at most. And
+    the yes either leg held to a declared deposit, which said otherwise.
     """
+    # contribution_decisions builds on this module.
+    from services.banking.contribution_decisions import drop_yes
+
     user_bidx = hash_index(user_uuid, master_key)
     readable = set(readable_account_bidxs(session, user_bidx, master_key))
     first = _readable_leg(session, first_id, readable, master_key)
@@ -224,6 +228,7 @@ def record_decision(
             existing_kind = BankTransferDecisionKind(decrypt_data(existing.kind_enc, master_key))
             if existing_kind is not BankTransferDecisionKind.NOT_TRANSFER:
                 session.delete(existing)
+        drop_yes(session, user_bidx, [debit_ref, credit_ref], master_key)
 
     session.add(
         BankTransferDecision(

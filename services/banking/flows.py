@@ -79,7 +79,7 @@ from services.banking.contributions import (
     match_candidates,
     unfaced,
 )
-from services.banking.contribution_decisions import ContributionDecisions, load_contribution_decisions
+from services.banking.contribution_decisions import ContributionDecisions, drop_yes, load_contribution_decisions
 from services.banking.labels import label_signature, label_words
 from services.banking.linking import readable_account_bidxs
 from services.banking.recurring_decisions import load_decisions as load_recurring_decisions
@@ -317,7 +317,7 @@ def _banking_days_between(first: date, second: date) -> int:
 
 
 def _internal_transfer_legs(
-    movements: list[_Movement], pairing: _Pairing | None = None
+    movements: list[_Movement], pairing: _Pairing | None = None, deposited: Collection[str] = frozenset()
 ) -> dict[int, _TransferLeg]:
     """Movements that pair up — as one transfer between the user's own accounts,
     or as an operation and its cancellation on one — each index mapped to its
@@ -342,14 +342,19 @@ def _internal_transfer_legs(
     within a month of the debit, and a word the two labels share that the
     account does not use everywhere — the merchant's name.
 
+    An operation the user said is a deposit or withdrawal they declared, while
+    that yes holds, is past all of them: only a pair the user bound takes it.
+
     One-to-one, and settled globally, closest pairs first: walking the debits in
     date order let an earlier coincidental debit claim a credit whose true debit
     was booked the next day, leaving both that debit and the true pair unmatched.
 
     Without `pairing`, every candidate comes back suggested: the bare structure
-    the patterns are counted on.
+    the patterns are counted on, without the `deposited` operations.
     """
     paired: dict[int, _TransferLeg] = {}
+    if pairing:
+        deposited = pairing.patterns.deposited
 
     def claim(debit: int, credit: int, status: BankTransferStatus) -> None:
         paired[debit] = _TransferLeg(credit, status)
@@ -396,7 +401,10 @@ def _internal_transfer_legs(
 
     by_key: dict[tuple[str, Decimal], tuple[list[int], list[int]]] = defaultdict(lambda: ([], []))
     for index, movement in enumerate(movements):
-        if movement.day is not None and index not in paired and not movement.adjustment:
+        if (
+            movement.day is not None and index not in paired and not movement.adjustment
+            and movement.row.uuid not in deposited
+        ):
             by_key[(movement.currency, movement.amount)][movement.is_credit].append(index)
 
     settled: list[tuple[int, int, int, int, BankTransferStatus]] = []
@@ -679,12 +687,9 @@ def _contributions(
     keeps the operation out; the rest is matched as found.
     """
     candidates = {
-        index: Candidate(index, movement.day, movement.amount, movement.is_credit)
+        index: _candidate(index, movement)
         for index, movement in enumerate(movements)
-        if movement.is_final
-        and not movement.adjustment
-        and movement.day is not None
-        and movement.currency == BASE_CURRENCY
+        if _may_face(movement)
         and (index not in transfer_legs or transfer_legs[index].status is BankTransferStatus.SUGGESTED)
     }
     settled: dict[int, Match] = {}
@@ -702,6 +707,36 @@ def _contributions(
     taken = {match.contribution for match in settled.values()}
     found = match_candidates(list(candidates.values()), contributions.without(taken))
     return {**found, **settled}, frozenset(settled)
+
+
+def _deposited(
+    movements: list[_Movement], contributions: Contributions, decisions: ContributionDecisions, master_key: str,
+) -> frozenset[str]:
+    """The operations whose yes still holds, by uuid: the pairing runs before
+    any reader matches deposits, so the rebuild settles these for it."""
+    if not decisions.confirmed:
+        return frozenset()
+    by_ref = {hash_index(contribution.ref, master_key): contribution for contribution in contributions.all()}
+    held = set()
+    for index, movement in enumerate(movements):
+        if not _may_face(movement):
+            continue
+        confirmed = by_ref.get(decisions.confirmed.get(hash_index(movement.row.uuid, master_key), ""))
+        if confirmed is not None and fits(_candidate(index, movement), confirmed):
+            held.add(movement.row.uuid)
+    return frozenset(held)
+
+
+def _may_face(movement: _Movement) -> bool:
+    """Whether a declared deposit or withdrawal may be this movement."""
+    return (
+        movement.is_final and not movement.adjustment and movement.day is not None
+        and movement.currency == BASE_CURRENCY
+    )
+
+
+def _candidate(index: int, movement: _Movement) -> Candidate:
+    return Candidate(index, movement.day, movement.amount, movement.is_credit)
 
 
 def _taught(movements: list[_Movement], filing: _Filing) -> frozenset[tuple[str, str, str]]:
@@ -789,7 +824,11 @@ def transfer_patterns(
         source = stored_patterns.source_digest(session, user_bidx, accounts.readable, savings, master_key)
 
     patterns = TransferPatterns()
-    for debit, leg in _internal_transfer_legs(movements).items():
+    patterns.deposited = _deposited(
+        movements, load_contributions(session, user_uuid, master_key),
+        load_contribution_decisions(session, user_uuid, master_key), master_key,
+    )
+    for debit, leg in _internal_transfer_legs(movements, deposited=patterns.deposited).items():
         d, c = movements[debit], movements[leg.other]
         if d.is_credit or d.row.label_signature_bidx is None or c.row.label_signature_bidx is None:
             continue
@@ -1480,12 +1519,9 @@ def _unfaced(
     deposit; a suggested one still may."""
     return unfaced(
         [
-            Candidate(index, movement.day, movement.amount, movement.is_credit)
+            _candidate(index, movement)
             for index, movement in enumerate(movements)
-            if movement.is_final
-            and not movement.adjustment
-            and movement.day is not None
-            and movement.currency == BASE_CURRENCY
+            if _may_face(movement)
             and (index not in transfer_legs or transfer_legs[index].status is BankTransferStatus.SUGGESTED)
         ],
         contributions,
@@ -1586,7 +1622,8 @@ def set_transaction_type(
     direction.
 
     A rule drops the operation's own override, so the rule is what types it
-    from then on — correcting the rule later corrects it too. Ticked
+    from then on — correcting the rule later corrects it too. A type given by
+    hand withdraws the yes the operation held to a declared deposit. Ticked
     operations are typed one by one, as many answers would: nothing is
     learned for the operations to come (docs/bank-sorting.md).
     """
@@ -1603,6 +1640,10 @@ def set_transaction_type(
             typed.type_override_enc = encrypt_data(kind.value, master_key)
             typed.type_override_at = now
             session.add(typed)
+        drop_yes(
+            session, hash_index(user_uuid, master_key), [hash_index(typed.uuid, master_key) for typed in ticked],
+            master_key,
+        )
         session.commit()
         return BankTransactionTypeResult(
             transaction=_transaction_item(session, user_uuid, master_key, accounts, row), covered_count=len(ticked),

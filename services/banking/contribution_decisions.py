@@ -8,9 +8,11 @@ So the question is asked, and the answer kept on both sides, as a pair decision
 keeps its two legs:
 
 - **yes** binds the operation to that declared movement, whatever else matches
-  that day, and counts it as an investment. It also vouches for its label: the
-  next operation of that label, from that account, facing on the very day a
-  movement of that same investment account, is that movement again. That lesson
+  that day, and counts it as an investment — out of any pair but one the user
+  binds, which withdraws the yes, as a type given by hand does. It also vouches
+  for its label: the next operation of that label, from that account, facing
+  on the very day a movement of that same investment account, is that movement
+  again. That lesson
   is drawn from the whole history once, with the transfer patterns
   (`flows.transfer_patterns`), so every page reads an operation the same way;
 - **no** takes the operation out of the matching: it reads as any other, and
@@ -124,6 +126,20 @@ def record_contribution_decision(
         )
     )
     session.commit()
+
+
+def drop_yes(session: Session, user_bidx: str, transaction_refs: list[str], master_key: str) -> None:
+    """Withdraw the yes these operations held, uncommitted: binding one into a
+    pair or typing it by hand says what it is instead. A no stays, being no
+    claim about what the operation is."""
+    for row in session.exec(
+        select(BankContributionDecision).where(
+            BankContributionDecision.user_uuid_bidx == user_bidx,
+            BankContributionDecision.transaction_ref_bidx.in_(transaction_refs),  # type: ignore[attr-defined]
+        )
+    ).all():
+        if BankContributionDecisionKind(decrypt_data(row.kind_enc, master_key)) is BankContributionDecisionKind.CONTRIBUTION:
+            session.delete(row)
 
 
 def forget_contribution_decision(session: Session, user_uuid: str, master_key: str, decision_id: str) -> bool:

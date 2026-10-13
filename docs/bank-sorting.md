@@ -43,7 +43,9 @@ l'utilisateur.
   « est-ce celui-ci ? », Oui / Non, sur chaque opération concernée (`services/banking/contribution_decisions.py`) :
   - **Oui** lie l'opération à ce dépôt, des deux côtés, et la compte en investissement ; il vaut pour le libellé
     (ligne « Dépôt déjà validé » plus haut). Un type choisi à la main sur cette opération s'efface : ce qu'elle est
-    décide de comment elle compte.
+    décide de comment elle compte. Elle ne rejoint plus aucune paire, proposée ou automatique : seul « Lier » peut
+    encore l'apparier, et il efface le Oui, comme un type choisi à la main ensuite. Une seule décision par
+    opération. L'opération d'en face libérée compte seule (une entrée pose sa question à partir de 100 €).
   - **Non** la sort du rapprochement : elle se lit comme toute autre opération, et le dépôt peut faire face à une
     autre opération.
   - Une réponse tient tant que les deux côtés se font encore face : un dépôt supprimé ou déplacé depuis la laisse
@@ -52,9 +54,9 @@ l'utilisateur.
   - Mesuré sur le dump (12/10) : 7 « oui », un par forme, rangent 58 des 59 sorties face à un dépôt le même jour (la
     dernière attend la réponse sur sa paire proposée), et chaque page mensuelle lit comme l'historique entier. Avant,
     la leçon ne voyait que les mois chargés par la page : 45 sorties comptaient en dépense sur leur mois.
-  - Si une paire et un dépôt sont tous deux possibles, la même question montre les deux : « C'est… vers <compte> » ou
-    « versement sur <compte d'investissement> » (la paire écartée, l'opération liée au dépôt). Tant que la paire est
-    proposée, le dépôt n'est qu'affiché, même déjà validé pour ce libellé. Mesuré sur le dump : un cas (−20 € du
+  - Si une paire et un dépôt sont tous deux possibles, la même question montre les deux : « Ensemble » ou
+    « versement sur <compte d'investissement> » (le Oui, qui écarte la paire). Tant que la paire est proposée, le
+    dépôt n'est qu'affiché, même déjà validé pour ce libellé. Mesuré sur le dump : un cas (−20 € du
     05/02/2024), dont le dépôt s'affichait jusque-là, à tort, sur une autre sortie de 20 € deux jours plus tard.
 - **Sortie sans rien en face, au-dessus du seuil** du curseur (500 € par défaut, réglable). Le seuil porte sur
   l'opération, pas sur le total du libellé. Les questions restent regroupées par libellé, « celle-ci » par défaut.

@@ -62,7 +62,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "30"
+_VERSION = "31"
 
 
 class FlowCarrier(NamedTuple):
@@ -211,6 +211,9 @@ class TransferPatterns:
     # (bank account, label signature, investment account uuid) of every yes the
     # user said to a declared deposit or withdrawal.
     contribution_shapes: frozenset[tuple[str, str, str]] = frozenset()
+    # Operation uuids the user said are a declared deposit or withdrawal, while
+    # it still faces them: no pair takes them but one the user bound.
+    deposited: frozenset[str] = frozenset()
     _members: dict[str, tuple[StoredRecurring, RecurringMember]] | None = field(default=None, repr=False)
 
     def set_recurring(self, recurring: list[StoredRecurring]) -> None:
@@ -396,6 +399,7 @@ def read_patterns(
         recurring=[StoredRecurring.from_json(item) for item in content["recurring"]],
         recurring_questions=content["recurring_questions"],
         contribution_shapes=frozenset(tuple(shape) for shape in content["contribution_shapes"]),
+        deposited=frozenset(content["deposited"]),
     )
 
 
@@ -421,6 +425,7 @@ def write_patterns(
             "recurring": [stored.to_json() for stored in patterns.recurring],
             "recurring_questions": patterns.recurring_questions,
             "contribution_shapes": sorted(patterns.contribution_shapes),
+            "deposited": sorted(patterns.deposited),
         }),
         master_key,
     )
