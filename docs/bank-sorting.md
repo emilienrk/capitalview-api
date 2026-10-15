@@ -40,7 +40,9 @@ l'utilisateur.
   ci-dessus ne confirme. Y compris entre deux comptes courants, même avec le même libellé, le même jour et le même
   montant. Une paire seulement proposée ne change aucun total.
 - **Dépôt Bourse/Crypto possible** : même montant, dans les 3 jours, ou avec un écart de frais. La question est
-  « est-ce celui-ci ? », Oui / Non, sur chaque opération concernée (`services/banking/contribution_decisions.py`) :
+  posée en Oui / Non sur chaque opération concernée (`services/banking/contribution_decisions.py`) : le badge
+  « vers <compte> ? » suffit le même jour pour le même montant ; sinon une ligne courte donne ce qui diffère
+  (« Versement de 48,88 € sur PEA le 4 sept. ? ») :
   - **Oui** lie l'opération à ce dépôt, des deux côtés, et la compte en investissement ; il vaut pour le libellé
     (ligne « Dépôt déjà validé » plus haut). Un type choisi à la main sur cette opération s'efface : ce qu'elle est
     décide de comment elle compte. Elle ne rejoint plus aucune paire, proposée ou automatique : seul « Lier » peut
@@ -133,11 +135,11 @@ ne reçoivent pas de question et ne changent aucun total.
 
 ## Délier, annuler
 
-- Une paire proposée se pose en toutes lettres : « C'est… Ensemble / Pas ensemble ». On ne sait pas si c'est un
+- Une paire proposée se pose en deux boutons : « Ensemble / Pas ensemble ». On ne sait pas si c'est un
   virement entre ses comptes ou un tiers qui rembourse un achat sur l'autre compte (presque toutes les paires proposées
-  du dump, le 12/10) : le badge dit « avec <compte> ? », sans flèche, et la ligne dessous dit seulement ce que fait
-  chaque réponse — « Ensemble : elles s'annulent, aucune n'est comptée » (ou « comptées en épargne » face à un compte
-  épargne non réglementé, `together_type`), « Pas ensemble : chacune restera comptée de son côté ». Une fois liée, la
+  du dump, le 12/10) : le badge dit « avec <compte> ? », sans flèche, et la ligne dessous dit seulement ce que compte
+  « Ensemble » — « Ensemble : elles s'annulent, aucune n'est comptée » (ou « comptées en épargne » face à un compte
+  épargne non réglementé, `together_type`). « Pas ensemble » se lit seul, et son effet reste au survol. Une fois liée, la
   paire reprend sa flèche « vers / depuis <compte> ».
 - Quand une autre opération est aussi proche que celle proposée, d'un autre compte ou d'un autre libellé, et encore
   libre, la question la montre aussi : « Ou, sur <compte> le <jour> : <libellé> », à choisir à la place. Elle se pose
