@@ -139,7 +139,7 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
         question = None
         if index in carriers:
             question = BankReviewKind.FLOW
-        elif leg is not None and leg.status is BankTransferStatus.SUGGESTED and not movement.is_credit:
+        elif leg is not None and leg.asks:
             question = BankReviewKind.TRANSFER
         elif movement.row.uuid in asking:
             question = BankReviewKind.RECURRING

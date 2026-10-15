@@ -22,7 +22,7 @@ Chaque changement de règle se mesure sur un dump réel, avant et après : paire
 | Règle | Exemple | Pourquoi c'est sûr |
 | --- | --- | --- |
 | **Ta décision** : lier deux opérations, ou les délier | tu lies −200 € Boursorama et +200 € Revolut | c'est toi qui l'as dit |
-| **Livret réglementé** (Livret A, LDDS, LEP, PEL, CEL) d'un côté d'une paire | courant −500 € → Livret A +500 € le même jour | la loi interdit qu'il aille ailleurs que vers ton compte |
+| **Livret réglementé** (Livret A, LDDS, LEP, PEL, CEL) d'un côté d'une paire | courant −500 € → Livret A +500 € le même jour | la loi interdit qu'il aille ailleurs que vers ton compte — mais pas laquelle de deux opérations aussi proches c'est : voir plus bas |
 | **Paire répétée** : même débit, même crédit, mêmes deux comptes, au moins 3 fois | tes virements Boursorama ↔ Revolut | mesuré : aucun faux virement à 3, un remboursement de tiers passait à 2 |
 | **Paire déjà validée** : les deux côtés ressemblent aux deux côtés d'une paire que tu as validée, sur les mêmes comptes | une recharge Revolut validée une fois, les suivantes passent | ta validation porte sur *cette paire*, pas sur tous les virements d'un des deux noms |
 | **Remboursement sur un même compte** : même montant dans les 30 jours, avec un mot rare commun | −30 € Amazon, puis +30 € Amazon | les mots trop fréquents sont calculés sur ton compte, sans dictionnaire |
@@ -134,6 +134,13 @@ ne reçoivent pas de question et ne changent aucun total.
   chaque réponse — « Ensemble : elles s'annulent, aucune n'est comptée » (ou « comptées en épargne » face à un compte
   épargne non réglementé, `together_type`), « Pas ensemble : chacune restera comptée de son côté ». Une fois liée, la
   paire reprend sa flèche « vers / depuis <compte> ».
+- Quand une autre opération est aussi proche que celle proposée, d'un autre compte ou d'un autre libellé, et encore
+  libre, la question la montre aussi : « Ou, sur <compte> le <jour> : <libellé> », à choisir à la place. Elle se pose
+  sur l'opération qu'elles se disputent. Une paire de livret est alors seulement proposée au lieu d'être validée seule
+  (décidé le 15/10) : sur le dump, 2 paires de livret avaient pris la mauvaise des deux (−250 € Livret A face au
+  revenu de Mme Dormia Laure le 28/04/2025, −750 € LDD le 30/12/2024) ; ce sont les 2 seules questions de plus.
+  Deux opérations identiques (même compte, même libellé) ne sont pas une alternative : n'importe laquelle est juste.
+  En attendant la réponse, les deux opérations comptent chacune de leur côté, comme toute paire proposée.
 - Un refus ne vaut que pour **sa** paire. Il n'apprend rien sur les libellés. (Avant le 08/10, un seul refus bloquait
   toutes les paires aux libellés semblables, livrets compris : 8 virements vers le Compte plaisir perdus.)
 - **Historique de toutes les actions** (paires liées et déliées, réponses), chacune annulable ; les règles ont leur page. Une paire

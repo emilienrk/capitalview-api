@@ -14,8 +14,10 @@ from dataclasses import dataclass
 import pytest
 from sqlmodel import Session
 
-from services.banking.flows import _paired_movements, _pairing, _user_accounts
-from services.encryption import decrypt_data
+from dtos.banking import BankReviewKind, BankTransferDecisionKind, BankTransferStatus as Status
+from services.banking.flows import _paired_movements, _pairing, _user_accounts, review_queue
+from services.banking.transfer_decisions import record_decision
+from services.encryption import decrypt_data, hash_index
 from tests.services.test_banking_flows import USER, _link, _raw, _store
 
 CURRENT, NEOBANK, SAVINGS, LDD = "current", "neobank", "savings", "ldd"
@@ -212,3 +214,94 @@ def _shapes(case: Case, pairs) -> Counter:
 def test_the_pairing_matches_what_really_moved(session: Session, master_key: str, case: Case):
     stored = _stored_pairs(session, master_key, case)
     assert _shapes(case, stored.elements()) == _shapes(case, case.transfers)
+
+
+def _legs(session: Session, master_key: str, *operations: tuple[str, ...]) -> tuple[dict, dict]:
+    """token -> (other token, status, asks, alternatives' tokens), and token ->
+    uuid. An operation's label is its token, or a sixth field to make two alike."""
+    for account in {op[1] for op in operations}:
+        _link(session, master_key, account)
+    for token, account, day, amount, direction, *label in operations:
+        _store(session, master_key, account, _raw(amount, direction, day, ref=token, label=label[0] if label else token))
+    accounts = _user_accounts(session, USER, master_key)
+    movements, legs = _paired_movements(
+        session, master_key, accounts.readable, sorted({op[2][:7] for op in operations}),
+        _pairing(session, USER, master_key, accounts),
+    )
+    tokens = {hash_index(op[0], master_key): op[0] for op in operations}
+    name = {i: tokens[m.row.entry_ref_bidx] for i, m in enumerate(movements)}
+    return (
+        {name[i]: (name[leg.other], leg.status, leg.asks, tuple(name[a] for a in leg.alternatives)) for i, leg in legs.items()},
+        {name[i]: m.row.uuid for i, m in enumerate(movements)},
+    )
+
+
+class TestTiedSavings:
+    """The law keeps a savings account's money the user's, not which of two
+    operations as close it is: a tie of another label or account is asked."""
+
+    def test_a_savings_debit_two_credits_could_be_asks_with_the_other_to_pick(self, session: Session, master_key: str):
+        legs, _ = _legs(
+            session, master_key,
+            ("from-livret", SAVINGS, "2025-04-28", "250.00", "DBIT"),
+            ("rent", CURRENT, "2025-04-28", "250.00", "CRDT"),
+            ("back-from-livret", CURRENT, "2025-04-28", "250.00", "CRDT"),
+        )
+        other, status, asks, alternatives = legs["from-livret"]
+        assert (status, asks) == (Status.SUGGESTED, True)
+        assert {other, *alternatives} == {"rent", "back-from-livret"} and len(alternatives) == 1
+        assert legs[other][1:] == (Status.SUGGESTED, False, ())
+
+    def test_identical_moves_to_savings_stay_settled(self, session: Session, master_key: str):
+        legs, _ = _legs(
+            session, master_key,
+            ("to-1", CURRENT, "2025-05-29", "100.00", "DBIT", "to livret"),
+            ("to-2", CURRENT, "2025-05-29", "100.00", "DBIT", "to livret"),
+            ("in-1", SAVINGS, "2025-05-29", "100.00", "CRDT", "into livret"),
+            ("in-2", SAVINGS, "2025-05-29", "100.00", "CRDT", "into livret"),
+        )
+        assert {leg[1:] for leg in legs.values()} == {(Status.SAVINGS, False, ())}
+
+    def test_a_savings_credit_two_debits_could_be_asks_on_the_credit(self, session: Session, master_key: str):
+        legs, _ = _legs(
+            session, master_key,
+            ("into-livret", SAVINGS, "2025-05-15", "200.00", "CRDT"),
+            ("from-current", CURRENT, "2025-05-15", "200.00", "DBIT"),
+            ("from-neobank", NEOBANK, "2025-05-15", "200.00", "DBIT"),
+        )
+        other, status, asks, alternatives = legs["into-livret"]
+        assert (status, asks) == (Status.SUGGESTED, True)
+        assert {other, *alternatives} == {"from-current", "from-neobank"} and len(alternatives) == 1
+
+        [question] = [q for q in review_queue(session, USER, master_key).questions if q.kind is BankReviewKind.TRANSFER]
+        assert question.transaction.label == "into-livret"
+        assert [a.label for a in question.transaction.transfer_alternatives] == list(alternatives)
+
+    def test_no_to_the_one_offered_settles_the_other(self, session: Session, master_key: str):
+        ops = (
+            ("from-livret", SAVINGS, "2025-04-28", "250.00", "DBIT"),
+            ("rent", CURRENT, "2025-04-28", "250.00", "CRDT"),
+            ("back-from-livret", CURRENT, "2025-04-28", "250.00", "CRDT"),
+        )
+        legs, uuids = _legs(session, master_key, *ops)
+        offered, _, _, (rival,) = legs["from-livret"]
+        record_decision(session, USER, master_key, uuids["from-livret"], uuids[offered], BankTransferDecisionKind.NOT_TRANSFER)
+
+        accounts = _user_accounts(session, USER, master_key)
+        movements, after = _paired_movements(
+            session, master_key, accounts.readable, ["2025-04"], _pairing(session, USER, master_key, accounts)
+        )
+        by_uuid = {m.row.uuid: i for i, m in enumerate(movements)}
+        leg = after[by_uuid[uuids["from-livret"]]]
+        assert (movements[leg.other].row.uuid, leg.status, leg.asks) == (uuids[rival], Status.SAVINGS, False)
+
+    def test_a_rival_another_pair_takes_leaves_the_savings_pair_settled(self, session: Session, master_key: str):
+        legs, _ = _legs(
+            session, master_key,
+            ("from-livret", SAVINGS, "2025-04-28", "250.00", "DBIT"),
+            ("back-from-livret", CURRENT, "2025-04-28", "250.00", "CRDT"),
+            ("top-up", NEOBANK, "2025-04-28", "250.00", "CRDT"),
+            ("to-neobank", CURRENT, "2025-04-28", "250.00", "DBIT"),
+        )
+        assert legs["from-livret"][:4] == ("back-from-livret", Status.SAVINGS, False, ())
+        assert legs["to-neobank"][:2] == ("top-up", Status.SUGGESTED)

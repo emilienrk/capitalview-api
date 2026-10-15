@@ -313,6 +313,15 @@ class BankContributionMatch(BaseModel):
     exact: bool
 
 
+class BankTransferAlternative(BaseModel):
+    """Another operation as close as the one an offered pair names, that the
+    user may pick instead: what it is judged by, the amount being the same."""
+    id: str
+    account_name: str
+    day: date | None
+    label: str | None
+
+
 class BankFlowQuestion(BaseModel):
     """Asked on the last operation of a label nothing types but the user: a
     credit, or a transfer sent. Answered by typing the label — or, for the
@@ -456,6 +465,9 @@ class BankTransactionItem(BaseModel):
     # Only on a pair offered: what both legs count as once the user says they
     # go together — nowhere, or as saving when one side is a savings account.
     together_type: CashflowType | None = None
+    # Only on the leg an offered pair asks on, when others are as close: the
+    # operations the user may pick instead of the one named.
+    transfer_alternatives: list[BankTransferAlternative] = []
     cashflow_type: CashflowType = CashflowType.EXPENSE
     type_source: TypeSource = TypeSource.DEFAULT
     # The rule typing it, exact or reached from a nearby label.

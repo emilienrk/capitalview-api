@@ -51,6 +51,7 @@ from dtos.banking import (
     BankTransactionsResponse,
     BankTransferDecisionKind,
     BankTransactionTypeResult,
+    BankTransferAlternative,
     BankTransferStatus,
     BankRulePreviewKept,
     BankRulePreviewOperation,
@@ -206,6 +207,11 @@ class _Movement(NamedTuple):
 class _TransferLeg(NamedTuple):
     other: int
     status: BankTransferStatus
+    # On an offered pair, the leg its question is asked on: the debit, or the
+    # one operation others as close compete for.
+    asks: bool = False
+    # Those others, on the asking leg: what the user may pick instead of `other`.
+    alternatives: tuple[int, ...] = ()
 
 
 class _Accounts(NamedTuple):
@@ -333,7 +339,9 @@ def _internal_transfer_legs(
     account, so each pair is then settled, first rule that applies:
 
     1. the user bound it (services/banking/transfer_decisions.py);
-    2. it touches a regulated savings account;
+    2. it touches a regulated savings account — unless another operation as
+       close, of another account or label, could be the other leg: then it is
+       offered, with that other one to pick instead;
     3. its shape recurs across the history (services/banking/transfer_patterns.py);
     4. both labels read like pairs the user confirmed;
     5. otherwise it is only suggested, and both legs keep counting — most often
@@ -439,11 +447,81 @@ def _internal_transfer_legs(
                 entry = (banking_gap, calendar_gap, debit, credit, status)
                 (offered if status is BankTransferStatus.SUGGESTED else settled).append(entry)
 
+    contested = _contested(settled, movements)
+    settled = [entry for entry in settled if entry not in contested]
+    offered += [(*entry[:-1], BankTransferStatus.SUGGESTED) for entry in contested]
     for tier in (settled, refunds, offered):
         free = [entry for entry in sorted(tier) if entry[-3] not in paired and entry[-2] not in paired]
         for debit, credit, status in _closest_complete_matching(free):
             claim(debit, credit, status)
+    _ask_offered(paired, offered, movements, {entry[-3:-1] for entry in contested})
     return paired
+
+
+def _kind(movements: list[_Movement], index: int) -> tuple[str, str | None]:
+    """What tells two candidates apart: two operations of one account and one
+    label shape are interchangeable, whichever takes the leg."""
+    return movements[index].account_bidx, movements[index].row.label_signature_bidx
+
+
+def _contested(settled: list[tuple], movements: list[_Movement]) -> set[tuple]:
+    """The savings pairs another operation as close could have made instead, of
+    another account or label: the law says the money stayed the user's, not
+    which of the two it is (docs/bank-sorting.md). They are only offered."""
+    contested: set[tuple] = set()
+    savings = [entry for entry in settled if entry[-1] is BankTransferStatus.SAVINGS]
+    for shared, rival in ((-3, -2), (-2, -3)):
+        by_leg: dict[int, list[tuple]] = defaultdict(list)
+        for entry in savings:
+            by_leg[entry[shared]].append(entry)
+        for entries in by_leg.values():
+            closest = min(entry[:2] for entry in entries)
+            tied = [entry for entry in entries if entry[:2] == closest]
+            if len({_kind(movements, entry[rival]) for entry in tied}) > 1:
+                contested.update(tied)
+    return contested
+
+
+def _ask_offered(
+    paired: dict[int, _TransferLeg], offered: list[tuple], movements: list[_Movement],
+    contested: set[tuple[int, int]],
+) -> None:
+    """Which leg of each offered pair asks, and what it may pick instead: the
+    operations as close as its other leg, still free, one of each kind. A
+    contested savings pair whose rivals all found a pair of their own is no
+    longer in doubt, and settles as it would have."""
+    gaps = {entry[-3:-1]: entry[:2] for entry in offered}
+    credits_of: dict[int, list[int]] = defaultdict(list)
+    debits_of: dict[int, list[int]] = defaultdict(list)
+    for debit, credit in gaps:
+        credits_of[debit].append(credit)
+        debits_of[credit].append(debit)
+
+    def rivals(debit: int, credit: int, on_debit: bool) -> list[int]:
+        """The free operations as close as the chosen one, for the shared leg."""
+        chosen = credit if on_debit else debit
+        seen = {_kind(movements, chosen)}
+        found = []
+        for other in sorted(credits_of[debit] if on_debit else debits_of[credit]):
+            pair = (debit, other) if on_debit else (other, credit)
+            kind = _kind(movements, other)
+            if other not in paired and gaps[pair] == gaps[(debit, credit)] and kind not in seen:
+                seen.add(kind)
+                found.append(other)
+        return found
+
+    for debit, leg in list(paired.items()):
+        if movements[debit].is_credit or leg.status is not BankTransferStatus.SUGGESTED:
+            continue
+        credit = leg.other
+        other_credits = rivals(debit, credit, on_debit=True)
+        other_debits = rivals(debit, credit, on_debit=False)
+        if not other_credits and not other_debits and (debit, credit) in contested:
+            paired[debit] = leg._replace(status=BankTransferStatus.SAVINGS)
+            paired[credit] = paired[credit]._replace(status=BankTransferStatus.SAVINGS)
+            continue
+        asker, others = (credit, other_debits) if other_debits and not other_credits else (debit, other_credits)
+        paired[asker] = paired[asker]._replace(asks=True, alternatives=tuple(others))
 
 
 def _closest_complete_matching(
@@ -884,7 +962,7 @@ def transfer_patterns(
     questions: dict[str, int] = defaultdict(int)
     questions_amount: dict[str, Decimal] = defaultdict(Decimal)
     for index, leg in transfer_legs.items():
-        if leg.status is BankTransferStatus.SUGGESTED and not movements[index].is_credit:
+        if leg.asks:
             questions[movements[index].period] += 1
             questions_amount[movements[index].period] += movements[index].amount
     patterns.questions = dict(sorted(questions.items()))
@@ -1299,6 +1377,13 @@ def _item_builder(
             transfer_label=_label(offered, master_key) if offered else None,
             transfer_date=offered.day if offered else None,
             together_type=pair_type(_savings_legs(movement, offered, filing)) if offered else None,
+            transfer_alternatives=[
+                BankTransferAlternative(
+                    id=movements[other].row.uuid, account_name=names[movements[other].account_bidx],
+                    day=movements[other].day, label=_label(movements[other], master_key),
+                )
+                for other in (leg.alternatives if leg else ())
+            ],
             cashflow_type=resolution.type,
             type_source=resolution.source,
             type_rule_id=resolution.rule_id,
@@ -1500,7 +1585,7 @@ def review_queue(
                     kind=BankReviewKind.FLOW, group=hash_index(group, master_key), transaction=built,
                     amount=carrier.amount, operation_count=carrier.count,
                 ))
-        elif leg is not None and leg.status is BankTransferStatus.SUGGESTED and not movement.is_credit:
+        elif leg is not None and leg.asks:
             built = item(index)
             questions.append(BankReviewItem(
                 kind=BankReviewKind.TRANSFER, group=built.id, transaction=built, amount=movement.amount,
