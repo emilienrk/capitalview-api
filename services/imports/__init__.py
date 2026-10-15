@@ -12,4 +12,5 @@ from services.imports import (
     generic_csv,  # noqa: F401
     kraken,  # noqa: F401
     trade_republic,  # noqa: F401
+    trade_republic_crypto,  # noqa: F401
 )
