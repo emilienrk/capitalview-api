@@ -688,3 +688,22 @@ def test_stock_realized_pnl_sell_and_dividend(mock_market, session: Session, mas
     assert summary.profit_loss == Decimal("300")          # 6 held @ 150 vs cost 600
     # total = latent 300 + realized 230; dividend counted once, not 260 (=300+200+30+30).
     assert summary.total_profit_loss == Decimal("530")
+
+
+def test_stock_cash_income_is_realized_and_eur_is_never_looked_up(session: Session, master_key: str):
+    """Interest paid on the cash (a DIVIDEND on EUR) is realized P/L, not a
+    dividend of any holding, and EUR never becomes a listed market asset."""
+    create_eur_deposit(session, "acc_cash_income", Decimal("100"), datetime(2024, 1, 1), master_key)
+    for kind, amount in ((StockTransactionType.DIVIDEND, "7.45"), (StockTransactionType.WITHDRAW, "50")):
+        create_stock_transaction(session, StockTransactionCreate(
+            account_id="acc_cash_income", asset_key="EUR", type=kind,
+            amount=Decimal(amount), price_per_unit=Decimal("1"),
+            executed_at=datetime(2024, 2, 1),
+        ), master_key)
+
+    summary = _stock_summary(session, "acc_cash_income", master_key)
+
+    assert summary.cash_balance == Decimal("57.45")
+    assert summary.realized_profit_loss == Decimal("7.45")
+    assert summary.total_dividends == Decimal("0")
+    assert session.exec(select(MarketAsset).where(MarketAsset.asset_key == "EUR")).first() is None

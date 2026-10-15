@@ -340,11 +340,13 @@ def create_stock_transaction(
     price_enc = encrypt_data(str(data.price_per_unit), master_key)
     fees_enc = encrypt_data(str(data.fees), master_key)
     exec_at_enc = encrypt_data(data.executed_at.isoformat(), master_key)
-    
 
-    mp = get_or_create_market_asset(session, data.asset_key, AssetType.STOCK)
-    if not mp:
-        raise ValueError(f"ISIN inconnu ou introuvable : {data.asset_key}")
+    # EUR is the cash sentinel, not a listed asset: a market search for it
+    # returns the EUR/USD rate and would register that as a stock.
+    if data.asset_key != "EUR":
+        mp = get_or_create_market_asset(session, data.asset_key, AssetType.STOCK)
+        if not mp:
+            raise ValueError(f"ISIN inconnu ou introuvable : {data.asset_key}")
 
     notes_enc = None
     if data.notes:
@@ -706,7 +708,10 @@ def get_stock_account_summary(
     # Realized P/L = closed-position gains (SELLs) + dividend income actually
     # received. Dividends are cash that left the position, so without folding them
     # in here they would only surface as extra cash, never as P/L.
-    realized_profit_loss_acc = realized_acc + total_dividends_acc
+    # Income paid on the cash itself (interest, a broker's gift) counts the same.
+    realized_profit_loss_acc = (
+        realized_acc + total_dividends_acc + positions_map["EUR"]["total_dividends"]
+    )
 
     # Total P/L = latent + realized (which already includes dividends). Dividends
     # are counted exactly once, never double-counted into total.
