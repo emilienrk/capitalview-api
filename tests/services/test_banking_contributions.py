@@ -520,6 +520,63 @@ class TestOperations:
         assert (tx.cashflow_type, tx.type_source) == (Type.EXPENSE, Source.RULE)
         assert (tx.flow_question is not None, tx.asks_contribution) == (True, True)
 
+    def test_a_type_given_by_hand_asks_again_the_day_a_deposit_faces_it(self, session: Session, master_key: str):
+        """The deposit imported after the user typed the operation: a yes makes it that deposit."""
+        _ops(session, master_key, (CURRENT, "2026-03-05", "500.00", "DBIT", "VIR INST JEAN MARTIN"))
+        [typed] = _month(session, master_key).values()
+        _answer(session, master_key, typed.id, Type.NEUTRAL)
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "500")
+
+        [tx] = _month(session, master_key).values()
+        assert (tx.cashflow_type, tx.type_source, tx.asks_contribution) == (Type.NEUTRAL, Source.OVERRIDE, True)
+
+        _say(session, master_key, tx)
+        [tx] = _month(session, master_key).values()
+        assert (tx.cashflow_type, tx.type_source, tx.asks_contribution) == (Type.INVESTMENT, Source.CONTRIBUTION, False)
+
+    def test_a_no_keeps_the_type_given_by_hand(self, session: Session, master_key: str):
+        _ops(session, master_key, (CURRENT, "2026-03-05", "500.00", "DBIT", "VIR INST JEAN MARTIN"))
+        [typed] = _month(session, master_key).values()
+        _answer(session, master_key, typed.id, Type.NEUTRAL)
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "500")
+        [tx] = _month(session, master_key).values()
+
+        _say(session, master_key, tx, Said.NOT_CONTRIBUTION)
+        [tx] = _month(session, master_key).values()
+        assert (tx.cashflow_type, tx.type_source, tx.asks_contribution) == (Type.NEUTRAL, Source.OVERRIDE, False)
+
+    def test_a_yes_on_its_label_leaves_a_type_given_by_hand_asked(self, session: Session, master_key: str):
+        def by_amount():
+            return {tx.amount: tx for tx in _operations(session, master_key)}
+
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-03-05", "500.00", "DBIT", "VIR INST JEAN MARTIN"),
+            (CURRENT, "2026-03-12", "300.00", "DBIT", "VIR INST JEAN MARTIN"),
+        )
+        _answer(session, master_key, by_amount()[Decimal("300.00")].id, Type.SAVING)
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "500")
+        _deposit(session, master_key, "2026-03-12", "300")
+
+        _say(session, master_key, by_amount()[Decimal("500.00")])
+        listed = by_amount()
+        assert listed[Decimal("500.00")].type_source is Source.CONTRIBUTION
+        kept = listed[Decimal("300.00")]
+        assert (kept.cashflow_type, kept.type_source, kept.asks_contribution) == (Type.SAVING, Source.OVERRIDE, True)
+
+    def test_an_investment_given_by_hand_asks_nothing(self, session: Session, master_key: str):
+        _ops(session, master_key, (CURRENT, "2026-03-05", "500.00", "DBIT", "VIR INST JEAN MARTIN"))
+        [typed] = _month(session, master_key).values()
+        _answer(session, master_key, typed.id, Type.INVESTMENT)
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "500")
+
+        [tx] = _month(session, master_key).values()
+        assert (tx.cashflow_type, tx.type_source, tx.asks_contribution) == (Type.INVESTMENT, Source.OVERRIDE, False)
+
     def test_a_rule_on_its_label_asks_nothing_of_a_deposit_days_away(self, session: Session, master_key: str):
         _ops(session, master_key, (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR INST JEAN MARTIN"))
         _pea(session, master_key)

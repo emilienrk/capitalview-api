@@ -1314,12 +1314,16 @@ def _asks_flow(
 
     A deposit on the very day asks even past a rule or a recurring payment: the
     rule speaks for a label, one label may go to the investment account one day
-    and anywhere the next, and a monthly transfer to it keeps a rhythm.
+    and anywhere the next, and a monthly transfer to it keeps a rhythm. And past
+    a type given by hand, but an investment: the deposit was often imported
+    after, and a no keeps that type.
     """
     if not movement.is_final or leg is not None or label_signature(label) is None:
         return False
     if resolution.source in (TypeSource.RULE, TypeSource.RECURRING):
         return facing is not None and facing.exact
+    if resolution.source is TypeSource.OVERRIDE:
+        return facing is not None and facing.exact and resolution.type is not CashflowType.INVESTMENT
     if resolution.source is not TypeSource.DEFAULT:
         return False
     return movement.is_credit or facing is not None or movement.amount >= threshold

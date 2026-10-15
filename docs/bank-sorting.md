@@ -55,6 +55,11 @@ l'utilisateur.
     un virement de 500 € sans rien en face deviennent 16 face au PEA et 1 question de type ; même montant à trier.
     Ces questions passent en tête d'« À trier », le reste suit par montant (décidé le 13/10) : un Oui apprend la
     forme et range seules les opérations suivantes qui la suivent.
+  - **Sur une opération classée à la main**, la question se pose aussi quand un dépôt lui fait face le même jour
+    (décidé le 15/10) : le dépôt arrive souvent après coup, par un import. Oui remplace le classement, Non le garde.
+    Pas si elle est déjà classée en Investissement. Le Oui donné à une autre opération du libellé ne la range pas :
+    sa question reste, et la liste du groupe montre son classement. Vu sur le dump : deux opérations classées Non compté avant
+    l'import Trade Republic (500 € le 15/04/2024, 423,35 € le 28/01/2026) ne posaient plus de question.
   - Une réponse tient tant que les deux côtés se font encore face : un dépôt supprimé ou déplacé depuis la laisse
     sans effet. Ni un type choisi, ni une règle n'apprennent un dépôt : une règle parle d'un libellé, et un libellé
     peut aller au PEA un jour et ailleurs le lendemain.
