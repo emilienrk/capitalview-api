@@ -382,7 +382,9 @@ def merge(
 ) -> BankRecurringItem | None:
     """One recurring of two: a contract that changed hands (Orange then
     Bouygues), an allowance that moved with the user (one CAF then another), a
-    series the detection cut. The other's decision goes."""
+    series the detection cut. The other's decision goes, what the user set on
+    it filling what this one leaves unset: merged from either side, a name
+    given stays."""
     _, decision = get_decision(session, user_uuid, master_key, decision_id)
     if other_id is None:
         accounts = _user_accounts(session, user_uuid, master_key)
@@ -404,6 +406,10 @@ def merge(
         decision.anchors = decision.anchors | other.anchors
         decision.includes = decision.includes | other.includes
         decision.excludes = (decision.excludes | other.excludes) - decision.includes
+        # Not its end date: that of a recurring the other carries on says nothing of the merged one.
+        decision.name = decision.name or other.name
+        decision.nature = decision.nature or other.nature
+        decision.cadence = decision.cadence or other.cadence
         delete_decision(session, user_uuid, master_key, other_id)
     save_decision(session, user_uuid, master_key, decision)
     return _read_back(session, user_uuid, master_key, decision.uuid)

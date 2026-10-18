@@ -245,6 +245,39 @@ def test_two_recurring_payments_merge_into_one(client, session, master_key):
     assert (_one(client)["id"], _one(client)["occurrence_count"]) == (confirmed["id"], 18)
 
 
+def test_a_merge_keeps_what_the_user_set_on_either_side(client, session, master_key):
+    _ops(
+        session, master_key,
+        *_months(CURRENT, "2025-01", 8, 27, "11.99", "PRLV SEPA ORANGE SA"),
+        *_months(CURRENT, "2025-09", 8, 16, "16.99", "PRLV SEPA BOUYGUES TELECOM"),
+    )
+    orange, bouygues = sorted(_items(client), key=lambda item: item["first_date"])
+    renamed = _decide(client, bouygues["transaction_id"], "confirm")
+    client.patch(f"/banking/recurring/{renamed['id']}", json={"name": "Box internet", "nature": "telecom"})
+    ended = _decide(client, orange["transaction_id"], "confirm")
+
+    response = client.post(f"/banking/recurring/{ended['id']}/merge", json={"other_id": renamed["id"]})
+
+    assert response.status_code == 200
+    merged = _one(client)
+    assert (merged["id"], merged["name"], merged["nature"]) == (ended["id"], "Box internet", "telecom")
+
+
+def test_a_merge_keeps_the_name_of_the_one_merged_into(client, session, master_key):
+    _ops(
+        session, master_key,
+        *_months(CURRENT, "2025-01", 8, 27, "11.99", "PRLV SEPA ORANGE SA"),
+        *_months(CURRENT, "2025-09", 8, 16, "16.99", "PRLV SEPA BOUYGUES TELECOM"),
+    )
+    orange, bouygues = sorted(_items(client), key=lambda item: item["first_date"])
+    other = _decide(client, bouygues["transaction_id"], "confirm", name="Bouygues")
+    kept = _decide(client, orange["transaction_id"], "confirm", name="Forfait mobile")
+
+    client.post(f"/banking/recurring/{kept['id']}/merge", json={"other_id": other["id"]})
+
+    assert _one(client)["name"] == "Forfait mobile"
+
+
 def test_forgetting_a_decision_asks_again(client, session, master_key):
     _ops(session, master_key, *_months(CURRENT, "2026-01", 3, 2, "21.60", POCKET_MONEY))
     refused = _decide(client, _one(client)["transaction_id"], "refuse")
