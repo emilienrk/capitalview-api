@@ -263,6 +263,27 @@ def test_a_merge_keeps_what_the_user_set_on_either_side(client, session, master_
     assert (merged["id"], merged["name"], merged["nature"]) == (ended["id"], "Box internet", "telecom")
 
 
+def test_a_merge_shows_the_whole_history_of_both(client, session, master_key):
+    _ops(
+        session, master_key,
+        *_months(CURRENT, "2025-01", 8, 27, "11.99", "PRLV SEPA ORANGE SA"),
+        *_months(CURRENT, "2025-09", 8, 16, "16.99", "PRLV SEPA BOUYGUES TELECOM"),
+    )
+    orange, bouygues = sorted(_items(client), key=lambda item: item["first_date"])
+    other = _decide(client, bouygues["transaction_id"], "confirm")
+    kept = _decide(client, orange["transaction_id"], "confirm")
+
+    client.post(f"/banking/recurring/{kept['id']}/merge", json={"other_id": other["id"]})
+
+    merged = _one(client)
+    assert (merged["first_date"][:7], merged["occurrence_count"]) == ("2025-01", 16)
+    assert Decimal(merged["paid_total"]) == 8 * Decimal("11.99") + 8 * Decimal("16.99")
+    assert [m["month"] for m in merged["paid_by_month"]][::7] == ["2025-01", "2025-08", "2026-03"]
+    operations = client.get(f"/banking/recurring/{kept['id']}/operations").json()
+    assert len(operations) == 16
+    assert {op["label"] for op in operations} == {"PRLV SEPA ORANGE SA", "PRLV SEPA BOUYGUES TELECOM"}
+
+
 def test_a_merge_keeps_the_name_of_the_one_merged_into(client, session, master_key):
     _ops(
         session, master_key,
