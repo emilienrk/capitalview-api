@@ -301,6 +301,17 @@ def test_renamed_and_ended_on(client, session, master_key):
     assert (cleared["name"], cleared["ended_on"]) == ("Électricité", None)
 
 
+def test_what_was_paid_over_the_whole_history_month_by_month(client, session, master_key):
+    _ops(session, master_key, *_months(CURRENT, "2025-06", 8, 5, "60.00", EDF))
+
+    item = _one(client)
+
+    assert Decimal(item["paid_total"]) == Decimal("480.00")
+    assert [(m["month"], Decimal(m["amount"])) for m in item["paid_by_month"]] == [
+        (f"{year}-{month:02d}", Decimal("60.00")) for year, month in [(2025, m) for m in range(6, 13)] + [(2026, 1)]
+    ]
+
+
 def test_the_nature_is_the_user_s_alone(client, session, master_key):
     _ops(session, master_key, *_months(CURRENT, "2025-06", 8, 5, "60.00", EDF))
     unfiled = _one(client)

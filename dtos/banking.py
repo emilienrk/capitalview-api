@@ -939,6 +939,12 @@ class BankRecurringEpisode(BaseModel):
     end: date
 
 
+class BankRecurringMonth(BaseModel):
+    # YYYY-MM
+    month: str
+    amount: Decimal
+
+
 class BankRecurringRename(BaseModel):
     date: date
     before: str
@@ -980,6 +986,10 @@ class BankRecurringItem(BaseModel):
     # What was actually paid, or received, over the last twelve months, extras
     # included, cancelled operations left out.
     paid_last_12_months: Decimal
+    # The same over its whole history, then month by month, months without
+    # any operation left out.
+    paid_total: Decimal
+    paid_by_month: list[BankRecurringMonth] = []
     first_date: date
     # Set when the first operation is within a due date of the account's first
     # operation: it may have started before the history does.

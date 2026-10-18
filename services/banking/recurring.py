@@ -13,6 +13,7 @@ back from the rebuild.
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -21,6 +22,7 @@ from sqlmodel import Session
 from dtos.banking import (
     BankRecurringEpisode,
     BankRecurringItem,
+    BankRecurringMonth,
     BankRecurringPriceChange,
     BankRecurringRefund,
     BankRecurringRefunds,
@@ -187,6 +189,10 @@ class _Reader:
         nature = natures.of(stored.nature)
         year_ago = self.today - timedelta(days=365)
         refunds = [member for member in stored.members if member.role == REFUND]
+        paid = [member for member in stored.members if member.role in _PAID]
+        by_month: dict[str, Decimal] = defaultdict(Decimal)
+        for member in paid:
+            by_month[member.day.strftime("%Y-%m")] += member.amount
         due = [member for member in stored.members if member.role in (REGULAR, CANCELLED)]
         starts = [
             self.patterns.coverage[self.bidx[account]][0] for account in stored.accounts
@@ -208,9 +214,9 @@ class _Reader:
             currency=stored.currency,
             monthly_equivalent=(annual / 12).quantize(_CENT),
             annual_estimate=annual.quantize(_CENT),
-            paid_last_12_months=sum(
-                (m.amount for m in stored.members if m.role in _PAID and m.day > year_ago), Decimal("0"),
-            ),
+            paid_last_12_months=sum((m.amount for m in paid if m.day > year_ago), Decimal("0")),
+            paid_total=sum((m.amount for m in paid), Decimal("0")),
+            paid_by_month=[BankRecurringMonth(month=month, amount=total) for month, total in sorted(by_month.items())],
             first_date=stored.first,
             since_at_least=bool(starts) and (stored.first - min(starts)).days < cadence.nominal,
             last_date=stored.last,
