@@ -223,6 +223,18 @@ règle carte les perdait : un montant rond devait tomber au jour près), aucune 
 effet : le loyer confirmé « Frederic Durand », payé par virement, prend comme remboursement le crédit de 345 € du
 29/07/2026 venu du même nom.
 
+**Fusionner** fait un récurrent de deux qui se suivent : un contrat repris (Orange puis Bouygues), une série que la
+détection a coupée. Celui depuis lequel on fusionne reste ; l'autre décision part, et ce que l'utilisateur y avait mis
+(nom, nature, cadence) passe à celui qui reste quand il n'en a pas (corrigé le 18/10 : le nom revenait au libellé de la
+banque). Sa date de fin ne passe pas. Deux séries **simultanées** ne se fusionnent pas utilement : la série fusionnée
+n'a qu'un montant par échéance, son total reste juste mais son mensuel est faux. Pour les regrouper, la nature.
+
+**Catégories = natures** (décidé le 18/10) : la liste fixe (Logement, Énergie…), choisie par l'utilisateur, jamais
+devinée ; pas de catégories libres. Une catégorie s'ouvre sur toute son histoire, terminés compris : payé en tout,
+mensuel, mois par mois par récurrent. Chaque récurrent porte son total et son mois par mois (`paid_total`,
+`paid_by_month`), comptés comme « payé sur 12 mois » : échéances, hors échéance et ajouts à la main, remboursements non
+déduits.
+
 ## État au 9 octobre 2026
 
 | Point | État |
@@ -245,3 +257,5 @@ effet : le loyer confirmé « Frederic Durand », payé par virement, prend comm
 | Récurrents : rien compté seul, toute série proposée | fait |
 | Récurrents sans dictionnaire ni moyen de paiement, une seule règle | fait |
 | Moyen de paiement retiré partout, affichage et filtre compris | fait |
+| Fusion : nom, nature et cadence gardés de part et d'autre (18/10) | poussé (4b45539) |
+| Catégories de récurrents par nature, terminés compris, total et mois par mois (18/10) | poussé (6f9ac2d) |
