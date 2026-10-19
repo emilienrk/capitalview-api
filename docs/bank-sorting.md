@@ -168,6 +168,10 @@ Ajustement de solde > paire reconnue > choix sur cette opération > dépôt prou
 Une paire avec exactement un compte d'épargne compte en Épargne ; entre deux comptes courants, ou entre deux épargnes,
 elle n'est pas comptée.
 
+Un virement reconnu entre deux comptes sort aussi l'opération des récurrents (un remboursement, lui, la garde
+comme échéance annulée). Une règle, non : l'opération
+reste dans son récurrent, mais compte selon la règle (voir « Une règle sur un récurrent confirmé »).
+
 ## Ce qui ne décide jamais
 
 Le moyen de paiement (« CARTE », « VIR », « PRLV »…) n'est plus lu du tout, ni affiché ni filtré (retiré le 12/10) :
@@ -229,6 +233,17 @@ détection a coupée. Celui depuis lequel on fusionne reste ; l'autre décision 
 banque). Sa date de fin ne passe pas. Deux séries **simultanées** ne se fusionnent pas utilement : la série fusionnée
 n'a qu'un montant par échéance, son total reste juste mais son mensuel est faux. Pour les regrouper, la nature.
 
+**Une règle sur un récurrent confirmé** (décidé le 19/10). La règle passe avant le récurrent, opération par
+opération : classées autrement qu'en dépense (ou en entrée pour un revenu), ses opérations ne comptent déjà plus dans
+« dont … qui reviennent ». Quand la règle atteint sa **dernière échéance**, les suivantes suivront : le récurrent sort
+aussi de ce qui est fixe, partout à la fois (total et nombre de l'onglet Récurrents, mensuel de sa catégorie, charges
+fixes et échéances attendues du Réel, outil MCP). Il reste listé à sa place, avec « Hors du total », et son détail
+nomme la règle. Retirer la règle le fait revenir. Un choix fait à la main sur une seule opération ne le sort pas :
+il ne parle pas des suivantes. Avant d'enregistrer, l'aperçu d'une règle écrite nomme les récurrents qu'elle sortirait,
+et le choix d'un type pour tout un libellé le dit quand l'opération fait partie d'un récurrent confirmé. Le payé en
+tout et le mois par mois restent ce qui a été payé. Si ce n'était pas un récurrent, c'est « Ce n'est pas récurrent »
+qu'il faut dire, pas une règle.
+
 **Catégories = natures** (décidé le 18/10) : la liste fixe (Logement, Énergie…), choisie par l'utilisateur, jamais
 devinée ; pas de catégories libres. Une catégorie s'ouvre sur toute son histoire, terminés compris : payé en tout,
 mensuel, mois par mois par récurrent. Chaque récurrent porte son total et son mois par mois (`paid_total`,
@@ -259,3 +274,4 @@ déduits.
 | Moyen de paiement retiré partout, affichage et filtre compris | fait |
 | Fusion : nom, nature et cadence gardés de part et d'autre (18/10) | poussé (4b45539) |
 | Catégories de récurrents par nature, terminés compris, total et mois par mois (18/10) | poussé (6f9ac2d) |
+| Règle qui classe autrement un récurrent confirmé : hors du total, nommée, annoncée avant (19/10) | fait |
