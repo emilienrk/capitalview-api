@@ -633,6 +633,8 @@ def _recurring_note(item) -> str | None:
         notes.append("montant variable")
     if item.state is RecurringState.CANDIDATE:
         notes.append("détecté, pas encore confirmé par l'utilisateur")
+    if item.retyped:
+        notes.append(f"hors des totaux : une règle classe ses opérations en {item.retyped.type.value.lower()}")
     if item.price_changes:
         change = item.price_changes[-1]
         notes.append(f"prix passé de {_money(change.before)} à {_money(change.after)} le {change.date}")

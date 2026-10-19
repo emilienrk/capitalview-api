@@ -1101,7 +1101,7 @@ def _recurring_movement(
         day=movement.day, paid_on=paid_on, amount=movement.amount, currency=movement.currency,
         is_credit=movement.is_credit, is_final=movement.is_final, label=label,
         leg=leg.status if leg else None, type=resolution.type, regulated=regulated,
-        deposit=resolution.source is TypeSource.CONTRIBUTION,
+        deposit=resolution.source is TypeSource.CONTRIBUTION, rule=resolution.rule_id,
     )
 
 
@@ -1880,6 +1880,9 @@ class _RuleReach:
     side: int
     rules: dict[str, TypeRule]
     labels: dict[str, str | None]
+    # The confirmed recurring payments or income whose latest operation it
+    # would type otherwise: they would no longer count as fixed.
+    recurring: list[str]
 
 
 def _rule_reach(
@@ -1902,7 +1905,7 @@ def _rule_reach(
         candidate=candidate,
         names={bidx: decrypt_data(account.name_enc, master_key) for bidx, account in accounts.by_bidx.items()},
         touched=[], overridden=[], taken=defaultdict(int), yielded=defaultdict(int), kept=defaultdict(int), side=0,
-        rules={known.uuid: known for known in filing.rules.all()}, labels={},
+        rules={known.uuid: known for known in filing.rules.all()}, labels={}, recurring=[],
     )
     for index, movement in enumerate(movements):
         if movement.adjustment or movement.is_credit != rule.is_credit:
@@ -1939,6 +1942,12 @@ def _rule_reach(
     newest_first = lambda found: found[0].day or date.min  # noqa: E731
     reach.touched.sort(key=newest_first, reverse=True)
     reach.overridden.sort(key=newest_first, reverse=True)
+    typed = {movement.row.uuid for movement, _, _ in reach.touched}
+    reach.recurring = [
+        stored.name for stored in filing.patterns.recurring
+        if stored.counted and stored.retyped is None and stored.kind is not rule.type
+        and (latest := stored.latest_paid) is not None and latest.uuid in typed
+    ]
     return reach
 
 
@@ -1985,6 +1994,7 @@ def preview_rule(
         kept_count=sum(kept.values()) + len(reach.overridden),
         kept=[BankRulePreviewKept(reason=reason, count=count) for reason, count in kept.items()],
         side_count=reach.side,
+        recurring=reach.recurring,
     )
 
 

@@ -13,10 +13,12 @@ from sqlmodel import Session, select
 from dtos.banking import (
     BankContributionDecisionKind,
     BankTransferDecisionKind,
+    BankTypeRuleWrite,
     RecurringDecisionKind,
     RecurringDirection,
     RecurringNature,
     RecurringState,
+    RuleMatch,
     TypeScope,
     TypeSource,
 )
@@ -26,6 +28,7 @@ from services.banking.contribution_decisions import record_contribution_decision
 from services.banking.flows import (
     list_flow_group,
     list_month_transactions,
+    preview_rule,
     review_queue,
     set_transaction_type,
     transfer_patterns,
@@ -388,6 +391,59 @@ def test_an_account_not_synced_since_expects_nothing(session: Session, master_ke
 
     assert real_cashflow_year(session, USER, master_key, 2026, today=today).running_recurring == Decimal("0")
     assert real_cashflow_current(session, USER, master_key, today=today).upcoming == []
+
+
+def _confirmed_edf(session: Session, master_key: str, today: date) -> list:
+    _ops(session, master_key, *_months(CURRENT, "2025-08", 8, 5, "60.00", EDF))
+    _synced(session, master_key, CURRENT, today)
+    _confirm_all(session, master_key)
+    return list_month_transactions(session, USER, master_key, "2026-03").transactions
+
+
+def test_a_rule_typing_a_confirmed_recurring_otherwise_takes_it_out_of_what_is_fixed(
+    session: Session, master_key: str,
+):
+    # Confirmed, then its label ruled as not counted: the cash flow already left
+    # its operations out; what is fixed and what is due follow.
+    today = date(2026, 4, 2)
+    [last] = _confirmed_edf(session, master_key, today)
+    set_transaction_type(session, USER, master_key, last.id, Type.NEUTRAL, TypeScope.LABEL)
+
+    [ruled] = list_month_transactions(session, USER, master_key, "2026-03").transactions
+    listed = list_recurring(session, USER, master_key, today=today)
+    [item] = listed.items
+    assert (item.state, item.retyped.type, item.retyped.rule_id) == (
+        RecurringState.CONFIRMED, Type.NEUTRAL, ruled.type_rule_id,
+    )
+    assert listed.monthly_total == Decimal("0") and item.paid_total == Decimal("480.00")
+    assert real_cashflow_year(session, USER, master_key, 2026, today=today).running_recurring == Decimal("0")
+    assert real_cashflow_current(session, USER, master_key, today=today).upcoming == []
+
+    # The rule withdrawn, it is fixed again.
+    set_transaction_type(session, USER, master_key, last.id, Type.EXPENSE, TypeScope.LABEL)
+    listed = list_recurring(session, USER, master_key, today=today)
+    assert (listed.items[0].retyped, listed.monthly_total) == (None, Decimal("60.00"))
+
+
+def test_a_choice_by_hand_on_its_latest_payment_leaves_it_fixed(session: Session, master_key: str):
+    # One operation, not the ones to come: the next one counts again.
+    today = date(2026, 4, 2)
+    [last] = _confirmed_edf(session, master_key, today)
+    set_transaction_type(session, USER, master_key, last.id, Type.NEUTRAL, TypeScope.OPERATION)
+
+    listed = list_recurring(session, USER, master_key, today=today)
+    assert (listed.items[0].retyped, listed.monthly_total) == (None, Decimal("60.00"))
+
+
+def test_the_preview_of_a_rule_names_the_recurring_it_would_take_out(session: Session, master_key: str):
+    _confirmed_edf(session, master_key, date(2026, 4, 2))
+
+    def preview(kind: Type) -> list[str]:
+        rule = BankTypeRuleWrite(match=RuleMatch.CONTAINS, text="edf", is_credit=False, type=kind)
+        return preview_rule(session, USER, master_key, rule).recurring
+
+    assert preview(Type.SAVING) == [EDF_NAME]
+    assert preview(Type.EXPENSE) == []
 
 
 # ---------------------------------------------------------------------------

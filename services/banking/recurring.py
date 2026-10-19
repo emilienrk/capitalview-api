@@ -28,6 +28,7 @@ from dtos.banking import (
     BankRecurringRefunds,
     BankRecurringRename,
     BankRecurringResponse,
+    BankRecurringRetyped,
     BankTransactionItem,
     BankTransferStatus,
     CashflowType,
@@ -68,7 +69,7 @@ from services.banking.recurring_series import annual_estimate, occurrence_count
 from services.banking.transfer_patterns import (
     CANCELLED,
     EXTRA,
-    MANUAL,
+    PAID_ROLES,
     REFUND,
     REGULAR,
     StoredRecurring,
@@ -78,7 +79,6 @@ from services.encryption import decrypt_data, hash_index
 
 _CENT = Decimal("0.01")
 _PERCENT = Decimal("0.1")
-_PAID = frozenset({REGULAR, EXTRA, MANUAL})
 
 
 class NoRecurringError(LookupError):
@@ -120,7 +120,7 @@ def list_recurring(
 
     counted = [
         item for item in items
-        if item.state is RecurringState.CONFIRMED
+        if item.state is RecurringState.CONFIRMED and item.retyped is None
         and item.status in (RecurringStatus.ACTIVE, RecurringStatus.STALE)
     ]
     currencies = [item.currency for item in counted] or [item.currency for item in items]
@@ -144,7 +144,7 @@ def active_counted(
     reader = _Reader(session, user_uuid, master_key, accounts, patterns, today)
     return [
         (stored, item)
-        for stored in patterns.recurring if stored.counted
+        for stored in patterns.recurring if stored.counted and stored.retyped is None
         for item in [reader.item(stored)]
         if item.status is RecurringStatus.ACTIVE
     ]
@@ -189,7 +189,7 @@ class _Reader:
         nature = natures.of(stored.nature)
         year_ago = self.today - timedelta(days=365)
         refunds = [member for member in stored.members if member.role == REFUND]
-        paid = [member for member in stored.members if member.role in _PAID]
+        paid = [member for member in stored.members if member.role in PAID_ROLES]
         by_month: dict[str, Decimal] = defaultdict(Decimal)
         for member in paid:
             by_month[member.day.strftime("%Y-%m")] += member.amount
@@ -238,6 +238,10 @@ class _Reader:
                 items=[BankRecurringRefund(id=m.uuid, date=m.day, amount=m.amount, label=m.label) for m in refunds],
             ),
             ended_on=stored.ended_on,
+            retyped=(
+                BankRecurringRetyped(type=CashflowType(stored.retyped[0]), rule_id=stored.retyped[1])
+                if stored.retyped else None
+            ),
         )
 
 

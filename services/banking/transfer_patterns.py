@@ -62,7 +62,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "33"
+_VERSION = "34"
 
 
 class FlowCarrier(NamedTuple):
@@ -75,6 +75,8 @@ class FlowCarrier(NamedTuple):
 # refund count towards "dont … qui reviennent", and only when typed as its kind.
 REGULAR, EXTRA, MANUAL, CANCELLED, REFUND = "regular", "extra", "manual", "cancelled", "refund"
 COUNTED_ROLES = frozenset({REGULAR, EXTRA, MANUAL, REFUND})
+# What was paid, or received: a refunded debit and a refund are not.
+PAID_ROLES = frozenset({REGULAR, EXTRA, MANUAL})
 
 
 class RecurringMember(NamedTuple):
@@ -128,11 +130,18 @@ class StoredRecurring:
     # What the user filed it as; None until they say.
     nature: str | None = None
     ended_on: date | None = None
+    # (type, rule id) when a rule types its latest payment as something else:
+    # the next ones will be too, so it no longer counts as fixed.
+    retyped: tuple[str, str] | None = None
 
     @property
     def kind(self) -> CashflowType:
         """The type its operations count as."""
         return CashflowType.INCOME if self.direction == RecurringDirection.INCOME.value else CashflowType.EXPENSE
+
+    @property
+    def latest_paid(self) -> RecurringMember | None:
+        return max((m for m in self.members if m.role in PAID_ROLES), key=lambda m: m.day, default=None)
 
     def to_json(self) -> dict:
         return {
@@ -151,6 +160,7 @@ class StoredRecurring:
             "carrier": self.carrier, "question": self.question, "counted": self.counted, "words": self.words,
             "nature": self.nature,
             "ended_on": self.ended_on.isoformat() if self.ended_on else None,
+            "retyped": list(self.retyped) if self.retyped else None,
         }
 
     @classmethod
@@ -176,6 +186,7 @@ class StoredRecurring:
             words=content["words"],
             nature=content["nature"],
             ended_on=date.fromisoformat(content["ended_on"]) if content["ended_on"] else None,
+            retyped=tuple(content["retyped"]) if content["retyped"] else None,
         )
 
 

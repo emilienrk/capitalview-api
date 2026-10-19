@@ -877,6 +877,8 @@ class BankTypeRulePreview(BaseModel):
     # Every operation on the rule's side (its account or all, its direction):
     # a rule reaching most of them is said to be one.
     side_count: int
+    # The recurring payments or income it takes out of the fixed ones, by name.
+    recurring: list[str] = []
 
 
 class RecurringDecisionKind(str, Enum):
@@ -963,6 +965,12 @@ class BankRecurringRefunds(BaseModel):
     items: list[BankRecurringRefund]
 
 
+class BankRecurringRetyped(BaseModel):
+    """A rule typing its latest payment otherwise: it is listed, never added up."""
+    type: CashflowType
+    rule_id: str
+
+
 class BankRecurringItem(BaseModel):
     # The user's decision; None for a series never decided.
     id: str | None
@@ -1004,6 +1012,7 @@ class BankRecurringItem(BaseModel):
     renamed: list[BankRecurringRename] = []
     refunds: BankRecurringRefunds
     ended_on: date | None = None
+    retyped: BankRecurringRetyped | None = None
 
 
 class BankRecurringResponse(BaseModel):

@@ -76,6 +76,8 @@ class Movement(NamedTuple):
     # Counted as the deposit or withdrawal the user said it is: an investment,
     # whatever rhythm it keeps.
     deposit: bool = False
+    # The rule typing it, when one does.
+    rule: str | None = None
 
 
 @dataclass
@@ -381,7 +383,7 @@ def _stored(
     carrier = recurrence.carrier(series)
     question = state == CANDIDATE and carrier is not None
     name, renamed = _names(series, by_uuid)
-    return StoredRecurring(
+    stored = StoredRecurring(
         key=decision.uuid if decision else series.first.id,
         decision=decision.uuid if decision else None,
         direction=(RecurringDirection.INCOME if income else RecurringDirection.EXPENSE).value,
@@ -406,6 +408,11 @@ def _stored(
         nature=decision.nature if decision else None,
         ended_on=decision.ended_on if decision else None,
     )
+    latest = stored.latest_paid
+    typing = by_uuid[latest.uuid] if latest else None
+    if typing is not None and typing.rule is not None and typing.type is not series.kind:
+        stored.retyped = (typing.type.value, typing.rule)
+    return stored
 
 
 def _refunding(series: Series, heads: dict[int, set[str]]) -> set[int]:
