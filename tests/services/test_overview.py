@@ -345,3 +345,32 @@ def test_a_zero_reference_gives_no_percentage():
     changes = overview.net_worth_changes([_snapshot("2026-09-27", "0")], Decimal("100"), {}, _TODAY)
 
     assert changes[0]["change_pct"] is None
+
+
+def test_the_curve_stops_at_the_last_day_every_category_has_reached(monkeypatch):
+    def snaps(*days_and_values):
+        return lambda *a, **k: [
+            type("Snap", (), {"snapshot_date": datetime.date.fromisoformat(day), "total_value": Decimal(value)})
+            for day, value in days_and_values
+        ]
+
+    monkeypatch.setattr(
+        overview, "get_or_create_settings",
+        lambda *a, **k: type("Settings", (), {"bank_module_enabled": True, "wealth_module_enabled": True}),
+    )
+    # The bank ledger already carried to the 17th, the stocks still at the 16th.
+    monkeypatch.setattr(
+        overview, "get_all_bank_accounts_history",
+        snaps(("2026-10-15", "3000"), ("2026-10-16", "3100"), ("2026-10-17", "3200")),
+    )
+    monkeypatch.setattr(overview, "get_all_stock_accounts_history", snaps(("2026-10-16", "17000")))
+    monkeypatch.setattr(overview, "get_all_crypto_accounts_history", snaps())
+    monkeypatch.setattr(overview, "get_asset_portfolio_history", snaps())
+    monkeypatch.setattr(overview, "get_all_placements_history", snaps())
+
+    history = overview.build_wealth_history(None, "user", "key")
+
+    assert [(h["snapshot_date"].isoformat(), h["total_wealth"]) for h in history] == [
+        ("2026-10-15", Decimal("3000")),
+        ("2026-10-16", Decimal("20100")),
+    ]

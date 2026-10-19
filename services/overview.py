@@ -69,7 +69,8 @@ def build_wealth_history(session: Session, user_uuid: str, master_key: str) -> l
     The union of every category's snapshot dates, so a day where only the bank
     moved still appears. A category with no snapshot on a given day contributes
     zero rather than being omitted — the caller charts a stacked total and needs
-    every series to line up.
+    every series to line up. Trailing days some category has not reached yet
+    are left out instead.
 
     Values stay Decimal; rounding and serialisation belong to the caller.
     """
@@ -103,12 +104,16 @@ def build_wealth_history(session: Session, user_uuid: str, master_key: str) -> l
         for s in get_all_placements_history(session, user_uuid, master_key)
     }
 
+    series = [s for s in (stock_snaps, crypto_snaps, bank_snaps, assets_snaps, placements_snaps) if s]
+    # The catchup commits the bank ledger well before the other categories,
+    # which wait on market prices (services/account_history.py): read in
+    # between, the latest days hold the bank alone and the curve crashes until
+    # a reload. It stops at the last day every category has reached.
+    last_common = min((max(s) for s in series), default=None)
     all_dates = sorted(
-        stock_snaps.keys()
-        | crypto_snaps.keys()
-        | bank_snaps.keys()
-        | assets_snaps.keys()
-        | placements_snaps.keys()
+        day
+        for day in set().union(*series)
+        if day <= last_common
     )
 
     history = []
