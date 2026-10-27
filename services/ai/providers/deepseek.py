@@ -37,6 +37,11 @@ class DeepseekProvider(AIProvider):
     # DeepSeek has no json_schema response format: the schema rides in the
     # system prompt and the answer is only held to JSON.
     native_json_schema = False
+    # DeepSeek thinks by default, and with tools it then wants every earlier
+    # assistant turn sent back with its reasoning_content: the synthetic turn
+    # the extraction opens with has none, so the very first call is refused.
+    # Both agents hold the answer to a schema and do without the thinking.
+    disables_thinking = True
 
     def __init__(
         self,
@@ -102,6 +107,9 @@ class DeepseekProvider(AIProvider):
             "max_tokens": self.max_tokens,
             "messages": openai_messages,
         }
+
+        if self.disables_thinking:
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
         if tools:
             # If tools are already formatted in OpenAI function format, use as-is
@@ -184,6 +192,11 @@ class DeepseekProvider(AIProvider):
                         "input": args,
                     }
                 )
+        # A model that thought anyway wants its reasoning back on the next
+        # call. Last, since the agents read the answer from the first block.
+        reasoning = getattr(msg, "reasoning_content", None)
+        if reasoning:
+            content_blocks.append({"type": "reasoning", "text": reasoning})
         return {"role": "assistant", "content": content_blocks}
 
     def build_tool_result_block(self, tool_use_id: str, content: str) -> dict[str, Any]:
@@ -236,10 +249,13 @@ class DeepseekProvider(AIProvider):
                     # Build text + image parts for the user/assistant message
                     parts = []
                     tool_calls_openai = []
+                    reasoning_content = None
                     for block in non_tool:
                         if isinstance(block, dict):
                             btype = block.get("type")
-                            if btype == "text":
+                            if btype == "reasoning":
+                                reasoning_content = block["text"]
+                            elif btype == "text":
                                 parts.append({"type": "text", "text": block["text"]})
                             elif btype == "image":
                                 src = block.get("source", {})
@@ -282,6 +298,8 @@ class DeepseekProvider(AIProvider):
                                 )
 
                     out_msg: dict[str, Any] = {"role": role}
+                    if reasoning_content:
+                        out_msg["reasoning_content"] = reasoning_content
                     if tool_calls_openai:
                         out_msg["tool_calls"] = tool_calls_openai
                         out_msg["content"] = parts[0]["text"] if parts else None

@@ -440,3 +440,45 @@ async def test_structured_output_format(provider_class, expected):
 
     assert sent[0]["response_format"]["type"] == expected
     assert sent[0]["model"] == "some/model"
+
+
+@pytest.mark.parametrize(
+    "provider_class, thinking",
+    [(DeepseekProvider, {"type": "disabled"}), (OpenRouterProvider, None)],
+)
+async def test_deepseek_calls_without_thinking(provider_class, thinking):
+    # Thinking with tools wants every earlier assistant turn's reasoning back,
+    # which the extraction's synthetic opening turn cannot give.
+    sent: list = []
+    provider = provider_class("sk-test", model="some/model")
+    provider.client = openai.AsyncOpenAI(
+        api_key="sk-test", base_url=provider.base_url, http_client=_mock_http(_completion_capture(sent))
+    )
+
+    await provider._send_message(messages=[{"role": "user", "content": "hi"}])
+
+    assert sent[0].get("thinking") == thinking
+
+
+def test_reasoning_goes_back_with_its_assistant_turn():
+    provider = DeepseekProvider("sk-test", model="deepseek-flash")
+    message = SimpleNamespace(
+        content="Let me look it up.",
+        reasoning_content="The ISIN is not on the screen.",
+        tool_calls=[
+            SimpleNamespace(
+                id="call_1",
+                function=SimpleNamespace(name="search_assets", arguments='{"query": "Amundi"}'),
+            )
+        ],
+    )
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    stored = provider.build_assistant_message(response)
+    # The agents read the answer from the first block
+    assert stored["content"][0] == {"type": "text", "text": "Let me look it up."}
+
+    [sent] = provider._convert_messages([stored], system=None)
+    assert sent["reasoning_content"] == "The ISIN is not on the screen."
+    assert sent["tool_calls"][0]["id"] == "call_1"
+    assert sent["content"] == "Let me look it up."
