@@ -65,7 +65,8 @@ class UserAIProvider(SQLModel, table=True):
     user_uuid_bidx: str = Field(index=True)
     provider: str = Field(nullable=False)          # e.g. "google" | "anthropic" | "deepseek"
     api_key_enc: str | None = Field(default=None, sa_column=Column(TEXT))
-    selected_model: str | None = Field(default=None)  # None = use provider default model
+    selected_model: str | None = Field(default=None)  # chat; None = automatic
+    selected_vision_model: str | None = Field(default=None)  # photo import; None = automatic
 
 
 class UserSettings(SQLModel, table=True):

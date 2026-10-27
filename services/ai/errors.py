@@ -92,8 +92,8 @@ async def no_provider_handler(request: Request, exc: NoProviderAvailableError) -
         content={
             "detail": (
                 "Aucun fournisseur IA compatible n'est configuré. Ajoutez une clé API "
-                "dans les paramètres (Gemini, Claude ou OpenRouter pour l'analyse de photos). "
-                "Avec OpenRouter, choisissez un modèle qui lit les images."
+                "dans les paramètres. Pour l'analyse de photos, il faut un modèle qui lit "
+                "les images : choisissez-le dans « Modèle pour l'import par image »."
             )
         },
     )

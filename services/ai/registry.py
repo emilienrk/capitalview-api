@@ -6,6 +6,10 @@ This is the single source of truth for:
 - What capabilities each provider offers
 - How "automatic" picks a model among those the user's key can reach
 
+Which models read images is not listed here: it is read from each provider's
+live list, so a provider serves the photo import as soon as its key reaches a
+model that reads images.
+
 Adding a new provider = add an entry here + create its provider class.
 No database migration needed.
 """
@@ -15,13 +19,19 @@ from typing import TypedDict
 
 class ProviderEntry(TypedDict):
     label: str
-    capabilities: list[str]  # subset of ["vision", "chat"]
+    capabilities: list[str]  # subset of ["vision", "chat"]; vision still needs a model that reads images
     # What "automatic" picks among the models the user's key can reach: the
     # first pattern with a match wins, at its highest version. Matched against
     # the provider's live list, so a new release is picked up without a deploy.
     preferred: list[str]
+    # Patterns tried first for the photo import, among the models that read
+    # images; the general ones above follow.
+    preferred_vision: list[str]
     # Called when that list cannot be fetched; the call then reports the cause.
     fallback_model: str
+    # The same for the photo import; None when no model can be assumed to read
+    # images, so the import moves on to the next provider.
+    fallback_vision_model: str | None
 
 
 PROVIDER_REGISTRY: dict[str, ProviderEntry] = {
@@ -34,19 +44,26 @@ PROVIDER_REGISTRY: dict[str, ProviderEntry] = {
             r"^gemini-.*flash",
             r"^gemini-",
         ],
+        "preferred_vision": [],
         "fallback_model": "gemini-3.5-flash",
+        "fallback_vision_model": "gemini-3.5-flash",
     },
     "anthropic": {
         "label": "Claude (Anthropic)",
         "capabilities": ["vision", "chat"],
         "preferred": [r"^claude-sonnet-", r"^claude-haiku-", r"^claude-opus-", r"^claude-"],
+        "preferred_vision": [],
         "fallback_model": "claude-sonnet-4-6",
+        "fallback_vision_model": "claude-sonnet-4-6",
     },
     "deepseek": {
         "label": "DeepSeek",
-        "capabilities": ["chat"],
+        "capabilities": ["vision", "chat"],
         "preferred": [r"^deepseek-v[\d.]+-flash$", r"^deepseek-chat$", r"^deepseek-"],
+        "preferred_vision": [r"^deepseek-v[\d.]+-flash-vision", r"^deepseek-.*vision", r"^deepseek-vl"],
         "fallback_model": "deepseek-v4-flash",
+        # Its vision models are still experimental and renamed as they go
+        "fallback_vision_model": None,
     },
     "openrouter": {
         "label": "OpenRouter",
@@ -58,21 +75,25 @@ PROVIDER_REGISTRY: dict[str, ProviderEntry] = {
             r"^google/gemini-",
         ],
         # OpenRouter's own router: an id that exists whatever the catalogue holds
+        "preferred_vision": [],
         "fallback_model": "openrouter/auto",
+        "fallback_vision_model": "openrouter/auto",
     },
 }
 
 # Default provider priority per capability (used when user has no explicit preference)
 CAPABILITY_PRIORITY: dict[str, list[str]] = {
-    "vision": ["google", "anthropic", "openrouter"],
+    "vision": ["google", "anthropic", "deepseek", "openrouter"],
     "chat":   ["google", "deepseek", "anthropic", "openrouter"],
 }
 
 
-def get_fallback_model(provider: str) -> str | None:
+def get_fallback_model(provider: str, *, vision: bool = False) -> str | None:
     """Return the model called when the provider's list cannot be fetched."""
     entry = PROVIDER_REGISTRY.get(provider)
-    return entry["fallback_model"] if entry else None
+    if entry is None:
+        return None
+    return entry["fallback_vision_model"] if vision else entry["fallback_model"]
 
 
 def provider_supports(provider: str, capability: str) -> bool:

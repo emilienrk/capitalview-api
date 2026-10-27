@@ -66,17 +66,30 @@ def test_anthropic_reads_a_dated_snapshot_as_its_version():
     assert recommend("anthropic", models) == "claude-sonnet-4-6"
 
 
-def test_openrouter_keeps_to_models_that_read_images():
+def test_the_photo_import_keeps_to_models_that_read_images():
     models = _models(
         ("google/gemini-3.5-flash", False),
         ("anthropic/claude-sonnet-4.6", True),
     )
-    assert recommend("openrouter", models) == "anthropic/claude-sonnet-4.6"
+    assert recommend("openrouter", models, vision=True) == "anthropic/claude-sonnet-4.6"
+    # The chat has no need for images
+    assert recommend("openrouter", models) == "google/gemini-3.5-flash"
 
 
-def test_openrouter_takes_a_text_model_when_none_reads_images():
+def test_no_photo_import_model_when_none_reads_images():
     models = _models(("mistralai/mistral-large", False), ("qwen/qwen3-max", False))
+    assert recommend("openrouter", models, vision=True) is None
     assert recommend("openrouter", models) == "mistralai/mistral-large"
+
+
+def test_deepseek_recommends_its_vision_model_for_the_photo_import():
+    models = _models(
+        ("deepseek-v4-flash", False),
+        ("deepseek-v4-pro", False),
+        ("deepseek-v4-flash-vision-exp", True),
+    )
+    assert recommend("deepseek", models, vision=True) == "deepseek-v4-flash-vision-exp"
+    assert recommend("deepseek", models) == "deepseek-v4-flash"
 
 
 def test_nothing_to_recommend_without_models():
@@ -146,11 +159,62 @@ async def test_a_failed_listing_falls_back_and_lets_the_call_report():
     assert provider.model == "openrouter/auto"
 
 
-async def test_deepseek_never_serves_vision():
+async def test_deepseek_without_a_vision_model_turns_the_photo_import_down():
     provider = DeepseekProvider("sk-test")
-    provider.list_models = AsyncMock(return_value=_models(("deepseek-chat", False)))
+    provider.list_models = AsyncMock(return_value=_models(("deepseek-v4-flash", False)))
 
     assert await settle_model(provider, ModelCapability.TEXT | ModelCapability.VISION) is False
+
+
+async def test_each_use_calls_its_own_model():
+    provider = DeepseekProvider("sk-test")
+    provider.list_models = AsyncMock(
+        return_value=_models(("deepseek-v4-flash", False), ("deepseek-v4-flash-vision-exp", True))
+    )
+    vision = ModelCapability.TEXT | ModelCapability.VISION
+
+    assert await settle_model(provider, vision) is True
+    assert provider.model == "deepseek-v4-flash-vision-exp"
+    assert await settle_model(provider, ModelCapability.TEXT) is True
+    assert provider.model == "deepseek-v4-flash"
+
+
+async def test_a_chosen_vision_model_is_kept_for_the_photo_import_only():
+    provider = _FakeProvider(
+        _models(("google/gemini-3.5-flash", True), ("anthropic/claude-sonnet-4.6", True)),
+        model="openai/gpt-5",
+    )
+    provider.vision_model = "anthropic/claude-sonnet-4.6"
+    vision = ModelCapability.TEXT | ModelCapability.VISION
+
+    assert await settle_model(provider, vision) is True
+    assert provider.model == "anthropic/claude-sonnet-4.6"
+    assert await settle_model(provider, ModelCapability.TEXT) is True
+    assert provider.model == "openai/gpt-5"
+
+
+async def test_a_failed_deepseek_listing_leaves_the_photo_import_to_another_provider():
+    provider = DeepseekProvider("sk-test")
+    provider.list_models = AsyncMock(side_effect=RuntimeError("network down"))
+
+    assert await settle_model(provider, ModelCapability.TEXT | ModelCapability.VISION) is False
+    assert await settle_model(provider, ModelCapability.TEXT) is True
+    assert provider.model == "deepseek-v4-flash"
+
+
+async def test_deepseek_serves_the_photo_import_when_preferred():
+    deepseek = DeepseekProvider("sk-test")
+    deepseek.list_models = AsyncMock(
+        return_value=_models(("deepseek-v4-flash", False), ("deepseek-v4-flash-vision-exp", True))
+    )
+    claude = AnthropicProvider("sk-ant-test")
+    claude.list_models = AsyncMock(return_value=_models(("claude-sonnet-4-6", True)))
+    manager = AIProviderManager(
+        {"deepseek": deepseek, "anthropic": claude}, vision_preference="deepseek"
+    )
+
+    assert await manager.get_provider_for_capability("vision") is deepseek
+    assert deepseek.model == "deepseek-v4-flash-vision-exp"
 
 
 async def test_vision_moves_on_from_a_text_only_openrouter_model():
@@ -227,6 +291,32 @@ async def test_openrouter_lists_models_that_call_tools():
         DetectedModel("qwen/qwen3-max", "Qwen: Qwen3 Max", vision=False),
     ]
 
+
+
+async def test_deepseek_tells_its_image_readers_by_name():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/models"
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {"id": model_id, "object": "model", "owned_by": "deepseek"}
+                    for model_id in ("deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-vl2")
+                ],
+            },
+        )
+
+    provider = DeepseekProvider("sk-test")
+    provider.client = openai.AsyncOpenAI(
+        api_key="sk-test", base_url=provider.base_url, http_client=_mock_http(handler)
+    )
+
+    assert [(m.id, m.vision) for m in await provider.list_models()] == [
+        ("deepseek-v4-flash", False),
+        ("deepseek-v4-flash-vision-exp", True),
+        ("deepseek-vl2", True),
+    ]
 
 async def test_anthropic_lists_models_with_structured_outputs():
     def capabilities(structured: bool, images: bool) -> dict:
