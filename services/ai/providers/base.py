@@ -46,8 +46,12 @@ class AIProvider(ABC):
     provider_id: ClassVar[str]
 
     def __init__(self, api_key: str, model: str | None):
-        # None = automatic: settled against the live model list before the
-        # first call (services.ai.catalog.settle_model).
+        # What the user chose, per use; None = automatic: settled against the
+        # live model list before the call (services.ai.catalog.settle_model).
+        # The photo import's choice is set by build_provider.
+        self.chat_model = model
+        self.vision_model: str | None = None
+        # The model the next call uses, set by settle_model for the use at hand
         self.model = model
         # Keys the detected-model cache without keeping the key itself around
         self.key_fingerprint = hashlib.sha256(api_key.encode()).hexdigest()

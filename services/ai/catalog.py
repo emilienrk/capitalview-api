@@ -47,17 +47,22 @@ def _version(model_id: str) -> tuple[tuple[int, ...], bool]:
     return numbers, stable
 
 
-def recommend(provider_id: str, models: list[DetectedModel]) -> str | None:
-    """Return the model "automatic" stands for among `models`, None if there are none."""
+def recommend(
+    provider_id: str, models: list[DetectedModel], *, vision: bool = False
+) -> str | None:
+    """Return the model "automatic" stands for among `models`, None if there are none.
+
+    `vision` keeps to the models that read images, for the photo import: None
+    then means the key reaches none.
+    """
     entry = PROVIDER_REGISTRY.get(provider_id)
-    if entry is None or not models:
+    if entry is None:
         return None
-    # One model serves every use of a provider, so one that offers the photo
-    # import keeps to the models that read images, as long as there is one.
-    candidates = models
-    if "vision" in entry["capabilities"]:
-        candidates = [m for m in models if m.vision] or models
-    for pattern in entry["preferred"]:
+    candidates = [m for m in models if m.vision] if vision else models
+    if not candidates:
+        return None
+    patterns = (entry["preferred_vision"] if vision else []) + entry["preferred"]
+    for pattern in patterns:
         family = [m for m in candidates if re.search(pattern, m.id)]
         if family:
             return max(family, key=lambda m: _version(m.id)).id
@@ -67,12 +72,14 @@ def recommend(provider_id: str, models: list[DetectedModel]) -> str | None:
 async def settle_model(provider: AIProvider, required: ModelCapability) -> bool:
     """Fix the model the provider will call, and say whether it covers `required`.
 
-    A provider on "automatic" gets the recommended model. A model known not to
-    read images turns the provider down for the photo import, so the next one
-    in line gets its chance.
+    Each use has its own choice: the photo import calls the provider's vision
+    model, the chat its chat model. One left on "automatic" gets the
+    recommended model for that use. A model known not to read images turns the
+    provider down for the photo import, so the next one in line gets its chance.
     """
     if not provider.supports(required):
         return False
+    vision = ModelCapability.VISION in required
     try:
         models = await detect_models(provider)
     except Exception as exc:
@@ -80,12 +87,18 @@ async def settle_model(provider: AIProvider, required: ModelCapability) -> bool:
         # failure) far better than a listing that failed the same way.
         logger.warning("could not list %s models: %r", provider.provider_id, exc)
         models = []
-    if provider.model is None:
-        provider.model = recommend(provider.provider_id, models) or get_fallback_model(
-            provider.provider_id
-        )
-    if ModelCapability.VISION in required:
-        chosen = next((m for m in models if m.id == provider.model), None)
-        if chosen is not None and not chosen.vision:
+    chosen = provider.vision_model if vision else provider.chat_model
+    if chosen is None:
+        if models:
+            chosen = recommend(provider.provider_id, models, vision=vision)
+        else:
+            chosen = get_fallback_model(provider.provider_id, vision=vision)
+        if chosen is None:
+            # A key that reaches no model reading images, or no list to tell
+            return False
+    provider.model = chosen
+    if vision:
+        known = next((m for m in models if m.id == chosen), None)
+        if known is not None and not known.vision:
             return False
     return True

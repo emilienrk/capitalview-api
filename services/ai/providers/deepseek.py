@@ -5,6 +5,7 @@ DeepSeek exposes an OpenAI-compatible endpoint, so we use the `openai` SDK.
 Install: pip install openai
 """
 
+import re
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -15,12 +16,18 @@ from services.ai.providers.base import AIProvider, DetectedModel, ModelCapabilit
 DEFAULT_MAX_TOKENS = 2000
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
+# DeepSeek lists bare ids, no modalities: its image readers say so in the name
+# ("deepseek-v4-flash-vision-exp", "deepseek-vl2").
+_READS_IMAGES = re.compile(r"vision|(?:^|-)vl\d*(?:-|$)")
+
 
 class DeepseekProvider(AIProvider):
     """
     DeepSeek provider using the OpenAI-compatible REST API.
 
-    Capabilities: TEXT only (no vision on deepseek-chat; deepseek-reasoner adds REASONING).
+    Capabilities: TEXT + VISION, the latter depending on the model: only its
+    vision models read images, and settle_model skips the others for the photo
+    import. deepseek-reasoner adds REASONING.
     Tool format : OpenAI-style function calling (converted from Anthropic-style input_schema).
     """
 
@@ -45,13 +52,18 @@ class DeepseekProvider(AIProvider):
     # ------------------------------------------------------------------
 
     def capabilities(self) -> ModelCapability:
+        capabilities = ModelCapability.TEXT | ModelCapability.VISION
         if self.model and "reasoner" in self.model.lower():
-            return ModelCapability.TEXT | ModelCapability.REASONING
-        return ModelCapability.TEXT
+            capabilities |= ModelCapability.REASONING
+        return capabilities
 
     async def list_models(self) -> list[DetectedModel]:
         return [
-            DetectedModel(id=model.id, label=model.id, vision=False)
+            DetectedModel(
+                id=model.id,
+                label=model.id,
+                vision=bool(_READS_IMAGES.search(model.id.lower())),
+            )
             async for model in self.client.models.list()
         ]
 

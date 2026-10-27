@@ -54,6 +54,7 @@ def test_lists_the_models_the_key_reaches(client):
             {"id": "google/gemini-3.5-flash", "label": "Google: Gemini 3.5 Flash", "vision": True},
         ],
         "recommended": "google/gemini-3.5-flash",
+        "recommended_vision": "google/gemini-3.5-flash",
     }
 
 
@@ -116,3 +117,32 @@ def test_options_offer_openrouter_for_both_uses(client):
     assert "openrouter" in [o["provider"] for o in capabilities["vision"]]
     assert "openrouter" in [o["provider"] for o in capabilities["chat"]]
     assert all("models" not in o for o in capabilities["chat"])
+
+
+def test_options_offer_deepseek_for_the_photo_import(client):
+    r = client.get("/settings/ai/options")
+
+    assert "deepseek" in [o["provider"] for o in r.json()["capabilities"]["vision"]]
+
+
+def test_the_photo_import_model_is_chosen_apart_from_the_chat_model(client):
+    client.put("/settings/ai/providers/deepseek", json={"selected_model": "deepseek-v4-flash"})
+    r = client.put(
+        "/settings/ai/providers/deepseek",
+        json={"selected_vision_model": "deepseek-v4-flash-vision-exp"},
+    )
+
+    assert r.status_code == 200
+    assert r.json()["selected_model"] == "deepseek-v4-flash"
+    assert r.json()["selected_vision_model"] == "deepseek-v4-flash-vision-exp"
+
+    r = client.put("/settings/ai/providers/deepseek", json={"selected_vision_model": None})
+    assert r.json()["selected_vision_model"] is None
+    assert r.json()["selected_model"] == "deepseek-v4-flash"
+
+
+def test_deepseek_can_be_preferred_for_the_photo_import(client):
+    r = client.put("/settings", json={"ai_vision_provider": "deepseek"})
+
+    assert r.status_code == 200
+    assert r.json()["ai_vision_provider"] == "deepseek"

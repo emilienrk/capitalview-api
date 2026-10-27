@@ -12,13 +12,15 @@ class AIProviderConfig(BaseModel):
     """State of a single AI provider for a user (read-only)."""
     provider: str               # "google" | "anthropic" | "deepseek" | "openrouter"
     has_key: bool               # True if an API key is configured
-    selected_model: str | None  # None = automatic
+    selected_model: str | None  # chat; None = automatic
+    selected_vision_model: str | None = None  # photo import; None = automatic
 
 
 class AIProviderUpdate(BaseModel):
-    """Update the API key and/or model for a single provider."""
-    api_key: str | None = None          # None = delete the key; omit field to leave unchanged
-    selected_model: str | None = None   # None = automatic
+    """Update the API key and/or models for a single provider; omitted fields are left unchanged."""
+    api_key: str | None = None                 # None = delete the key
+    selected_model: str | None = None          # chat; None = automatic
+    selected_vision_model: str | None = None   # photo import; None = automatic
 
 
 class AIProviderOption(BaseModel):
@@ -38,7 +40,10 @@ class AIModelOption(BaseModel):
 class AIModelsResponse(BaseModel):
     """Response for GET /settings/ai/providers/{provider}/models."""
     models: list[AIModelOption]
-    recommended: str | None  # what "automatic" (selected_model=None) calls
+    recommended: str | None  # what "automatic" (selected_model=None) calls for the chat
+    # What it calls for the photo import (selected_vision_model=None); None when
+    # the key reaches no model that reads images
+    recommended_vision: str | None = None
 
 
 class AIOptionsResponse(BaseModel):

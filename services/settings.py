@@ -63,6 +63,7 @@ def _map_settings_to_response(
             provider=p.provider,
             has_key=bool(p.api_key_enc),
             selected_model=p.selected_model,
+            selected_vision_model=p.selected_vision_model,
         )
         for p in ai_providers
     ]
@@ -313,11 +314,12 @@ def update_ai_provider(
 
     user_bidx = hash_index(user_uuid, master_key)
 
-    if data.selected_model is not None and not _MODEL_ID.fullmatch(data.selected_model):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Modèle '{data.selected_model}' non valide pour le provider '{provider}'.",
-        )
+    for chosen in (data.selected_model, data.selected_vision_model):
+        if chosen is not None and not _MODEL_ID.fullmatch(chosen):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Modèle '{chosen}' non valide pour le provider '{provider}'.",
+            )
 
     # Find or create the provider row
     row = session.exec(
@@ -344,16 +346,24 @@ def update_ai_provider(
     else:
         new_model = row.selected_model if row else None
 
+    new_vision_model: str | None
+    if "selected_vision_model" in data.model_fields_set:
+        new_vision_model = data.selected_vision_model
+    else:
+        new_vision_model = row.selected_vision_model if row else None
+
     if row is None:
         row = UserAIProvider(
             user_uuid_bidx=user_bidx,
             provider=provider,
             api_key_enc=new_key_enc,
             selected_model=new_model,
+            selected_vision_model=new_vision_model,
         )
     else:
         row.api_key_enc = new_key_enc
         row.selected_model = new_model
+        row.selected_vision_model = new_vision_model
 
     session.add(row)
     session.commit()
@@ -363,6 +373,7 @@ def update_ai_provider(
         provider=row.provider,
         has_key=bool(row.api_key_enc),
         selected_model=row.selected_model,
+        selected_vision_model=row.selected_vision_model,
     )
 
 
@@ -429,4 +440,5 @@ async def detect_ai_models(
     return AIModelsResponse(
         models=[AIModelOption(id=m.id, label=m.label, vision=m.vision) for m in models],
         recommended=recommend(provider, models),
+        recommended_vision=recommend(provider, models, vision=True),
     )
