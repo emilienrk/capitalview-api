@@ -16,9 +16,10 @@ from services.ai.providers.base import AIProvider, DetectedModel, ModelCapabilit
 DEFAULT_MAX_TOKENS = 2000
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
-# DeepSeek lists bare ids, no modalities: its image readers say so in the name
-# ("deepseek-v4-flash-vision-exp", "deepseek-vl2").
-_READS_IMAGES = re.compile(r"vision|(?:^|-)vl\d*(?:-|$)")
+# DeepSeek lists bare ids, no modalities. Its Flash models read images
+# ("deepseek-flash", served by V4.1-Flash), as do the ones that say so in the
+# name ("deepseek-v4-flash-vision-exp", "deepseek-vl2"); Pro reads none.
+_READS_IMAGES = re.compile(r"flash|vision|(?:^|-)vl\d*(?:-|$)")
 
 
 class DeepseekProvider(AIProvider):

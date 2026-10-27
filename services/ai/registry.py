@@ -59,11 +59,10 @@ PROVIDER_REGISTRY: dict[str, ProviderEntry] = {
     "deepseek": {
         "label": "DeepSeek",
         "capabilities": ["vision", "chat"],
-        "preferred": [r"^deepseek-v[\d.]+-flash$", r"^deepseek-chat$", r"^deepseek-"],
-        "preferred_vision": [r"^deepseek-v[\d.]+-flash-vision", r"^deepseek-.*vision", r"^deepseek-vl"],
-        "fallback_model": "deepseek-v4-flash",
-        # Its vision models are still experimental and renamed as they go
-        "fallback_vision_model": None,
+        "preferred": [r"^deepseek-flash$", r"^deepseek-v[\d.]+-flash$", r"^deepseek-chat$", r"^deepseek-"],
+        "preferred_vision": [r"^deepseek-flash$", r"^deepseek-v[\d.]+-flash"],
+        "fallback_model": "deepseek-flash",
+        "fallback_vision_model": "deepseek-flash",
     },
     "openrouter": {
         "label": "OpenRouter",

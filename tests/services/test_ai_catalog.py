@@ -82,14 +82,11 @@ def test_no_photo_import_model_when_none_reads_images():
     assert recommend("openrouter", models) == "mistralai/mistral-large"
 
 
-def test_deepseek_recommends_its_vision_model_for_the_photo_import():
-    models = _models(
-        ("deepseek-v4-flash", False),
-        ("deepseek-v4-pro", False),
-        ("deepseek-v4-flash-vision-exp", True),
-    )
-    assert recommend("deepseek", models, vision=True) == "deepseek-v4-flash-vision-exp"
-    assert recommend("deepseek", models) == "deepseek-v4-flash"
+def test_deepseek_recommends_flash_for_both_uses():
+    # What a DeepSeek key lists since the V4.1 renaming
+    models = _models(("deepseek-flash", True), ("deepseek-v4-pro", False))
+    assert recommend("deepseek", models, vision=True) == "deepseek-flash"
+    assert recommend("deepseek", models) == "deepseek-flash"
 
 
 def test_nothing_to_recommend_without_models():
@@ -161,7 +158,7 @@ async def test_a_failed_listing_falls_back_and_lets_the_call_report():
 
 async def test_deepseek_without_a_vision_model_turns_the_photo_import_down():
     provider = DeepseekProvider("sk-test")
-    provider.list_models = AsyncMock(return_value=_models(("deepseek-v4-flash", False)))
+    provider.list_models = AsyncMock(return_value=_models(("deepseek-v4-pro", False)))
 
     assert await settle_model(provider, ModelCapability.TEXT | ModelCapability.VISION) is False
 
@@ -193,13 +190,12 @@ async def test_a_chosen_vision_model_is_kept_for_the_photo_import_only():
     assert provider.model == "openai/gpt-5"
 
 
-async def test_a_failed_deepseek_listing_leaves_the_photo_import_to_another_provider():
+async def test_a_failed_deepseek_listing_falls_back_on_flash():
     provider = DeepseekProvider("sk-test")
     provider.list_models = AsyncMock(side_effect=RuntimeError("network down"))
 
-    assert await settle_model(provider, ModelCapability.TEXT | ModelCapability.VISION) is False
-    assert await settle_model(provider, ModelCapability.TEXT) is True
-    assert provider.model == "deepseek-v4-flash"
+    assert await settle_model(provider, ModelCapability.TEXT | ModelCapability.VISION) is True
+    assert provider.model == "deepseek-flash"
 
 
 async def test_deepseek_serves_the_photo_import_when_preferred():
@@ -302,7 +298,7 @@ async def test_deepseek_tells_its_image_readers_by_name():
                 "object": "list",
                 "data": [
                     {"id": model_id, "object": "model", "owned_by": "deepseek"}
-                    for model_id in ("deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-vl2")
+                    for model_id in ("deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp", "deepseek-vl2")
                 ],
             },
         )
@@ -313,7 +309,8 @@ async def test_deepseek_tells_its_image_readers_by_name():
     )
 
     assert [(m.id, m.vision) for m in await provider.list_models()] == [
-        ("deepseek-v4-flash", False),
+        ("deepseek-flash", True),
+        ("deepseek-v4-pro", False),
         ("deepseek-v4-flash-vision-exp", True),
         ("deepseek-vl2", True),
     ]
