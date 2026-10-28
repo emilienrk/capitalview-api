@@ -23,7 +23,7 @@ jobs:
       - name: Set up uv and Python
         uses: astral-sh/setup-uv@v10.0.1
         with:
-          python-version: '3.14'
+          python-version: '3.15'
           enable-cache: true
 
       # --frozen so the run fails on a stale lockfile rather than silently
