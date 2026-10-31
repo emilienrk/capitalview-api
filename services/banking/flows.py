@@ -25,7 +25,6 @@ import logging
 from collections import defaultdict
 from collections.abc import Collection
 from dataclasses import dataclass
-from functools import lru_cache
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import NamedTuple
@@ -85,6 +84,7 @@ from services.banking.contribution_decisions import ContributionDecisions, drop_
 from services.banking.labels import label_signature, label_words
 from services.banking.linking import readable_account_bidxs
 from services.banking.recurring_decisions import load_decisions as load_recurring_decisions
+from services.banking.settlement import banking_days_between
 from services.banking.transactions import CREDIT, FINAL_STATUSES, ORIGIN_ADJUSTMENT, row_date, row_origin
 from services.banking.transfer_decisions import (
     MAX_DECISION_DAYS,
@@ -286,43 +286,6 @@ def _shift_period(period: str, months: int) -> str:
     return f"{index // 12:04d}-{index % 12 + 1:02d}"
 
 
-def _easter_sunday(year: int) -> date:
-    """Anonymous Gregorian computus."""
-    a, b, c = year % 19, year // 100, year % 100
-    d, e = divmod(b, 4)
-    g = (8 * b + 13) // 25
-    h = (19 * a + b - d - g + 15) % 30
-    i, k = divmod(c, 4)
-    l = (32 + 2 * e + 2 * i - h - k) % 7
-    m = (a + 11 * h + 19 * l) // 433
-    month = (h + l - 7 * m + 90) // 25
-    return date(year, month, (h + l - 7 * m + 33 * month + 19) % 32)
-
-
-@lru_cache(maxsize=64)
-def _target_closing_days(year: int) -> frozenset[date]:
-    """The days TARGET2, the euro area's settlement system, does not settle.
-
-    One calendar for every euro bank, unlike national public holidays."""
-    easter = _easter_sunday(year)
-    return frozenset({
-        date(year, 1, 1), easter - timedelta(days=2), easter + timedelta(days=1),
-        date(year, 5, 1), date(year, 12, 25), date(year, 12, 26),
-    })
-
-
-def _banking_days_between(first: date, second: date) -> int:
-    """Settlement days stepped over going from the earlier date to the later one."""
-    low, high = sorted((first, second))
-    count = 0
-    day = low
-    while day < high:
-        day += timedelta(days=1)
-        if day.weekday() < 5 and day not in _target_closing_days(day.year):
-            count += 1
-    return count
-
-
 def _internal_transfer_legs(
     movements: list[_Movement], pairing: _Pairing | None = None, deposited: Collection[str] = frozenset()
 ) -> dict[int, _TransferLeg]:
@@ -436,7 +399,7 @@ def _internal_transfer_legs(
                 calendar_gap = abs((c.day - d.day).days)
                 if calendar_gap > _TRANSFER_MAX_CALENDAR_DAYS:
                     continue
-                banking_gap = _banking_days_between(d.day, c.day)
+                banking_gap = banking_days_between(d.day, c.day)
                 if banking_gap > TRANSFER_TOLERANCE_BANKING_DAYS:
                     continue
                 status = _transfer_status(pairing, d, c, debit, credit, verdict) if pairing else BankTransferStatus.SUGGESTED

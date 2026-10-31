@@ -39,7 +39,10 @@ l'utilisateur.
 - **Paire possible** entre deux comptes (sens opposés, même montant, au plus 2 jours ouvrés d'écart), qu'aucune règle
   ci-dessus ne confirme. Y compris entre deux comptes courants, même avec le même libellé, le même jour et le même
   montant. Une paire seulement proposée ne change aucun total.
-- **Dépôt Bourse/Crypto possible** : même montant, dans les 3 jours, ou avec un écart de frais. La question est
+- **Dépôt Bourse/Crypto possible** : même montant, à 2 jours ouvrés au plus (comme une paire), ou avec un écart de
+  frais. Mesuré sur le dump (31/10) : les 12 opérations trouvées ou validées à quelques jours de leur dépôt étaient
+  toutes à 2 jours ouvrés au plus, dont deux retraits Trade Republic d'un vendredi passés le mardi, que « 3 jours »
+  manquait ; 4 ou 5 jours de calendrier laissaient un paiement au restaurant couvrir un versement PERU. La question est
   posée en Oui / Non sur chaque opération concernée (`services/banking/contribution_decisions.py`) : le badge
   « vers <compte> ? » suffit le même jour pour le même montant ; sinon une ligne courte donne ce qui diffère
   (« Versement de 48,88 € sur PEA le 4 sept. ? ») :
@@ -98,11 +101,11 @@ déclarés sur un compte Bourse, Crypto ou un placement pour lesquels aucune op�
 l'inverse du curseur : il attrape un compte d'investissement oublié, cette liste attrape un compte bancaire oublié. Ils
 ne reçoivent pas de question et ne changent aucun total.
 
-- Est « en face » toute opération de sens opposé, même montant ou un écart de frais, à 3 jours au plus, quel que soit
+- Est « en face » toute opération de sens opposé, même montant ou un écart de frais, à 2 jours ouvrés au plus, quel que soit
   son type. Une paire déjà reconnue entre deux comptes bancaires ne compte pas ; une paire seulement proposée, si.
 - Un pour un : une sortie de 200 € ne couvre pas deux dépôts de 200 €.
-- Seuls les dépôts compris dans l'historique bancaire sont jugés, et pas les 3 derniers jours, où l'autre côté peut
-  ne pas être encore passé.
+- Seuls les dépôts compris dans l'historique bancaire sont jugés, et pas les 2 derniers jours ouvrés, où l'autre côté
+  peut ne pas être encore passé.
 - Mesuré sur le dump : 64 dépôts déclarés, 3 sans contrepartie (500 € sur un compte « trst », 90,17 € et 180 € sur le
   portefeuille crypto).
 

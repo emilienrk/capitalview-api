@@ -113,9 +113,23 @@ class TestMatching:
         [match] = match_candidates(candidates, _contributions(("2026-03-06", "200"))).values()
         assert not match.exact
 
-    def test_four_days_apart_says_nothing(self):
-        candidates = [Candidate(0, date(2026, 3, 10), Decimal("200"), False)]
-        assert match_candidates(candidates, _contributions(("2026-03-06", "200"))) == {}
+    def test_a_friday_withdrawal_booked_on_tuesday_is_a_hint(self):
+        """Four calendar days, two banking days: a broker's withdrawal on a Friday."""
+        candidates = [Candidate(0, date(2024, 11, 19), Decimal("32.89"), True)]
+        withdrawal = Contribution("CTO", date(2024, 11, 15), Decimal("32.89"), is_deposit=False, ref="w", account_id=PEA)
+        contributions = Contributions(by_amount={(False, Decimal("32.89")): [withdrawal]})
+        [match] = match_candidates(candidates, contributions).values()
+        assert not match.exact
+
+    def test_the_easter_closing_days_do_not_count(self):
+        """The Thursday before Easter to the Wednesday after: two banking days."""
+        candidates = [Candidate(0, date(2026, 4, 8), Decimal("200"), False)]
+        [match] = match_candidates(candidates, _contributions(("2026-04-02", "200"))).values()
+        assert not match.exact
+
+    def test_three_banking_days_apart_says_nothing(self):
+        candidates = [Candidate(0, date(2026, 3, 5), Decimal("200"), False)]
+        assert match_candidates(candidates, _contributions(("2026-03-02", "200"))) == {}
 
     def test_one_deposit_never_proves_two_debits_of_the_day(self):
         candidates = [
@@ -205,11 +219,11 @@ class TestUnfaced:
         [found] = unfaced([*_SPAN, _debit(0, "2026-03-05", "150")], _contributions(("2026-03-05", "200")))
         assert (found.day, found.amount) == (date(2026, 3, 5), Decimal("200"))
 
-    def test_a_debit_three_days_off_faces_it(self):
-        assert unfaced([*_SPAN, _debit(0, "2026-03-08", "200")], _contributions(("2026-03-05", "200"))) == []
+    def test_a_debit_two_banking_days_off_faces_it(self):
+        assert unfaced([*_SPAN, _debit(0, "2026-03-09", "200")], _contributions(("2026-03-05", "200"))) == []
 
-    def test_a_debit_four_days_off_does_not(self):
-        assert len(unfaced([*_SPAN, _debit(0, "2026-03-09", "200")], _contributions(("2026-03-05", "200")))) == 1
+    def test_a_debit_three_banking_days_off_does_not(self):
+        assert len(unfaced([*_SPAN, _debit(0, "2026-03-05", "200")], _contributions(("2026-03-02", "200")))) == 1
 
     def test_a_fee_kept_on_the_way_still_faces_it(self):
         assert unfaced([*_SPAN, _debit(0, "2026-03-05", "100")], _contributions(("2026-03-05", "99"))) == []
@@ -227,8 +241,8 @@ class TestUnfaced:
     def test_outside_the_bank_history_nothing_is_judged(self):
         """Before the first operation no debit can be read; too close to the
         last one, it may not be booked yet."""
-        found = unfaced(_SPAN, _contributions(("2026-02-27", "200"), ("2026-03-29", "200"), ("2026-03-28", "300")))
-        assert [c.day for c in found] == [date(2026, 3, 28)]
+        found = unfaced(_SPAN, _contributions(("2026-02-27", "200"), ("2026-03-30", "200"), ("2026-03-27", "300")))
+        assert [c.day for c in found] == [date(2026, 3, 27)]
 
 
 # ---------------------------------------------------------------------------
