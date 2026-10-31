@@ -17,6 +17,12 @@ derrière aucune option, rien ne se passe tant qu'il n'en écrit pas (décidé l
 
 Chaque changement de règle se mesure sur un dump réel, avant et après : paires, types, questions, totaux.
 
+**Un dépôt déclaré est validé, demandé ou listé, jamais couvert sans un mot** (décidé le 31/10). Validé : un Oui, ou
+la preuve du même jour pour une forme déjà validée. Demandé : une question Oui / Non sur l'opération en face. Listé :
+« Sans contrepartie bancaire ». Une seule règle dit ce qui est « en face », pour la question, l'alerte et la tenue des
+réponses (`contributions.fits`) : il n'y en a pas une plus large pour l'alerte. Un écart de date se compte partout en
+jours ouvrés (`services/banking/settlement.py`), paires comme dépôts : 2 au plus.
+
 ## Ce qui est automatique
 
 | Règle | Exemple | Pourquoi c'est sûr |
@@ -291,3 +297,6 @@ déduits.
 | Fusion : nom, nature et cadence gardés de part et d'autre (18/10) | poussé (4b45539) |
 | Catégories de récurrents par nature, terminés compris, total et mois par mois (18/10) | poussé (6f9ac2d) |
 | Règle qui classe autrement un récurrent confirmé : hors du total, nommée, annoncée avant (19/10) | fait |
+| Dépôt : 2 jours ouvrés au lieu de 3 jours de calendrier (31/10) | fait (6bb28c4) |
+| Dépôt : une seule règle « en face » pour la question et l'alerte, un Non remet dans l'alerte (31/10) | fait (fda3d82) |
+| PER, épargne salariale : « alimenté hors de mes banques », versements plus cherchés, rachats si (31/10) | fait (69cd7db) |
