@@ -176,16 +176,23 @@ class TestMatching:
         candidates = [Candidate(0, date(2026, 6, 2), Decimal("1020"), False)]
         assert match_candidates(candidates, _contributions(("2026-06-02", "1000")))[0].exact
 
-    def test_a_fee_apart_proves_nothing_the_day_after(self):
+    def test_a_fee_apart_the_day_after_is_only_a_hint(self):
         candidates = [Candidate(0, date(2026, 6, 3), Decimal("100"), False)]
-        assert match_candidates(candidates, _contributions(("2026-06-02", "99"))) == {}
+        [match] = match_candidates(candidates, _contributions(("2026-06-02", "99"))).values()
+        assert not match.exact
+
+    def test_the_amount_itself_is_shown_before_a_fee_apart(self):
+        candidates = [Candidate(0, date(2026, 6, 3), Decimal("100"), False)]
+        [match] = match_candidates(candidates, _contributions(("2026-06-04", "99.50"), ("2026-06-05", "100"))).values()
+        assert (match.contribution.amount, match.exact) == (Decimal("100"), False)
 
     def test_two_debits_a_fee_above_one_deposit_prove_nothing(self):
         candidates = [
             Candidate(0, date(2026, 6, 2), Decimal("100"), False),
             Candidate(1, date(2026, 6, 2), Decimal("99.50"), False),
         ]
-        assert match_candidates(candidates, _contributions(("2026-06-02", "99"))) == {}
+        matches = match_candidates(candidates, _contributions(("2026-06-02", "99")))
+        assert sorted(matches) == [0, 1] and not any(match.exact for match in matches.values())
 
     def test_an_exact_amount_wins_over_a_fee_apart(self):
         candidates = [
@@ -206,42 +213,23 @@ class TestMatching:
 # The declared movements no bank movement faces
 # ---------------------------------------------------------------------------
 
-def _debit(index: int, day: str, amount: str) -> Candidate:
-    return Candidate(index, date.fromisoformat(day), Decimal(amount), False)
-
-
-# The bank history spans March: every deposit below is judged.
-_SPAN = [_debit(90, "2026-03-01", "1"), _debit(91, "2026-03-31", "1")]
+def _listed(*items: tuple[str, str], shown: set[str] = frozenset()) -> list[Contribution]:
+    """Judged over a bank history spanning March."""
+    return unfaced(_contributions(*items), shown, date(2026, 3, 1), date(2026, 3, 31))
 
 
 class TestUnfaced:
-    def test_a_deposit_no_debit_faces_is_reported(self):
-        [found] = unfaced([*_SPAN, _debit(0, "2026-03-05", "150")], _contributions(("2026-03-05", "200")))
+    def test_a_deposit_shown_nowhere_is_listed(self):
+        [found] = _listed(("2026-03-05", "200"))
         assert (found.day, found.amount) == (date(2026, 3, 5), Decimal("200"))
 
-    def test_a_debit_two_banking_days_off_faces_it(self):
-        assert unfaced([*_SPAN, _debit(0, "2026-03-09", "200")], _contributions(("2026-03-05", "200"))) == []
-
-    def test_a_debit_three_banking_days_off_does_not(self):
-        assert len(unfaced([*_SPAN, _debit(0, "2026-03-05", "200")], _contributions(("2026-03-02", "200")))) == 1
-
-    def test_a_fee_kept_on_the_way_still_faces_it(self):
-        assert unfaced([*_SPAN, _debit(0, "2026-03-05", "100")], _contributions(("2026-03-05", "99"))) == []
-
-    def test_a_credit_never_faces_a_deposit(self):
-        credit = Candidate(0, date(2026, 3, 5), Decimal("200"), True)
-        assert len(unfaced([*_SPAN, credit], _contributions(("2026-03-05", "200")))) == 1
-
-    def test_one_debit_faces_one_deposit_only(self):
-        found = unfaced(
-            [*_SPAN, _debit(0, "2026-03-05", "200")], _contributions(("2026-03-05", "200"), ("2026-03-06", "200")),
-        )
-        assert [c.day for c in found] == [date(2026, 3, 6)]
+    def test_a_deposit_shown_beside_an_operation_is_not(self):
+        assert _listed(("2026-03-05", "200"), ("2026-03-06", "200"), shown={"deposit-0"})[0].day == date(2026, 3, 6)
 
     def test_outside_the_bank_history_nothing_is_judged(self):
-        """Before the first operation no debit can be read; too close to the
-        last one, it may not be booked yet."""
-        found = unfaced(_SPAN, _contributions(("2026-02-27", "200"), ("2026-03-30", "200"), ("2026-03-27", "300")))
+        """Before the first operation no debit can be read; within two banking
+        days of the last one, it may not be booked yet."""
+        found = _listed(("2026-02-27", "200"), ("2026-03-30", "200"), ("2026-03-27", "300"))
         assert [c.day for c in found] == [date(2026, 3, 27)]
 
 
@@ -905,3 +893,62 @@ class TestReviewQueue:
             date(2026, 3, 12), date(2026, 2, 10),
         ]
         assert review_queue(session, USER, master_key, 2025).unfaced == []
+
+    def _march(self, session: Session, master_key: str, *operations: tuple[str, str, str, str, str]) -> None:
+        """Operations inside a bank history spanning March, so every deposit is judged."""
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-03-01", "20.00", "DBIT", "CARTE BOULANGERIE"),
+            *operations,
+            (CURRENT, "2026-03-31", "20.00", "DBIT", "CARTE BOULANGERIE"),
+        )
+
+    def test_a_card_payment_a_fee_apart_the_next_day_asks_and_lists_nothing(self, session: Session, master_key: str):
+        """A purchase on an exchange by card: 15 € leave, 14.70 € arrive the day before."""
+        self._march(session, master_key, (CURRENT, "2026-03-06", "15.00", "DBIT", "CARTE EXCHANGE.COM"))
+        _wallet(session, master_key)
+        create_composite_crypto_transaction(session, CryptoCompositeTransactionCreate(
+            account_id=WALLET, asset_key="EUR", type=CryptoCompositeTransactionType.FIAT_DEPOSIT,
+            amount=Decimal("14.70"), executed_at=datetime(2026, 3, 5),
+        ), master_key)
+
+        tx = _month(session, master_key)["CARTE EXCHANGE.COM"]
+        assert (tx.asks_contribution, tx.contribution.exact, tx.contribution.amount) == (True, False, Decimal("14.70"))
+        assert review_queue(session, USER, master_key).unfaced == []
+
+    def test_a_no_lists_the_deposit_again(self, session: Session, master_key: str):
+        self._march(session, master_key, (CURRENT, "2026-03-06", "14.10", "DBIT", "CARTE FAST FOOD"))
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "13.69")
+        _say(session, master_key, _month(session, master_key)["CARTE FAST FOOD"], Said.NOT_CONTRIBUTION)
+
+        assert [u.amount for u in review_queue(session, USER, master_key).unfaced] == [Decimal("13.69")]
+        assert _month(session, master_key)["CARTE FAST FOOD"].asks_contribution is False
+
+    def test_four_banking_days_away_a_card_payment_neither_asks_nor_covers(self, session: Session, master_key: str):
+        """A restaurant on Monday, a deposit paid by the employer on Friday."""
+        self._march(session, master_key, (CURRENT, "2026-03-09", "32.40", "DBIT", "CARTE RESTAURANT"))
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-13", "32.05")
+
+        assert _month(session, master_key)["CARTE RESTAURANT"].contribution is None
+        assert [u.amount for u in review_queue(session, USER, master_key).unfaced] == [Decimal("32.05")]
+
+    def test_an_operation_typed_as_investment_covers_it(self, session: Session, master_key: str):
+        self._march(session, master_key, (CURRENT, "2026-03-06", "200.00", "DBIT", "VIR Virement vers PEA"))
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "200")
+        _answer(session, master_key, _month(session, master_key)["VIR Virement vers PEA"].id)
+
+        assert review_queue(session, USER, master_key).unfaced == []
+
+    def test_an_operation_a_rule_types_otherwise_asks_nothing_and_lists_it(self, session: Session, master_key: str):
+        """The rule speaks for the label; the deposit days away is left to the list, not covered unsaid."""
+        self._march(session, master_key, (CURRENT, "2026-03-06", "200.00", "DBIT", "VIR INST JEAN MARTIN"))
+        _pea(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "200")
+        tx = _month(session, master_key)["VIR INST JEAN MARTIN"]
+        set_transaction_type(session, USER, master_key, tx.id, Type.EXPENSE, TypeScope.LABEL)
+
+        assert _month(session, master_key)["VIR INST JEAN MARTIN"].asks_contribution is False
+        assert [u.amount for u in review_queue(session, USER, master_key).unfaced] == [Decimal("200.00")]

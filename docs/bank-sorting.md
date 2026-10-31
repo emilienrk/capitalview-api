@@ -39,8 +39,7 @@ l'utilisateur.
 - **Paire possible** entre deux comptes (sens opposés, même montant, au plus 2 jours ouvrés d'écart), qu'aucune règle
   ci-dessus ne confirme. Y compris entre deux comptes courants, même avec le même libellé, le même jour et le même
   montant. Une paire seulement proposée ne change aucun total.
-- **Dépôt Bourse/Crypto possible** : même montant, à 2 jours ouvrés au plus (comme une paire), ou avec un écart de
-  frais. Mesuré sur le dump (31/10) : les 12 opérations trouvées ou validées à quelques jours de leur dépôt étaient
+- **Dépôt Bourse/Crypto possible** : même montant ou un écart de frais, à 2 jours ouvrés au plus (comme une paire). Mesuré sur le dump (31/10) : les 12 opérations trouvées ou validées à quelques jours de leur dépôt étaient
   toutes à 2 jours ouvrés au plus, dont deux retraits Trade Republic d'un vendredi passés le mardi, que « 3 jours »
   manquait ; 4 ou 5 jours de calendrier laissaient un paiement au restaurant couvrir un versement PERU. La question est
   posée en Oui / Non sur chaque opération concernée (`services/banking/contribution_decisions.py`) : le badge
@@ -101,13 +100,23 @@ déclarés sur un compte Bourse, Crypto ou un placement pour lesquels aucune op�
 l'inverse du curseur : il attrape un compte d'investissement oublié, cette liste attrape un compte bancaire oublié. Ils
 ne reçoivent pas de question et ne changent aucun total.
 
-- Est « en face » toute opération de sens opposé, même montant ou un écart de frais, à 2 jours ouvrés au plus, quel que soit
-  son type. Une paire déjà reconnue entre deux comptes bancaires ne compte pas ; une paire seulement proposée, si.
-- Un pour un : une sortie de 200 € ne couvre pas deux dépôts de 200 €.
+- Un dépôt n'y figure que si rien ne le montre ailleurs : ni un Oui, ni une question posée sur une opération en face
+  (une paire proposée la pose aussi, le dépôt à côté), ni une opération en face déjà comptée en investissement. « En
+  face » se lit comme pour la question : sens opposé, même montant ou un écart de frais, à 2 jours ouvrés au plus. Une
+  seule règle pour la question, la tenue des réponses et cette liste (`contributions.fits`) : un dépôt est validé,
+  demandé ou listé, jamais couvert sans un mot.
+- Un « Non » le remet dans la liste. Une opération classée par une règle, un récurrent ou à la main ne pose sa
+  question que le même jour : un autre jour, le dépôt en face est listé.
+- Un pour un : une opération ne montre qu'un dépôt, le plus proche (le montant lui-même avant un écart de frais).
 - Seuls les dépôts compris dans l'historique bancaire sont jugés, et pas les 2 derniers jours ouvrés, où l'autre côté
   peut ne pas être encore passé.
-- Mesuré sur le dump : 64 dépôts déclarés, 3 sans contrepartie (500 € sur un compte « trst », 90,17 € et 180 € sur le
-  portefeuille crypto).
+- Décidé le 31/10. Avant, la liste prenait pour en face un écart de frais un autre jour, que la question ne demandait
+  pas, et ignorait les « Non » : un dépôt pouvait disparaître sans question. Mesuré sur le dump : 110 dépôts déclarés,
+  2 couverts ainsi (13,69 € face à un McDonald's de 14,10 € le lendemain ; 14,70 € sur le portefeuille crypto face à un
+  achat carte Binance de 15 €, sans doute le vrai). Ils deviennent des questions, avec les deux retraits Trade Republic :
+  5 opérations demandées, aucune classée autrement, 0 dépôt couvert sans un mot, 21 listés (12 versements PERU de
+  l'employeur, 7 sur le CTO, 2 sur le portefeuille). Dépôts décalés de 2 semaines à 3 mois : 8,9 questions de hasard
+  par essai au lieu de 5,6.
 
 ## Répondre
 

@@ -1583,27 +1583,38 @@ def review_queue(
             BankUnfacedContribution(
                 day=c.day, account_name=c.account_name, amount=c.amount, is_deposit=c.is_deposit,
             )
-            for c in reversed(_unfaced(movements, transfer_legs, filing.declared))
+            for c in reversed(_unfaced(movements, transfer_legs, filing))
             if year is None or c.day.year == year
         ],
     )
 
 
 def _unfaced(
-    movements: list[_Movement], transfer_legs: dict[int, _TransferLeg], contributions: Contributions,
+    movements: list[_Movement], transfer_legs: dict[int, _TransferLeg], filing: _Filing,
 ) -> list[Contribution]:
-    """The declared deposits and withdrawals no bank movement faces. A pair the
-    pairing settled moved money between two bank accounts and stands for no
-    deposit; a suggested one still may."""
-    return unfaced(
-        [
-            _candidate(index, movement)
-            for index, movement in enumerate(movements)
-            if _may_face(movement)
-            and (index not in transfer_legs or transfer_legs[index].status is BankTransferStatus.SUGGESTED)
-        ],
-        contributions,
-    )
+    """The declared deposits and withdrawals the user is shown nowhere else.
+
+    A contribution is shown when an operation facing it is settled by it, asks
+    whether it is it — a suggested pair asks too, the deposit beside it — or is
+    already counted as investment, by a type or a rule. Facing an operation
+    that asks nothing about it (a rule, a recurring payment or a hand-given
+    type) or one the user said no to, it is listed: nothing covers it unsaid.
+    """
+    shown: set[str] = set()
+    for index, match in filing.contributions.items():
+        movement, leg = movements[index], transfer_legs.get(index)
+        label = _label(movement, filing.master_key)
+        resolution = _filed(movements, transfer_legs, index, label, filing)
+        if (
+            resolution.type is CashflowType.INVESTMENT
+            or leg is not None
+            or _asks_deposit(movement, leg, label, resolution, match)
+        ):
+            shown.add(match.contribution.ref)
+    days = [movement.day for movement in movements if _may_face(movement)]
+    if not days:
+        return []
+    return unfaced(filing.declared, shown, min(days), max(days))
 
 
 def list_transfer_counterparts(
