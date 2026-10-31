@@ -122,7 +122,10 @@ def update_placement(
 ):
     account = _owned_or_404(session, account_id, current_user, master_key)
     previous_opened_at = account.opened_at
-    result = update_account(session, account, data, master_key)
+    try:
+        result = update_account(session, account, data, master_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     if "opened_at" in data.model_fields_set:
         _rebuild(session, account, current_user.uuid, master_key, previous_opened_at)
     return result

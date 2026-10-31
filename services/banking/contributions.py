@@ -35,8 +35,11 @@ debits of the same day, and none of the two is typed — the user is shown the
 deposit and settles it. Nothing is ever deduced from an amount alone.
 
 A placement has no cash of its own: every deposit and withdrawal the user
-writes on it is money crossing its boundary, so all of them count. Its
-statement balances are not movements at all and are never read here.
+writes on it is money crossing its boundary, so all of them count — but the
+deposits of one the user marked paid in outside their banks (an employer's
+top-up, a payslip's deduction), which no bank account ever carries: only its
+withdrawals are looked for. Its statement balances are not movements at all
+and are never read here.
 
 A platform may keep a fee on the way: 100 € leave the bank, 99 € reach the
 account. On the same day, a debit a little above a deposit (or a credit a
@@ -192,6 +195,7 @@ def load_contributions(session: Session, user_uuid: str, master_key: str) -> Con
         select(PlacementAccount).where(PlacementAccount.user_uuid_bidx == user_bidx)
     ).all()
     placement_names = {c.uuid: decrypt_data(c.name_enc, master_key) for c in placements}
+    paid_in_outside = {c.uuid for c in placements if c.paid_in_outside_banks}
     if placement_names:
         rows = session.exec(
             select(PlacementEntry).where(
@@ -200,7 +204,7 @@ def load_contributions(session: Session, user_uuid: str, master_key: str) -> Con
         ).all()
         for row in rows:
             kind = decrypt_data(row.type_enc, master_key)
-            if kind not in (_DEPOSIT, _WITHDRAW):
+            if kind not in (_DEPOSIT, _WITHDRAW) or (kind == _DEPOSIT and row.account_uuid in paid_in_outside):
                 continue
             day = _day(decrypt_data(row.occurred_at_enc, master_key))
             amount = _amount(decrypt_data(row.amount_enc, master_key))

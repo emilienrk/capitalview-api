@@ -108,6 +108,10 @@ ne reçoivent pas de question et ne changent aucun total.
 - Un « Non » le remet dans la liste. Une opération classée par une règle, un récurrent ou à la main ne pose sa
   question que le même jour : un autre jour, le dépôt en face est listé.
 - Un pour un : une opération ne montre qu'un dépôt, le plus proche (le montant lui-même avant un écart de frais).
+- Un PER ou une épargne salariale peut être marqué « alimenté hors de mes banques » (abondement de l'employeur,
+  prélèvement sur salaire) : ses versements ne sont plus cherchés côté banque, ni proposés, ni listés ; ses rachats
+  le sont toujours. Interrupteur par compte, coupé par défaut (décidé le 31/10) : sur le dump, 12 des 21 dépôts listés
+  étaient des versements PERU de l'employeur, et un paiement au restaurant pouvait en couvrir un.
 - Seuls les dépôts compris dans l'historique bancaire sont jugés, et pas les 2 derniers jours ouvrés, où l'autre côté
   peut ne pas être encore passé.
 - Décidé le 31/10. Avant, la liste prenait pour en face un écart de frais un autre jour, que la question ne demandait

@@ -23,6 +23,7 @@ import sqlalchemy as sa
 from sqlmodel import Session, select
 
 from dtos.placement import (
+    OUTSIDE_BANKS_ONLY,
     PlacementAccountCreate,
     PlacementAccountResponse,
     PlacementAccountUpdate,
@@ -33,7 +34,7 @@ from dtos.placement import (
 )
 from dtos.transaction import AccountHistorySnapshotResponse
 from models.account_history import AccountHistory
-from models.enums import PlacementType, PlacementEntryType
+from models.enums import FUNDED_OUTSIDE_BANKS, PlacementType, PlacementEntryType
 from models.placement import PlacementAccount, PlacementEntry
 from services.analytics.returns import annualize
 from services.encryption import decrypt_data, encrypt_data, hash_index
@@ -236,6 +237,7 @@ def _map_account(
         ),
         opened_at=account.opened_at,
         expected_return_rate=expected,
+        paid_in_outside_banks=account.paid_in_outside_banks,
         current_value=round(current_value, 2),
         total_deposits=round(deposits, 2),
         total_withdrawals=round(withdrawals, 2),
@@ -307,6 +309,7 @@ def create_account(
             else None
         ),
         opened_at=data.opened_at,
+        paid_in_outside_banks=data.paid_in_outside_banks,
     )
     session.add(account)
     session.commit()
@@ -321,6 +324,9 @@ def update_account(
     master_key: str,
 ) -> PlacementAccountResponse:
     fields = data.model_fields_set
+    placement_type = data.placement_type or PlacementType(decrypt_data(account.placement_type_enc, master_key))
+    if data.paid_in_outside_banks and placement_type not in FUNDED_OUTSIDE_BANKS:
+        raise ValueError(OUTSIDE_BANKS_ONLY)
     if data.name is not None:
         account.name_enc = encrypt_data(data.name, master_key)
     if data.placement_type is not None:
@@ -337,6 +343,11 @@ def update_account(
         )
     if "opened_at" in fields:
         account.opened_at = data.opened_at
+    if data.paid_in_outside_banks is not None:
+        account.paid_in_outside_banks = data.paid_in_outside_banks
+    if placement_type not in FUNDED_OUTSIDE_BANKS:
+        # Moved to a type no employer pays into: its deposits are looked for again.
+        account.paid_in_outside_banks = False
 
     session.add(account)
     session.commit()

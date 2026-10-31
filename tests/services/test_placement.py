@@ -179,6 +179,31 @@ def test_a_deposit_on_a_placement_proves_the_transfer_but_a_statement_does_not(
     assert (True, Decimal("5000.00")) not in contributions.by_amount
 
 
+def test_a_placement_paid_in_outside_the_banks_offers_only_its_withdrawals(session: Session, master_key: str):
+    """An employer's top-ups never cross a bank account; the money taken out does."""
+    from services.banking.transfer_patterns import source_digest
+
+    account = PlacementAccount(
+        uuid="peru",
+        user_uuid_bidx=hash_index(USER, master_key),
+        name_enc=encrypt_data("PERU", master_key),
+        placement_type_enc=encrypt_data("EPARGNE_SALARIALE", master_key),
+    )
+    session.add(account)
+    session.commit()
+    session.add(_entry("peru", Kind.DEPOSIT, "2025-03-05", "32.05", master_key))
+    session.add(_entry("peru", Kind.WITHDRAW, "2025-04-10", "800", master_key))
+    session.commit()
+    before = source_digest(session, hash_index(USER, master_key), [], frozenset(), master_key)
+
+    account.paid_in_outside_banks = True
+    session.add(account)
+    session.commit()
+
+    assert list(load_contributions(session, USER, master_key).by_amount) == [(False, Decimal("800.00"))]
+    assert source_digest(session, hash_index(USER, master_key), [], frozenset(), master_key) != before
+
+
 def test_a_single_lump_sum_is_not_projected_as_a_monthly_contribution(session: Session, master_key: str):
     from datetime import timedelta
 

@@ -62,7 +62,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "36"
+_VERSION = "37"
 
 
 class FlowCarrier(NamedTuple):
@@ -361,9 +361,13 @@ def _investment_rows(session: Session, user_bidx: str, master_key: str) -> list[
         ).one()
         signature.append(list(counted))
 
-    placement_uuids = session.exec(
-        select(PlacementAccount.uuid).where(PlacementAccount.user_uuid_bidx == user_bidx)
+    placements = session.exec(
+        select(PlacementAccount.uuid, PlacementAccount.paid_in_outside_banks)
+        .where(PlacementAccount.user_uuid_bidx == user_bidx)
     ).all()
+    placement_uuids = [uuid for uuid, _ in placements]
+    # Which deposits are looked for at all: a placement marked paid in outside the banks has none.
+    signature.append(sorted(uuid for uuid, outside in placements if outside))
     if placement_uuids:
         counted = session.exec(
             select(
