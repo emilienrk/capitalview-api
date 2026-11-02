@@ -96,6 +96,17 @@ class BankImportReplacedEntry(BaseModel):
     label: str | None = None
 
 
+class BankImportCarriedEntry(BaseModel):
+    """The opening balance the file reaches back over: carried to the eve of
+    the file's first operation, less what the file adds before its day, so the
+    balance it stated stays (docs/bank-ledger.md)."""
+    day: date
+    amount: Decimal  # signed
+    label: str | None = None
+    to_day: date
+    to_amount: Decimal
+
+
 class BankImportCurvePreview(BaseModel):
     """The balance curve a movements file draws before a linked account's
     history, anchored so that it meets the bank's."""
@@ -129,6 +140,7 @@ class ImportPreviewResponse(BaseModel):
     # Account no bank feeds only (docs/bank-ledger.md): what the file replaces,
     # and the balance at its last operation once imported.
     bank_replaced: list[BankImportReplacedEntry] | None = None
+    bank_carried: BankImportCarriedEntry | None = None
     bank_balance_after: Decimal | None = None
     bank_balance_after_date: date | None = None
 
@@ -154,3 +166,5 @@ class ImportConfirmResponse(BaseModel):
     covered_by_bank_count: int = 0
     # Adjustments the import replaced.
     replaced_count: int = 0
+    # The opening balance the import carried back, if it reached over it.
+    carried: BankImportCarriedEntry | None = None
