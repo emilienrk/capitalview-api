@@ -384,12 +384,18 @@ def test_what_is_fixed_and_what_is_still_due_this_month(session: Session, master
     assert current.upcoming_amount == Decimal("60.00")
 
 
-def test_an_account_not_synced_since_expects_nothing(session: Session, master_key: str):
+def test_an_account_not_synced_since_keeps_its_fixed_charges_but_expects_nothing(session: Session, master_key: str):
+    # Confirmed on an account last synced before its due date: still fixed,
+    # in the Réel as in the Récurrents tab — but no due date is expected of
+    # it this month, since one may have passed unseen.
     today = date(2026, 4, 2)
     _ops(session, master_key, *_months(CURRENT, "2025-08", 8, 5, "60.00", EDF))
     _synced(session, master_key, CURRENT, date(2026, 3, 20))
+    _confirm_all(session, master_key)
 
-    assert real_cashflow_year(session, USER, master_key, 2026, today=today).running_recurring == Decimal("0")
+    listed = list_recurring(session, USER, master_key, today=today)
+    assert (listed.items[0].status, listed.monthly_total) == ("stale", Decimal("60.00"))
+    assert real_cashflow_year(session, USER, master_key, 2026, today=today).running_recurring == Decimal("60.00")
     assert real_cashflow_current(session, USER, master_key, today=today).upcoming == []
 
 

@@ -8,6 +8,8 @@ patterns (services/banking/recurring_series.py). Nothing here writes one:
 a route writes a decision (services/banking/recurring_decisions.py), which
 moves the digest the patterns are kept fresh by, and reads the recurring payment
 back from the rebuild.
+
+Rules: docs/bank-sorting.md — R47 to R50.
 """
 
 from __future__ import annotations
@@ -120,8 +122,7 @@ def list_recurring(
 
     counted = [
         item for item in items
-        if item.state is RecurringState.CONFIRMED and item.retyped is None
-        and item.status in (RecurringStatus.ACTIVE, RecurringStatus.STALE)
+        if item.state is RecurringState.CONFIRMED and item.retyped is None and item.status in FIXED_STATUSES
     ]
     currencies = [item.currency for item in counted] or [item.currency for item in items]
     currency = max(sorted(set(currencies)), key=currencies.count) if currencies else "EUR"
@@ -135,18 +136,28 @@ def list_recurring(
     )
 
 
+# What a counted recurring must be to stay fixed: running, or on an account
+# nobody has synced since its last due date — which does not end it. The same
+# test as the Récurrents tab's total (`list_recurring`), so the fixed charges
+# of the Réel and the tab never disagree (docs/bank-sorting.md, R50).
+FIXED_STATUSES = frozenset({RecurringStatus.ACTIVE, RecurringStatus.STALE})
+
+
 def active_counted(
-    session: Session, user_uuid: str, master_key: str, accounts: _Accounts, patterns: TransferPatterns, today: date
+    session: Session, user_uuid: str, master_key: str, accounts: _Accounts, patterns: TransferPatterns, today: date,
+    statuses: frozenset[RecurringStatus] = FIXED_STATUSES,
 ) -> list[tuple[StoredRecurring, BankRecurringItem]]:
-    """The counted recurring payments and income still running on `today`:
-    what the real cashflow calls fixed, and whose next due dates it expects.
+    """The counted recurring payments and income still fixed on `today`:
+    what the real cashflow calls fixed, and — narrowed to `ACTIVE` by the
+    caller — whose next due dates it expects: on an account not synced since,
+    a due date may have passed unseen, so nothing is expected of it.
     Both directions: the caller reads `stored.direction`."""
     reader = _Reader(session, user_uuid, master_key, accounts, patterns, today)
     return [
         (stored, item)
         for stored in patterns.recurring if stored.counted and stored.retyped is None
         for item in [reader.item(stored)]
-        if item.status is RecurringStatus.ACTIVE
+        if item.status in statuses
     ]
 
 

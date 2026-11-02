@@ -44,6 +44,7 @@ from dtos.banking import (
     RealCashflowYear,
     RealCashflowYearTrend,
     RecurringDirection,
+    RecurringStatus,
 )
 from models.bank import BankAccount
 from models.banking import BankTransaction
@@ -232,8 +233,9 @@ def real_cashflow_recent(
 def _running(
     session: Session, user_uuid: str, master_key: str, accounts: _Accounts, reading: _Reading, today: date,
 ) -> dict[str, Decimal]:
-    """What the active recurring payments cost a month, and what the active
-    recurring income brings."""
+    """What the fixed recurring payments cost a month, and what the fixed
+    recurring income brings: the same ones the Récurrents tab totals, an
+    account not synced since included."""
     running = {RecurringDirection.EXPENSE: Decimal("0"), RecurringDirection.INCOME: Decimal("0")}
     for _, item in active_counted(session, user_uuid, master_key, accounts, reading.patterns, today):
         if item.currency == reading.currency:
@@ -313,7 +315,11 @@ def real_cashflow_current(
 
     cumulated = _cumulated(reading.daily[period], length)
     spent_to_date = cumulated[today.day - 1]
-    active = active_counted(session, user_uuid, master_key, accounts, reading.patterns, today)
+    # Running ones only: an account not synced since may have paid a due date
+    # unseen, so nothing is expected of its recurring payments.
+    active = active_counted(
+        session, user_uuid, master_key, accounts, reading.patterns, today, frozenset({RecurringStatus.ACTIVE}),
+    )
     upcoming = _upcoming(
         [(stored, item) for stored, item in active if stored.kind is CashflowType.EXPENSE],
         reading.pending_debits, reading.currency, today, _last_day(period),
