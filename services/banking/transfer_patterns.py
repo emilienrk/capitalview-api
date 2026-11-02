@@ -27,6 +27,9 @@ which operation of each label nothing types but the user carries its question,
 since a month's reader cannot tell which occurrence of a label is the last —
 with the amounts still open, so a reader can say what an answer may move — and
 the span of days each account's history covers.
+
+Rules: docs/bank-sorting.md — R9, R52: everything the reading consumes enters
+`source_digest`, and `_VERSION` moves when the derivation changes.
 """
 
 from __future__ import annotations

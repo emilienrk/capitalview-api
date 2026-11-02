@@ -16,6 +16,8 @@ MARTIN") may send money to an investment account one day and anywhere the next.
 A type is never guessed from a label's vocabulary: NEUTRAL only comes from a
 pair or from the user, and saving or investing from a pair, from the user, or
 from a movement the user declared on the account the money went to.
+
+Rules: docs/bank-sorting.md — R37 (priority), R38 (which leg of a pair counts).
 """
 
 from __future__ import annotations

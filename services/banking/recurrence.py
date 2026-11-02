@@ -31,6 +31,9 @@ on 29 synthetic edge cases, all kept as tests. Income measured on the dump of
 2026-09-23: 440 credits, 56 chains, the salaries, allowances and family
 transfers kept, the friends paying back left out. Without the means of payment,
 measured again on the dump of 2026-09-25: the same 25 series, no new one.
+
+Rules: docs/bank-sorting.md — R41 to R46; R53: measure on the dump before changing
+a threshold or a layer.
 """
 
 from __future__ import annotations

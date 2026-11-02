@@ -7,6 +7,8 @@ settlement, and one around Easter or Christmas reads further still.
 
 Read by the pairing of internal transfers (`flows`) and by the matching of a
 declared deposit with its bank movement (`contributions`).
+
+Rule: docs/bank-sorting.md — R6.
 """
 
 from datetime import date, timedelta

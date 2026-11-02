@@ -15,6 +15,8 @@ longer grows its own series from its operations (`recurrence.seed_series`):
 that is also how an operation the user marked by hand becomes a recurring payment.
 The latest decision on a series wins; one decision may hold several series,
 merged by the user.
+
+Rules: docs/bank-sorting.md — R42, R44, R47, R48.
 """
 
 from __future__ import annotations
