@@ -4,7 +4,7 @@ Backend API for CapitalView (FastAPI + SQLModel + PostgreSQL).
 
 ## Stack
 
-- Python 3.14+
+- Python 3.15+
 - FastAPI
 - SQLModel / SQLAlchemy
 - Alembic
