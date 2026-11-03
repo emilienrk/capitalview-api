@@ -6,7 +6,7 @@ from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, Field, model_validator
 
-from models.enums import PlacementType, PlacementEntryType
+from models.enums import FUNDED_OUTSIDE_BANKS, PlacementType, PlacementEntryType
 
 
 def _not_in_future(v: date | None) -> date | None:
@@ -23,6 +23,8 @@ def _not_in_future(v: date | None) -> date | None:
 PlacementDateOpt = Annotated[date | None, AfterValidator(_not_in_future)]
 PlacementDate = Annotated[date, AfterValidator(_not_in_future)]
 
+OUTSIDE_BANKS_ONLY = "Seuls un PER et l'épargne salariale peuvent être alimentés hors de vos banques."
+
 
 class PlacementAccountCreate(BaseModel):
     """Create a placement."""
@@ -31,6 +33,13 @@ class PlacementAccountCreate(BaseModel):
     institution_name: str | None = None
     opened_at: PlacementDateOpt = None
     expected_return_rate: Decimal | None = Field(default=None, ge=-1, le=1)
+    paid_in_outside_banks: bool = False
+
+    @model_validator(mode="after")
+    def paid_in_outside_banks_fits_the_type(self) -> "PlacementAccountCreate":
+        if self.paid_in_outside_banks and self.placement_type not in FUNDED_OUTSIDE_BANKS:
+            raise ValueError(OUTSIDE_BANKS_ONLY)
+        return self
 
 
 class PlacementAccountUpdate(BaseModel):
@@ -40,6 +49,7 @@ class PlacementAccountUpdate(BaseModel):
     institution_name: str | None = None
     opened_at: PlacementDateOpt = None
     expected_return_rate: Decimal | None = Field(default=None, ge=-1, le=1)
+    paid_in_outside_banks: bool | None = None
 
 
 class PlacementEntryCreate(BaseModel):
@@ -88,6 +98,7 @@ class PlacementAccountResponse(BaseModel):
     institution_name: str | None = None
     opened_at: date | None = None
     expected_return_rate: Decimal | None = None
+    paid_in_outside_banks: bool = False
 
     current_value: Decimal
     total_deposits: Decimal

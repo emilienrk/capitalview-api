@@ -47,12 +47,22 @@ class NoProviderAvailableError(Exception):
     """Raised when no provider can satisfy the required capability."""
 
 
-def build_provider(provider_id: str, api_key: str, model: str | None = None) -> AIProvider:
-    """Instantiate a provider; `model=None` leaves it on "automatic"."""
+def build_provider(
+    provider_id: str,
+    api_key: str,
+    model: str | None = None,
+    vision_model: str | None = None,
+) -> AIProvider:
+    """Instantiate a provider; a model left None stays on "automatic".
+
+    `model` serves the chat, `vision_model` the photo import.
+    """
     provider_class = _PROVIDER_CLASSES.get(provider_id)
     if provider_class is None:
         raise ValueError(f"Unknown provider '{provider_id}'")
-    return provider_class(api_key=api_key, model=model)
+    provider = provider_class(api_key=api_key, model=model)
+    provider.vision_model = vision_model
+    return provider
 
 
 class AIProviderManager:
@@ -141,7 +151,9 @@ class AIProviderManager:
                 continue
 
             try:
-                providers[provider_id] = build_provider(provider_id, api_key, row.selected_model)
+                providers[provider_id] = build_provider(
+                    provider_id, api_key, row.selected_model, row.selected_vision_model
+                )
             except Exception as exc:
                 logger.warning("Failed to init provider '%s': %s", provider_id, exc)
 

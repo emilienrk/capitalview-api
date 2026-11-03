@@ -11,8 +11,16 @@ Measured on 53 months, 62 declared deposits against 3 421 final debits: on the
 **same day**, same amount, among transfers sent, 51 matched one debit and one
 only, 4 matched several, 7 matched none. Widening to three days made it worse —
 50 unique, 6 ambiguous — so the deduction is made on the exact day alone.
-Within `TOLERANCE_DAYS` a deposit is reported as a hint beside the question,
-which the user answers; it types nothing by itself.
+Within `TOLERANCE_BANKING_DAYS` a deposit is reported as a hint beside the
+question, which the user answers; it types nothing by itself.
+
+Whatever could be a contribution is either settled, asked about, or listed as
+facing nothing (`unfaced`): never taken as covered without a word. One test
+decides it, `fits`, for the hint, for the hold of the user's answers and for
+that list alike. Before (until 31/10), the list read a fee apart days away as
+covering, which the question did not ask about: a card payment of 14.10 €
+silenced a 13.69 € deposit unasked, and a 15 € card purchase on an exchange
+counted as spending beside its 14.70 € deposit.
 
 Two rows never stand for a transfer from the bank, because the app wrote them
 itself and no money crossed the account's boundary: a stock account's automatic
@@ -27,15 +35,19 @@ debits of the same day, and none of the two is typed — the user is shown the
 deposit and settles it. Nothing is ever deduced from an amount alone.
 
 A placement has no cash of its own: every deposit and withdrawal the user
-writes on it is money crossing its boundary, so all of them count. Its
-statement balances are not movements at all and are never read here.
+writes on it is money crossing its boundary, so all of them count — but the
+deposits of one the user marked paid in outside their banks (an employer's
+top-up, a payslip's deduction), which no bank account ever carries: only its
+withdrawals are looked for. Its statement balances are not movements at all
+and are never read here.
 
 A platform may keep a fee on the way: 100 € leave the bank, 99 € reach the
 account. On the same day, a debit a little above a deposit (or a credit a
 little below a withdrawal) proves it too, when each is the other's only fit.
 Measured on the same history: 57 of the 62 deposits proved instead of 54, and
 with every deposit moved two weeks to three months away, 0.30 coincidences a
-trial instead of 0.25 — 2 € or 3 % proved no more, for 0.40.
+trial instead of 0.25 — 2 € or 3 % proved no more, for 0.40. A day or two
+away, a fee apart proves nothing and is shown as a hint, as the amount is.
 Between two bank accounts nothing is kept on the way: the pairing stays exact.
 """
 
@@ -54,12 +66,18 @@ from models.crypto import CryptoAccount, CryptoTransaction
 from models.placement import PlacementAccount, PlacementEntry
 from models.stock import StockAccount, StockTransaction
 from services.analytics.flows import AUTO_PROVISION_NOTE
+from services.banking.settlement import banking_days_between
 from services.encryption import decrypt_data, hash_index
 
-# How far a deposit may sit from a movement to be worth showing beside it. Three
-# days holds the settlement delay of a transfer booked on a Friday; past it, the
-# amounts on show are coincidences.
-TOLERANCE_DAYS = 3
+# How far a deposit may sit from a movement to be worth showing beside it, in
+# banking days (services/banking/settlement.py). Measured on the dump: the 12
+# movements found or answered days off their deposit all settled within two
+# banking days — a withdrawal sent on a Friday lands on Tuesday, four calendar
+# days on, which three calendar days missed — and two banking days show no more
+# coincidences than three calendar days did.
+TOLERANCE_BANKING_DAYS = 2
+# Beyond this, no calendar holds enough closed days to stay inside the tolerance.
+_TOLERANCE_MAX_CALENDAR_DAYS = 10
 
 # What a platform may keep of a deposit, or of a withdrawal, on the way: the
 # larger of a flat fee and a share of the amount.
@@ -177,6 +195,7 @@ def load_contributions(session: Session, user_uuid: str, master_key: str) -> Con
         select(PlacementAccount).where(PlacementAccount.user_uuid_bidx == user_bidx)
     ).all()
     placement_names = {c.uuid: decrypt_data(c.name_enc, master_key) for c in placements}
+    paid_in_outside = {c.uuid for c in placements if c.paid_in_outside_banks}
     if placement_names:
         rows = session.exec(
             select(PlacementEntry).where(
@@ -185,7 +204,7 @@ def load_contributions(session: Session, user_uuid: str, master_key: str) -> Con
         ).all()
         for row in rows:
             kind = decrypt_data(row.type_enc, master_key)
-            if kind not in (_DEPOSIT, _WITHDRAW):
+            if kind not in (_DEPOSIT, _WITHDRAW) or (kind == _DEPOSIT and row.account_uuid in paid_in_outside):
                 continue
             day = _day(decrypt_data(row.occurred_at_enc, master_key))
             amount = _amount(decrypt_data(row.amount_enc, master_key))
@@ -298,23 +317,32 @@ def match_candidates(candidates: list[Candidate], contributions: Contributions) 
 
     _match_fees(candidates, contributions, matches, claimed)
 
+    # Near the day, the one test every reader shares (`fits`): what is shown
+    # beside an operation, what a user's answer holds on to, and what keeps a
+    # contribution off the list of those nothing faces are one and the same.
+    open_by_day: dict[tuple[bool, date], list[Contribution]] = defaultdict(list)
+    for (is_deposit, amount), items in contributions.by_amount.items():
+        for rank, contribution in enumerate(items):
+            if (is_deposit, amount, rank) not in claimed:
+                open_by_day[(is_deposit, contribution.day)].append(contribution)
     for candidate in sorted(candidates):
         if candidate.index in matches:
             continue
-        key = (not candidate.is_credit, candidate.amount)
-        near = sorted(
-            (
-                (abs((contribution.day - candidate.day).days), contribution)
-                for rank, contribution in enumerate(contributions.by_amount.get(key, ()))
-                if abs((contribution.day - candidate.day).days) <= TOLERANCE_DAYS
-                and (*key, rank) not in claimed
-            ),
-            # On the day and the gap alone: two contributions of the same amount
-            # and day are interchangeable here, and never compared themselves.
-            key=lambda pair: (pair[0], pair[1].day),
-        )
+        near = [
+            contribution
+            for gap in range(-_TOLERANCE_MAX_CALENDAR_DAYS, _TOLERANCE_MAX_CALENDAR_DAYS + 1)
+            for contribution in open_by_day.get(
+                (not candidate.is_credit, candidate.day + timedelta(days=gap)), (),
+            )
+            if fits(candidate, contribution)
+        ]
         if near:
-            matches[candidate.index] = Match(near[0][1], exact=False)
+            # The amount itself before a fee apart, then the nearest day. Two
+            # contributions of the same amount and day are interchangeable here.
+            nearest = min(
+                near, key=lambda c: (c.amount != candidate.amount, abs((c.day - candidate.day).days), c.day),
+            )
+            matches[candidate.index] = Match(nearest, exact=False)
     return matches
 
 
@@ -350,56 +378,47 @@ def _match_fees(
             claimed.add(ref)
 
 
-def unfaced(candidates: list[Candidate], contributions: Contributions) -> list[Contribution]:
-    """The declared movements no bank movement can be, oldest first: nothing of
-    the opposite direction within TOLERANCE_DAYS, at the amount or a fee apart.
-    The money came from, or went to, an account the app does not hold.
+def unfaced(contributions: Contributions, shown: Collection[str], first: date, last: date) -> list[Contribution]:
+    """The declared movements the user sees beside no bank movement, oldest
+    first: `shown` holds the refs of those settled, asked about or already
+    counted as investment (`flows._unfaced`). The money came from, or went to,
+    an account the app does not hold — or the user said no to what faced it.
 
-    Read the other way round from `match_candidates`: any movement may stand
-    for a contribution here, however it is typed, and a near day is enough —
-    only one nothing could be is reported. Still one for one: two 200 €
-    deposits of a day are not both faced by one 200 € debit. Only the
-    contributions the bank history spans are judged, `TOLERANCE_DAYS` short of
-    its last day, where the other leg may not be booked yet.
+    Only the contributions the bank history spans, `first` to `last`, are
+    judged, and none `TOLERANCE_BANKING_DAYS` short of its last day, where the
+    other leg may not be booked yet.
     """
-    if not contributions or not candidates:
-        return []
-    first = min(candidate.day for candidate in candidates)
-    last = max(candidate.day for candidate in candidates)
-    by_day: dict[tuple[bool, date], list[Candidate]] = defaultdict(list)
-    for candidate in candidates:
-        by_day[(candidate.is_credit, candidate.day)].append(candidate)
-
-    spent: set[int] = set()
-    found: list[Contribution] = []
-    for contribution in sorted(
-        (c for items in contributions.by_amount.values() for c in items), key=lambda c: (c.day, c.amount),
-    ):
-        if contribution.day < first or (last - contribution.day).days < TOLERANCE_DAYS:
-            continue
-        fits = [
-            (candidate.amount != contribution.amount, gap, candidate.index)
-            for gap in range(TOLERANCE_DAYS + 1)
-            for day in {contribution.day - timedelta(days=gap), contribution.day + timedelta(days=gap)}
-            for candidate in by_day.get((not contribution.is_deposit, day), ())
-            if candidate.index not in spent
-            and (candidate.amount == contribution.amount or _a_fee_apart(candidate, contribution))
-        ]
-        if fits:
-            spent.add(min(fits)[2])
-        else:
-            found.append(contribution)
-    return found
+    return sorted(
+        (
+            contribution
+            for contribution in contributions.all()
+            if contribution.ref not in shown
+            and first <= contribution.day <= last
+            and (
+                (last - contribution.day).days > _TOLERANCE_MAX_CALENDAR_DAYS
+                or banking_days_between(contribution.day, last) >= TOLERANCE_BANKING_DAYS
+            )
+        ),
+        key=lambda c: (c.day, c.amount),
+    )
 
 
 def fits(candidate: Candidate, contribution: Contribution) -> bool:
     """Whether a movement can be this contribution at all: the other direction,
-    within `TOLERANCE_DAYS`, at the amount or a fee apart. What a decision of
+    within `TOLERANCE_BANKING_DAYS`, at the amount or a fee apart. What a decision of
     the user needs to hold — a deposit moved or changed since no longer does."""
     return (
         candidate.is_credit != contribution.is_deposit
-        and abs((contribution.day - candidate.day).days) <= TOLERANCE_DAYS
+        and within_tolerance(contribution.day, candidate.day)
         and (candidate.amount == contribution.amount or _a_fee_apart(candidate, contribution))
+    )
+
+
+def within_tolerance(first: date, second: date) -> bool:
+    """Whether two days are close enough for a movement to be a contribution."""
+    return (
+        abs((first - second).days) <= _TOLERANCE_MAX_CALENDAR_DAYS
+        and banking_days_between(first, second) <= TOLERANCE_BANKING_DAYS
     )
 
 

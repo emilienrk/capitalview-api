@@ -206,6 +206,35 @@ def test_entries_can_be_edited_and_deleted():
     assert client.get(f"/placements/{placement_id}/entries").json() == []
 
 
+def test_employee_savings_can_be_marked_paid_in_outside_the_banks():
+    client = TestClient(app)
+    placement_id = _placement(client, placement_type="EPARGNE_SALARIALE", paid_in_outside_banks=True)
+
+    assert client.get(f"/placements/{placement_id}").json()["paid_in_outside_banks"] is True
+    r = client.put(f"/placements/{placement_id}", json={"paid_in_outside_banks": False})
+    assert (r.status_code, r.json()["paid_in_outside_banks"]) == (200, False)
+
+
+def test_only_a_per_or_employee_savings_may_be_paid_in_outside_the_banks():
+    client = TestClient(app)
+    r = client.post("/placements", json={"name": "Spirit", "placement_type": "AV", "paid_in_outside_banks": True})
+    assert r.status_code == 422
+
+    placement_id = _placement(client)
+    r = client.put(f"/placements/{placement_id}", json={"paid_in_outside_banks": True})
+    assert r.status_code == 400
+    assert client.get(f"/placements/{placement_id}").json()["paid_in_outside_banks"] is False
+
+
+def test_turning_employee_savings_into_an_av_looks_for_its_deposits_again():
+    client = TestClient(app)
+    placement_id = _placement(client, placement_type="PER", paid_in_outside_banks=True)
+
+    r = client.put(f"/placements/{placement_id}", json={"placement_type": "AV"})
+
+    assert (r.status_code, r.json()["paid_in_outside_banks"]) == (200, False)
+
+
 def test_updating_a_placement_can_clear_its_optional_fields():
     client = TestClient(app)
     placement_id = _placement(client, institution_name="Spirica", expected_return_rate="0.03")

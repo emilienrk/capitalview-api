@@ -27,6 +27,8 @@ class OpenRouterProvider(DeepseekProvider):
     # Passed on to the models that take one; the others still see the schema
     # in the system prompt.
     native_json_schema = True
+    # DeepSeek's own switch; OpenRouter routes to many vendors that know none
+    disables_thinking = False
 
     def __init__(
         self,

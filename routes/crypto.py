@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from database import get_session
+from dtos._extracted import describe_rejection
 from models import User, CryptoAccount, CryptoTransaction
 from services.auth import get_current_user, get_master_key
 from models.enums import CryptoCompositeTransactionType, CryptoTransactionType, AssetType
@@ -454,6 +455,7 @@ async def extract_crypto_transactions_from_photo(
     else:
         tx_list = []
 
+    rejected: list[str] = []
     for tx in tx_list:
         if not isinstance(tx, dict):
             continue
@@ -461,7 +463,18 @@ async def extract_crypto_transactions_from_photo(
             transactions.append(ExtractedCryptoTransaction(**tx))
         except Exception as exc:
             print(f"WARNING: Failed to parse crypto transaction: {tx}. Error: {exc}")
-            continue
+            rejected.append(describe_rejection(exc))
+
+    if rejected and not transactions:
+        # The model did read transactions: an empty list would tell the user
+        # the photo was unreadable.
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{len(rejected)} transaction(s) lue(s) sur la photo, mais aucune n'a un "
+                f"format exploitable ({rejected[0]}). Réessayez ou changez de modèle."
+            ),
+        )
 
     return CryptoPhotoExtractResponse(transactions=transactions)
 

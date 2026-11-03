@@ -3,7 +3,11 @@
 from datetime import datetime
 from decimal import Decimal
 
+from typing import Annotated
+
 from pydantic import BaseModel, Field
+
+from dtos._extracted import ReadDatetimeInput, ReadDecimal, ReadFees, ReadUpper
 
 from dtos._dates import (
     ValidDateOpt,
@@ -138,11 +142,11 @@ class AssetInfoResponse(BaseModel):
 
 class ExtractedStockTransaction(BaseModel):
     asset_key: str | None = None
-    type: StockTransactionType
-    amount: Decimal
-    price_per_unit: Decimal
-    fees: Decimal = Decimal("0")
-    executed_at: ValidDatetime
+    type: Annotated[StockTransactionType, ReadUpper]
+    amount: ReadDecimal
+    price_per_unit: ReadDecimal
+    fees: ReadFees = Decimal("0")
+    executed_at: Annotated[ValidDatetime, ReadDatetimeInput]
     notes: str | None = None
 
 

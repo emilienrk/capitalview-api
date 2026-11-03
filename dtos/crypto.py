@@ -1,7 +1,11 @@
 from datetime import datetime
 from decimal import Decimal
 
+from typing import Annotated
+
 from pydantic import BaseModel, Field, model_validator
+
+from dtos._extracted import ReadDatetimeInput, ReadDecimal, ReadDecimalOpt, ReadUpper
 
 from dtos._dates import (
     UtcDatetimeOut,
@@ -270,14 +274,14 @@ class BinanceImportConfirmResponse(BaseModel):
 
 
 class ExtractedCryptoTransaction(BaseModel):
-    type: CryptoCompositeTransactionType
+    type: Annotated[CryptoCompositeTransactionType, ReadUpper]
     asset_key: str
-    amount: Decimal = Field(gt=0)
+    amount: ReadDecimal = Field(gt=0)
     quote_asset_key: str | None = None
-    quote_amount: Decimal | None = Field(default=None, ge=0)
+    quote_amount: ReadDecimalOpt = Field(default=None, ge=0)
     fee_asset_key: str | None = None
-    fee_amount: Decimal | None = Field(default=None, ge=0)
-    executed_at: ValidDatetime
+    fee_amount: ReadDecimalOpt = Field(default=None, ge=0)
+    executed_at: Annotated[ValidDatetime, ReadDatetimeInput]
     tx_hash: str | None = None
     notes: str | None = None
 

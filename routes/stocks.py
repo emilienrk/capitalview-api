@@ -11,6 +11,7 @@ from services.ai.agents.extract_tx_agent import ExtractTxAgent
 from sqlmodel import Session
 
 from database import get_session
+from dtos._extracted import describe_rejection
 from models import User, StockAccount, StockTransaction
 from services.auth import get_current_user, get_master_key
 from models.enums import AssetType
@@ -451,6 +452,7 @@ async def extract_transactions_from_photo(
     else:
         tx_list = []
 
+    rejected: list[str] = []
     for tx in tx_list:
         if not isinstance(tx, dict):
             continue
@@ -458,7 +460,18 @@ async def extract_transactions_from_photo(
             transactions.append(ExtractedStockTransaction(**tx))
         except Exception as exc:
             print(f"WARNING: Failed to parse stock transaction: {tx}. Error: {exc}")
-            continue
+            rejected.append(describe_rejection(exc))
+
+    if rejected and not transactions:
+        # The model did read transactions: an empty list would tell the user
+        # the photo was unreadable.
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{len(rejected)} transaction(s) lue(s) sur la photo, mais aucune n'a un "
+                f"format exploitable ({rejected[0]}). Réessayez ou changez de modèle."
+            ),
+        )
 
     return PhotoExtractResponse(transactions=transactions)
 

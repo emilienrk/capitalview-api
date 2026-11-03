@@ -17,6 +17,12 @@ derrière aucune option, rien ne se passe tant qu'il n'en écrit pas (décidé l
 
 Chaque changement de règle se mesure sur un dump réel, avant et après : paires, types, questions, totaux.
 
+**Un dépôt déclaré est validé, demandé ou listé, jamais couvert sans un mot** (décidé le 31/10). Validé : un Oui, ou
+la preuve du même jour pour une forme déjà validée. Demandé : une question Oui / Non sur l'opération en face. Listé :
+« Sans contrepartie bancaire ». Une seule règle dit ce qui est « en face », pour la question, l'alerte et la tenue des
+réponses (`contributions.fits`) : il n'y en a pas une plus large pour l'alerte. Un écart de date se compte partout en
+jours ouvrés (`services/banking/settlement.py`), paires comme dépôts : 2 au plus.
+
 ## Ce qui est automatique
 
 | Règle | Exemple | Pourquoi c'est sûr |
@@ -39,7 +45,9 @@ l'utilisateur.
 - **Paire possible** entre deux comptes (sens opposés, même montant, au plus 2 jours ouvrés d'écart), qu'aucune règle
   ci-dessus ne confirme. Y compris entre deux comptes courants, même avec le même libellé, le même jour et le même
   montant. Une paire seulement proposée ne change aucun total.
-- **Dépôt Bourse/Crypto possible** : même montant, dans les 3 jours, ou avec un écart de frais. La question est
+- **Dépôt Bourse/Crypto possible** : même montant ou un écart de frais, à 2 jours ouvrés au plus (comme une paire). Mesuré sur le dump (31/10) : les 12 opérations trouvées ou validées à quelques jours de leur dépôt étaient
+  toutes à 2 jours ouvrés au plus, dont deux retraits Trade Republic d'un vendredi passés le mardi, que « 3 jours »
+  manquait ; 4 ou 5 jours de calendrier laissaient un paiement au restaurant couvrir un versement PERU. La question est
   posée en Oui / Non sur chaque opération concernée (`services/banking/contribution_decisions.py`) : le badge
   « vers <compte> ? » suffit le même jour pour le même montant ; sinon une ligne courte donne ce qui diffère
   (« Versement de 48,88 € sur PEA le 4 sept. ? ») :
@@ -98,13 +106,27 @@ déclarés sur un compte Bourse, Crypto ou un placement pour lesquels aucune op�
 l'inverse du curseur : il attrape un compte d'investissement oublié, cette liste attrape un compte bancaire oublié. Ils
 ne reçoivent pas de question et ne changent aucun total.
 
-- Est « en face » toute opération de sens opposé, même montant ou un écart de frais, à 3 jours au plus, quel que soit
-  son type. Une paire déjà reconnue entre deux comptes bancaires ne compte pas ; une paire seulement proposée, si.
-- Un pour un : une sortie de 200 € ne couvre pas deux dépôts de 200 €.
-- Seuls les dépôts compris dans l'historique bancaire sont jugés, et pas les 3 derniers jours, où l'autre côté peut
-  ne pas être encore passé.
-- Mesuré sur le dump : 64 dépôts déclarés, 3 sans contrepartie (500 € sur un compte « trst », 90,17 € et 180 € sur le
-  portefeuille crypto).
+- Un dépôt n'y figure que si rien ne le montre ailleurs : ni un Oui, ni une question posée sur une opération en face
+  (une paire proposée la pose aussi, le dépôt à côté), ni une opération en face déjà comptée en investissement. « En
+  face » se lit comme pour la question : sens opposé, même montant ou un écart de frais, à 2 jours ouvrés au plus. Une
+  seule règle pour la question, la tenue des réponses et cette liste (`contributions.fits`) : un dépôt est validé,
+  demandé ou listé, jamais couvert sans un mot.
+- Un « Non » le remet dans la liste. Une opération classée par une règle, un récurrent ou à la main ne pose sa
+  question que le même jour : un autre jour, le dépôt en face est listé.
+- Un pour un : une opération ne montre qu'un dépôt, le plus proche (le montant lui-même avant un écart de frais).
+- Un PER ou une épargne salariale peut être marqué « alimenté hors de mes banques » (abondement de l'employeur,
+  prélèvement sur salaire) : ses versements ne sont plus cherchés côté banque, ni proposés, ni listés ; ses rachats
+  le sont toujours. Interrupteur par compte, coupé par défaut (décidé le 31/10) : sur le dump, 12 des 21 dépôts listés
+  étaient des versements PERU de l'employeur, et un paiement au restaurant pouvait en couvrir un.
+- Seuls les dépôts compris dans l'historique bancaire sont jugés, et pas les 2 derniers jours ouvrés, où l'autre côté
+  peut ne pas être encore passé.
+- Décidé le 31/10. Avant, la liste prenait pour en face un écart de frais un autre jour, que la question ne demandait
+  pas, et ignorait les « Non » : un dépôt pouvait disparaître sans question. Mesuré sur le dump : 110 dépôts déclarés,
+  2 couverts ainsi (13,69 € face à un McDonald's de 14,10 € le lendemain ; 14,70 € sur le portefeuille crypto face à un
+  achat carte Binance de 15 €, sans doute le vrai). Ils deviennent des questions, avec les deux retraits Trade Republic :
+  5 opérations demandées, aucune classée autrement, 0 dépôt couvert sans un mot, 21 listés (12 versements PERU de
+  l'employeur, 7 sur le CTO, 2 sur le portefeuille). Dépôts décalés de 2 semaines à 3 mois : 8,9 questions de hasard
+  par essai au lieu de 5,6.
 
 ## Répondre
 
@@ -275,3 +297,6 @@ déduits.
 | Fusion : nom, nature et cadence gardés de part et d'autre (18/10) | poussé (4b45539) |
 | Catégories de récurrents par nature, terminés compris, total et mois par mois (18/10) | poussé (6f9ac2d) |
 | Règle qui classe autrement un récurrent confirmé : hors du total, nommée, annoncée avant (19/10) | fait |
+| Dépôt : 2 jours ouvrés au lieu de 3 jours de calendrier (31/10) | fait (6bb28c4) |
+| Dépôt : une seule règle « en face » pour la question et l'alerte, un Non remet dans l'alerte (31/10) | fait (fda3d82) |
+| PER, épargne salariale : « alimenté hors de mes banques », versements plus cherchés, rachats si (31/10) | fait (69cd7db) |

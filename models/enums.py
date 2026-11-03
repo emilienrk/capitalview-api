@@ -65,6 +65,10 @@ class PlacementType(str, Enum):
     CAPITALISATION = "CAPITALISATION"
     OTHER = "OTHER"
 
+# The placements an employer may pay into, or a payslip feed: the only ones
+# whose deposits may bypass the user's banks.
+FUNDED_OUTSIDE_BANKS = frozenset({PlacementType.PER, PlacementType.EPARGNE_SALARIALE})
+
 class PlacementEntryType(str, Enum):
     """A manual entry on a placement: a statement balance, or money in or out."""
     VALUATION = "VALUATION"

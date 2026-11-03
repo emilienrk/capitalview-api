@@ -31,6 +31,14 @@ class PlacementAccount(SQLModel, table=True):
         sa_column=Column(sa.Date, nullable=True),
     )
 
+    # Employee savings the employer pays into, or the payslip feeds: its deposits
+    # cross no bank account and are never looked for there; its withdrawals are
+    # (services/banking/contributions.py). Only on `FUNDED_OUTSIDE_BANKS` types.
+    paid_in_outside_banks: bool = Field(
+        default=False,
+        sa_column=Column(sa.Boolean, nullable=False, server_default=sa.false()),
+    )
+
     created_at: datetime = Field(
         default=sa.func.now(),
         sa_column=Column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
