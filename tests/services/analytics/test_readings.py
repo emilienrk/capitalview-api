@@ -65,3 +65,20 @@ def test_a_withheld_block_sends_no_signal():
     blocks = {"deposit_lag": {"reading": reading(None, DEPOSIT_LAG_BANDS, "days")}}
 
     assert build_signals(blocks) == []
+
+
+def test_the_excess_return_signal_stays_neutral_until_the_test_speaks():
+    from services.analytics.readings import VOLATILITY_BANDS, build_signals, reading
+
+    risk = {
+        "reading": reading(Decimal("1.3"), VOLATILITY_BANDS, "times"),
+        "excess_return": _metric(Decimal("0.02")),
+        "is_detectable": False,
+    }
+    signals = {s["label"]: s for s in build_signals({"risk": risk})}
+
+    assert signals["Risque pris"]["tone"] == "watch"
+    assert signals["Face à l'indice"]["tone"] == "neutral"
+
+    risk["is_detectable"] = True
+    assert {s["label"]: s["tone"] for s in build_signals({"risk": risk})}["Face à l'indice"] == "good"

@@ -27,47 +27,65 @@ from services.analytics.behaviour import (
     purchase_amounts,
     purchases_by_asset,
 )
+from services.analytics.benchmark import get_benchmark_series, resolve_benchmark_key
 from services.analytics.concentration import (
     MIN_OVERLAP,
     analyse_concentration,
     holdings_from_transactions,
 )
+from services.analytics.counterfactual import build_bridge
+from services.analytics.execution import MIN_ORDERS, SOLID_ORDERS, analyse_execution
 from services.analytics.fees import (
     MIN_ORDERS as FEES_MIN_ORDERS,
+)
+from services.analytics.fees import (
     PROJECTION_RATE,
     PROJECTION_YEARS,
-    SOLID_ORDERS as FEES_SOLID_ORDERS,
     TARGET_BPS,
     FeeModel,
     analyse_fees,
 )
+from services.analytics.fees import (
+    SOLID_ORDERS as FEES_SOLID_ORDERS,
+)
+from services.analytics.flows import is_auto_provision, stock_external_flows, with_implied_deposits
+from services.analytics.labels import label_of, resolve_asset_labels
 from services.analytics.plan import (
     MIN_MONTHS as PLAN_MIN_MONTHS,
+)
+from services.analytics.plan import (
     PlanError,
     analyse_plan,
 )
-from services.analytics.benchmark import get_benchmark_series, resolve_benchmark_key
-from services.analytics.counterfactual import build_bridge
-from services.analytics.execution import MIN_ORDERS, SOLID_ORDERS, analyse_execution
-from services.analytics.flows import is_auto_provision, stock_external_flows, with_implied_deposits
-from services.analytics.labels import label_of, resolve_asset_labels
 from services.analytics.prices import fill_price_gaps, get_price_matrix
 from services.analytics.readings import (
     ADHERENCE_BANDS,
     BAD,
-    GOOD,
     DEPOSIT_LAG_BANDS,
     DISPOSITION_BANDS,
     FEES_BANDS,
+    GOOD,
     INDEPENDENT_BETS_BANDS,
+    VOLATILITY_BANDS,
     build_signals,
     reading,
     regularity_bands,
 )
 from services.analytics.reliability import Metric
 from services.analytics.returns import annualize, time_weighted_return, xirr
+from services.analytics.risk import (
+    MIN_SESSIONS as RISK_MIN_SESSIONS,
+)
+from services.analytics.risk import (
+    SOLID_SESSIONS as RISK_SOLID_SESSIONS,
+)
+from services.analytics.risk import (
+    analyse_risk,
+)
 from services.analytics.timing import (
     MIN_PURCHASES as MIN_TIMING_PURCHASES,
+)
+from services.analytics.timing import (
     MIN_SESSIONS,
     analyse_market_conditioning,
 )
@@ -111,6 +129,7 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
 
     if len(series) < 2:
         blocks["investor_gap"] = None
+        blocks["risk"] = None
         return {
             "period_start": series[0][0] if series else None,
             "period_end": series[-1][0] if series else None,
@@ -145,6 +164,11 @@ def build_investor_analytics(session: Session, user_uuid: str, master_key: str) 
 
     benchmark_annual = _benchmark_annual_return(
         session, benchmark_key, period_start, period_end, span_days, benchmark_ensured
+    )
+    # After the benchmark was ensured above: the sessions it really quoted, on
+    # which the risk is measured — never the forward-filled calendar series.
+    blocks["risk"] = _risk_payload(
+        analyse_risk(series, flows_all, _benchmark_sessions(session, benchmark_key, period_start, period_end))
     )
 
     def gated(value, unit):
@@ -779,6 +803,124 @@ def _benchmark_annual_return(
     if not start_price or not end_price or start_price <= _ZERO:
         return None
     return annualize(end_price / start_price - Decimal("1"), span_days)
+
+
+def _benchmark_sessions(session: Session, benchmark_key: str, start: date, end: date) -> dict:
+    """The benchmark's real quotes over the window, sparse: one per session."""
+    return get_price_matrix(session, [benchmark_key], start, end).get(benchmark_key) or {}
+
+
+def _risk_payload(risk) -> dict | None:
+    if risk is None:
+        return None
+
+    sessions = risk.sessions
+    too_few = f"{sessions} séances communes avec l'indice : trop peu pour mesurer le risque pris."
+
+    def gated(value, unit, *, solid_at=RISK_SOLID_SESSIONS):
+        return _as_metric(
+            Metric.gated(
+                value,
+                unit=unit,
+                sample_size=sessions,
+                minimum=RISK_MIN_SESSIONS,
+                solid_at=solid_at,
+                caveat_insufficient=too_few,
+                caveat_indicative=(
+                    "Moins de trois ans de séances — un seul épisode de marché pèse encore "
+                    "beaucoup dans la mesure."
+                ),
+            )
+        )
+
+    ratio = gated(risk.volatility_ratio, "fois")
+    excess = gated(risk.excess_return, "ratio_annuel")
+    show = ratio["value"] is not None
+
+    def drawdown(dd):
+        if dd is None or not show:
+            return None
+        return {
+            "depth": dd.depth,
+            "peak": dd.peak,
+            "trough": dd.trough,
+            "recovered": dd.recovered,
+        }
+
+    return {
+        "sessions": sessions,
+        # A volatility needs a year; a beta, a drawdown or a tracking error that
+        # one bad quarter cannot flip need three.
+        "volatility": gated(risk.volatility, "ratio_annuel", solid_at=RISK_MIN_SESSIONS),
+        "benchmark_volatility": gated(
+            risk.benchmark_volatility, "ratio_annuel", solid_at=RISK_MIN_SESSIONS
+        ),
+        "volatility_ratio": ratio,
+        "beta": gated(risk.beta, "beta"),
+        "correlation": gated(risk.correlation, "ratio"),
+        "tracking_error": gated(risk.tracking_error, "ratio_annuel"),
+        "max_drawdown": drawdown(risk.max_drawdown),
+        "benchmark_max_drawdown": drawdown(risk.benchmark_max_drawdown),
+        "excess_return": excess,
+        "p_value": (
+            round(Decimal(str(risk.excess_p_value)), 4)
+            if risk.excess_p_value is not None and show
+            else None
+        ),
+        "is_detectable": bool(show and risk.is_detectable),
+        "years_to_conclude": risk.years_to_conclude if show else None,
+        "return_per_risk": gated(risk.return_per_risk, "ratio"),
+        "benchmark_return_per_risk": gated(risk.benchmark_return_per_risk, "ratio"),
+        "reading": reading(ratio["value"], VOLATILITY_BANDS, "times"),
+        "verdict": _risk_verdict(risk, ratio["value"], excess["value"]),
+    }
+
+
+def _risk_verdict(risk, ratio, excess) -> str:
+    if ratio is None:
+        return (
+            f"{risk.sessions} séances communes avec l'indice : trop peu pour mesurer le "
+            "risque pris."
+        )
+
+    moves = (
+        f"Votre portefeuille bouge {_fr(ratio, 1)} fois autant que l'indice "
+        f"(volatilité {_pct(risk.volatility)} contre {_pct(risk.benchmark_volatility)})."
+    )
+
+    fall = ""
+    dd = risk.max_drawdown
+    if dd is not None and dd.depth < _ZERO:
+        healed = (
+            f"rattrapée le {dd.recovered:%d/%m/%Y}"
+            if dd.recovered is not None
+            else "pas encore rattrapée"
+        )
+        against = ""
+        if risk.benchmark_max_drawdown is not None:
+            against = f", contre {_pct(risk.benchmark_max_drawdown.depth)} pour l'indice"
+        fall = (
+            f" Pire chute depuis un sommet : {_pct(dd.depth)} du {dd.peak:%d/%m/%Y} au "
+            f"{dd.trough:%d/%m/%Y}, {healed}{against}."
+        )
+
+    gap = ""
+    if excess is not None:
+        sign = "+" if excess >= _ZERO else "−"
+        gap = f" Écart à l'indice de {sign}{_pct(abs(excess))} par an"
+        if risk.is_detectable:
+            gap += " : significatif, ce n'est pas le hasard."
+        elif risk.years_to_conclude is not None and risk.years_to_conclude >= Decimal("100"):
+            gap += " : indiscernable du hasard, et il le resterait sur plus d'un siècle."
+        elif risk.years_to_conclude is not None:
+            gap += (
+                f" : indiscernable du hasard — il faudrait environ "
+                f"{round(risk.years_to_conclude)} ans d'historique à ce rythme pour conclure."
+            )
+        else:
+            gap += " : indiscernable du hasard."
+
+    return f"{moves}{fall}{gap}"
 
 
 def _money_weighted(flows: dict[date, Decimal], terminal_value: Decimal, terminal_day: date):
@@ -1528,6 +1670,20 @@ def build_global_verdict(blocks: dict) -> str:
         and conditioning["is_detectable"]
     ):
         structural.append(conditioning["verdict"])
+
+    risk = blocks.get("risk")
+    if risk and risk["reading"]["tone"] == BAD:
+        structural.append(
+            f"Votre portefeuille bouge {_fr(risk['volatility_ratio']['value'], 1)} fois autant "
+            "que l'indice : le risque pris dépasse nettement celui de la référence."
+        )
+    if risk and risk["is_detectable"] and risk["excess_return"]["value"] is not None:
+        amount = risk["excess_return"]["value"]
+        side = "au-dessus" if amount > _ZERO else "en dessous"
+        structural.append(
+            f"Votre rendement est {_pct(abs(amount))} par an {side} de l'indice, et cet écart "
+            "n'est pas dû au hasard."
+        )
 
     costed.sort(key=lambda item: item[0], reverse=True)
     sentences = [text for _, text in costed[:3]] + structural[:2]
