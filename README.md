@@ -107,6 +107,50 @@ so "81 237 € in ten years" reads as 60 000 paid in and 21 237 earned, with
 `growth_share` (26%) saying how much of the result the portfolio produced rather
 than the saver.
 
+## Investor analytics
+
+`GET /analytics/investor` replays the whole stock ledger (`services/analytics/`):
+every block shares one window, one price matrix and one benchmark. The maths
+are cheap — the permutation tests and the risk figures run in numpy in well
+under a second. What costs is around them: decrypting every row and every
+daily snapshot, and `ensure_price_history` for every line held plus the
+benchmark, a network round trip each.
+
+### Kept between reads
+
+The finished payload is stored (`services/analytics/cache.py`, table
+`investor_analytics_cache`), encrypted under the user's Master Key like every
+other row of theirs, with a digest of what it was built from — counts and
+timestamps of the stock rows, the benchmark, the plan — so any ledger or
+settings change rebuilds it on the next read. Prices alone touch no row the
+digest sees, so a validity bounds the drift: `ANALYTICS_CACHE_DAYS`, 30 by
+default, 0 to disable. The response carries `computed_at`, `valid_until` and
+`cached`; `?refresh=true` rebuilds now. `/analytics/yearly` follows the same
+path, with the crypto and placement rows in its digest.
+
+Written on read, never by a job: the server never holds a Master Key outside
+a request, so no scheduler could compute a payload, or open one. A Redis
+warm-up would run into the same wall; this row is the long-term cache.
+
+### Risk, and whether the gap to the index is real
+
+The `risk` block (`services/analytics/risk.py`) measures the portfolio on the
+benchmark's sessions — the snapshots repeat a close over the weekend, and a
+standard deviation over calendar days would be deflated by √(7/5):
+
+| Figure | What it is |
+| --- | --- |
+| `volatility`, `benchmark_volatility`, `volatility_ratio` | Annualised standard deviation of session returns (flows neutralised as in the TWR); the ratio is the headline, read on `VOLATILITY_BANDS` |
+| `beta`, `correlation`, `tracking_error` | Against the benchmark over the same sessions |
+| `max_drawdown`, `benchmark_max_drawdown` | Deepest fall from a peak, with its dates and recovery, both over the same span |
+| `excess_return`, `p_value`, `is_detectable`, `years_to_conclude` | Annualised mean excess, its t-test, and how many years this gap would need at this noise to clear the 5 % bar |
+| `return_per_risk` | Annualised return over volatility — a Sharpe ratio without a risk-free rate, for both sides |
+
+A year of sessions before a volatility is shown, three before the rest is
+called solid. The excess return is never crowned on its sign alone: the page
+says "indistinguishable from chance, it would take about N years to conclude",
+which for most retail histories is the honest answer.
+
 ### How a token reaches encrypted data
 
 Every user record is encrypted under a Master Key that the server never stores

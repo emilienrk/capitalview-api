@@ -51,6 +51,12 @@ class Settings:
         self.git_sha: str | None = os.getenv("GIT_SHA") or None
         self.build_time: str | None = os.getenv("BUILD_TIME") or None
 
+        # ── Investor analytics ────────────────────────────────
+        # How long a finished analysis is served before prices alone justify
+        # recomputing it. Ledger and settings changes invalidate it regardless
+        # (services/analytics/cache.py). 0 disables the cache.
+        self.analytics_cache_days: int = int(os.getenv("ANALYTICS_CACHE_DAYS", "30"))
+
         # ── MCP (agent access to the API) ─────────────────────
         self.mcp_enabled: bool = os.getenv("MCP_ENABLED", "true").lower() == "true"
         self.mcp_path: str = os.getenv("MCP_PATH", "/mcp")
