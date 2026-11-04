@@ -16,6 +16,7 @@ import sqlalchemy as sa
 from sqlmodel import Session, select
 
 from models.account_history import AccountHistory
+from models.analytics_cache import InvestorAnalyticsCache
 from models.api_token import ApiToken
 from models.asset import Asset, AssetValuation
 from models.bank import BankAccount
@@ -358,6 +359,7 @@ def purge_account(session: Session, user: User, master_key: str) -> dict[str, in
     wipe(BankTransferDecision, BankTransferDecision.user_uuid_bidx == user_bidx)
     wipe(BankContributionDecision, BankContributionDecision.user_uuid_bidx == user_bidx)
     wipe(BankTransferPatterns, BankTransferPatterns.user_uuid_bidx == user_bidx)
+    wipe(InvestorAnalyticsCache, InvestorAnalyticsCache.user_uuid_bidx == user_bidx)
     wipe(BankTypeRule, BankTypeRule.user_uuid_bidx == user_bidx)
     wipe(BankRecurringSeries, BankRecurringSeries.user_uuid_bidx == user_bidx)
 

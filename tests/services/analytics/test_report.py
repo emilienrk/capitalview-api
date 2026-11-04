@@ -43,6 +43,10 @@ def _run(snapshots, transactions, benchmark=None):
         patch("services.analytics.report.get_account_transactions", return_value=transactions),
         patch("services.analytics.report.get_all_stock_accounts_history", return_value=snapshots),
         patch("services.analytics.report.get_benchmark_series", return_value=benchmark or {}),
+        patch(
+            "services.analytics.report.get_price_matrix",
+            return_value={"IE00B4L5Y983": benchmark} if benchmark else {},
+        ),
     ):
         return build_investor_analytics(None, "user_1", "key")
 
@@ -567,3 +571,49 @@ def test_every_key_a_block_builds_is_declared_in_its_response_model():
     for key, model in models.items():
         if report[key] is not None:
             assert set(report[key]) <= set(model.model_fields), key
+
+
+def _benchmark_sessions(days: int, daily: float = 0.0005):
+    """A benchmark quoted every weekday, rising steadily, over the series' span."""
+    out, price = {}, Decimal("100")
+    for n in range(days):
+        day = START + timedelta(days=n)
+        if day.weekday() < 5:
+            price = price * (Decimal("1") + Decimal(str(daily)))
+            out[day] = round(price, 6)
+    return out
+
+
+def test_the_risk_block_measures_the_portfolio_against_the_index_sessions():
+    txs = [_Tx("DEPOSIT", "EUR", 1000, START)]
+    # Three years, so every risk figure clears its solid threshold.
+    snapshots = [_Snapshot(START + timedelta(days=n), 1000 * (1.0003 ** n)) for n in range(0, 1100)]
+    report = _run(snapshots, txs, benchmark=_benchmark_sessions(1100))
+
+    risk = report["risk"]
+    assert risk["sessions"] >= 750
+    assert risk["volatility_ratio"]["reliability"] == "solide"
+    assert risk["reading"]["format"] == "times"
+    assert risk["max_drawdown"]["depth"] == Decimal("0")
+    assert risk["excess_return"]["value"] is not None
+    assert "fois autant que l'indice" in risk["verdict"]
+    assert any(signal["block"] == "risk" for signal in report["signals"])
+
+
+def test_the_risk_block_is_withheld_under_a_year_of_sessions():
+    txs = [_Tx("DEPOSIT", "EUR", 1000, START)]
+    snapshots = [_Snapshot(START + timedelta(days=n), 1000 + n) for n in range(0, 200)]
+    report = _run(snapshots, txs, benchmark=_benchmark_sessions(200))
+
+    risk = report["risk"]
+    assert risk["volatility_ratio"]["value"] is None
+    assert risk["volatility_ratio"]["reliability"] == "insuffisant"
+    assert risk["max_drawdown"] is None
+    assert risk["reading"]["tone"] is None
+    assert not any(signal["block"] == "risk" for signal in report["signals"])
+
+
+def test_no_benchmark_sessions_leaves_the_risk_block_empty():
+    report = _run(_two_year_series(), [_Tx("DEPOSIT", "EUR", 1000, START)])
+
+    assert report["risk"] is None

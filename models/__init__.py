@@ -40,6 +40,7 @@ from .asset import Asset, AssetValuation
 from .placement import PlacementAccount, PlacementEntry
 from .community import CommunityProfile, CommunityPosition, CommunityFollow, CommunityPick
 from .account_history import AccountHistory
+from .analytics_cache import InvestorAnalyticsCache
 from .notification import Notification, NotificationType
 from .job_run import JobRun, JobStatus
 from .rate_limit import RateLimitHit
@@ -93,6 +94,7 @@ __all__ = [
     "AccountHistory",
     "Notification",
     "JobRun",
+    "InvestorAnalyticsCache",
     "JobStatus",
     "RateLimitHit",
     "NotificationType",
