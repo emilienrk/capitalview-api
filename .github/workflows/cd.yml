@@ -38,6 +38,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Read build time
+        id: build-time
+        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Build API image
         uses: docker/build-push-action@v6
         with:
@@ -45,7 +49,7 @@ jobs:
           file: ./Dockerfile.prod
           build-args: |
             GIT_SHA=${{ github.sha }}
-            BUILD_TIME=${{ github.event.repository.updated_at }}
+            BUILD_TIME=${{ steps.build-time.outputs.value }}
           load: true
           tags: |
             ghcr.io/${{ github.repository }}:latest
