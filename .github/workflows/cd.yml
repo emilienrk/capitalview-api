@@ -13,6 +13,20 @@ permissions:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: smoke
+          POSTGRES_PASSWORD: smoke
+          POSTGRES_DB: smoke
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U smoke -d smoke"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -24,7 +38,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push API image
+      - name: Build API image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -32,7 +46,29 @@ jobs:
           build-args: |
             GIT_SHA=${{ github.sha }}
             BUILD_TIME=${{ github.event.repository.updated_at }}
-          push: true
+          load: true
           tags: |
             ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+      # The test suite runs on SQLite, so this is the only check that the image
+      # can migrate and reach Postgres. /health answers even with the database
+      # down, hence /health/db.
+      - name: Smoke test image against Postgres
+        run: |
+          docker run -d --name api --network host \
+            -e ENV=production \
+            -e DATABASE_URL=postgresql://smoke:smoke@localhost:5432/smoke \
+            -e SECRET_KEY=smoke-secret-key-for-ci-only \
+            -e ENCRYPTION_KEY=smoke-encryption-key-for-ci-only \
+            -e COMMUNITY_ENCRYPTION_KEY=smoke-community-key-for-ci-only \
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          for _ in $(seq 1 30); do
+            curl -fsS http://localhost:8000/health/db && exit 0
+            sleep 2
+          done
+          docker logs api
+          exit 1
+
+      - name: Push API image
+        run: docker push --all-tags ghcr.io/${{ github.repository }}
