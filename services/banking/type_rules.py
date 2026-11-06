@@ -24,6 +24,8 @@ kept to an account, then the most recent.
 
 Rules are applied as operations are read, never written onto them, so a rule
 also types the operations imported after it.
+
+Rules: docs/bank-sorting.md — R27 to R32.
 """
 
 from __future__ import annotations

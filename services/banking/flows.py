@@ -16,6 +16,10 @@ which is each bank's own invention (Boursorama writes `CARTE 03/08/25 AIRBNB *
 HMFYWK533K`); a label is only read as a set of words (`labels.py`). The
 structured fields — `merchant_category_code`, `bank_transaction_code`,
 `creditor` — are empty on all 4 240 real rows captured so far.
+
+Rules: docs/bank-sorting.md — R7 to R26 (pairing and questions), R51 (one reading,
+`_filed`), R52 (`transfer_patterns` and its digest). A behaviour change updates the
+rule and the journal there.
 """
 
 from __future__ import annotations

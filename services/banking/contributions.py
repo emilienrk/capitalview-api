@@ -49,6 +49,9 @@ with every deposit moved two weeks to three months away, 0.30 coincidences a
 trial instead of 0.25 — 2 € or 3 % proved no more, for 0.40. A day or two
 away, a fee apart proves nothing and is shown as a hint, as the amount is.
 Between two bank accounts nothing is kept on the way: the pairing stays exact.
+
+Rules: docs/bank-sorting.md — R5, R6, R12, R16, R26. The measurements below are
+repeated in its journal.
 """
 
 from __future__ import annotations

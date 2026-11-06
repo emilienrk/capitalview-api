@@ -17,6 +17,8 @@ right. So the user decides, and each decision is kept for two uses:
 
 No bank's label format is known here: the comparison is between labels of the
 same account.
+
+Rules: docs/bank-sorting.md — R7, R10, R35.
 """
 
 from __future__ import annotations

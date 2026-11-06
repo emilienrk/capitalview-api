@@ -8,6 +8,8 @@ whole after every write. Nobody types a balance: money already on the account
 when it is opened is its first operation. See docs/bank-ledger.md.
 
 A synced account is left alone everywhere here: the bank's word is its balance.
+
+Rules: docs/bank-ledger.md — L1 to L9; L7 for the opening adjustment.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 import logging
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import NamedTuple
 
 import sqlalchemy as sa
 from sqlmodel import Session, select
@@ -28,6 +31,7 @@ from services.banking.transactions import (
     ORIGIN_ADJUSTMENT,
     ORIGIN_MANUAL,
     is_adjustment,
+    rewrite_entry,
     row_date,
     signed_row_amount,
     store_entry,
@@ -117,14 +121,80 @@ def rebuild_from_operations(session: Session, account: BankAccount, master_key: 
     session.commit()
 
 
+class Opening(NamedTuple):
+    """The balance carried from before the operations: the earliest adjustment
+    of the account, when no real operation is dated before it. It states what
+    the account held at the end of its day; whatever is written before that
+    day keeps that statement true (docs/bank-ledger.md)."""
+    day: date
+    amount: Decimal
+    row: BankTransaction
+
+
+class Carried(NamedTuple):
+    """What the opening adjustment became once something was written before it."""
+    day: date
+    amount: Decimal
+    label: str | None
+    to_day: date
+    to_amount: Decimal
+
+
+def opening_adjustment(session: Session, account: BankAccount, master_key: str) -> Opening | None:
+    dated = _dated(session, account, master_key)
+    adjustments = sorted(
+        ((day, amount, row) for day, amount, row in dated if is_adjustment(row, master_key)),
+        key=lambda found: (found[0], found[2].uuid),
+    )
+    if not adjustments:
+        return None
+    day, amount, row = adjustments[0]
+    if any(d < day for d, _, r in dated if not is_adjustment(r, master_key)):
+        return None
+    return Opening(day, amount, row)
+
+
+def carried_opening(opening: Opening, added: Decimal, to_day: date, master_key: str) -> Carried:
+    """Where the opening adjustment goes once `added` (signed) has been written
+    on or before its day: back to `to_day` when that is earlier, less what was
+    added — so the balance it stated on its day does not move."""
+    label = decrypt_data(opening.row.remittance_enc, master_key) if opening.row.remittance_enc else None
+    return Carried(opening.day, opening.amount, label, min(opening.day, to_day), opening.amount - added)
+
+
+def carry_opening(
+    session: Session, account: BankAccount, master_key: str, added: Decimal, to_day: date,
+    opening: Opening | None = None,
+) -> Carried | None:
+    """Rewrite the opening adjustment as `carried_opening` says, uncommitted;
+    None when the account has none. A carried adjustment that comes to zero
+    is dropped: nothing is left to carry."""
+    opening = opening or opening_adjustment(session, account, master_key)
+    if opening is None:
+        return None
+    carried = carried_opening(opening, added, to_day, master_key)
+    if carried.to_amount == 0:
+        session.delete(opening.row)
+    else:
+        rewrite_entry(
+            session, master_key, opening.row, carried.to_day, carried.to_amount, carried.label,
+            _currency(account, master_key), ORIGIN_ADJUSTMENT,
+        )
+    session.flush()
+    return carried
+
+
 def adjustments_between(
     session: Session, account: BankAccount, master_key: str, start: date | None, end: date,
 ) -> list[tuple[date, Decimal, BankTransaction]]:
     """The adjustments dated in [start, end] (from the first one when `start`
-    is None): what real operations of that period replace."""
+    is None): what real operations of that period replace. The opening
+    adjustment is never among them: it is carried, not replaced."""
+    opening = opening_adjustment(session, account, master_key)
     return [
         (day, amount, row) for day, amount, row in _dated(session, account, master_key)
         if is_adjustment(row, master_key) and (start is None or day >= start) and day <= end
+        and (opening is None or row.uuid != opening.row.uuid)
     ]
 
 
@@ -160,10 +230,14 @@ def add_entry(
     if is_synced(session, account, master_key):
         raise SyncedAccountError("Le solde de ce compte est lu à la banque : il ne se saisit pas à la main.")
     ensure_ledgers(session, account.user_uuid_bidx, master_key)
+    opening = opening_adjustment(session, account, master_key)
     row = store_entry(
         session, master_key, account.uuid, entry.day, entry.amount, entry.label,
         _currency(account, master_key), ORIGIN_MANUAL,
     )
+    # Dated before the opening balance: that balance stays what it was.
+    if opening is not None and entry.day <= opening.day:
+        carry_opening(session, account, master_key, entry.amount, entry.day - timedelta(days=1), opening)
     session.commit()
     rebuild_from_operations(session, account, master_key)
     return BankEntryResponse(id=row.uuid)

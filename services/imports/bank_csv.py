@@ -26,6 +26,7 @@ from sqlmodel import Session
 
 from dtos.bank import BankHistoryEntry
 from dtos.imports import (
+    BankImportCarriedEntry,
     BankImportCurvePreview,
     BankImportReplacedEntry,
     BankImportTransactionPreview,
@@ -415,9 +416,10 @@ class GenericBankTransactionsParser(ImportParser):
         warnings: list[str],
     ) -> ImportPreviewResponse:
         """What the file does to an account whose operations are its truth: each
-        row's fate, the adjustments of its period it replaces, and the balance
-        at its last operation once imported."""
-        from services.bank_ledger import adjustments_between, balance_at, ensure_ledgers
+        row's fate, the adjustments of its period it replaces, the opening
+        balance it carries back when it reaches over it, and the balance at
+        its last operation once imported."""
+        from services.bank_ledger import adjustments_between, balance_at, carried_opening, ensure_ledgers, opening_adjustment
         from services.banking.transactions import ROW_AMBIGUOUS, ROW_DUPLICATE, ROW_NEW, classify_transactions
         from services.encryption import decrypt_data
 
@@ -433,6 +435,7 @@ class GenericBankTransactionsParser(ImportParser):
             row.is_duplicate = status == ROW_DUPLICATE
 
         replaced: list[BankImportReplacedEntry] = []
+        carried: BankImportCarriedEntry | None = None
         balance_after = None
         last = None
         opening = Decimal("0")
@@ -447,7 +450,21 @@ class GenericBankTransactionsParser(ImportParser):
                 )
                 for day, amount, row in adjustments
             ]
-            added = sum((_signed(r) for r in rows if r.status in (ROW_NEW, ROW_AMBIGUOUS)), Decimal("0"))
+            new = [r for r in rows if r.status in (ROW_NEW, ROW_AMBIGUOUS)]
+            added = sum((_signed(r) for r in new), Decimal("0"))
+            # Reaching over the opening balance: it is carried back to the eve
+            # of the file, less what the file adds before its day, and the
+            # curve the warning reads starts from what it then holds.
+            held = opening_adjustment(session, account, master_key)
+            if held is not None and first <= held.day:
+                before = sum((_signed(r) for r in new if r.day <= held.day), Decimal("0"))
+                moved = carried_opening(held, before, first - timedelta(days=1), master_key)
+                carried = BankImportCarriedEntry(
+                    day=moved.day, amount=moved.amount, label=moved.label,
+                    to_day=moved.to_day, to_amount=moved.to_amount,
+                )
+                opening += moved.to_amount
+                added -= before
             balance_after = (
                 balance_at(session, account, last, master_key)
                 - sum((e.amount for e in replaced), Decimal("0"))
@@ -463,6 +480,7 @@ class GenericBankTransactionsParser(ImportParser):
             warnings=warnings,
             bank_transactions=rows,
             bank_replaced=replaced,
+            bank_carried=carried,
             bank_balance_after=balance_after,
             bank_balance_after_date=last,
         )
@@ -471,8 +489,11 @@ class GenericBankTransactionsParser(ImportParser):
         self, session: Session, account_id: str, payload: ImportConfirmRequest, master_key: str
     ) -> ImportConfirmResponse:
         """Replace the adjustments of the file's period, store its
-        operations, and rebuild the balance from the whole."""
-        from services.bank_ledger import drop_adjustments, ensure_ledgers, rebuild_from_operations
+        operations, carry the opening balance back over what the file adds
+        before it, and rebuild the balance from the whole."""
+        from services.bank_ledger import (
+            balance_at, carry_opening, drop_adjustments, ensure_ledgers, opening_adjustment, rebuild_from_operations,
+        )
         from services.banking.transactions import store_transactions
 
         account = _ledger_account(session, account_id, master_key)
@@ -486,15 +507,27 @@ class GenericBankTransactionsParser(ImportParser):
         first, last = rows[0].day, rows[-1].day
 
         replaced = drop_adjustments(session, account, master_key, first, last)
+        held = opening_adjustment(session, account, master_key)
+        # Measured, not taken from the preview: what the file really adds
+        # before the opening balance is what the store decides.
+        before = balance_at(session, account, held.day, master_key) if held is not None else Decimal("0")
         inserted, updated, skipped = store_transactions(
             session, master_key, account_id, _raws(kept, _account_currency(session, account_id, master_key))
         )
+        carried = None
+        if held is not None and first <= held.day:
+            added = balance_at(session, account, held.day, master_key) - before
+            moved = carry_opening(session, account, master_key, added, first - timedelta(days=1), held)
+            carried = BankImportCarriedEntry(
+                day=moved.day, amount=moved.amount, label=moved.label, to_day=moved.to_day, to_amount=moved.to_amount,
+            )
         session.commit()
         rebuild_from_operations(session, account, master_key)
         return ImportConfirmResponse(
             imported_count=inserted,
             skipped_duplicates=updated + skipped,
             replaced_count=replaced,
+            carried=carried,
         )
 
     def _not_covered(

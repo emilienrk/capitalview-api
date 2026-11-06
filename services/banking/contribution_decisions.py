@@ -22,6 +22,8 @@ A decision holds while its two sides still face each other (`contributions.fits`
 a deposit deleted or moved since leaves the operation read as if nothing had
 been said. A rule teaches nothing here: it speaks for a label, and one label may
 go to the investment account one day and anywhere the next.
+
+Rules: docs/bank-sorting.md — R16, R19.
 """
 
 from __future__ import annotations

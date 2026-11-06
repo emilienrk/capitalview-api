@@ -316,6 +316,23 @@ def store_entry(
 ) -> BankTransaction:
     """Write one operation the user typed, or one derived from a balance: a
     signed amount, no reference — so a statement holding it replaces it."""
+    row = BankTransaction(account_id_bidx=hash_index(bank_account_uuid, master_key))
+    rewrite_entry(session, master_key, row, day, amount, label, currency, origin)
+    return row
+
+
+def rewrite_entry(
+    session: Session,
+    master_key: str,
+    row: BankTransaction,
+    day: date,
+    amount: Decimal,
+    label: str | None,
+    currency: str,
+    origin: str,
+) -> BankTransaction:
+    """Give an operation of the app's own (`store_entry`) another day, amount
+    or label, keeping its id: what moves an opening adjustment."""
     tx = normalize_transaction({
         "transaction_amount": {"currency": currency, "amount": str(abs(amount))},
         "credit_debit_indicator": CREDIT if amount >= 0 else DEBIT,
@@ -323,7 +340,6 @@ def store_entry(
         "booking_date": day.isoformat(),
         "remittance_information": [label] if label else [],
     })
-    row = BankTransaction(account_id_bidx=hash_index(bank_account_uuid, master_key))
     _apply(row, tx, None, hash_index(tx.dedup_key, master_key), master_key)
     row.origin_enc = encrypt_data(origin, master_key)
     session.add(row)

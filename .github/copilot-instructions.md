@@ -61,6 +61,14 @@ capitalview-api/
 
 ---
 
+## Reference Documentation
+
+Read before changing the matching code, and update with every behaviour change (see `CLAUDE.md`):
+
+- `docs/bank-sorting.md` — how bank operations are sorted (rules R1–R53, UI texts, dated journal).
+- `docs/bank-ledger.md` — how a bank balance is derived (rules L1–L9, journal).
+- `docs/crypto-ledger.md`, `docs/currencies.md`.
+
 ## AI Agent Rules
 
 1. **Always use Python Type Hints**.

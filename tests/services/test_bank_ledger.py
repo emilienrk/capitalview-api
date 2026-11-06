@@ -17,9 +17,9 @@ from models.bank import BankAccount
 from models.banking import BankTransaction
 from models.enums import BankAccountType
 from services.bank import create_bank_account, get_bank_account_history, replace_history_window
-from services.bank_ledger import add_entry, balance_on, delete_operation, ensure_ledgers
+from services.bank_ledger import OPENING_LABEL, add_entry, balance_on, delete_operation, ensure_ledgers
 from services.banking.flows import compute_real_flows
-from services.banking.transactions import ORIGIN_ADJUSTMENT, row_origin, store_entry
+from services.banking.transactions import ORIGIN_ADJUSTMENT, ORIGIN_MANUAL, row_origin, store_entry
 from services.encryption import decrypt_data, encrypt_data, hash_index
 from services.imports.bank_csv import parse_bank_transactions
 from services.imports.registry import get_parser
@@ -213,6 +213,7 @@ def test_a_deleted_operation_leaves_the_balance(session, master_key):
 
 def test_an_import_replaces_the_adjustments_of_its_period(session, master_key):
     account = _account(session, master_key)
+    # The opening balance: no operation before it, so it is carried, not replaced.
     store_entry(session, master_key, account.uuid, date(2024, 1, 20), Decimal("700"), "Ouverture", "EUR", ORIGIN_ADJUSTMENT)
     # Outside the file's period: kept.
     store_entry(session, master_key, account.uuid, date(2024, 3, 1), Decimal("300"), "Ajustement", "EUR", ORIGIN_ADJUSTMENT)
@@ -220,16 +221,63 @@ def test_an_import_replaces_the_adjustments_of_its_period(session, master_key):
     session.commit()
 
     preview = _preview(session, master_key, account)
-    assert sorted((e.day, e.label) for e in preview.bank_replaced) == [
-        (date(2024, 1, 20), "Ouverture"), (date(2024, 2, 1), "Ajustement de solde"),
-    ]
+    assert [(e.day, e.label) for e in preview.bank_replaced] == [(date(2024, 2, 1), "Ajustement de solde")]
+    assert (preview.bank_carried.day, preview.bank_carried.amount) == (date(2024, 1, 20), Decimal("700"))
+    assert (preview.bank_carried.to_day, preview.bank_carried.to_amount) == (date(2024, 1, 14), Decimal("742.50"))
+    assert preview.bank_balance_after == Decimal("1050.00")
 
     result = _import(session, master_key, account)
 
-    assert result.replaced_count == 2
-    assert _origins(session, master_key, account) == ["", "", "", "adjustment"]
+    assert result.replaced_count == 1
+    assert (result.carried.to_day, result.carried.to_amount) == (date(2024, 1, 14), Decimal("742.50"))
+    assert _origins(session, master_key, account) == ["", "", "", "adjustment", "adjustment"]
     # The March adjustment keeps its amount (the known limit).
-    assert _balance(session, master_key, account) == Decimal("607.50")
+    assert _balance(session, master_key, account) == Decimal("1350.00")
+
+
+def test_a_file_reaching_over_the_opening_balance_carries_it_back(session, master_key):
+    """The balance the opening adjustment stated on its day does not move:
+    the adjustment goes back to the eve of the file, less what the file adds
+    before its day. Before this rule, the 700 € were dropped and the balance
+    read −92.50 €."""
+    account = _account(session, master_key)
+    store_entry(session, master_key, account.uuid, date(2024, 2, 9), Decimal("700"), OPENING_LABEL, "EUR", ORIGIN_ADJUSTMENT)
+    store_entry(session, master_key, account.uuid, date(2024, 2, 10), Decimal("-100"), "CARTE X", "EUR", ORIGIN_MANUAL)
+    session.commit()
+    older = "date,amount,label\n2024-01-15,-42.50,CARTE FNAC\n2024-02-15,50.00,VIR AMI\n"
+
+    preview = _preview(session, master_key, account, csv=older)
+    assert preview.bank_replaced == []
+    carried = preview.bank_carried
+    assert (carried.day, carried.amount, carried.label) == (date(2024, 2, 9), Decimal("700"), OPENING_LABEL)
+    assert (carried.to_day, carried.to_amount) == (date(2024, 1, 14), Decimal("742.50"))
+    assert preview.bank_balance_after == Decimal("650.00")
+    assert not preview.warnings
+
+    _import(session, master_key, account, csv=older)
+
+    assert _balance(session, master_key, account) == Decimal("650.00")
+    curve = _curve(session, master_key, account)
+    assert (curve[date(2024, 1, 14)], curve[date(2024, 2, 9)]) == (Decimal("742.50"), Decimal("700.00"))
+    [opening] = [r for r in _rows(session, master_key, account) if row_origin(r, master_key) == ORIGIN_ADJUSTMENT]
+    assert decrypt_data(opening.remittance_enc, master_key) == OPENING_LABEL
+
+
+def test_an_entry_typed_before_the_opening_balance_keeps_it(session, master_key):
+    account = _account(session, master_key)
+    store_entry(session, master_key, account.uuid, date(2024, 2, 9), Decimal("700"), OPENING_LABEL, "EUR", ORIGIN_ADJUSTMENT)
+    session.commit()
+
+    add_entry(session, account, BankEntryRequest(day=date(2024, 2, 1), amount=Decimal("-30"), label="Resto"), master_key)
+
+    curve = _curve(session, master_key, account)
+    assert (curve[date(2024, 1, 31)], curve[date(2024, 2, 1)], curve[date(2024, 2, 9)]) == (
+        Decimal("730"), Decimal("700"), Decimal("700"),
+    )
+    # Typed again before it, the opening keeps moving back; brought to nothing, it goes.
+    add_entry(session, account, BankEntryRequest(day=date(2024, 1, 20), amount=Decimal("730"), label="Virement"), master_key)
+    assert _origins(session, master_key, account) == ["manual", "manual"]
+    assert _balance(session, master_key, account) == Decimal("700")
 
 
 # ─── Converting what predates the ledger ─────────────────────────────────
