@@ -72,8 +72,13 @@ ajustements sont exclus de ce niveau 2.
 
 **L9.** Un ajustement autre que celui d'ouverture garde son montant. Si des opérations plus anciennes que lui arrivent,
 hors de la période d'un import, le solde d'après bouge d'autant. Accepté : le corriger demanderait de stocker le solde
-lu et non l'écart, c'est-à-dire une seconde source de vérité. De même, supprimer une opération datée avant l'ajustement
-d'ouverture ne le rectifie pas : une opération supprimée est une opération qui n'existait pas.
+lu et non l'écart, c'est-à-dire une seconde source de vérité.
+
+De même, une opération qui a reculé l'ajustement d'ouverture (L7) ne le ramène pas quand elle disparaît : la supprimer
+décale le solde d'après de son montant, et la corriger — la modale supprime puis ressaisit — le décale de l'écart.
+Vérifié le 06/11 : ouverture à 700 €, saisie de −30 € avant elle, puis supprimée : 730 € ; ressaisie à −40 € : 690 €,
+au lieu de 700 € les deux fois. Accepté pour l'instant : le corriger demanderait de garder sur l'ajustement la date et
+le montant affirmés au départ, pour le recalculer à chaque écriture.
 
 ## Conversion des comptes
 
