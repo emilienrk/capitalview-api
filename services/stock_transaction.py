@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 
 from models import StockAccount, StockTransaction
 from models.market import MarketAsset
-from models.enums import AssetType
+from models.enums import AssetType, StockTransactionType
 from dtos import (
     StockTransactionCreate,
     StockTransactionUpdate,
@@ -30,6 +30,7 @@ def bulk_tx_order_key(item_with_index: tuple[int, object]) -> tuple:
     index, item = item_with_index
     type_priority = {
         "DEPOSIT": 0,
+        "GIFT": 0,
         "DIVIDEND": 1,
         "BUY": 2,
         "SELL": 3,
@@ -134,7 +135,7 @@ def _decrypt_transaction(tx: StockTransaction, master_key: str) -> TransactionRe
 
     notes = decrypt_data(tx.notes_enc, master_key) if tx.notes_enc else None
 
-    if type_str == "DEPOSIT" and asset_key == "EUR":
+    if type_str in ("DEPOSIT", "GIFT") and asset_key == "EUR":
         total_cost = amount - fees
         fees_pct = (fees / amount * 100) if amount > 0 else Decimal("0")
     else:
@@ -221,7 +222,7 @@ def _compute_eur_balance(
             eur += tx.amount - tx.fees
         elif tx.type == "BUY" and tx.asset_key != "EUR":
             eur -= (tx.amount * tx.price_per_unit) + tx.fees
-        elif tx.type == "DIVIDEND":
+        elif tx.type in ("DIVIDEND", "GIFT"):
             eur += (tx.amount * tx.price_per_unit) - tx.fees
         elif tx.type == "SELL" and tx.asset_key != "EUR":
             eur += (tx.amount * tx.price_per_unit) - tx.fees
@@ -303,6 +304,9 @@ def create_stock_transaction(
     """
     if data.asset_key:
         data.asset_key = data.asset_key.strip()
+
+    if data.type == StockTransactionType.GIFT:
+        data.asset_key, data.price_per_unit = "EUR", Decimal("1")
 
     # Validate SELL quantity against current position
     if data.type.value == "SELL" and data.asset_key != "EUR":
@@ -412,6 +416,9 @@ def update_stock_transaction(
 
     if data.asset_key:
         data.asset_key = data.asset_key.strip()
+
+    if data.type == StockTransactionType.GIFT:
+        data.asset_key, data.price_per_unit = "EUR", Decimal("1")
 
     # Validate SELL quantity: compute held quantity excluding this transaction itself
     current = _decrypt_transaction(transaction, master_key)
@@ -599,6 +606,9 @@ def get_stock_account_summary(
             pos["total_fees"] += tx.fees
             pos["total_dividends"] += proceeds
 
+        elif tx.type == "GIFT":
+            positions_map["EUR"]["total_amount"] += (tx.amount * tx.price_per_unit) - tx.fees
+
         elif tx.type == "SELL" and pos["total_amount"] > 0:
             fraction = min(tx.amount / pos["total_amount"], Decimal("1"))
             proceeds = (tx.amount * tx.price_per_unit) - tx.fees
@@ -708,7 +718,7 @@ def get_stock_account_summary(
     # Realized P/L = closed-position gains (SELLs) + dividend income actually
     # received. Dividends are cash that left the position, so without folding them
     # in here they would only surface as extra cash, never as P/L.
-    # Income paid on the cash itself (interest, a broker's gift) counts the same.
+    # Interest paid on the cash itself counts the same; a GIFT never does.
     realized_profit_loss_acc = (
         realized_acc + total_dividends_acc + positions_map["EUR"]["total_dividends"]
     )

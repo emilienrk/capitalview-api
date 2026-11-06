@@ -144,7 +144,7 @@ def map_type(raw: str, type_mapping: dict, allowed: set[str], default: str | Non
         "ACHAT": "BUY", "VENTE": "SELL", "DÉPÔT": "DEPOSIT", "DEPOT": "DEPOSIT",
         "RETRAIT": "WITHDRAW", "DIVIDENDE": "DIVIDEND", "FRAIS": "FEE",
         "RÉCOMPENSE": "REWARD", "RECOMPENSE": "REWARD", "STAKING": "REWARD",
-        "TRANSFERT": "TRANSFER", "WITHDRAWAL": "WITHDRAW",
+        "TRANSFERT": "TRANSFER", "WITHDRAWAL": "WITHDRAW", "CADEAU": "GIFT",
     }
     mapped = aliases.get(upper)
     if mapped and mapped in allowed:
@@ -191,7 +191,7 @@ def parse_stock_rows(csv_content: str, options: dict) -> tuple[list[StockImportR
         fees = parse_generic_decimal(raw_fees, decimal_separator) if raw_fees else Decimal("0")
 
         asset_key = raw_asset.upper() or None
-        if tx_type == "DEPOSIT":
+        if tx_type in ("DEPOSIT", "GIFT"):
             asset_key = "EUR"
             price = Decimal("1")
 

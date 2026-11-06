@@ -71,7 +71,8 @@ def _signed_flow(tx, include_auto_provisions: bool) -> Decimal:
 
     amount = _to_decimal(getattr(tx, "amount", _ZERO))
     match _tx_type(tx):
-        case "DEPOSIT":
+        # A gift enters from outside too: read as performance, it would show as a gain.
+        case "DEPOSIT" | "GIFT":
             return amount
         case "WITHDRAW":
             return -amount

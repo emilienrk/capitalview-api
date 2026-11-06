@@ -44,9 +44,10 @@ _CASH_OUT = {
     "CUSTOMER_OUTBOUND_REQUEST", "TRANSFER_OUTBOUND", "TRANSFER_INSTANT_OUTBOUND",
     "CARD_TRANSACTION",
 }
-# Cash credited without the user paying it in: income, never a contribution.
-_INCOME = {
-    "INTEREST_PAYMENT": "Intérêts",
+# Cash credited without the user paying it in, never a contribution. Interest is
+# what the cash earned; a gift is not a return on anything.
+_INCOME = {"INTEREST_PAYMENT": "Intérêts"}
+_GIFTS = {
     "GIFT": "Cadeau Trade Republic",
     "STOCKPERK": "Action offerte",
 }
@@ -145,12 +146,17 @@ def _parse_export(csv_content: str) -> tuple[list[StockImportRowPreview], list[s
             continue
 
         if tx_type in _INCOME:
+            row("DIVIDEND", abs(amount), Decimal("1"), asset_key="EUR", row_fees=fees,
+                notes=_INCOME[tx_type])
+            continue
+
+        if tx_type in _GIFTS:
             # A lottery gift lands a second after the purchase of the share it
             # pays for: dated with it, it is replayed first.
             if executed_at and last_buy_at and timedelta(0) <= executed_at - last_buy_at <= _FUNDING_LAG:
                 when = last_buy_at.isoformat()
-            row("DIVIDEND", abs(amount), Decimal("1"), asset_key="EUR", row_fees=fees,
-                notes=f"{_INCOME[tx_type]}{f' — {name}' if name and tx_type == 'STOCKPERK' else ''}")
+            row("GIFT", abs(amount), Decimal("1"), asset_key="EUR", row_fees=fees,
+                notes=f"{_GIFTS[tx_type]}{f' — {name}' if name and tx_type == 'STOCKPERK' else ''}")
             continue
 
         if tx_type == "DIVIDEND":

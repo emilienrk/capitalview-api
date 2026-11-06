@@ -71,7 +71,10 @@ class ExtractTxAgent:
                                         },
                                         "type": {
                                             "type": "string",
-                                            "enum": [t.value for t in StockTransactionType],
+                                            "enum": [
+                                                t.value for t in StockTransactionType
+                                                if t is not StockTransactionType.GIFT
+                                            ],
                                         },
                                         "amount": {"type": "string"},
                                         "price_per_unit": {

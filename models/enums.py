@@ -82,10 +82,13 @@ class StockTransactionType(str, Enum):
     DEPOSIT = "DEPOSIT"
     DIVIDEND = "DIVIDEND"
     WITHDRAW = "WITHDRAW"
+    # Euros a broker gives away (referral, lottery, offered share): cash the user
+    # did not pay in and did not earn by investing, so neither a deposit nor P/L.
+    GIFT = "GIFT"
 
     @classmethod
     def credit_types(cls) -> frozenset:
-        return frozenset({cls.BUY, cls.DEPOSIT, cls.DIVIDEND})
+        return frozenset({cls.BUY, cls.DEPOSIT, cls.DIVIDEND, cls.GIFT})
 
     @classmethod
     def debit_types(cls) -> frozenset:
