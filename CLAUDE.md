@@ -9,9 +9,11 @@
 | `services/crypto_transaction.py`, `services/crypto_account.py` | `docs/crypto-ledger.md` |
 | tout ce qui touche une devise | `docs/currencies.md` |
 
-Ces documents sont la source de vérité : le code les suit. Les docstrings des modules renvoient à la règle qu'ils
-portent (« Rules: docs/bank-sorting.md — R… ») et gardent le *pourquoi* local ; les mesures et les décisions datées
-vivent dans la doc, pas dans le code.
+Ces documents décrivent le comportement voulu, et le code s'y conforme. Un écart entre les deux est un bug à trancher,
+jamais à suivre en silence : on corrige le code ou la règle, dans le même commit. Ils ne contiennent que ce qui est en
+place, jamais de plan ni de tâche à venir. Les docstrings des modules renvoient à la règle qu'ils portent
+(« Rules: docs/bank-sorting.md — R… ») et gardent le *pourquoi* local ; les mesures et les décisions datées vivent dans
+la doc, pas dans le code.
 
 ## Tout changement de comportement
 
