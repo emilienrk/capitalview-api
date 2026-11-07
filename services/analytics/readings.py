@@ -63,6 +63,15 @@ DISPOSITION_BANDS = [
     Band(None, "très marqué", BAD),
 ]
 
+# How much more the portfolio moves than its benchmark. Up to 15 % more is
+# noise and a few single lines; past half again, the reference is not what
+# the portfolio is being compared against any more.
+VOLATILITY_BANDS = [
+    Band(Decimal("1.15"), "comme l'indice", GOOD),
+    Band(Decimal("1.5"), "plus nerveux", WATCH),
+    Band(None, "bien plus nerveux", BAD),
+]
+
 ADHERENCE_BANDS = [
     Band(Decimal("0.8"), "décroché", BAD),
     Band(Decimal("0.98"), "en retrait", WATCH),
@@ -159,6 +168,17 @@ def build_signals(blocks: dict) -> list[dict]:
         add("market_conditioning", "Moment dans le marché", tone, value=mine, fmt="pct")
 
     from_reading("concentration", "Paris indépendants", blocks.get("concentration"))
+
+    risk = blocks.get("risk")
+    from_reading("risk", "Risque pris", risk)
+    if risk and risk["excess_return"]["value"] is not None:
+        excess = risk["excess_return"]["value"]
+        # Neutral until the t-test says the gap is more than noise: a rate
+        # alone would crown or blame a streak the next year undoes.
+        tone = NEUTRAL
+        if risk["is_detectable"]:
+            tone = GOOD if excess > _ZERO else BAD
+        add("risk", "Face à l'indice", tone, value=excess, fmt="pct")
     # The annual load, not the euros paid: every portfolio pays fees, and a green
     # line reading "−59 €" says the opposite of what it means.
     from_reading("fees", "Frais de courtage", blocks.get("fees"))

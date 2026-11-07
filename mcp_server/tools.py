@@ -51,12 +51,14 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 from pydantic_core import to_jsonable_python
 
+from dtos.analytics import InvestorAnalyticsResponse
 from dtos.banking import CashflowType, RecurringDirection, RecurringState, RecurringStatus
 from mcp_server.context import require_scope
 from mcp_server.db import open_session
 from services.analytics.benchmark import benchmark_return, user_benchmark
 from services.analytics.period import period_performance
 from services.analytics.projection_basis import BasisWarning, describe
+from services.analytics.cache import KIND_INVESTOR, cached_payload
 from services.analytics.report import build_investor_analytics
 from services.analytics.yearly import yearly_performance
 from services.api_token import READ_SCOPE
@@ -1226,11 +1228,22 @@ def register_tools(mcp) -> None:
             "dans le marché, concentration, frais réels, sorties, respect du plan déclaré. "
             "`verdict` et `signals` (bon / à surveiller / mauvais) résument ; chaque bloc a son "
             "propre `verdict`, et chaque mesure sa `reliability` et sa `caveat` à respecter. "
-            "Réponse volumineuse et lente : pour un diagnostic, pas pour un chiffre."
+            "Réponse volumineuse : pour un diagnostic, pas pour un chiffre. Servie telle "
+            "qu'elle a été calculée à `computed_at` tant que le journal n'a pas bougé : "
+            "relayer cette date quand elle compte."
         ),
     )
     def get_investor_analytics() -> str:
         principal = require_scope(READ_SCOPE)
         with open_session() as session:
-            report = build_investor_analytics(session, principal.user_uuid, principal.master_key)
+            report = cached_payload(
+                session,
+                principal.user_uuid,
+                principal.master_key,
+                KIND_INVESTOR,
+                InvestorAnalyticsResponse,
+                lambda: build_investor_analytics(
+                    session, principal.user_uuid, principal.master_key
+                ),
+            )
         return _render(_lean(_jsonable(report)))

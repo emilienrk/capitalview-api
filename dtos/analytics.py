@@ -1,6 +1,6 @@
 """Investor behaviour analytics schemas."""
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel
@@ -346,6 +346,48 @@ class ExitsResponse(BaseModel):
     verdict: str
 
 
+class DrawdownOut(BaseModel):
+    depth: Decimal
+    """Fall from the peak to the trough, negative or zero."""
+    peak: date
+    trough: date
+    recovered: date | None = None
+    """First session back at the peak, or null while still under water."""
+
+
+class RiskResponse(BaseModel):
+    """How much the portfolio moves against its benchmark, and whether the gap to it is real.
+
+    Measured on the benchmark's sessions, not on calendar days: the snapshots
+    repeat a close over the weekend and would deflate every standard deviation.
+    """
+
+    sessions: int
+    volatility: MetricOut
+    """Annualised standard deviation of the session returns."""
+    benchmark_volatility: MetricOut
+    volatility_ratio: MetricOut
+    """Portfolio volatility over benchmark volatility — the block's headline."""
+    beta: MetricOut
+    correlation: MetricOut
+    tracking_error: MetricOut
+    max_drawdown: DrawdownOut | None = None
+    benchmark_max_drawdown: DrawdownOut | None = None
+    """Over the same sessions, so the two falls compare."""
+    excess_return: MetricOut
+    """Annualised mean excess over the benchmark. The sign is the finding, the test below says whether it holds."""
+    p_value: Decimal | None = None
+    is_detectable: bool = False
+    """False means the gap to the index is indistinguishable from chance."""
+    years_to_conclude: Decimal | None = None
+    """Years of history this gap would need, at this noise level, to be significant."""
+    return_per_risk: MetricOut
+    """Annualised return per point of volatility — a Sharpe ratio without a risk-free rate."""
+    benchmark_return_per_risk: MetricOut
+    reading: ReadingOut | None = None
+    verdict: str
+
+
 class MonthlyAdherenceOut(BaseModel):
     year: int
     month: int
@@ -411,7 +453,20 @@ class PlanResponse(BaseModel):
     """Why a declared plan could not be scored, when that is the case."""
 
 
-class InvestorAnalyticsResponse(BaseModel):
+class CachedPayload(BaseModel):
+    """When the payload was computed, and until when it is served as is.
+
+    The analysis is kept between reads (services/analytics/cache.py): a ledger
+    or settings change rebuilds it at once, prices alone only at `valid_until`.
+    """
+
+    computed_at: datetime | None = None
+    valid_until: datetime | None = None
+    cached: bool = False
+    """True when this response came from the store rather than a fresh replay."""
+
+
+class InvestorAnalyticsResponse(CachedPayload):
     period_start: date | None = None
     period_end: date | None = None
     days: int
@@ -428,6 +483,7 @@ class InvestorAnalyticsResponse(BaseModel):
     deposit_lag: DepositLagResponse | None = None
     market_conditioning: MarketConditioningResponse | None = None
     concentration: ConcentrationResponse | None = None
+    risk: RiskResponse | None = None
     fees: FeesResponse | None = None
     exits: ExitsResponse | None = None
     plan: PlanResponse | None = None
@@ -465,7 +521,7 @@ class YearPerformanceOut(BaseModel):
     benchmark_end: date | None = None
 
 
-class YearlyPerformanceResponse(BaseModel):
+class YearlyPerformanceResponse(CachedPayload):
     benchmark_asset_key: str
     benchmark_name: str
     years: list[YearPerformanceOut] = []
