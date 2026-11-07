@@ -189,7 +189,7 @@ def build_bridge(
         kind = _tx_type(tx)
         fees_total += _dec(getattr(tx, "fees", None))
         gross = _dec(getattr(tx, "amount", None)) * _dec(getattr(tx, "price_per_unit", None))
-        if kind == "DEPOSIT":
+        if kind in ("DEPOSIT", "GIFT"):
             deposits += gross
         elif kind == "WITHDRAW":
             withdrawals += gross

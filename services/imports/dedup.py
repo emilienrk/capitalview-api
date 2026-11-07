@@ -28,6 +28,10 @@ def _norm_dt(value) -> str:
 
 
 def make_fingerprint(executed_at, asset_key: str, tx_type: str, amount) -> Fingerprint:
+    # A gift imported before GIFT existed is stored as a euro DIVIDEND, and the
+    # user may retype it either way: re-importing the export must still skip it.
+    if str(asset_key) == "EUR" and str(tx_type) == "GIFT":
+        tx_type = "DIVIDEND"
     return (_norm_dt(executed_at), str(asset_key), str(tx_type), _norm_amount(amount))
 
 

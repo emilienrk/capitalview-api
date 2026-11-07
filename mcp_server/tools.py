@@ -765,7 +765,9 @@ def register_tools(mcp) -> None:
             "Le patrimoine net de l'utilisateur, par poche, tel que le tableau de bord l'affiche : "
             "`bank` (comptes bancaires et livrets), `stocks` et `crypto` (valeur des lignes détenues, "
             "avec `invested` au prix de revient, `profit_loss` latent, `realized_profit_loss`, "
-            "`dividends`, `fees`), `broker_cash` (espèces qui dorment sur les comptes-titres et "
+            "`dividends`, `fees`, `gifts` = cadeaux du courtier — parrainage, loterie, action "
+            "offerte —, comptés dans `broker_cash` mais ni dans le P/L ni dans les versements), "
+            "`broker_cash` (espèces qui dorment sur les comptes-titres et "
             "exchanges, négatif sur un compte à découvert), `placements` (assurance vie, PER, SCPI… : "
             "`net_invested` versé net des rachats, `gain`) et `assets` (biens : voiture, montres…). "
             "`share_pct` est la part de chaque poche dans `global_wealth`. À appeler en premier. "
@@ -1082,7 +1084,8 @@ def register_tools(mcp) -> None:
         title="Achats et ventes",
         description=(
             "Les mouvements des comptes d'investissement (achats, ventes, dépôts, retraits, "
-            "dividendes, frais), du plus récent au plus ancien : « qu'est-ce que j'ai acheté en "
+            "dividendes, cadeaux du courtier en `GIFT`, frais), du plus récent au plus ancien : "
+            "« qu'est-ce que j'ai acheté en "
             "mars », « quand suis-je entré sur cette ligne ». `account_type` 'stock', 'crypto' ou "
             "'all'. `since` / `until` bornent les dates (incluses) : préférer une fenêtre resserrée, "
             "la réponse est plafonnée à 200 lignes et `truncated` le signale. Les opérations "

@@ -80,6 +80,16 @@ def test_idle_cash_is_not_counted_as_a_gain(session, master_key, stock_account, 
     assert balance["global_wealth"] == 5301.0
 
 
+def test_gifts_explain_the_cash_that_neither_deposits_nor_pnl_do(session, master_key, stock_account, monkeypatch):
+    summary = _summary(Decimal("217.60")).model_copy(update={"total_gifts": Decimal("281.99")})
+    monkeypatch.setattr(overview, "get_stock_account_summary", lambda *a, **k: summary)
+
+    balance = overview.get_user_balance(session, stock_account, master_key, details=True)
+
+    assert balance["pockets"]["stocks"]["gifts"] == 281.99
+    assert balance["accounts"]["stocks"][0]["gifts"] == 281.99
+
+
 def test_negative_broker_cash_is_left_out_of_the_total(session, master_key, stock_account, monkeypatch):
     """-3 801 € means deposits never entered, not a debt: the bank already shows
     that money gone. The account detail keeps the real balance."""

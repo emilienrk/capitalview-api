@@ -84,6 +84,8 @@ class AccountSummaryResponse(BaseModel):
     total_withdrawals: Decimal = Decimal("0")
     total_fees: Decimal
     total_dividends: Decimal = Decimal("0")
+    # In cash_balance, never in deposits nor P/L: the gap between the two.
+    total_gifts: Decimal = Decimal("0")
     currency: str = "EUR"
     current_value: Decimal | None = None
     cash_balance: Decimal = Decimal("0")

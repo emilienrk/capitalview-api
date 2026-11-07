@@ -255,6 +255,104 @@ def test_auto_fund_uses_eur_balance_as_of_buy_date(session: Session, master_key:
     assert auto_deposits[0].executed_at == datetime(2023, 1, 5, 11, 59, 59)
 
 
+def _gift(acc: str, amount: str, day: datetime) -> StockTransactionCreate:
+    return StockTransactionCreate(
+        account_id=acc,
+        type=StockTransactionType.GIFT,
+        amount=Decimal(amount),
+        price_per_unit=Decimal("0"),
+        executed_at=day,
+    )
+
+
+def test_gift_adds_cash_without_being_a_deposit_or_pnl(session: Session, master_key: str):
+    acc = "acc_gift"
+    created = create_stock_transaction(session, _gift(acc, "251", datetime(2026, 1, 6)), master_key)
+    assert (created.asset_key, created.price_per_unit) == ("EUR", Decimal("1"))
+
+    summary = _stock_summary(session, acc, master_key)
+    assert summary.cash_balance == Decimal("251")
+    assert summary.total_deposits == Decimal("0")
+    assert summary.realized_profit_loss == Decimal("0")
+    assert summary.total_profit_loss == Decimal("0")
+    assert summary.total_dividends == Decimal("0")
+    assert summary.total_gifts == Decimal("251")
+
+
+def test_a_gift_already_imported_as_a_dividend_is_not_imported_twice():
+    from services.imports.dedup import make_fingerprint
+
+    day = datetime(2026, 1, 6, 9, 13, 18)
+    assert make_fingerprint(day, "EUR", "GIFT", Decimal("251")) == make_fingerprint(
+        day, "EUR", "DIVIDEND", Decimal("251.000000")
+    )
+    assert make_fingerprint(day, "US5949181045", "BUY", 1) != make_fingerprint(day, "US5949181045", "DIVIDEND", 1)
+
+
+def test_interest_stays_in_realized_pnl_beside_a_gift(session: Session, master_key: str):
+    acc = "acc_gift_interest"
+    create_stock_transaction(session, _gift(acc, "21", datetime(2026, 1, 2)), master_key)
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id=acc,
+        asset_key="EUR",
+        type=StockTransactionType.DIVIDEND,
+        amount=Decimal("1.15"),
+        price_per_unit=Decimal("1"),
+        executed_at=datetime(2026, 2, 1),
+    ), master_key)
+
+    summary = _stock_summary(session, acc, master_key)
+    assert summary.cash_balance == Decimal("22.15")
+    assert summary.realized_profit_loss == Decimal("1.15")
+
+
+def test_gift_funds_a_buy_so_no_provision_is_written(session: Session, master_key: str):
+    acc = "acc_gift_funds"
+    _add_market_asset(session, "ISIN_MSFT", symbol="MSFT")
+    create_stock_transaction(session, _gift(acc, "251", datetime(2026, 1, 6, 9, 0, 0)), master_key)
+    create_stock_transaction(session, StockTransactionCreate(
+        account_id=acc,
+        asset_key="ISIN_MSFT",
+        type=StockTransactionType.BUY,
+        amount=Decimal("1"),
+        price_per_unit=Decimal("250"),
+        executed_at=datetime(2026, 1, 6, 10, 0, 0),
+    ), master_key)
+
+    txs = get_account_transactions(session, acc, master_key)
+    assert not [tx for tx in txs if tx.type == "DEPOSIT"]
+
+
+def test_an_income_row_retyped_as_gift_leaves_the_pnl(session: Session, master_key: str):
+    acc = "acc_gift_retype"
+    user_uuid = "user_gift_retype"
+    _make_stock_account(session, acc, user_uuid, master_key)
+    income = create_stock_transaction(session, StockTransactionCreate(
+        account_id=acc,
+        asset_key="EUR",
+        type=StockTransactionType.DIVIDEND,
+        amount=Decimal("251"),
+        price_per_unit=Decimal("1"),
+        executed_at=datetime(2026, 1, 6),
+    ), master_key)
+    assert _stock_summary(session, acc, master_key).realized_profit_loss == Decimal("251")
+
+    row = session.get(StockTransaction, income.id)
+    update_stock_transaction(
+        session, row, StockTransactionUpdate(type=StockTransactionType.GIFT), user_uuid, master_key
+    )
+
+    summary = _stock_summary(session, acc, master_key)
+    assert summary.realized_profit_loss == Decimal("0")
+    assert summary.cash_balance == Decimal("251")
+
+    # Editing the gift later, without resending its type, keeps it in euros.
+    update_stock_transaction(
+        session, row, StockTransactionUpdate(asset_key="ISIN_MSFT", amount=Decimal("250")), user_uuid, master_key
+    )
+    assert _stock_summary(session, acc, master_key).cash_balance == Decimal("250")
+
+
 @patch("services.stock_transaction.get_stock_info")
 def test_get_stock_account_summary(mock_market, session: Session, master_key: str):
     # Side effect now receives (session, asset_key)

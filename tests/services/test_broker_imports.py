@@ -151,6 +151,7 @@ def _replayed_cash(rows) -> Decimal:
         cash += {
             "DEPOSIT": amount - fees, "WITHDRAW": -amount - fees, "BUY": -amount * price - fees,
             "SELL": amount * price - fees, "DIVIDEND": amount * price - fees,
+            "GIFT": amount * price - fees,
         }[r.type]
     return cash
 
@@ -180,9 +181,11 @@ def test_trade_republic_export_maps_each_movement():
     dividend = next(r for r in rows if r.type == "DIVIDEND" and r.asset_key == "FR0000121014")
     assert (dividend.amount, dividend.fees) == (0.54, 0.14)
 
-    # Interest, gifts and offered shares are income on the cash, not deposits.
+    # Interest is income on the cash; gifts and offered shares are neither income nor deposits.
     income = [r for r in rows if r.type == "DIVIDEND" and r.asset_key == "EUR"]
-    assert sorted(r.amount for r in income) == [0.07, 9.99, 21.0]
+    assert [r.amount for r in income] == [0.07]
+    gifts = [r for r in rows if r.type == "GIFT" and r.asset_key == "EUR"]
+    assert sorted(r.amount for r in gifts) == [9.99, 21.0]
 
     # Crypto trades only move cash out to the crypto account and back.
     assert by_tx[("WITHDRAW", "EUR", "Achat Bitcoin (compte crypto)")].amount == 51.19

@@ -160,9 +160,11 @@ def _category_basis(
     basis = CategoryBasis()
 
     # Both measures read the same ledger, so a deposit cannot count for one and
-    # not the other.
+    # not the other. A gift is no deposit: it moves the value, so the return must
+    # discount it, but nobody saves it every month.
     flows = with_implied_deposits(stock_external_flows(transactions), history or [])
-    average, months, total = average_monthly_contribution(flows)
+    saved = with_implied_deposits(stock_external_flows(transactions, include_gifts=False), history or [])
+    average, months, total = average_monthly_contribution(saved)
     if average is not None:
         basis.monthly_contribution = average
         basis.contribution_source = "net_external_flows"
