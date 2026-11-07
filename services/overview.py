@@ -234,6 +234,7 @@ class _Pocket:
     invested: Decimal = Decimal(0)
     realized: Decimal = Decimal(0)
     dividends: Decimal = Decimal(0)
+    gifts: Decimal = Decimal(0)
     fees: Decimal = Decimal(0)
     # One entry per account that could be priced.
     priced_profit_loss: list[Decimal] = field(default_factory=list)
@@ -255,6 +256,7 @@ class _Pocket:
             "profit_loss_pct": _pct(self.profit_loss, self.invested),
             "realized_profit_loss": float(self.realized),
             "dividends": float(self.dividends),
+            "gifts": float(self.gifts),
             "fees": float(self.fees),
             "share_pct": _pct(self.holdings, total),
         }
@@ -306,6 +308,7 @@ def _read_pocket(
         pocket.invested += summary.total_invested
         pocket.realized += summary.realized_profit_loss or Decimal(0)
         pocket.dividends += summary.total_dividends or Decimal(0)
+        pocket.gifts += summary.total_gifts
         pocket.fees += summary.total_fees or Decimal(0)
         if summary.profit_loss is not None:
             pocket.priced_profit_loss.append(summary.profit_loss)
@@ -329,6 +332,7 @@ def _read_pocket(
                 "profit_loss_pct": _opt_float(summary.profit_loss_percentage),
                 "realized_profit_loss": _opt_float(summary.realized_profit_loss),
                 "dividends": float(summary.total_dividends or 0),
+                "gifts": float(summary.total_gifts),
                 "fees": float(summary.total_fees or 0),
             })
             pocket.accounts.append((detail, lines))

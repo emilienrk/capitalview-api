@@ -63,7 +63,7 @@ def is_auto_provision(tx) -> bool:
     return (getattr(tx, "notes", None) or "").strip() == AUTO_PROVISION_NOTE
 
 
-def _signed_flow(tx, include_auto_provisions: bool) -> Decimal:
+def _signed_flow(tx, include_auto_provisions: bool, include_gifts: bool = True) -> Decimal:
     if str(getattr(tx, "asset_key", "") or "").upper() != "EUR":
         return _ZERO
     if not include_auto_provisions and is_auto_provision(tx):
@@ -71,9 +71,11 @@ def _signed_flow(tx, include_auto_provisions: bool) -> Decimal:
 
     amount = _to_decimal(getattr(tx, "amount", _ZERO))
     match _tx_type(tx):
-        # A gift enters from outside too: read as performance, it would show as a gain.
-        case "DEPOSIT" | "GIFT":
+        case "DEPOSIT":
             return amount
+        # A gift enters from outside too: read as performance, it would show as a gain.
+        case "GIFT":
+            return amount if include_gifts else _ZERO
         case "WITHDRAW":
             return -amount
         case _:
@@ -99,6 +101,7 @@ def stock_external_flows(
     transactions: Iterable[object],
     *,
     include_auto_provisions: bool = True,
+    include_gifts: bool = True,
 ) -> dict[date, Decimal]:
     """Signed external EUR flow per day. Days with no net flow are omitted."""
     grouped: dict[date, Decimal] = defaultdict(lambda: _ZERO)
@@ -106,7 +109,7 @@ def stock_external_flows(
         day = _tx_day(tx)
         if day is None:
             continue
-        flow = _signed_flow(tx, include_auto_provisions)
+        flow = _signed_flow(tx, include_auto_provisions, include_gifts)
         if flow != _ZERO:
             grouped[day] += flow
     return {day: total for day, total in grouped.items() if total != _ZERO}

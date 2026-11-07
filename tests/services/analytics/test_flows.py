@@ -36,6 +36,7 @@ def test_a_gift_enters_from_outside_like_a_deposit():
     txs = [_Tx("GIFT", "EUR", 251, D1)]
     assert stock_external_flow_for_day(txs, D1) == Decimal("251")
     assert stock_external_flows(txs) == {D1: Decimal("251")}
+    assert stock_external_flows(txs, include_gifts=False) == {}
 
 
 def test_buys_and_sells_are_not_external_flows():

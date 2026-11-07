@@ -42,6 +42,19 @@ def test_the_average_is_the_net_flow_over_the_months_it_spans():
     assert average == total / (Decimal(360) / Decimal("30.4375"))
 
 
+def test_a_gift_is_not_counted_as_monthly_saving():
+    """500 paid in each of two months, then a 251 € broker gift: still 500 saved a month."""
+    transactions = [
+        _Tx(datetime.date(2026, 1, 1), "500"),
+        _Tx(datetime.date(2026, 1, 6), "251", "GIFT"),
+        _Tx(datetime.date(2026, 3, 3), "500"),
+    ]
+
+    basis = _category_basis([], transactions)
+
+    assert basis.contribution_total == Decimal("1000")
+
+
 def test_a_withdrawal_heavy_ledger_reports_negative_saving():
     """Taking more out than in is disinvestment, not zero — the sign is the news."""
     flows = {

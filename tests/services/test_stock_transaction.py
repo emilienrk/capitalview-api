@@ -276,6 +276,17 @@ def test_gift_adds_cash_without_being_a_deposit_or_pnl(session: Session, master_
     assert summary.realized_profit_loss == Decimal("0")
     assert summary.total_profit_loss == Decimal("0")
     assert summary.total_dividends == Decimal("0")
+    assert summary.total_gifts == Decimal("251")
+
+
+def test_a_gift_already_imported_as_a_dividend_is_not_imported_twice():
+    from services.imports.dedup import make_fingerprint
+
+    day = datetime(2026, 1, 6, 9, 13, 18)
+    assert make_fingerprint(day, "EUR", "GIFT", Decimal("251")) == make_fingerprint(
+        day, "EUR", "DIVIDEND", Decimal("251.000000")
+    )
+    assert make_fingerprint(day, "US5949181045", "BUY", 1) != make_fingerprint(day, "US5949181045", "DIVIDEND", 1)
 
 
 def test_interest_stays_in_realized_pnl_beside_a_gift(session: Session, master_key: str):
@@ -334,6 +345,12 @@ def test_an_income_row_retyped_as_gift_leaves_the_pnl(session: Session, master_k
     summary = _stock_summary(session, acc, master_key)
     assert summary.realized_profit_loss == Decimal("0")
     assert summary.cash_balance == Decimal("251")
+
+    # Editing the gift later, without resending its type, keeps it in euros.
+    update_stock_transaction(
+        session, row, StockTransactionUpdate(asset_key="ISIN_MSFT", amount=Decimal("250")), user_uuid, master_key
+    )
+    assert _stock_summary(session, acc, master_key).cash_balance == Decimal("250")
 
 
 @patch("services.stock_transaction.get_stock_info")

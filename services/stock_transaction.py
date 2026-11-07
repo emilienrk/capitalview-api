@@ -417,12 +417,11 @@ def update_stock_transaction(
     if data.asset_key:
         data.asset_key = data.asset_key.strip()
 
-    if data.type == StockTransactionType.GIFT:
-        data.asset_key, data.price_per_unit = "EUR", Decimal("1")
-
     # Validate SELL quantity: compute held quantity excluding this transaction itself
     current = _decrypt_transaction(transaction, master_key)
     effective_type = data.type.value if data.type is not None else current.type
+    if effective_type == StockTransactionType.GIFT.value:
+        data.asset_key, data.price_per_unit = "EUR", Decimal("1")
     effective_asset_key = data.asset_key if data.asset_key is not None else current.asset_key
     effective_amount = data.amount if data.amount is not None else current.amount
 
@@ -548,6 +547,7 @@ def get_stock_account_summary(
     total_deposits_acc = Decimal("0")
     total_withdrawals_acc = Decimal("0")
     realized_acc = Decimal("0")
+    gifts_acc = Decimal("0")
 
     positions_map: dict[str, dict] = {
         "EUR": {
@@ -607,7 +607,9 @@ def get_stock_account_summary(
             pos["total_dividends"] += proceeds
 
         elif tx.type == "GIFT":
-            positions_map["EUR"]["total_amount"] += (tx.amount * tx.price_per_unit) - tx.fees
+            gift = (tx.amount * tx.price_per_unit) - tx.fees
+            positions_map["EUR"]["total_amount"] += gift
+            gifts_acc += gift
 
         elif tx.type == "SELL" and pos["total_amount"] > 0:
             fraction = min(tx.amount / pos["total_amount"], Decimal("1"))
@@ -736,6 +738,7 @@ def get_stock_account_summary(
         total_withdrawals=round(total_withdrawals_acc, 2),
         total_fees=round(total_fees_acc, 2),
         total_dividends=round(total_dividends_acc, 2),
+        total_gifts=round(gifts_acc, 2),
         current_value=round(current_value_acc, 2) if current_value_acc is not None else None,
         cash_balance=round(cash_balance_acc, 2),
         profit_loss=round(profit_loss_acc, 2) if profit_loss_acc is not None else None,
