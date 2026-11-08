@@ -342,7 +342,9 @@ class GenericStockParser(StockImportParser):
 
 # ── Generic CRYPTO parser ────────────────────────────────────
 
-_CRYPTO_TYPES = {t.value for t in CryptoTransactionType}
+# A crypto gift is a whole operation (offered euros funding a BUY), chosen by
+# hand in the form: a CSV row stands for one leg.
+_CRYPTO_TYPES = {t.value for t in CryptoTransactionType if t is not CryptoTransactionType.GIFT}
 
 
 @register

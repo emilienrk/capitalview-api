@@ -87,6 +87,9 @@ def create_crypto_transaction(
 
     account_bidx = hash_index(data.account_id, master_key)
 
+    if data.type == CryptoTransactionType.GIFT:
+        data.asset_key, data.price_per_unit = "EUR", Decimal("1")
+
     asset_key_enc = encrypt_data(data.asset_key.upper(), master_key)
     type_enc = encrypt_data(data.type.value, master_key)
     amount_enc = encrypt_data(str(data.amount), master_key)
@@ -125,7 +128,24 @@ def create_composite_crypto_transaction(
     rows: list[TransactionResponse] = []
     composite_type = CryptoCompositeTransactionType.normalize(data.type)
 
-    if composite_type == CryptoCompositeTransactionType.CRYPTO_DEPOSIT:
+    if composite_type == CryptoCompositeTransactionType.GIFT and data.asset_key.upper() in FIAT_ASSET_KEYS:
+        gift = CryptoTransactionCreate(
+            account_id=data.account_id,
+            asset_key="EUR",
+            type=CryptoTransactionType.GIFT,
+            amount=data.amount,
+            price_per_unit=Decimal("1"),
+            executed_at=data.executed_at,
+            tx_hash=data.tx_hash,
+            notes=data.notes,
+        )
+        rows.append(create_crypto_transaction(session, gift, master_key, group_uuid=group))
+        return rows
+
+    # A crypto received as a gift is written as a crypto deposit whose euros were
+    # offered: its value enters the account and becomes its cost basis, but the
+    # user paid none of it in.
+    if composite_type in (CryptoCompositeTransactionType.CRYPTO_DEPOSIT, CryptoCompositeTransactionType.GIFT):
         eur_amount = data.eur_amount or Decimal("0")
         if eur_amount == Decimal("0") and data.asset_key not in FIAT_ASSET_KEYS:
             price = get_crypto_price(session, data.asset_key, as_of=data.executed_at.date()) or Decimal("0")
@@ -134,7 +154,11 @@ def create_composite_crypto_transaction(
         fiat_deposit = CryptoTransactionCreate(
             account_id=data.account_id,
             asset_key="EUR",
-            type=CryptoTransactionType.DEPOSIT,
+            type=(
+                CryptoTransactionType.GIFT
+                if composite_type == CryptoCompositeTransactionType.GIFT
+                else CryptoTransactionType.DEPOSIT
+            ),
             amount=eur_amount,
             price_per_unit=Decimal("1"),
             executed_at=data.executed_at,
@@ -454,7 +478,7 @@ def _compute_asset_key_pru(
                     cost_basis += group_cost * (surviving / tx.amount)
                 else:
                     cost_basis += group_cost
-            case CryptoTransactionType.REWARD.value | CryptoTransactionType.DEPOSIT.value:
+            case CryptoTransactionType.REWARD.value | CryptoTransactionType.DEPOSIT.value | CryptoTransactionType.GIFT.value:
                 total_amount += tx.amount
             case CryptoTransactionType.SPEND.value | CryptoTransactionType.TRANSFER.value:
                 if total_amount > 0:
@@ -610,6 +634,41 @@ class ImmutableLegError(ValueError):
     """A change only the whole operation can make."""
 
 
+_CASH_IN_TYPES = {CryptoTransactionType.DEPOSIT.value, CryptoTransactionType.GIFT.value}
+
+
+def _retype_cash_in(session: Session, transaction: CryptoTransaction, new_type: str, master_key: str) -> None:
+    """Turn a euro deposit into a gift or back: whose money it was is the only
+    thing a type change may say. Both shapes are ones a composite action writes;
+    the proceeds of a sale are no money coming in, and stay a deposit."""
+    current = decrypt_data(transaction.type_enc, master_key)
+    if current == new_type:
+        return
+    if (
+        current not in _CASH_IN_TYPES
+        or new_type not in _CASH_IN_TYPES
+        or decrypt_data(transaction.asset_key_enc, master_key).upper() != "EUR"
+    ):
+        raise ImmutableLegError(
+            "Seul un dépôt d'euros peut devenir un cadeau, ou l'inverse : "
+            "supprimez l'opération et recréez-la."
+        )
+    if transaction.group_uuid:
+        siblings = session.exec(
+            select(CryptoTransaction).where(
+                CryptoTransaction.group_uuid == transaction.group_uuid,
+                CryptoTransaction.uuid != transaction.uuid,
+            )
+        ).all()
+        if any(
+            decrypt_data(row.type_enc, master_key) == CryptoTransactionType.SPEND.value
+            and decrypt_data(row.asset_key_enc, master_key).upper() not in FIAT_ASSET_KEYS
+            for row in siblings
+        ):
+            raise ImmutableLegError("Le produit d'une vente reste un dépôt : ce n'est pas un cadeau.")
+    transaction.type_enc = encrypt_data(new_type, master_key)
+
+
 def update_crypto_transaction(
     session: Session,
     transaction: CryptoTransaction,
@@ -620,6 +679,8 @@ def update_crypto_transaction(
     if not _account_owned_by_user(session, transaction.account_id_bidx, user_uuid, master_key):
         return None
 
+    if data.type is not None:
+        _retype_cash_in(session, transaction, data.type.value, master_key)
     if data.amount is not None:
         if decrypt_data(transaction.type_enc, master_key) != CryptoTransactionType.ANCHOR.value:
             raise ImmutableLegError(
@@ -795,7 +856,7 @@ def get_crypto_account_summary(
                     pos["cost_basis"] += group_cost * (surviving / tx.amount)
                 else:
                     pos["cost_basis"] += group_cost
-            case "REWARD" | "DEPOSIT":
+            case "REWARD" | "DEPOSIT" | "GIFT":
                 pos["total_amount"] += tx.amount
             case "ANCHOR":
                 pass
@@ -903,8 +964,11 @@ def get_crypto_account_summary(
 
     total_deposits_acc = Decimal("0")
     total_withdrawals_acc = Decimal("0")
+    gifts_acc = Decimal("0")
     for tx in transactions:
-        if tx.type == "DEPOSIT" and tx.asset_key in FIAT_ASSET_KEYS:
+        if tx.type == "GIFT":
+            gifts_acc += tx.amount * tx.price_per_unit
+        elif tx.type == "DEPOSIT" and tx.asset_key in FIAT_ASSET_KEYS:
             # External wire IN — only if NOT part of a crypto-sale (SELL_TO_FIAT) group
             if not tx.group_uuid or tx.group_uuid not in groups_with_crypto_spend:
                 total_deposits_acc += tx.amount * tx.price_per_unit
@@ -983,6 +1047,7 @@ def get_crypto_account_summary(
         total_deposits=round(total_deposits_acc, 2),
         total_withdrawals=round(total_withdrawals_acc, 2),
         total_fees=round(total_fees_acc, 2),
+        total_gifts=round(gifts_acc, 2),
         currency="EUR",
         current_value=round(current_value_acc, 2) if current_value_acc is not None else None,
         cash_balance=round(cash_balance_acc, 2),

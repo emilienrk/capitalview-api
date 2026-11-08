@@ -23,7 +23,7 @@ prix d'un actif (`services/market.py`, `_crypto_timeline_events`), les
 statistiques communautaires (`services/community.py`), le PRU d'un transfert
 (`_compute_asset_key_pru`) et le front (`capitalview-web/src/utils/cryptoOperations.ts`).
 
-## Huit types atomiques
+## Neuf types atomiques
 
 `CryptoTransactionType` (`models/enums.py`) :
 
@@ -37,6 +37,7 @@ statistiques communautaires (`services/community.py`), le PRU d'un transfert
 | `WITHDRAW` | − | − au prorata si crypto | sortie taxable, ou retrait d'euros vers la banque |
 | `FEE` | − | inchangé | frais prélevés dans un actif ; valorisés à part (`fees_eur`) |
 | `ANCHOR` | aucune | porte le coût du groupe | ligne EUR virtuelle, jamais comptée dans un solde |
+| `GIFT` | + | — | euros offerts : parrainage, loterie, don reçu sur la plateforme ; toujours en EUR |
 
 Crédits et débits : `credit_types()` / `debit_types()`. `ANCHOR` n'est ni l'un
 ni l'autre.
@@ -82,6 +83,8 @@ même `group_uuid` et la même date.
 | `SELL_TO_FIAT` | `SPEND` de l'actif + `DEPOSIT` de la devise (auto) + `FEE` éventuel |
 | `FIAT_DEPOSIT` / `FIAT_WITHDRAW` | `DEPOSIT EUR` / `WITHDRAW EUR` |
 | `REWARD` | `REWARD` |
+| `GIFT` en euros | `GIFT EUR` |
+| `GIFT` d'une crypto | `GIFT EUR` (auto) + `BUY` + `SPEND EUR` : la forme du `CRYPTO_DEPOSIT` |
 | `TRANSFER`, `EXIT` | `TRANSFER` (+ `FEE` pour `EXIT`) |
 | `FEE` | `FEE` |
 
@@ -117,9 +120,20 @@ cours du jour, en miroir de la sortie côté source.
 | --- | --- | --- |
 | `DEPOSIT EUR` seul | oui | oui : peut prouver un virement sortant de la banque |
 | `DEPOSIT EUR` d'un `CRYPTO_DEPOSIT` | oui : la valeur de la crypto entre dans le compte | non (`is_auto_provision`) |
+| `GIFT EUR`, seul ou d'une crypto offerte | flux oui, `total_deposits` non : `total_gifts` | non |
 | `DEPOSIT` devise d'une vente | non : produit de cession (groupe avec `SPEND` crypto) | non (`is_auto_provision`) |
 | `WITHDRAW EUR` | sortie | oui |
 | `TRANSFER` / `WITHDRAW` crypto | sortie au cours du jour | — |
+
+Un cadeau est de l'argent que l'utilisateur n'a ni versé ni gagné en
+investissant, comme le `GIFT` d'un compte-titres. Il entre dans la valeur et
+dans les flux externes, pour que le rendement ne le lise pas comme un gain.
+Il reste hors de `total_deposits`, de l'épargne mensuelle de la projection et
+du rapprochement bancaire. Une crypto offerte garde sa valeur au jour du don
+comme prix de revient : ce qu'elle prend ensuite est du vrai P/L. Ce qu'un
+placement rapporte (staking, intérêts) reste un `REWARD`. Un cadeau ne se
+devine jamais d'un libellé : l'utilisateur le choisit dans le formulaire, et
+l'import CSV n'en écrit pas (2026-11-08).
 
 `is_auto_provision` marque une jambe EUR que l'application a écrite elle-même à
 côté d'une autre : aucun argent n'a franchi la frontière du compte, donc rien
@@ -178,7 +192,12 @@ le reste du groupe, laisserait un groupe qu'aucune action composite n'aurait
 - **les notes et le hash** ;
 - **le montant d'un `ANCHOR`** : la valeur EUR du groupe, qu'aucune autre jambe
   ne répète. C'est ce qu'on corrige quand le préremplissage d'un import s'est
-  trompé. Tout autre montant renvoie 422 (`ImmutableLegError`).
+  trompé. Tout autre montant renvoie 422 (`ImmutableLegError`) ;
+- **le type d'une jambe `DEPOSIT EUR` ↔ `GIFT EUR`** : à qui était l'argent.
+  Les deux formes sont celles d'une action composite (`FIAT_DEPOSIT` / `GIFT`
+  en euros, `CRYPTO_DEPOSIT` / `GIFT` d'une crypto). Le produit d'une vente
+  (groupe avec un `SPEND` crypto) reste un dépôt. Tout autre changement de type
+  renvoie 422 (2026-11-08).
 
 Jusqu'au 2026-10-11, l'actif, le type, la quantité et le prix de n'importe
 quelle ligne se modifiaient seuls.

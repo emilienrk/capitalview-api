@@ -82,8 +82,9 @@ class StockTransactionType(str, Enum):
     DEPOSIT = "DEPOSIT"
     DIVIDEND = "DIVIDEND"
     WITHDRAW = "WITHDRAW"
-    # Euros a broker gives away (referral, lottery, offered share): cash the user
-    # did not pay in and did not earn by investing, so neither a deposit nor P/L.
+    # Euros offered (a referral, a lottery, an offered share, money given on the
+    # platform itself): cash the user did not pay in and did not earn by
+    # investing, so neither a deposit nor P/L.
     GIFT = "GIFT"
 
     @classmethod
@@ -113,6 +114,8 @@ class CryptoTransactionType(str, Enum):
     DEPOSIT      — Direct EUR entry (wire transfer, exchange deposit).
     ANCHOR       — Virtual EUR cost anchor for a crypto deposit group; never
                    counted in balance — only used to carry PRU cost in a group.
+    GIFT         — Euros offered, as on a stock account: neither a deposit nor P/L.
+                   Alone, or funding the BUY of a crypto received as a gift.
     TRANSFER     — Neutral outbound to own wallet (no tax event).
     WITHDRAW     — Taxable outbound (cash-out, payment, donation).
     """
@@ -124,10 +127,11 @@ class CryptoTransactionType(str, Enum):
     ANCHOR       = "ANCHOR"
     TRANSFER     = "TRANSFER"
     WITHDRAW     = "WITHDRAW"
+    GIFT         = "GIFT"
 
     @classmethod
     def credit_types(cls) -> frozenset:
-        return frozenset({cls.BUY, cls.REWARD, cls.DEPOSIT})
+        return frozenset({cls.BUY, cls.REWARD, cls.DEPOSIT, cls.GIFT})
 
     @classmethod
     def debit_types(cls) -> frozenset:
@@ -150,6 +154,7 @@ class CryptoCompositeTransactionType(str, Enum):
     SELL_TO_FIAT = "SELL_TO_FIAT"
     FEE = "FEE"
     EXIT = "EXIT"
+    GIFT = "GIFT"
 
     @classmethod
     def normalize(cls, value: "CryptoCompositeTransactionType") -> "CryptoCompositeTransactionType":

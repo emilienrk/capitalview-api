@@ -767,8 +767,9 @@ def register_tools(mcp) -> None:
             "Le patrimoine net de l'utilisateur, par poche, tel que le tableau de bord l'affiche : "
             "`bank` (comptes bancaires et livrets), `stocks` et `crypto` (valeur des lignes détenues, "
             "avec `invested` au prix de revient, `profit_loss` latent, `realized_profit_loss`, "
-            "`dividends`, `fees`, `gifts` = cadeaux du courtier — parrainage, loterie, action "
-            "offerte —, comptés dans `broker_cash` mais ni dans le P/L ni dans les versements), "
+            "`dividends`, `fees`, `gifts` = argent offert — parrainage, loterie, action offerte, "
+            "don reçu sur la plateforme, crypto offerte —, compté dans la valeur mais ni dans le "
+            "P/L ni dans les versements), "
             "`broker_cash` (espèces qui dorment sur les comptes-titres et "
             "exchanges, négatif sur un compte à découvert), `placements` (assurance vie, PER, SCPI… : "
             "`net_invested` versé net des rachats, `gain`) et `assets` (biens : voiture, montres…). "
@@ -1086,7 +1087,7 @@ def register_tools(mcp) -> None:
         title="Achats et ventes",
         description=(
             "Les mouvements des comptes d'investissement (achats, ventes, dépôts, retraits, "
-            "dividendes, cadeaux du courtier en `GIFT`, frais), du plus récent au plus ancien : "
+            "dividendes, argent offert en `GIFT`, frais), du plus récent au plus ancien : "
             "« qu'est-ce que j'ai acheté en "
             "mars », « quand suis-je entré sur cette ligne ». `account_type` 'stock', 'crypto' ou "
             "'all'. `since` / `until` bornent les dates (incluses) : préférer une fenêtre resserrée, "

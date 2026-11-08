@@ -614,6 +614,29 @@ def test_compute_daily_net_flow_crypto_deposit_group_not_matched_as_transfer():
     assert net_flow == Decimal("3000")
 
 
+def test_offered_euros_on_a_crypto_account_enter_as_an_external_flow():
+    """A gift is money in, not performance: without it in the flow, the day of
+    the gift would show as a gain (docs/crypto-ledger.md)."""
+    d = date(2025, 12, 25)
+    at = datetime(2025, 12, 25, 10, 0, tzinfo=timezone.utc)
+    txs = [
+        _tx(id="tx_gift", group_uuid="g_gift", type="GIFT", asset_key="EUR",
+            amount=Decimal("180"), price_per_unit=Decimal("1"), executed_at=at),
+        _tx(id="tx_buy", group_uuid="g_gift", type="BUY", asset_key="BTC",
+            amount=Decimal("0.0025"), price_per_unit=Decimal("0"), executed_at=at),
+        _tx(id="tx_spend", group_uuid="g_gift", type="SPEND", asset_key="EUR",
+            amount=Decimal("180"), price_per_unit=Decimal("1"), executed_at=at),
+    ]
+
+    net_flow = _compute_daily_net_flow(
+        _AccountSnapshot(account_id="acc_gift", account_type=AccountCategory.CRYPTO, transactions=txs),
+        d,
+        {"BTC": {d: Decimal("72000")}},
+    )
+
+    assert net_flow == Decimal("180")
+
+
 def test_compute_daily_net_flow_crypto_withdraw_counted_as_outflow():
     """A non-fiat WITHDRAW (cash-out/payment/donation) must be treated like
     a TRANSFER: external outflow at the day's price, not a market loss."""

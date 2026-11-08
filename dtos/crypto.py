@@ -75,6 +75,8 @@ class CryptoTransactionUpdate(BaseModel):
     instead (docs/crypto-ledger.md)."""
     # Only on an ANCHOR: the group's euro value, which no other leg repeats.
     amount: Decimal | None = Field(None, ge=0)
+    # Only between DEPOSIT and GIFT on a euro leg: whose money it was.
+    type: CryptoTransactionType | None = None
     executed_at: ValidDatetimeOpt = None
     tx_hash: str | None = None
     notes: str | None = None

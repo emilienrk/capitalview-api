@@ -290,7 +290,7 @@ def _compute_daily_net_flow(
     groups_with_spend_or_deposit: set[str] = {
         tx.group_uuid
         for tx in day_txs
-        if getattr(tx, "group_uuid", None) and _type(tx) in ("SPEND", "DEPOSIT")
+        if getattr(tx, "group_uuid", None) and _type(tx) in ("SPEND", "DEPOSIT", "GIFT")
     }
     groups_with_anchor: set[str] = {
         tx.group_uuid
@@ -309,6 +309,10 @@ def _compute_daily_net_flow(
                 case "DEPOSIT":
                     if not group_uuid or group_uuid not in groups_with_crypto_spend:
                         net_flow += amount
+                # Offered money enters from outside too: read as performance, it
+                # would show as a gain.
+                case "GIFT":
+                    net_flow += amount
                 case "WITHDRAW":
                     net_flow -= amount
         elif tx_type in ("TRANSFER", "WITHDRAW"):

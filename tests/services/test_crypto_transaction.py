@@ -1810,3 +1810,138 @@ def test_crypto_covered_disposal_reports_no_negative_balance(mock_info, session:
     summary = _crypto_summary(session, "acc_full", master_key)
     assert summary.realized_profit_loss == Decimal("25000")  # 40000 − 15000
     assert summary.negative_balances == []
+
+
+# ── Gifts (docs/crypto-ledger.md, « Ce qui compte comme argent entré ») ──────
+
+
+def _gift_btc(session: Session, master_key: str, account_id: str) -> list:
+    """0.0025 BTC offered, worth 180 € on the day."""
+    return create_composite_crypto_transaction(
+        session,
+        CryptoCompositeTransactionCreate(
+            account_id=account_id,
+            type="GIFT",
+            asset_key="BTC",
+            amount=Decimal("0.0025"),
+            eur_amount=Decimal("180"),
+            executed_at=datetime(2025, 12, 25, 10, 0, 0),
+        ),
+        master_key,
+    )
+
+
+@patch("services.crypto_transaction.get_crypto_info")
+def test_an_offered_crypto_keeps_its_value_as_cost_but_is_no_deposit(mock_info, session: Session, master_key: str):
+    mock_info.side_effect = lambda s, symbol, db_only=False, as_of=None: ("Bitcoin", Decimal("80000"))
+    _make_crypto_account(session, "acc_gift_btc", "user_gift_btc", master_key)
+
+    rows = _gift_btc(session, master_key, "acc_gift_btc")
+
+    assert sorted(r.type for r in rows) == ["BUY", "GIFT", "SPEND"]
+    assert len({r.group_uuid for r in rows}) == 1
+    summary = _crypto_summary(session, "acc_gift_btc", master_key)
+    assert summary.total_deposits == Decimal("0")
+    assert summary.total_gifts == Decimal("180.00")
+    assert summary.total_invested == Decimal("180.00")
+    assert summary.cash_balance == Decimal("0")
+    assert summary.profit_loss == Decimal("20.00")  # 0.0025 × 80 000 − 180
+
+
+def test_offered_euros_are_cash_and_neither_a_deposit_nor_a_crypto(session: Session, master_key: str):
+    _make_crypto_account(session, "acc_gift_eur", "user_gift_eur", master_key)
+
+    rows = create_composite_crypto_transaction(
+        session,
+        CryptoCompositeTransactionCreate(
+            account_id="acc_gift_eur", type="GIFT", asset_key="EUR",
+            amount=Decimal("25"), executed_at=datetime(2025, 6, 1),
+        ),
+        master_key,
+    )
+
+    assert [(r.type, r.asset_key, r.amount, r.price_per_unit) for r in rows] == [
+        ("GIFT", "EUR", Decimal("25"), Decimal("1")),
+    ]
+    summary = _crypto_summary(session, "acc_gift_eur", master_key)
+    assert summary.cash_balance == Decimal("25")
+    assert summary.total_deposits == Decimal("0")
+    assert summary.total_gifts == Decimal("25")
+    assert get_asset_key_balance(session, "acc_gift_eur", "EUR", master_key) == Decimal("25")
+
+
+def test_an_atomic_gift_is_always_written_in_euros(session: Session, master_key: str):
+    resp = create_crypto_transaction(session, CryptoTransactionCreate(
+        account_id="acc_gift_atomic", asset_key="BTC", type=CryptoTransactionType.GIFT,
+        amount=Decimal("10"), price_per_unit=Decimal("3"), executed_at=datetime(2025, 6, 1),
+    ), master_key)
+
+    assert (resp.asset_key, resp.price_per_unit) == ("EUR", Decimal("1"))
+
+
+def test_a_crypto_deposit_can_be_retyped_as_the_gift_it_was(session: Session, master_key: str):
+    user_uuid = "user_retype_gift"
+    _make_crypto_account(session, "acc_retype", user_uuid, master_key)
+    rows = create_composite_crypto_transaction(
+        session,
+        CryptoCompositeTransactionCreate(
+            account_id="acc_retype", type="CRYPTO_DEPOSIT", asset_key="BTC",
+            amount=Decimal("0.0025"), eur_amount=Decimal("180"),
+            executed_at=datetime(2025, 12, 25, 10, 0, 0),
+        ),
+        master_key,
+    )
+    deposit = next(r for r in rows if r.type == "DEPOSIT")
+
+    updated = update_crypto_transaction(
+        session, session.get(CryptoTransaction, deposit.id),
+        CryptoTransactionUpdate(type=CryptoTransactionType.GIFT), user_uuid, master_key,
+    )
+
+    assert updated.type == "GIFT"
+    summary = get_crypto_account_summary(session, get_account_transactions(session, "acc_retype", master_key))
+    assert summary.total_deposits == Decimal("0")
+    assert summary.total_gifts == Decimal("180.00")
+
+    back = update_crypto_transaction(
+        session, session.get(CryptoTransaction, deposit.id),
+        CryptoTransactionUpdate(type=CryptoTransactionType.DEPOSIT), user_uuid, master_key,
+    )
+    assert back.type == "DEPOSIT"
+
+
+def test_the_proceeds_of_a_sale_never_become_a_gift(session: Session, master_key: str):
+    from services.crypto_transaction import ImmutableLegError
+
+    user_uuid = "user_sale_gift"
+    _make_crypto_account(session, "acc_sale_gift", user_uuid, master_key)
+    rows = create_composite_crypto_transaction(
+        session,
+        CryptoCompositeTransactionCreate(
+            account_id="acc_sale_gift", type="SELL_TO_FIAT", asset_key="BTC",
+            amount=Decimal("0.01"), eur_amount=Decimal("800"), executed_at=datetime(2025, 6, 1),
+        ),
+        master_key,
+    )
+    proceeds = next(r for r in rows if r.type == "DEPOSIT")
+
+    with pytest.raises(ImmutableLegError):
+        update_crypto_transaction(
+            session, session.get(CryptoTransaction, proceeds.id),
+            CryptoTransactionUpdate(type=CryptoTransactionType.GIFT), user_uuid, master_key,
+        )
+    assert get_crypto_transaction(session, proceeds.id, user_uuid, master_key).type == "DEPOSIT"
+
+
+def test_only_a_euro_deposit_changes_type(session: Session, master_key: str):
+    from services.crypto_transaction import ImmutableLegError
+
+    user_uuid = "user_retype_buy"
+    _make_crypto_account(session, "acc_crypto", user_uuid, master_key)
+    buy = next(row for row in _swap(session, master_key) if row.type == "BUY")
+
+    with pytest.raises(ImmutableLegError):
+        update_crypto_transaction(
+            session, session.get(CryptoTransaction, buy.id),
+            CryptoTransactionUpdate(type=CryptoTransactionType.GIFT), user_uuid, master_key,
+        )

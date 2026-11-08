@@ -277,6 +277,16 @@ class TestLoading:
             "Mon Portefeuille", Decimal("200.00"), True,
         )
 
+    def test_offered_money_on_a_wallet_proves_no_transfer(self, session: Session, master_key: str):
+        _wallet(session, master_key)
+        for asset_key, amount, eur_amount in (("EUR", "25", None), ("BTC", "0.0025", "180")):
+            create_composite_crypto_transaction(session, CryptoCompositeTransactionCreate(
+                account_id=WALLET, asset_key=asset_key, type=CryptoCompositeTransactionType.GIFT,
+                amount=Decimal(amount), eur_amount=Decimal(eur_amount) if eur_amount else None,
+                executed_at=datetime(2026, 3, 5),
+            ), master_key)
+        assert not load_contributions(session, USER, master_key)
+
 
 # ---------------------------------------------------------------------------
 # What it changes in the operations list
