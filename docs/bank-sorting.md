@@ -230,8 +230,9 @@ la règle. Les paires ne sont jamais concernées.
 ### Délier, annuler
 
 **R33. Une paire proposée se pose en deux boutons : « Ensemble / Pas ensemble ».** On ne sait pas si c'est un
-virement entre ses comptes ou un tiers qui rembourse un achat sur l'autre compte : le badge dit « avec <compte> ? »,
-sans flèche, et la ligne dessous dit seulement ce que compte « Ensemble » — « Ensemble : elles s'annulent, aucune
+virement entre ses comptes ou un tiers qui rembourse un achat sur l'autre compte : l'autre côté s'écrit sur sa
+ligne, « <compte> · <jour> · <libellé> », sans flèche ni badge, et la ligne sous les boutons dit seulement ce que compte
+« Ensemble » — « Ensemble : elles s'annulent, aucune
 n'est comptée » (ou « comptées en épargne » face à un compte épargne non réglementé, `together_type`). « Pas
 ensemble » se lit seul, et son effet reste au survol. Une fois liée, la paire reprend sa flèche « vers / depuis
 <compte> ». La question se pose sur le débit, ou sur la jambe que d'autres opérations aussi proches se disputent.
@@ -241,8 +242,10 @@ encore libre, la question la montre aussi. Dès que la question hésite entre pl
 opérations aussi proches, dépôt en face, R20), chacun a sa ligne « <compte> · <jour> · <libellé> » et son propre
 bouton « Celle-ci » (« Celui-ci » pour le dépôt), puis un seul « Aucune », qui refuse chaque paire montrée et répond
 Non au dépôt : un refus ne valant que pour sa paire (R35), « Pas ensemble » aurait seulement fait proposer la
-suivante. Le compte ouvre chaque ligne, marqué d'une icône (⇄ une opération, ↗ un dépôt) : il n'y a plus de badge
-« avec … ? ». Elle se pose sur l'opération
+suivante. Le compte ouvre chaque ligne, marqué d'une icône selon ce qu'est le compte (courant, épargne,
+investissement), jamais selon ce que l'opération a l'air d'être : sans dictionnaire, une carte et un virement ne se
+distinguent pas. Une opération proposée en plus n'arrive qu'avec le nom de son compte : sans compte unique à ce nom,
+l'icône reste neutre. Elle se pose sur l'opération
 qu'elles se disputent. Une paire de livret est alors seulement proposée au lieu d'être validée
 seule (R8). En attendant la réponse, les deux opérations comptent chacune de leur côté, comme toute paire proposée.
 *Mesuré sur le dump : 2 paires de livret avaient pris la mauvaise des deux (−250 € Livret A face au revenu de Mme
@@ -391,7 +394,7 @@ tolérance ou de couche de détection se justifie par ses chiffres avant et apr�
 
 | Où | Texte |
 | --- | --- |
-| Paire proposée | badge « avec <compte> ? » ; boutons « Ensemble » / « Pas ensemble » ; ligne « Ensemble : elles s'annulent, aucune n'est comptée » ou « comptées en épargne » |
+| Paire proposée | ligne « <compte> · <jour> · <libellé> », icône du type de compte ; boutons « Ensemble » / « Pas ensemble » ; ligne « Ensemble : elles s'annulent, aucune n'est comptée » ou « comptées en épargne » |
 | Plusieurs mouvements possibles | sans badge ; une ligne « <compte> · <jour> · <libellé> » (ou « versement de <montant> ») et son bouton « Celle-ci » / « Celui-ci » ; « Aucune » |
 | Paire liée | « vers / depuis <compte> » |
 | Dépôt possible | badge « vers <compte> ? » le même jour pour le même montant ; sinon « Versement de 48,88 € sur PEA le 4 sept. ? » ; Oui / Non / Choisir |
@@ -505,7 +508,8 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
 
 - Paire proposée avec plusieurs mouvements possibles (R20, R34) : une ligne et un bouton par mouvement, puis « Aucune ».
   Avant, « Ensemble » répondait pour la ligne « En face » écrite plus haut, et « Pas ensemble » ne refusait que la
-  paire nommée : la suivante revenait. Le compte ouvre chaque ligne, le badge « avec … ? » disparaît dans ce cas.
+  paire nommée : la suivante revenait. Le compte ouvre chaque ligne, avec l'icône de son type ; le badge
+  « avec … ? » disparaît, paire seule comprise (R33).
   Changement du front seul ; « Aucune » envoie les refus et le Non existants.
   Sur le dump : 2 questions concernées (−20 € du 05/02/2024 face à un paiement et au PEA ; +100 € du 05/04/2026 face
   à deux paiements carte).
