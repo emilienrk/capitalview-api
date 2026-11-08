@@ -129,8 +129,9 @@ face est listé (R26). *Vu sur le dump : deux opérations classées Non compté 
 sans effet. Ni un type choisi, ni une règle n'apprennent un dépôt : une règle parle d'un libellé, et un libellé peut
 aller au PEA un jour et ailleurs le lendemain.
 
-**R20. Si une paire et un dépôt sont tous deux possibles, la même question montre les deux** : « Ensemble » ou
-« versement sur <compte d'investissement> » (le Oui, qui écarte la paire). Tant que la paire est proposée, le dépôt
+**R20. Si une paire et un dépôt sont tous deux possibles, la même question montre les deux**, une ligne chacun avec
+son bouton (R34) : l'opération en face, « Celle-ci », ou le versement sur le compte d'investissement, « Celui-ci » (le
+Oui, qui écarte la paire). Tant que la paire est proposée, le dépôt
 n'est qu'affiché, même déjà validé pour ce libellé. *Mesuré sur le dump : un cas (−20 € du 05/02/2024), dont le dépôt
 s'affichait jusque-là, à tort, sur une autre sortie de 20 € deux jours plus tard.*
 
@@ -236,8 +237,12 @@ ensemble » se lit seul, et son effet reste au survol. Une fois liée, la paire 
 <compte> ». La question se pose sur le débit, ou sur la jambe que d'autres opérations aussi proches se disputent.
 
 **R34. Quand une autre opération est aussi proche que celle proposée**, d'un autre compte ou d'un autre libellé, et
-encore libre, la question la montre aussi : « Ou, sur <compte> le <jour> : <libellé> », à choisir à la place. Elle se
-pose sur l'opération qu'elles se disputent. Une paire de livret est alors seulement proposée au lieu d'être validée
+encore libre, la question la montre aussi. Dès que la question hésite entre plusieurs mouvements (paire nommée,
+opérations aussi proches, dépôt en face, R20), chacun a sa ligne « <compte> le <jour> : <libellé> » et son propre
+bouton « Celle-ci » (« Celui-ci » pour le dépôt), puis un seul « Aucune », qui refuse chaque paire montrée et répond
+Non au dépôt : un refus ne valant que pour sa paire (R35), « Pas ensemble » aurait seulement fait proposer la
+suivante. Le badge nomme les comptes concernés, « avec <compte> ou <compte> ? ». Elle se pose sur l'opération
+qu'elles se disputent. Une paire de livret est alors seulement proposée au lieu d'être validée
 seule (R8). En attendant la réponse, les deux opérations comptent chacune de leur côté, comme toute paire proposée.
 *Mesuré sur le dump : 2 paires de livret avaient pris la mauvaise des deux (−250 € Livret A face au revenu de Mme
 Dormia Laure le 28/04/2025, −750 € LDD le 30/12/2024) ; ce sont les 2 seules questions de plus.*
@@ -386,10 +391,9 @@ tolérance ou de couche de détection se justifie par ses chiffres avant et apr�
 | Où | Texte |
 | --- | --- |
 | Paire proposée | badge « avec <compte> ? » ; boutons « Ensemble » / « Pas ensemble » ; ligne « Ensemble : elles s'annulent, aucune n'est comptée » ou « comptées en épargne » |
-| Alternative | « Ou, sur <compte> le <jour> : <libellé> » |
+| Plusieurs mouvements possibles | badge « avec <compte> ou <compte> ? » ; une ligne « <compte> le <jour> : <libellé> » (ou « versement de <montant> ») et son bouton « Celle-ci » / « Celui-ci » ; « Aucune » |
 | Paire liée | « vers / depuis <compte> » |
 | Dépôt possible | badge « vers <compte> ? » le même jour pour le même montant ; sinon « Versement de 48,88 € sur PEA le 4 sept. ? » ; Oui / Non / Choisir |
-| Paire et dépôt possibles | « Ensemble » ou « versement sur <compte d'investissement> » |
 | Portées d'une réponse | « Celle-ci », « Celles que je coche » (« Choisir parmi les N opérations de ce libellé »), « Les prochaines aussi » |
 | Règle écrite | bouton « Nouvelle règle » ; « contient » / « commence par » ; case « Les passer aussi en … » |
 | Priorité annoncée | « Pour ce libellé, elle passe avant la règle Contient « amazon » » |
@@ -495,6 +499,15 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
 - Le digest des `transfer_patterns` et la lecture unique `_filed` écrits comme invariants (R51, R52).
 - Côté solde : l'ajustement d'ouverture est reculé, jamais supprimé, par un import ou une saisie plus ancienne
   (docs/bank-ledger.md).
+
+### 8 novembre 2026
+
+- Paire proposée avec plusieurs mouvements possibles (R20, R34) : une ligne et un bouton par mouvement, puis « Aucune ».
+  Avant, « Ensemble » répondait pour la ligne « En face » écrite plus haut, et « Pas ensemble » ne refusait que la
+  paire nommée : la suivante revenait. Changement du front seul ; « Aucune » envoie les refus et le Non existants.
+  Sur le dump : 2 questions concernées (−20 € du 05/02/2024 face à un paiement et au PEA ; +100 € du 05/04/2026 face
+  à deux paiements carte).
+- Le badge de type d'une entrée se lit comme le choix de type : « Remboursement » et non « Dépense ».
 
 ### État des points
 
