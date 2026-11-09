@@ -68,6 +68,13 @@ solde restait positif.
 devise) la reconnaît, et un import qui contient la même opération la **remplace** au lieu de la doubler. Les
 ajustements sont exclus de ce niveau 2.
 
+**L10. Une saisie à la main porte un libellé, avec au moins un mot** (deux lettres ou plus, sans chiffre, comme les
+lit `services/banking/labels.py`). Sans mot, une opération ne pose aucune question et ne porte aucune règle
+(docs/bank-sorting.md, R24) : elle compterait en silence comme le dit son sens. La modale propose les libellés déjà vus
+sur ce compte dans ce sens, les plus fréquents d'abord : en reprendre un tel quel range la saisie avec ses semblables.
+Pas de libellé par défaut : un même texte pour toutes les saisies les regrouperait, et une règle ou un Oui appris sur
+l'une rangerait les autres. Vérifié dans la modale seulement : l'API accepte encore une saisie sans libellé.
+
 ## Limite connue
 
 **L9.** Un ajustement autre que celui d'ouverture garde son montant. Si des opérations plus anciennes que lui arrivent,
@@ -105,3 +112,6 @@ Aucun montant n'est journalisé.
 - **2 novembre 2026** : l'ajustement d'ouverture est reculé par un import ou une saisie plus ancienne, jamais
   supprimé, et l'aperçu d'import le dit (L7). La limite connue se restreint aux autres ajustements (L9). La première
   entrée comptée en revenu notée comme limite (L3).
+- **9 novembre 2026** : le libellé d'une saisie devient obligatoire, avec au moins un mot, et la modale propose ceux
+  déjà vus sur le compte (L10). Sur le dump, aucune saisie à la main ; 17 opérations importées sans mot (« A.r.e.a. »,
+  « H&L », « 00160669 », « Cgf17516mcdo1 ») restent sans question, limite R24.
