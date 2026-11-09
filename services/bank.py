@@ -460,14 +460,29 @@ def get_user_bank_accounts(
     ).all()
 
     links = _link_metadata(session, user_bidx, master_key)
-    responses = [
+    responses = _by_balance(session, [
         _map_to_response(acc, master_key, links.get(hash_index(acc.uuid, master_key)))
         for acc in accounts
-    ]
+    ])
     return BankSummaryResponse(
         total_balance=_total_in_base_currency(session, responses),
         accounts=responses,
     )
+
+
+def _by_balance(session: Session, responses: list[BankAccountResponse]) -> list[BankAccountResponse]:
+    """The largest balance first, compared in euros, then by name.
+
+    Every list of accounts reads in this order. Unsorted, they came in the
+    table's physical order, which an update of a row can change. A currency
+    with no published rate is compared at its face value: only the order is at
+    stake, never a figure.
+    """
+    rates = {
+        currency: get_exchange_rate(session, currency, "EUR") if has_exchange_rate(session, currency) else Decimal("1")
+        for currency in {account.currency for account in responses}
+    }
+    return sorted(responses, key=lambda account: (-account.balance * rates[account.currency], account.name.casefold()))
 
 
 def _total_in_base_currency(

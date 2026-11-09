@@ -106,6 +106,16 @@ def test_get_user_bank_accounts(session: Session, master_key: str):
     assert summary.total_balance == Decimal("300")
 
 
+def test_accounts_are_listed_by_balance_largest_first_then_by_name(session: Session, master_key: str):
+    user_uuid = "user_1"
+    _opened(session, user_uuid, master_key, "50", name="Courant", account_type=BankAccountType.CHECKING)
+    _opened(session, user_uuid, master_key, "1200", name="Livret A", account_type=BankAccountType.LIVRET_A)
+    _opened(session, user_uuid, master_key, "50", name="banque en ligne", account_type=BankAccountType.CHECKING)
+    _opened(session, user_uuid, master_key, "-30", name="Joint", account_type=BankAccountType.CHECKING)
+    summary = get_user_bank_accounts(session, user_uuid, master_key)
+    assert [account.name for account in summary.accounts] == ["Livret A", "banque en ligne", "Courant", "Joint"]
+
+
 def test_get_bank_account(session: Session, master_key: str):
     user_uuid = "user_1"
     created = create_bank_account(session, BankAccountCreate(name="My Acc", account_type=BankAccountType.CHECKING), user_uuid, master_key)
