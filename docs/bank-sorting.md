@@ -126,8 +126,10 @@ face est listé (R26). *Vu sur le dump : deux opérations classées Non compté 
 15/04/2024, 423,35 € le 28/01/2026) ne posaient plus de question.*
 
 **R19. Une réponse tient tant que les deux côtés se font encore face** : un dépôt supprimé ou déplacé depuis la laisse
-sans effet. Ni un type choisi, ni une règle n'apprennent un dépôt : une règle parle d'un libellé, et un libellé peut
-aller au PEA un jour et ailleurs le lendemain.
+sans effet. Elle reste alors dans l'historique des réponses, pour être retirée. Supprimer le compte d'investissement
+(Bourse, crypto ou placement) supprime les réponses données face à ses versements et retraits, comme supprimer un
+compte bancaire supprime les siennes. Ni un type choisi, ni une règle n'apprennent un dépôt : une règle parle d'un
+libellé, et un libellé peut aller au PEA un jour et ailleurs le lendemain.
 
 **R20. Si une paire et un dépôt sont tous deux possibles, la même question montre les deux**, une ligne chacun avec
 son bouton (R34) : l'opération en face, « Celle-ci », ou le versement sur le compte d'investissement, « Celui-ci » (le
@@ -516,6 +518,13 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
   à deux paiements carte).
 - Le badge de type d'une entrée se lit comme le choix de type : « Remboursement » et non « Dépense ».
 
+### 9 novembre 2026
+
+- Supprimer un compte Bourse, crypto ou placement supprime les réponses Oui / Non données face à ses versements et
+  retraits (R19). Avant, elles restaient dans l'historique des réponses sans plus rien ranger, et une réimportation
+  ne les retrouvait pas : elle écrit de nouveaux identifiants. Lecture des opérations inchangée par construction,
+  puisque R19 laissait déjà ces réponses sans effet ; non mesuré sur le dump.
+
 ### État des points
 
 | Point | État |
@@ -546,3 +555,4 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
 | PER, épargne salariale : « alimenté hors de mes banques », versements plus cherchés, rachats si (31/10) | fait (69cd7db) |
 | Récurrent `stale` compté dans le Réel comme dans l'onglet (02/11) | fait |
 | Ajustement d'ouverture reculé par un import ou une saisie plus ancienne (02/11) | fait |
+| Réponses de dépôt supprimées avec leur compte d'investissement (09/11) | fait |

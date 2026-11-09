@@ -1,11 +1,11 @@
 """A placement's value and return, derived from the entries written on it
 (services/placement.py), and what its deposits prove on the bank side."""
 
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from models.enums import PlacementEntryType as Kind
 from models.placement import PlacementAccount, PlacementEntry
@@ -226,3 +226,32 @@ def test_a_single_lump_sum_is_not_projected_as_a_monthly_contribution(session: S
 
     assert basis.monthly_contribution == pytest.approx(Decimal("10000") / 24, rel=Decimal("0.02"))
     assert [w.code for w in basis.warnings] == ["no_statement"]
+
+
+def test_a_deleted_placement_takes_the_answers_about_its_deposits_with_it(session: Session, master_key: str):
+    from models.banking import BankContributionDecision
+    from services.placement import delete_account
+
+    user_bidx = hash_index(USER, master_key)
+    account = PlacementAccount(
+        uuid="placement-gone",
+        user_uuid_bidx=user_bidx,
+        name_enc=encrypt_data("Linxea Spirit", master_key),
+        placement_type_enc=encrypt_data("AV", master_key),
+    )
+    deposit = _entry("placement-gone", Kind.DEPOSIT, "2025-03-05", "200", master_key)
+    session.add_all([account, deposit])
+    session.commit()
+    session.add(BankContributionDecision(
+        user_uuid_bidx=user_bidx,
+        kind_enc=encrypt_data("contribution", master_key),
+        transaction_ref_bidx=hash_index("bank-operation", master_key),
+        account_bidx=hash_index("bank-account", master_key),
+        contribution_ref_bidx=hash_index(deposit.uuid, master_key),
+        created_at=datetime.now(timezone.utc),
+    ))
+    session.commit()
+
+    delete_account(session, account, master_key)
+
+    assert session.exec(select(BankContributionDecision)).all() == []

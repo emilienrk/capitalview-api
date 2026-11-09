@@ -37,6 +37,7 @@ from models.account_history import AccountHistory
 from models.enums import FUNDED_OUTSIDE_BANKS, PlacementType, PlacementEntryType
 from models.placement import PlacementAccount, PlacementEntry
 from services.analytics.returns import annualize
+from services.banking.contribution_decisions import forget_declared
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 _ZERO = Decimal("0")
@@ -356,6 +357,8 @@ def update_account(
 
 
 def delete_account(session: Session, account: PlacementAccount, master_key: str) -> None:
+    entries = session.exec(select(PlacementEntry.uuid).where(PlacementEntry.account_uuid == account.uuid)).all()
+    forget_declared(session, account.user_uuid_bidx, entries, master_key)
     session.exec(
         sa.delete(PlacementEntry).where(PlacementEntry.account_uuid == account.uuid)
     )

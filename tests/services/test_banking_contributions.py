@@ -38,7 +38,9 @@ from services.banking.contribution_decisions import record_contribution_decision
 from services.banking.history import action_history, undo_action
 from services.banking.real_cashflow import real_cashflow_month
 from services.banking.transfer_decisions import DecisionError, record_decision
+from services.crypto_account import delete_crypto_account
 from services.crypto_transaction import create_composite_crypto_transaction
+from services.stock_account import delete_stock_account
 from services.encryption import encrypt_data, hash_index
 from services.stock_transaction import create_eur_deposit
 from tests.services.test_banking_flows import USER
@@ -752,6 +754,29 @@ class TestDecisions:
         undo_action(session, USER, master_key, item.kind, item.id)
         [tx] = _month(session, master_key).values()
         assert tx.type_source == Source.DEFAULT
+
+    def test_a_deleted_investment_account_takes_its_answers_with_it(self, session: Session, master_key: str):
+        _ops(
+            session, master_key,
+            (CURRENT, "2026-03-05", "200.00", "DBIT", "VIR Virement vers PEA"),
+            (CURRENT, "2026-03-06", "50.00", "DBIT", "VIR Virement vers Binance"),
+        )
+        _pea(session, master_key)
+        _wallet(session, master_key)
+        _deposit(session, master_key, "2026-03-05", "200")
+        create_composite_crypto_transaction(session, CryptoCompositeTransactionCreate(
+            account_id=WALLET, asset_key="EUR", type=CryptoCompositeTransactionType.FIAT_DEPOSIT,
+            amount=Decimal("50"), executed_at=datetime(2026, 3, 6, 10),
+        ), master_key)
+        month = _month(session, master_key)
+        _say(session, master_key, month["VIR Virement vers PEA"])
+        _say(session, master_key, month["VIR Virement vers Binance"], Said.NOT_CONTRIBUTION)
+
+        delete_stock_account(session, PEA, master_key)
+        delete_crypto_account(session, WALLET, master_key)
+
+        assert action_history(session, USER, master_key) == []
+        assert {tx.type_source for tx in _month(session, master_key).values()} == {Source.DEFAULT}
 
 
 class TestSuggestedPair:

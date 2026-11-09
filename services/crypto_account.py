@@ -20,6 +20,7 @@ from dtos.transaction import (
 )
 from services.crypto_transaction import get_account_transactions, get_crypto_account_summary
 from services.broker_cash import counted_cash, uncounted_cash
+from services.banking.contribution_decisions import forget_declared
 from services.encryption import encrypt_data, decrypt_data, hash_index
 
 # Shown wherever the account is named, the bank review among them: it must say
@@ -199,6 +200,7 @@ def delete_crypto_account(
         select(CryptoTransaction).where(CryptoTransaction.account_id_bidx == account_bidx)
     ).all()
 
+    forget_declared(session, account.user_uuid_bidx, [tx.uuid for tx in transactions], master_key)
     for tx in transactions:
         session.delete(tx)
 

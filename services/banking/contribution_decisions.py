@@ -159,6 +159,23 @@ def drop_yes(session: Session, user_bidx: str, transaction_refs: list[str], mast
             session.delete(row)
 
 
+def forget_declared(session: Session, user_bidx: str, refs: Collection[str], master_key: str) -> None:
+    """Delete, uncommitted, the answers about these declared movements, when
+    their account goes: R19 leaves them without effect already, and no page
+    could still show the account to withdraw them from. A re-import writes new
+    uuids, so they would not hold again either."""
+    if not refs:
+        return
+    session.exec(
+        sa.delete(BankContributionDecision).where(
+            BankContributionDecision.user_uuid_bidx == user_bidx,
+            BankContributionDecision.contribution_ref_bidx.in_(  # type: ignore[attr-defined]
+                [hash_index(ref, master_key) for ref in refs]
+            ),
+        )
+    )
+
+
 def forget_contribution_decision(session: Session, user_uuid: str, master_key: str, decision_id: str) -> bool:
     """Withdraw one decision; False when the user holds none under this id."""
     deleted = session.exec(
