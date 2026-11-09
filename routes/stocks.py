@@ -14,6 +14,7 @@ from database import get_session
 from dtos._extracted import describe_rejection
 from models import User, StockAccount, StockTransaction
 from services.auth import get_current_user, get_master_key
+from services.community import refresh_community_positions
 from models.enums import AssetType
 from dtos import (
     StockAccountCreate,
@@ -182,6 +183,8 @@ def delete_account(
         raise HTTPException(status_code=404, detail="Account not found")
         
     delete_stock_account(session, account_id, master_key)
+    # What the community profile shows of the holdings it held goes with it.
+    refresh_community_positions(session, current_user.uuid, master_key)
     return None
 
 
