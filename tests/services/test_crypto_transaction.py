@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch
 from decimal import Decimal
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from sqlmodel import Session
 
 from services.crypto_transaction import (
@@ -1908,6 +1908,31 @@ def test_a_crypto_deposit_can_be_retyped_as_the_gift_it_was(session: Session, ma
         CryptoTransactionUpdate(type=CryptoTransactionType.DEPOSIT), user_uuid, master_key,
     )
     assert back.type == "DEPOSIT"
+
+
+def test_a_gift_and_a_new_date_are_one_update_of_the_cash_leg(session: Session, master_key: str):
+    user_uuid = "user_retype_dated"
+    _make_crypto_account(session, "acc_retype_dated", user_uuid, master_key)
+    rows = create_composite_crypto_transaction(
+        session,
+        CryptoCompositeTransactionCreate(
+            account_id="acc_retype_dated", type="CRYPTO_DEPOSIT", asset_key="BTC",
+            amount=Decimal("0.0025"), eur_amount=Decimal("180"),
+            executed_at=datetime(2025, 12, 25, 10, 0, 0),
+        ),
+        master_key,
+    )
+    deposit = next(r for r in rows if r.type == "DEPOSIT")
+
+    update_crypto_transaction(
+        session, session.get(CryptoTransaction, deposit.id),
+        CryptoTransactionUpdate(type=CryptoTransactionType.GIFT, executed_at=datetime(2025, 12, 24, 9, 0, 0)),
+        user_uuid, master_key,
+    )
+
+    legs = get_account_transactions(session, "acc_retype_dated", master_key)
+    assert sorted(leg.type for leg in legs) == ["BUY", "GIFT", "SPEND"]
+    assert {leg.executed_at.date() for leg in legs} == {date(2025, 12, 24)}
 
 
 def test_the_proceeds_of_a_sale_never_become_a_gift(session: Session, master_key: str):
