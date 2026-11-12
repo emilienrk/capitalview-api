@@ -24,6 +24,7 @@ from models.banking import (
     BankAccountLink,
     BankAuthorization,
     BankContributionDecision,
+    BankLabelSeparation,
     BankSession,
     BankRecurringSeries,
     BankTransaction,
@@ -165,6 +166,24 @@ def _export_bank_type_rules(session: Session, user_bidx: str, master_key: str) -
     ]
 
 
+def _export_bank_label_separations(session: Session, user_bidx: str, master_key: str) -> list[dict]:
+    rows = session.exec(
+        select(BankLabelSeparation)
+        .where(BankLabelSeparation.user_uuid_bidx == user_bidx)
+        .order_by(BankLabelSeparation.created_at)
+    ).all()
+    return [
+        {
+            "uuid": row.uuid,
+            "signature": _safe_decrypt(row.signature_enc, master_key),
+            "bank_account_id": _safe_decrypt(row.account_ref_enc, master_key),
+            "is_credit": _safe_decrypt(row.credit_enc, master_key) == "true",
+            "created_at": row.created_at,
+        }
+        for row in rows
+    ]
+
+
 def export_account_data(session: Session, user: User, master_key: str) -> dict:
     """Build the full, decrypted picture of an account.
 
@@ -276,6 +295,7 @@ def export_account_data(session: Session, user: User, master_key: str) -> dict:
         "settings": get_settings(session, user.uuid, master_key),
         "bank_accounts": bank_accounts,
         "bank_type_rules": _export_bank_type_rules(session, user_bidx, master_key),
+        "bank_label_separations": _export_bank_label_separations(session, user_bidx, master_key),
         "bank_recurring_series": export_decisions(session, user_bidx, master_key),
         "stock_accounts": stock_accounts,
         "crypto_accounts": crypto_accounts,
@@ -361,6 +381,7 @@ def purge_account(session: Session, user: User, master_key: str) -> dict[str, in
     wipe(BankTransferPatterns, BankTransferPatterns.user_uuid_bidx == user_bidx)
     wipe(InvestorAnalyticsCache, InvestorAnalyticsCache.user_uuid_bidx == user_bidx)
     wipe(BankTypeRule, BankTypeRule.user_uuid_bidx == user_bidx)
+    wipe(BankLabelSeparation, BankLabelSeparation.user_uuid_bidx == user_bidx)
     wipe(BankRecurringSeries, BankRecurringSeries.user_uuid_bidx == user_bidx)
 
     # 2. Asset valuations cascade from assets in Postgres, but assets themselves

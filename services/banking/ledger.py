@@ -93,7 +93,7 @@ def build_ledger(session: Session, user_uuid: str, master_key: str) -> BankLedge
     open_rows: set[int] = set()
     carriers: set[int] = set()
     for members in _flow_groups(
-        movements, transfer_legs, labels, resolutions, filing.contributions, filing.threshold,
+        movements, transfer_legs, labels, resolutions, filing.contributions, filing.threshold, filing.rules.separated,
         patterns.flow_carriers,
     ):
         open_rows.update(members)

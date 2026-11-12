@@ -29,6 +29,7 @@ from .banking import (
     BankContributionDecision,
     BankTransferPatterns,
     BankTypeRule,
+    BankLabelSeparation,
     BankRecurringSeries,
 )
 from .stock import StockAccount, StockTransaction
@@ -73,6 +74,7 @@ __all__ = [
     "BankContributionDecision",
     "BankTransferPatterns",
     "BankTypeRule",
+    "BankLabelSeparation",
     "BankRecurringSeries",
     "StockAccount",
     "StockTransaction",

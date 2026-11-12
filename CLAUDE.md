@@ -4,7 +4,7 @@
 
 | Avant de toucher | Lire |
 | --- | --- |
-| `services/banking/`, `routes/banking.py`, `dtos/banking.py`, `mcp_server/tools.py` (partie banque) | `docs/bank-sorting.md` : règles R1 à R53, textes d'interface, journal |
+| `services/banking/`, `routes/banking.py`, `dtos/banking.py`, `mcp_server/tools.py` (partie banque) | `docs/bank-sorting.md` : règles R1 à R54, textes d'interface, journal |
 | `services/bank_ledger.py`, `services/imports/bank_csv.py`, `routes/bank.py` | `docs/bank-ledger.md` : règles L1 à L9, journal |
 | `services/crypto_transaction.py`, `services/crypto_account.py` | `docs/crypto-ledger.md` |
 | tout ce qui touche une devise | `docs/currencies.md` |

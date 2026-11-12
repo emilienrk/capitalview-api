@@ -485,6 +485,9 @@ class BankTransactionItem(BaseModel):
     origin: str | None = None
     # Whether DELETE /bank/transactions/{id} accepts it.
     deletable: bool = False
+    # Its label is separated (docs/bank-sorting.md, R54): it is answered alone,
+    # never for the label.
+    label_separated: bool = False
 
 
 class BankTransactionsResponse(BaseModel):
@@ -799,6 +802,32 @@ class BankTypeRuleItem(BaseModel):
     type: CashflowType
     operation_count: int
     created_at: datetime
+
+
+class BankLabelSeparationItem(BaseModel):
+    """GET /banking/label-separations: a label whose operations ask one by one."""
+    id: str
+    account_id: str
+    account_name: str
+    is_credit: bool
+    # The label's words, or its whole text marked "#" when it has none.
+    signature: str
+    # Its most recent operation's, to read it by; None when none is left.
+    label: str | None = None
+    operation_count: int
+    created_at: datetime
+
+
+class BankLabelSeparationPreview(BaseModel):
+    """GET /banking/transactions/{id}/separation: what separating its label
+    withdraws, nothing written."""
+    separated: bool
+    # The label's operations on this account and direction.
+    operation_count: int
+    # The rule given from an answer on this label, deleted on separating.
+    rule: BankTypeRuleItem | None = None
+    # The label's operations a nearby label's rule types, which it no longer would.
+    nearby_count: int = 0
 
 
 class BankTypeRuleUpdate(BaseModel):

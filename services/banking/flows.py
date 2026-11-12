@@ -18,8 +18,8 @@ structured fields — `merchant_category_code`, `bank_transaction_code`,
 `creditor` — are empty on all 4 240 real rows captured so far.
 
 Rules: docs/bank-sorting.md — R7 to R26 (pairing and questions), R51 (one reading,
-`_filed`), R52 (`transfer_patterns` and its digest). A behaviour change updates the
-rule and the journal there.
+`_filed`), R52 (`transfer_patterns` and its digest), R54 (separated labels). A
+behaviour change updates the rule and the journal there.
 """
 
 from __future__ import annotations
@@ -41,6 +41,8 @@ from dtos.banking import (
     BankFlowMonth,
     BankFlowQuestion,
     BankFlowsResponse,
+    BankLabelSeparationItem,
+    BankLabelSeparationPreview,
     BankReviewItem,
     BankReviewKind,
     BankQuestionThreshold,
@@ -85,6 +87,7 @@ from services.banking.contributions import (
     unfaced,
 )
 from services.banking.contribution_decisions import ContributionDecisions, drop_yes, load_contribution_decisions
+from services.banking.label_separations import load_separations, save_separation
 from services.banking.labels import label_signature, label_words
 from services.banking.linking import readable_account_bidxs
 from services.banking.recurring_decisions import load_decisions as load_recurring_decisions
@@ -102,6 +105,7 @@ from services.banking.type_rules import (
     RuleNotFoundError,
     TypeRule,
     TypeRules,
+    drop_label_rule,
     fold_text,
     load_rules,
     save_rule,
@@ -189,6 +193,11 @@ class LabelRequiredError(ValueError):
 class OutsideLabelError(ValueError):
     """Operations ticked together share an account and a direction, as the
     operations of one label do."""
+
+
+class SeparatedLabelError(ValueError):
+    """A separated label types its operations one by one: no rule given from
+    an answer reaches it."""
 
 
 class _Movement(NamedTuple):
@@ -961,7 +970,7 @@ def transfer_patterns(
         _filed(movements, transfer_legs, index, labels[index], filing) for index in range(len(movements))
     ]
     asking_groups = _asking_groups(
-        movements, transfer_legs, labels, resolutions, filing.contributions, filing.threshold
+        movements, transfer_legs, labels, resolutions, filing.contributions, filing.threshold, filing.rules.separated,
     )
     heavy = [members for members in asking_groups if _heavy(movements, members, filing.contributions)]
 
@@ -1006,15 +1015,18 @@ def _flow_groups(
     resolutions: list[Resolution],
     facing: dict[int, Match],
     threshold: Decimal,
+    separated: frozenset[tuple[str, bool, str]],
     carriers: Collection[str] = frozenset(),
 ) -> list[list[int]]:
     """The labels only the user can type, each as its operations in date order:
     one group per account, direction and signature — those facing a deposit or
-    a withdrawal apart, by investment account — heavy enough to ask, or
-    carrying a question the rebuild asked all the same (`carriers`, the stored
+    a withdrawal apart, by investment account, and each operation of a
+    separated label alone — heavy enough to ask, or carrying a question the
+    rebuild asked all the same (`carriers`, the stored
     `TransferPatterns.flow_carriers`)."""
     return [
-        members for members in _asking_groups(movements, transfer_legs, labels, resolutions, facing, threshold)
+        members
+        for members in _asking_groups(movements, transfer_legs, labels, resolutions, facing, threshold, separated)
         if _heavy(movements, members, facing) or movements[members[-1]].row.uuid in carriers
     ]
 
@@ -1026,17 +1038,28 @@ def _asking_groups(
     resolutions: list[Resolution],
     facing: dict[int, Match],
     threshold: Decimal,
+    separated: frozenset[tuple[str, bool, str]],
 ) -> list[list[int]]:
     """The operations asking, by account, direction and signature. Those asked
     whether they are the deposit or withdrawal facing them group apart, by its
-    investment account: their answer is a yes or a no, never a type."""
-    groups: dict[tuple[str, bool, str, str | None], list[int]] = defaultdict(list)
+    investment account: their answer is a yes or a no, never a type. Each
+    operation of a separated label asks alone."""
+    groups: dict[tuple, list[int]] = defaultdict(list)
     for index, movement in enumerate(movements):
         label, leg, match = labels[index], transfer_legs.get(index), facing.get(index)
         if _asks_flow(movement, leg, label, resolutions[index], match, threshold):
             investment = match.contribution.account_id if _asks_deposit(movement, leg, label, resolutions[index], match) else None
-            groups[(movement.account_bidx, movement.is_credit, label_signature(label), investment)].append(index)
+            groups[_question_group(movement, label, investment, separated)].append(index)
     return list(groups.values())
+
+
+def _question_group(
+    movement: _Movement, label: str | None, investment: str | None, separated: frozenset[tuple[str, bool, str]],
+) -> tuple[str, bool, str | None, str | None, str | None]:
+    """What a flow question groups its operations by."""
+    signature = label_signature(label)
+    alone = movement.row.uuid if (movement.account_bidx, movement.is_credit, signature) in separated else None
+    return movement.account_bidx, movement.is_credit, signature, investment, alone
 
 
 def _heavy(movements: list[_Movement], members: list[int], facing: dict[int, Match]) -> bool:
@@ -1245,11 +1268,13 @@ def _filed(
         CashflowType(decrypt_data(override, filing.master_key)) if override else None,
         (rule.uuid, rule.type) if rule else None,
         # A suggested pair holds its question: the deposit is only shown beside it.
+        # A yes vouches for its label, unless the user separated it.
         contributed=(
             leg is None and match is not None and match.exact
             and (
                 index in filing.confirmed
                 or movement.row.label_signature_bidx is not None and _deposit_shape(movement, match) in filing.validated
+                and not filing.rules.separates(movement.account_bidx, movement.is_credit, label_signature(label))
             )
         ),
         recurring=filing.patterns.held_by_recurring(movement.row.uuid),
@@ -1375,6 +1400,7 @@ def _item_builder(
             ),
             origin=movement.origin,
             deletable=_deletable(movement, accounts),
+            label_separated=filing.rules.separates(movement.account_bidx, movement.is_credit, label_signature(label)),
         )
 
     return item
@@ -1549,9 +1575,7 @@ def review_queue(
             if built.flow_question:
                 # The key _asking_groups grouped it by: the next carrier of the group keeps it.
                 investment = filing.contributions[index].contribution.account_id if built.asks_contribution else None
-                group = json.dumps([
-                    movement.account_bidx, movement.is_credit, label_signature(_label(movement, master_key)), investment,
-                ])
+                group = json.dumps(_question_group(movement, built.label, investment, filing.rules.separated))
                 questions.append(BankReviewItem(
                     kind=BankReviewKind.FLOW, group=hash_index(group, master_key), transaction=built,
                     amount=carrier.amount, operation_count=carrier.count,
@@ -1690,7 +1714,7 @@ def list_flow_group(
     ]
 
     groups = _flow_groups(
-        movements, transfer_legs, labels, resolutions, filing.contributions, filing.threshold,
+        movements, transfer_legs, labels, resolutions, filing.contributions, filing.threshold, filing.rules.separated,
         pairing.patterns.flow_carriers,
     )
     members = next(
@@ -1745,6 +1769,8 @@ def set_transaction_type(
     signature = label_signature(current.label)
     if signature is None:
         raise LabelRequiredError(transaction_id)
+    if current.label_separated:
+        raise SeparatedLabelError(transaction_id)
     row.type_override_enc = None
     row.type_override_at = None
     session.add(row)
@@ -1818,18 +1844,115 @@ def list_type_rules(session: Session, user_uuid: str, master_key: str) -> list[B
         # A rule of a deleted account types nothing and names no account.
         if rule.account_bidx is not None and account is None:
             continue
-        items.append(BankTypeRuleItem(
-            id=rule.uuid,
-            account_id=account.uuid if account else None,
-            account_name=decrypt_data(account.name_enc, master_key) if account else None,
-            is_credit=rule.is_credit,
-            signature=rule.signature,
-            match=rule.match,
-            label=labels.get(rule.uuid),
-            type=rule.type,
-            operation_count=counts[rule.uuid],
-            created_at=rule.created_at,
-        ))
+        items.append(_rule_item(rule, account, counts[rule.uuid], labels.get(rule.uuid), master_key))
+    return sorted(items, key=lambda item: (-item.operation_count, item.signature))
+
+
+def _rule_item(
+    rule: TypeRule, account: BankAccount | None, count: int, label: str | None, master_key: str,
+) -> BankTypeRuleItem:
+    return BankTypeRuleItem(
+        id=rule.uuid,
+        account_id=account.uuid if account else None,
+        account_name=decrypt_data(account.name_enc, master_key) if account else None,
+        is_credit=rule.is_credit,
+        signature=rule.signature,
+        match=rule.match,
+        label=label,
+        type=rule.type,
+        operation_count=count,
+        created_at=rule.created_at,
+    )
+
+
+def _label_side(
+    session: Session, accounts: _Accounts, transaction_id: str, master_key: str,
+) -> tuple[BankTransaction, tuple[str, bool, str]]:
+    """An operation, and the label it is one of: its account, direction and
+    signature. A label without a letter or a digit is no label to separate."""
+    row = _readable_row(session, accounts, transaction_id)
+    signature = label_signature(decrypt_data(row.remittance_enc, master_key) if row.remittance_enc else None)
+    if signature is None:
+        raise LabelRequiredError(transaction_id)
+    return row, (row.account_id_bidx, decrypt_data(row.credit_debit_enc, master_key) == CREDIT, signature)
+
+
+def separation_preview(
+    session: Session, user_uuid: str, master_key: str, transaction_id: str,
+) -> BankLabelSeparationPreview:
+    """What separating this operation's label would withdraw, nothing written:
+    the rule given from an answer on the label, which goes, and the operations
+    of the label a nearby label's rule types, which it no longer would."""
+    accounts = _user_accounts(session, user_uuid, master_key)
+    _, side = _label_side(session, accounts, transaction_id, master_key)
+    rules = load_rules(session, user_uuid, master_key)
+    own = rules.exact.get(side)
+    answered = {rule.uuid for rule in rules.exact.values()}
+    counts: dict[str, int] = defaultdict(int)
+    labels: dict[str, str | None] = {}
+    operations = nearby = 0
+    for movement, label, resolution in _typed_history(session, user_uuid, master_key, accounts):
+        if resolution.rule_id is not None:
+            counts[resolution.rule_id] += 1
+            labels[resolution.rule_id] = label
+        if movement.adjustment or (movement.account_bidx, movement.is_credit, label_signature(label)) != side:
+            continue
+        operations += 1
+        if resolution.rule_id in answered and resolution.rule_id != (own.uuid if own else None):
+            nearby += 1
+    return BankLabelSeparationPreview(
+        separated=side in rules.separated,
+        operation_count=operations,
+        rule=_rule_item(own, accounts.by_bidx.get(side[0]), counts[own.uuid], labels.get(own.uuid), master_key)
+        if own else None,
+        nearby_count=nearby,
+    )
+
+
+def separate_label(
+    session: Session, user_uuid: str, master_key: str, transaction_id: str,
+) -> BankLabelSeparationItem:
+    """Separate this operation's label on its account and direction: each of
+    its operations asks alone from then on, and the rule given from an answer
+    on it goes. Separating it again changes nothing."""
+    accounts = _user_accounts(session, user_uuid, master_key)
+    _, (account_bidx, is_credit, signature) = _label_side(session, accounts, transaction_id, master_key)
+    account_id = accounts.by_bidx[account_bidx].uuid
+    drop_label_rule(session, user_uuid, master_key, account_id, is_credit, signature)
+    saved = save_separation(session, user_uuid, master_key, account_id, is_credit, signature)
+    session.commit()
+    return next(item for item in list_label_separations(session, user_uuid, master_key) if item.id == saved.uuid)
+
+
+def list_label_separations(session: Session, user_uuid: str, master_key: str) -> list[BankLabelSeparationItem]:
+    """Every label the user separated, with its operations across the history."""
+    accounts = _user_accounts(session, user_uuid, master_key)
+    separations = [s for s in load_separations(session, user_uuid, master_key) if s.account_bidx in accounts.by_bidx]
+    keys = {separation.key for separation in separations}
+    counts: dict[tuple[str, bool, str], int] = defaultdict(int)
+    labels: dict[tuple[str, bool, str], str | None] = {}
+    # Sorted by day: the last label seen is the most recent.
+    for movement in _load_movements(session, master_key, accounts.readable, None):
+        if movement.adjustment:
+            continue
+        label = _label(movement, master_key)
+        key = (movement.account_bidx, movement.is_credit, label_signature(label))
+        if key in keys:
+            counts[key] += 1
+            labels[key] = label
+    items = [
+        BankLabelSeparationItem(
+            id=separation.uuid,
+            account_id=separation.account_id,
+            account_name=decrypt_data(accounts.by_bidx[separation.account_bidx].name_enc, master_key),
+            is_credit=separation.is_credit,
+            signature=separation.signature,
+            label=labels.get(separation.key),
+            operation_count=counts[separation.key],
+            created_at=separation.created_at,
+        )
+        for separation in separations
+    ]
     return sorted(items, key=lambda item: (-item.operation_count, item.signature))
 
 

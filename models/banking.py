@@ -395,6 +395,38 @@ class BankTypeRule(SQLModel, table=True):
     )
 
 
+class BankLabelSeparation(SQLModel, table=True):
+    """A label the user separated on one account and direction: its operations
+    share words but not a nature, so each asks alone and no rule given from an
+    answer reaches it (services/banking/label_separations.py). Read as the
+    operations are, never written onto them.
+
+    Uniqueness rests on a blind index of the account, the direction and the
+    label signature together, as a rule's does.
+    """
+    __tablename__ = "bank_label_separations"
+    __table_args__ = (
+        UniqueConstraint("user_uuid_bidx", "separation_bidx", name="uq_bank_label_separations_label"),
+        {"extend_existing": True},
+    )
+
+    uuid: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        sa_column=Column(TEXT, primary_key=True, nullable=False),
+    )
+    user_uuid_bidx: str = Field(sa_column=Column(TEXT, nullable=False, index=True))
+    separation_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    # The same blind index as `BankTransaction.account_id_bidx`: the separation
+    # goes with the account.
+    account_bidx: str = Field(sa_column=Column(TEXT, nullable=False))
+    account_ref_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    credit_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    signature_enc: str = Field(sa_column=Column(TEXT, nullable=False))
+    created_at: datetime = Field(
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False)
+    )
+
+
 class BankRecurringSeries(SQLModel, table=True):
     """What the user said of a recurring charge: it is a recurring payment, or it is
     not — with the corrections they made to it (services/banking/recurring.py).

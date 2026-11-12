@@ -35,6 +35,8 @@ from dtos.banking import (
     BankFlowsResponse,
     BankHistoryItem,
     BankHistoryKind,
+    BankLabelSeparationItem,
+    BankLabelSeparationPreview,
     BankLedger,
     BankQuestionThreshold,
     BankReviewQueue,
@@ -78,6 +80,7 @@ from services.banking.flows import (
     LabelRequiredError,
     OutsideLabelError,
     PairedOperationError,
+    SeparatedLabelError,
     UnknownAccountError,
     clear_transaction_type,
     compute_real_flows,
@@ -86,7 +89,10 @@ from services.banking.flows import (
     list_transfer_counterparts,
     RuleAccountNotFoundError,
     list_type_rules,
+    list_label_separations,
     preview_rule,
+    separate_label,
+    separation_preview,
     write_rule,
     question_threshold_preview,
     review_queue,
@@ -102,6 +108,7 @@ from services.banking.errors import BankingApiError
 from services.banking import recurring as recurring_service
 from services.banking.recurring_decisions import RecurringNotFoundError
 from services.banking.type_rules import RuleNotFoundError, RulePatternError, delete_rule, retype_rule
+from services.banking.label_separations import SeparationNotFoundError, delete_separation
 from services.banking.ledger import build_ledger, ledger_etag
 from services.banking.real_cashflow import (
     PeriodNotCompletedError,
@@ -649,6 +656,43 @@ def put_transaction_type(
         raise HTTPException(status_code=400, detail="Une opération sans libellé ne se corrige qu'à l'unité.")
     except OutsideLabelError:
         raise HTTPException(status_code=400, detail="Les opérations cochées doivent être du même compte et du même sens.")
+    except SeparatedLabelError:
+        raise HTTPException(
+            status_code=409, detail="Ce libellé est séparé : chacune de ses opérations se classe seule.",
+        )
+
+
+@router.get("/transactions/{transaction_id}/separation", response_model=BankLabelSeparationPreview)
+def get_separation_preview(
+    transaction_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """What separating this operation's label would withdraw, nothing written."""
+    try:
+        return separation_preview(session, current_user.uuid, master_key, transaction_id)
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail="Opération introuvable.")
+    except LabelRequiredError:
+        raise HTTPException(status_code=400, detail="Une opération sans libellé n'a rien à séparer.")
+
+
+@router.post("/transactions/{transaction_id}/separation", response_model=BankLabelSeparationItem, status_code=201)
+def post_separation(
+    transaction_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Separate this operation's label on its account and direction: each of
+    its operations asks alone, and no rule given from an answer reaches it."""
+    try:
+        return separate_label(session, current_user.uuid, master_key, transaction_id)
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail="Opération introuvable.")
+    except LabelRequiredError:
+        raise HTTPException(status_code=400, detail="Une opération sans libellé n'a rien à séparer.")
 
 
 @router.delete("/transactions/{transaction_id}/type", response_model=BankTransactionItem)
@@ -787,6 +831,30 @@ def delete_type_rule(
         delete_rule(session, current_user.uuid, master_key, rule_id)
     except RuleNotFoundError:
         raise HTTPException(status_code=404, detail="Règle introuvable.")
+
+
+@router.get("/label-separations", response_model=list[BankLabelSeparationItem])
+def get_label_separations(
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """The labels the user separated, listed beside the sorting rules."""
+    return list_label_separations(session, current_user.uuid, master_key)
+
+
+@router.delete("/label-separations/{separation_id}", status_code=204)
+def delete_label_separation(
+    separation_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """Regroup a label: its operations ask together again."""
+    try:
+        delete_separation(session, current_user.uuid, master_key, separation_id)
+    except SeparationNotFoundError:
+        raise HTTPException(status_code=404, detail="Ce libellé n'est plus séparé.")
 
 
 @router.get("/transfer-questions", response_model=BankTransferQuestionsResponse)

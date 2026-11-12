@@ -46,6 +46,7 @@ from sqlmodel import Session, select
 from dtos.banking import CashflowType, RecurringDirection
 from models.banking import (
     BankContributionDecision,
+    BankLabelSeparation,
     BankRecurringSeries,
     BankTransaction,
     BankTransferDecision,
@@ -65,7 +66,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "38"
+_VERSION = "39"
 
 
 class FlowCarrier(NamedTuple):
@@ -290,9 +291,10 @@ def source_digest(
 
     Cheap on purpose — counts and timestamps, no row decrypted — since every
     read computes it. Any row added, removed or rewritten moves a count or a
-    timestamp; so do a decision and a type rule, which is replaced rather than
-    updated. The savings accounts are part of it as they are, not through a
-    timestamp: an account's type decides whole tiers. A recurring payment decision
+    timestamp; so do a decision, a type rule, which is replaced rather than
+    updated, and a label separation, only ever added or deleted. The savings
+    accounts are part of it as they are, not through a timestamp: an account's
+    type decides whole tiers. A recurring payment decision
     is updated in place, so its latest update time counts, not its creation.
 
     The investment accounts count too: a deposit declared on one of them types
@@ -321,6 +323,11 @@ def source_digest(
     rules = session.exec(
         select(sa.func.count(), sa.func.max(BankTypeRule.created_at)).where(BankTypeRule.user_uuid_bidx == user_bidx)
     ).one()
+    separations = session.exec(
+        select(sa.func.count(), sa.func.max(BankLabelSeparation.created_at)).where(
+            BankLabelSeparation.user_uuid_bidx == user_bidx
+        )
+    ).one()
     recurring = session.exec(
         select(sa.func.count(), sa.func.max(BankRecurringSeries.updated_at)).where(
             BankRecurringSeries.user_uuid_bidx == user_bidx
@@ -334,8 +341,8 @@ def source_digest(
     raw = json.dumps(
         [
             _VERSION, sorted(readable), sorted(savings),
-            list(rows), list(decisions), list(contribution_decisions), list(rules), list(recurring), investments,
-            threshold,
+            list(rows), list(decisions), list(contribution_decisions), list(rules), list(separations),
+            list(recurring), investments, threshold,
         ],
         default=str,
     )

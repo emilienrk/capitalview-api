@@ -35,6 +35,7 @@ from dtos.bank import (
 )
 from dtos.transaction import AccountHistoryPosition, AccountHistorySnapshotResponse
 from services.banking.health import is_session_active
+from services.banking.label_separations import forget_account_separations
 from services.banking.linking import is_card_account
 from services.banking.recurring_decisions import forget_account
 from services.bank_ledger import (
@@ -439,6 +440,7 @@ def delete_bank_account(
     session.exec(
         sa.delete(BankContributionDecision).where(BankContributionDecision.account_bidx == account_id_bidx)
     )
+    forget_account_separations(session, account_id_bidx)
     forget_account(session, account.user_uuid_bidx, account_uuid, master_key)
 
     session.delete(account)

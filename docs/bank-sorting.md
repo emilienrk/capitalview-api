@@ -3,7 +3,7 @@
 Comment chaque opération d'un compte bancaire est comptée : virement entre comptes, dépense, épargne, investissement,
 ou non compté. Ce document est la référence : le code la suit, et chaque changement de comportement le met à jour.
 
-Il se lit en trois parties. **Les règles**, numérotées R1 à R53, stables, chacune avec le module qui la porte : c'est
+Il se lit en trois parties. **Les règles**, numérotées R1 à R54, stables, chacune avec le module qui la porte : c'est
 ce qu'une session de développement doit connaître avant de toucher `services/banking`. **Les textes d'interface**,
 tels qu'ils s'affichent. **Le journal**, daté : chaque décision, chaque mesure sur le dump de développement, chaque
 commit, dans l'ordre. Rien de l'ancienne version n'a été retiré : ce qui n'est plus une règle est dans le journal.
@@ -161,7 +161,8 @@ pose aucune question, ne porte aucune règle, compte par défaut et se type à l
 
 Aucune liste de mots n'entre dans l'identité (R1, R40). Limite connue : un libellé fait des seuls mots du format de sa
 banque (« CARTE 12/03/25 A.R.E.A. CB*0837 », lu « carte cb ») partage son identité avec les autres paiements de ce
-format, et « les prochaines aussi » sur l'un atteindrait les autres. *Mesuré sur le dump (12/11) : 7 opérations sans
+format, et « les prochaines aussi » sur l'un atteindrait les autres : l'utilisateur peut alors séparer ce libellé
+(R54). *Mesuré sur le dump (12/11) : 7 opérations sans
 mot, dont 5 crédits « 00160669 » (301,50 €) qui posent désormais leur question ; « carte cb » couvre 25 opérations de
 8 marchands sur 2 comptes, « carte cb le » 3, « envoye paiement par » 1, aucune règle ne porte dessus.*
 
@@ -209,9 +210,9 @@ l'interrupteur PER : 12 des 21 dépôts listés étaient des versements PERU de 
   libellé »). Liste ouverte, la réponse porte sur les opérations cochées, celle de la question cochée d'avance ;
   fermée, sur celle-ci. Chacune reçoit son propre type, comme si on avait répondu une par une : aucune règle, rien
   pour les prochaines. Seules des opérations du même compte et du même sens peuvent être cochées ensemble.
-- **Les prochaines aussi** : case explicite, qui crée une règle. Les règles sont le dictionnaire de l'utilisateur :
-  onglet « Règles » de Banque, chacune avec son libellé, son compte, son sens et le nombre d'opérations qu'elle type ;
-  on y change son type ou on la supprime. Une règle parle des opérations à venir, elle n'a pas sa place dans
+- **Les prochaines aussi** : case explicite, qui crée une règle (jamais sur un libellé séparé, R54). Les règles sont
+  le dictionnaire de l'utilisateur : onglet « Règles » de Banque, chacune avec son libellé, son compte, son sens et le
+  nombre d'opérations qu'elle type ; on y change son type ou on la supprime. Une règle parle des opérations à venir, elle n'a pas sa place dans
   l'historique des réponses. Une règle née d'une réponse atteint le libellé exact et les libellés proches (0,6 de mots
   en commun, les mots trop fréquents sur ce côté du compte mis de côté), sur ce compte et ce sens
   (`services/banking/type_rules.py`).
@@ -391,13 +392,41 @@ montrent et un mois de marge de chaque côté, parce qu'un virement du 30 peut a
 fréquents, questions ouvertes, porteurs de question, récurrents, formes de dépôt validées, Oui en cours, couverture
 des comptes), rebâti entièrement quand `transfer_patterns.source_digest` change, jamais mis à jour en place. Le digest
 tient aux comptes lisibles, aux livrets réglementés, aux lignes bancaires (nombre, dernière mise à jour, dernière
-création), aux décisions de paire, de dépôt et de récurrent, aux règles, aux lignes des comptes d'investissement et
-placements, aux placements « alimentés hors banques », au seuil, et à `_VERSION`. **Toute nouvelle entrée de la
-lecture entre dans le digest, et `_VERSION` monte quand la dérivation change** : sinon un lecteur sert un résultat
-périmé sans erreur. Une règle est remplacée plutôt que modifiée, pour la même raison.
+création), aux décisions de paire, de dépôt et de récurrent, aux règles, aux séparations de libellé (R54), aux
+lignes des comptes d'investissement et placements, aux placements « alimentés hors banques », au seuil, et à
+`_VERSION`. **Toute nouvelle entrée de la lecture entre dans le digest, et `_VERSION` monte quand la dérivation
+change** : sinon un lecteur sert un résultat périmé sans erreur. Une règle est remplacée plutôt que modifiée, pour la même raison.
 
 **R53. Les mesures se font sur le dump de développement, jamais sur une intuition** (R4). Un changement de seuil, de
 tolérance ou de couche de détection se justifie par ses chiffres avant et après, notés dans le journal.
+
+### Séparer un libellé
+
+**R54. Un libellé qui mélange des opérations sans rapport se sépare.** Quand une identité (R24) couvre plusieurs
+natures — « carte cb » pour les paiements de plusieurs marchands — l'utilisateur la sépare : bouton « Séparer » de la
+liste « Choisir parmi les N opérations de ce libellé », là où le mélange se voit ; « Regrouper », dans l'onglet
+« Règles », l'annule (« Délier » reste aux paires, R7, R33). C'est sa décision sur un compte, un sens et une identité de
+libellé, rangée à part (`services/banking/label_separations.py`), lue à chaque lecture comme une règle, jamais écrite
+sur les opérations : elle vaut pour celles importées plus tard, et se défait sans rien abîmer. Aucune liste de mots,
+aucune lecture du format de la banque (R1, R40) : c'est l'utilisateur qui dit que ce libellé mélange. Sur un libellé
+séparé :
+
+- chaque opération pose sa question seule, comme une opération au libellé unique : une entrée si elle fait à elle seule
+  100 € (R22), une sortie à ses conditions habituelles (R14, R21), face à un dépôt comme toujours ;
+- seule la portée « Celle-ci » reste : ni « Celles que je coche », ni « Les prochaines aussi » (R27), dans « À trier »
+  comme dans le choix du type ; la mention « Libellé séparé » les remplace. L'API refuse la portée libellé ;
+- aucune règle née d'une réponse ne l'atteint, ni la sienne ni celle d'un libellé proche (0,6, R27). Sa propre règle
+  est supprimée en séparant ; avant de confirmer, le message dit combien d'opérations elle comptait, et combien
+  d'opérations du libellé la règle d'un libellé proche cesse de compter. Une règle écrite à la main (R29) s'applique
+  toujours : c'est la parole de l'utilisateur ;
+- un Oui à un dépôt ne vaut plus que pour son opération (R12, R16) : les formes déjà apprises pour ce libellé ne rangent
+  plus seules, chaque opération face à un dépôt demande ;
+- les paires ne bougent pas (R7 à R11, R15) : elles reposent sur les montants et les comptes.
+
+L'onglet « Règles » liste chaque séparation avec son libellé, son compte, son sens, le nombre de ses opérations et
+« Regrouper » ; comme une règle, elle n'est pas dans l'historique des réponses (R36). Un libellé sans mot (`#…`, R24) se
+sépare comme un autre ; un libellé sans identité, non. Supprimer un compte bancaire supprime ses séparations ; supprimer
+le compte utilisateur aussi, et l'export du compte les contient.
 
 ---
 
@@ -417,6 +446,7 @@ tolérance ou de couche de détection se justifie par ses chiffres avant et apr�
 | À trier | « Sans contrepartie bancaire » ; « Historique de mes réponses » ; « Annuler » |
 | Récurrents | « Hors du total » ; « Ce n'est pas récurrent » ; « alimenté hors de mes banques » (placements) |
 | Curseur | « Dépenses à vérifier à partir de <montant> » |
+| Libellé séparé | bouton « Séparer » dans la liste « Choisir parmi les N opérations de ce libellé » ; fenêtre « Séparer ce libellé » ; « Libellé séparé : chaque opération pose sa question seule. » (Annuler) ; mention « Libellé séparé » ; « Regrouper » (onglet Règles) |
 
 ---
 
@@ -546,6 +576,27 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
   confond. Ce serait une liste de mots qui décide (R1, R40). Noté comme limite dans R24.
 - La saisie à la main accepte tout libellé qui porte une lettre ou un chiffre (docs/bank-ledger.md, L10).
 
+### 13 novembre 2026
+
+- Séparer un libellé (R54), validé par Emilien en huit points : chaque opération demande seule, seule « Celle-ci »
+  reste, aucune règle née d'une réponse ne l'atteint (la sienne est supprimée, annoncée avant), un Oui ne vaut plus pour
+  le libellé, les paires ne bougent pas, la séparation est listée dans l'onglet « Règles ». Rangée dans sa propre table
+  (`bank_label_separations`) plutôt que parmi les règles : ce n'est pas un type, et chaque lecteur des règles
+  (onglet, aperçu, export, changement de type) l'aurait prise pour une. Une entrée de plus dans le digest, `_VERSION`
+  de 38 à 39.
+- Mesuré sur le dump, sans aucune séparation, avant et après : formes de paires (65, 365 occurrences), jambes (364
+  répétées, 300 épargne, 50 remboursements, 62 proposées, 4 liées), types et totaux par type, source et sens,
+  récurrents (13 dépenses, 682,86 € par mois ; 9 revenus, 2 601,36 €), « À trier » (70 questions, 29 190,13 € : 33
+  entrées, 6 sorties, 31 paires ; 9 dépôts sans contrepartie) : rien ne bouge.
+- « carte cb » en sorties séparé, dans une transaction annulée : 16 opérations, toutes sur le compte principal,
+  278,07 €, 14 textes de libellé différents ; aucune n'atteint le seuil ni ne fait face à un dépôt, aucune règle ne
+  portait dessus : aucune question ni aucun type ne bouge. Relu ce jour sur le même dump, « carte cb » ne couvre que
+  ces 16 sorties, pas les 25 opérations sur 2 comptes notées le 12/11 ; l'écart n'est pas expliqué.
+- Pour voir l'effet sur un libellé qui demande, toujours dans une transaction annulée : « Paiement envoyé par MANGOPAY »
+  (13 entrées, 540 €, une question) séparé donne 3 questions (125 €, 111 €, 100 €) ; les 10 autres, chacune sous
+  100 €, 204 € en tout, restent comptées en revenu sans question. « À trier » passe de 70 à 72 questions, de
+  29 190,13 € à 28 986,13 €.
+
 ### État des points
 
 | Point | État |
@@ -578,3 +629,4 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
 | Ajustement d'ouverture reculé par un import ou une saisie plus ancienne (02/11) | fait |
 | Réponses de dépôt supprimées avec leur compte d'investissement (09/11) | fait |
 | Libellé sans mot : identité `#` sur le texte entier, correspondance exacte (12/11) | fait |
+| Séparer un libellé : chaque opération demande seule, aucune règle née d'une réponse ne l'atteint (13/11) | fait |

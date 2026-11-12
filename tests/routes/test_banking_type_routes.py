@@ -277,3 +277,47 @@ def test_the_flow_group_route_lists_what_one_answer_would_type(client, session, 
 def test_the_flow_group_of_an_unknown_operation_is_a_404(client, session, master_key):
     _seed(session, master_key)
     assert client.get("/banking/transactions/nope/flow-group").status_code == 404
+
+
+def test_a_separated_label_is_answered_one_operation_at_a_time_and_regrouped(client, session, master_key):
+    from services.auth import get_current_user
+
+    _seed_asking(session, master_key)
+    target = _month(client)["VIR INST ROUKINE EMILIEN"]
+
+    preview = client.get(f"/banking/transactions/{target['id']}/separation")
+    assert (preview.status_code, preview.json()["operation_count"], preview.json()["rule"]) == (200, 2, None)
+    created = client.post(f"/banking/transactions/{target['id']}/separation")
+    assert (created.status_code, created.json()["signature"], created.json()["operation_count"]) == (
+        201, "emilien inst roukine vir", 2,
+    )
+    assert _month(client)["VIR INST ROUKINE EMILIEN"]["label_separated"] is True
+
+    refused = client.put(f"/banking/transactions/{target['id']}/type", json={"type": "SAVING", "scope": "label"})
+    assert refused.status_code == 409
+    assert client.get("/banking/type-rules").json() == []
+
+    [listed] = client.get("/banking/label-separations").json()
+    owner = app.dependency_overrides[get_current_user]
+    app.dependency_overrides[get_current_user] = lambda: User(
+        uuid="someone-else", auth_salt="salt", username="o", email="o@test", password_hash="x"
+    )
+    assert client.delete(f"/banking/label-separations/{listed['id']}").status_code == 404
+    assert client.post(f"/banking/transactions/{target['id']}/separation").status_code == 404
+    app.dependency_overrides[get_current_user] = owner
+    assert client.delete(f"/banking/label-separations/{listed['id']}").status_code == 204
+    assert client.get("/banking/label-separations").json() == []
+    assert client.put(
+        f"/banking/transactions/{target['id']}/type", json={"type": "SAVING", "scope": "label"},
+    ).status_code == 200
+
+
+def test_an_operation_without_label_has_no_label_to_separate(client, session, master_key):
+    _link(session, master_key, "current")
+    raw = _raw("12.00", "DBIT", "2026-03-05", ref="bare")
+    raw["remittance_information"] = []
+    _store(session, master_key, "current", raw)
+    [target] = client.get("/banking/transactions?period=2026-03").json()["transactions"]
+
+    assert client.get(f"/banking/transactions/{target['id']}/separation").status_code == 400
+    assert client.post(f"/banking/transactions/{target['id']}/separation").status_code == 400

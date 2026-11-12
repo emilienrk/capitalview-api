@@ -14,6 +14,7 @@ from models.bank import BankAccount
 from models.banking import (
     BankAccountLink,
     BankAuthorization,
+    BankLabelSeparation,
     BankSession,
     BankRecurringSeries,
     BankTransaction,
@@ -86,6 +87,7 @@ BIDX_MODELS = (
     BankTransferDecision,
     BankTransferPatterns,
     BankTypeRule,
+    BankLabelSeparation,
     BankRecurringSeries,
 )
 FK_MODELS = (
@@ -552,6 +554,22 @@ def test_export_includes_type_rules_in_clear(session):
     ] == [("emilien inst roukine vir", "acc-1", False, "SAVING")]
 
 
+def test_export_includes_label_separations_in_clear(session):
+    from services.banking.label_separations import save_separation
+
+    client = TestClient(app)
+    access_token, master_key, user_uuid = _register(client, session, "separations_export@example.com")
+    save_separation(session, user_uuid, master_key, "acc-1", False, "carte cb")
+    session.commit()
+
+    response = client.get("/auth/me/export", headers=_auth_headers(access_token, master_key))
+
+    assert response.status_code == 200
+    assert [
+        (r["signature"], r["bank_account_id"], r["is_credit"]) for r in response.json()["bank_label_separations"]
+    ] == [("carte cb", "acc-1", False)]
+
+
 def _recurring(session, user_uuid: str, bank_account_uuid: str, master_key: str) -> None:
     from services.banking.recurring_decisions import CONFIRMED, Decision, Identity, save_decision
 
@@ -666,6 +684,8 @@ def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeyp
         )
     )
     session.add(_type_rule(user_bidx, bank_acc_uuid, master_key))
+    from services.banking.label_separations import save_separation
+    save_separation(session, user_uuid, master_key, bank_acc_uuid, False, "carte cb")
     session.commit()
     _recurring(session, user_uuid, bank_acc_uuid, master_key)
 
@@ -691,6 +711,7 @@ def test_purge_account_wipes_all_banking_tables_in_proper_order(session, monkeyp
     assert before["bank_transfer_decisions"] == 1
     assert before["bank_transfer_patterns"] == 1
     assert before["bank_type_rules"] == 1
+    assert before["bank_label_separations"] == 1
     assert before["bank_recurring_series"] == 1
 
     # Purge

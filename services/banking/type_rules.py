@@ -25,7 +25,11 @@ kept to an account, then the most recent.
 Rules are applied as operations are read, never written onto them, so a rule
 also types the operations imported after it.
 
-Rules: docs/bank-sorting.md — R27 to R32.
+A label the user separated (services/banking/label_separations.py) is reached
+by no rule given from an answer, its own or a nearby one's: only a written
+rule still types it.
+
+Rules: docs/bank-sorting.md — R27 to R32, R54.
 """
 
 from __future__ import annotations
@@ -42,6 +46,7 @@ from models.banking import BankTypeRule
 from services.banking.labels import (
     SIMILARITY_THRESHOLD, fold, label_signature, label_words, signature_words, similarity,
 )
+from services.banking.label_separations import load_separations
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 
@@ -111,19 +116,25 @@ class TypeRules:
     exact: dict[tuple[str, bool, str], TypeRule] = field(default_factory=dict)
     by_side: dict[tuple[str, bool], list[TypeRule]] = field(default_factory=dict)
     written: list[TypeRule] = field(default_factory=list)
+    # (account, direction, signature) of every label the user separated.
+    separated: frozenset[tuple[str, bool, str]] = frozenset()
     _reached: dict[tuple[str, bool, str], TypeRule | None] = field(default_factory=dict)
     _written_reached: dict[tuple[str, bool, str], TypeRule | None] = field(default_factory=dict)
 
     def all(self) -> list[TypeRule]:
         return [*self.exact.values(), *self.written]
 
+    def separates(self, account_bidx: str, is_credit: bool, signature: str | None) -> bool:
+        return signature is not None and (account_bidx, is_credit, signature) in self.separated
+
     def reach(
         self, account_bidx: str, is_credit: bool, label: str | None, common: frozenset[str]
     ) -> TypeRule | None:
         """The rule of this label: its own, else the nearest one on the same
-        side of the account, the most recent on a tie; else a written one."""
+        side of the account, the most recent on a tie; else a written one,
+        the only kind that reaches a separated label."""
         signature = label_signature(label)
-        if signature is not None:
+        if signature is not None and not self.separates(account_bidx, is_credit, signature):
             key = (account_bidx, is_credit, signature)
             if key in self.exact:
                 return self.exact[key]
@@ -148,7 +159,7 @@ class TypeRules:
     def replaced(self, rule: TypeRule, without: frozenset[str] = frozenset()) -> TypeRules:
         """These rules with one written rule added, and those it replaces gone:
         what a rule would do before it is saved."""
-        rules = TypeRules()
+        rules = TypeRules(separated=self.separated)
         for kept in self.all():
             if kept.uuid not in without:
                 rules._add(kept)
@@ -204,7 +215,9 @@ def written_rule_bidx(
 
 
 def load_rules(session: Session, user_uuid: str, master_key: str) -> TypeRules:
-    rules = TypeRules()
+    rules = TypeRules(separated=frozenset(
+        separation.key for separation in load_separations(session, user_uuid, master_key)
+    ))
     for rule in _stored(session, hash_index(user_uuid, master_key), master_key):
         rules._add(rule)
     return rules
@@ -250,19 +263,10 @@ def save_rule(
     if signature is None:
         raise ValueError("A rule needs a label.")
     user_bidx = hash_index(user_uuid, master_key)
-    bidx = rule_bidx(account_id, is_credit, signature, master_key)
-    side = (hash_index(account_id, master_key), is_credit, signature)
-    replaced = [
-        rule.uuid for rule in _stored(session, user_bidx, master_key)
-        if rule.match is RuleMatch.SIMILAR and (rule.account_bidx, rule.is_credit, rule.signature) == side
-    ]
-    session.exec(sa.delete(BankTypeRule).where(
-        BankTypeRule.user_uuid_bidx == user_bidx,
-        sa.or_(BankTypeRule.rule_bidx == bidx, BankTypeRule.uuid.in_(replaced)),
-    ))
+    drop_label_rule(session, user_uuid, master_key, account_id, is_credit, signature)
     row = BankTypeRule(
         user_uuid_bidx=user_bidx,
-        rule_bidx=bidx,
+        rule_bidx=rule_bidx(account_id, is_credit, signature, master_key),
         signature_enc=encrypt_data(signature, master_key),
         account_ref_enc=encrypt_data(account_id, master_key),
         credit_enc=encrypt_data(_flag(is_credit), master_key),
@@ -273,6 +277,26 @@ def save_rule(
     session.add(row)
     session.commit()
     return row
+
+
+def drop_label_rule(
+    session: Session, user_uuid: str, master_key: str, account_id: str, is_credit: bool, signature: str,
+) -> None:
+    """Delete the rule given from an answer on this label, under its key or
+    read back from its words. Left to the caller to commit."""
+    user_bidx = hash_index(user_uuid, master_key)
+    side = (hash_index(account_id, master_key), is_credit, signature)
+    replaced = [
+        rule.uuid for rule in _stored(session, user_bidx, master_key)
+        if rule.match is RuleMatch.SIMILAR and (rule.account_bidx, rule.is_credit, rule.signature) == side
+    ]
+    session.exec(sa.delete(BankTypeRule).where(
+        BankTypeRule.user_uuid_bidx == user_bidx,
+        sa.or_(
+            BankTypeRule.rule_bidx == rule_bidx(account_id, is_credit, signature, master_key),
+            BankTypeRule.uuid.in_(replaced),
+        ),
+    ))
 
 
 def save_written_rule(
