@@ -163,8 +163,8 @@ Aucune liste de mots n'entre dans l'identité (R1, R40). Limite connue : un libe
 banque (« CARTE 12/03/25 A.R.E.A. CB*0837 », lu « carte cb ») partage son identité avec les autres paiements de ce
 format, et « les prochaines aussi » sur l'un atteindrait les autres : l'utilisateur peut alors séparer ce libellé
 (R54). *Mesuré sur le dump (12/11) : 7 opérations sans
-mot, dont 5 crédits « 00160669 » (301,50 €) qui posent désormais leur question ; « carte cb » couvre 25 opérations de
-8 marchands sur 2 comptes, « carte cb le » 3, « envoye paiement par » 1, aucune règle ne porte dessus.*
+mot, dont 5 crédits « 00160669 » (301,50 €) qui posent désormais leur question ; « carte cb » couvre 16 opérations de
+8 marchands sur un compte, « carte cb le » 3, « envoye paiement par » 1, aucune règle ne porte dessus.*
 
 ### Ce qui ne reçoit pas de question
 
@@ -404,7 +404,8 @@ tolérance ou de couche de détection se justifie par ses chiffres avant et apr�
 
 **R54. Un libellé qui mélange des opérations sans rapport se sépare.** Quand une identité (R24) couvre plusieurs
 natures — « carte cb » pour les paiements de plusieurs marchands — l'utilisateur la sépare : bouton « Séparer » de la
-liste « Choisir parmi les N opérations de ce libellé », là où le mélange se voit ; « Regrouper », dans l'onglet
+liste « Choisir parmi les N opérations de ce libellé », là où le mélange se voit, et de la fenêtre du type, seul
+endroit où se propose la règle d'un libellé qui ne pose aucune question ; « Regrouper », dans l'onglet
 « Règles », l'annule (« Délier » reste aux paires, R7, R33). C'est sa décision sur un compte, un sens et une identité de
 libellé, rangée à part (`services/banking/label_separations.py`), lue à chaque lecture comme une règle, jamais écrite
 sur les opérations : elle vaut pour celles importées plus tard, et se défait sans rien abîmer. Aucune liste de mots,
@@ -446,7 +447,7 @@ le compte utilisateur aussi, et l'export du compte les contient.
 | À trier | « Sans contrepartie bancaire » ; « Historique de mes réponses » ; « Annuler » |
 | Récurrents | « Hors du total » ; « Ce n'est pas récurrent » ; « alimenté hors de mes banques » (placements) |
 | Curseur | « Dépenses à vérifier à partir de <montant> » |
-| Libellé séparé | bouton « Séparer » dans la liste « Choisir parmi les N opérations de ce libellé » ; fenêtre « Séparer ce libellé » ; « Libellé séparé : chaque opération pose sa question seule. » (Annuler) ; mention « Libellé séparé » ; « Regrouper » (onglet Règles) |
+| Libellé séparé | bouton « Séparer » dans la liste « Choisir parmi les N opérations de ce libellé » ; dans la fenêtre du type, « Ce libellé couvre des opérations sans rapport ? Séparer » ; fenêtre « Séparer ce libellé » ; « Libellé séparé : chaque opération pose sa question seule. » (Annuler) ; mention « Libellé séparé » ; « Regrouper » (onglet Règles) |
 
 ---
 
@@ -590,8 +591,11 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
   entrées, 6 sorties, 31 paires ; 9 dépôts sans contrepartie) : rien ne bouge.
 - « carte cb » en sorties séparé, dans une transaction annulée : 16 opérations, toutes sur le compte principal,
   278,07 €, 14 textes de libellé différents ; aucune n'atteint le seuil ni ne fait face à un dépôt, aucune règle ne
-  portait dessus : aucune question ni aucun type ne bouge. Relu ce jour sur le même dump, « carte cb » ne couvre que
-  ces 16 sorties, pas les 25 opérations sur 2 comptes notées le 12/11 ; l'écart n'est pas expliqué.
+  portait dessus : aucune question ni aucun type ne bouge. Le 12/11, R24 en notait 25 sur 2 comptes : le
+  compte portait sur toutes les lignes stockées, dont 9 parmi les 273 lignes d'un compte qui n'est plus à
+  l'utilisateur et qu'aucun lecteur ne lit. R24 corrigée : 16 opérations, un compte.
+- « Séparer » est aussi offert dans la fenêtre du type : « carte cb » ne pose aucune question, donc n'a pas de liste,
+  et c'est dans cette fenêtre que sa règle se propose.
 - Pour voir l'effet sur un libellé qui demande, toujours dans une transaction annulée : « Paiement envoyé par MANGOPAY »
   (13 entrées, 540 €, une question) séparé donne 3 questions (125 €, 111 €, 100 €) ; les 10 autres, chacune sous
   100 €, 204 € en tout, restent comptées en revenu sans question. « À trier » passe de 70 à 72 questions, de
