@@ -12,7 +12,9 @@ recurring payment moved, and one question fewer was asked.
 Built on it, strictest first:
 
 - `label_signature`: every word of a label, as one key — the identity a rule,
-  a flow question and a transfer's shape are keyed on;
+  a flow question and a transfer's shape are keyed on. A label without a word
+  ("00160669", "H&L") keys on its whole text instead, marked so it never
+  passes for a word and matched as is, never as a nearby label;
 - `label_groups.group_key`: the words naming the counterpart, bank plumbing set
   aside — what the lists group and display by;
 - `merchants.same_merchant`: words weighted by rarity, a truncation or a typo
@@ -34,6 +36,9 @@ SIMILARITY_THRESHOLD = 0.6
 
 _RUN = re.compile(r"[^\W_]+")
 
+# Opens an identity read off a text no word names: no word holds it.
+FALLBACK = "#"
+
 
 def fold(text: str) -> str:
     """Lower case, accents dropped."""
@@ -53,9 +58,23 @@ def label_words(label: str | None) -> frozenset[str]:
 
 
 def label_signature(label: str | None) -> str | None:
-    """Every word of a label in one key; None for a label without any."""
+    """Every word of a label in one key. Without a word, its letters and
+    digits as written; None for a label holding neither."""
     words = label_words(label)
-    return " ".join(sorted(words)) if words else None
+    if words:
+        return " ".join(sorted(words))
+    runs = _RUN.findall(fold(label or ""))
+    return FALLBACK + " ".join(runs) if runs else None
+
+
+def signature_words(label: str | None) -> frozenset[str]:
+    """The words a signature is made of, so it is read back from them: those of
+    the label, or its whole identity as one when it has none."""
+    words = label_words(label)
+    if words:
+        return words
+    signature = label_signature(label)
+    return frozenset({signature}) if signature else frozenset()
 
 
 def similarity(a: frozenset[str], b: frozenset[str]) -> float:

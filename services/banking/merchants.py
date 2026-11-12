@@ -22,7 +22,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable
 
 from services.banking.label_groups import NOISE_WORDS, display_label
-from services.banking.labels import SIMILARITY_THRESHOLD, fold, words_in_order
+from services.banking.labels import FALLBACK, SIMILARITY_THRESHOLD, fold, words_in_order
 
 MerchantKey = tuple[str, ...]
 
@@ -46,8 +46,6 @@ PREFIX_MIN_LETTERS = 4
 PREFIX_MIN_SHARE = 0.5
 TYPO_MIN_LETTERS = 5
 
-_FALLBACK = "#"
-
 
 def merchant_words(label: str | None) -> MerchantKey:
     """The words naming who is paid, in label order: runs of letters of two or
@@ -56,11 +54,11 @@ def merchant_words(label: str | None) -> MerchantKey:
     words = tuple(dict.fromkeys(word for word in words_in_order(label) if word not in NOISE))
     if words:
         return words
-    return (_FALLBACK + fold(display_label(label)),)
+    return (FALLBACK + fold(display_label(label)),)
 
 
 def _is_fallback(key: MerchantKey) -> bool:
-    return key[0].startswith(_FALLBACK)
+    return key[0].startswith(FALLBACK)
 
 
 class Idf:

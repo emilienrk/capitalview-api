@@ -268,3 +268,33 @@ def test_an_answered_label_has_no_group_left(session: Session, master_key: str):
     set_transaction_type(session, USER, master_key, carrier.id, Type.INVESTMENT, TypeScope.LABEL)
 
     assert list_flow_group(session, USER, master_key, carrier.id) == []
+
+
+def test_credits_under_a_label_without_words_ask_together(session: Session, master_key: str):
+    """Cash machine refunds labelled by a number alone (docs/bank-sorting.md, R24)."""
+    _ops(
+        session, master_key,
+        (CURRENT, "2026-03-10", "60.32", "CRDT", "00160669"),
+        (CURRENT, "2026-03-11", "60.31", "CRDT", "00160669"),
+        (CURRENT, "2026-03-12", "60.00", "CRDT", "00160670"),
+    )
+    assert _questions(session, master_key) == {"00160669": (CREDIT_CHOICES, 2)}
+
+
+def test_an_answer_for_a_label_without_words_reaches_that_very_text_only(session: Session, master_key: str):
+    _ops(
+        session, master_key,
+        (CURRENT, "2026-03-10", "150.00", "CRDT", "00160669"),
+        (CURRENT, "2026-03-11", "150.00", "CRDT", "00160670"),
+    )
+    listed = list_month_transactions(session, USER, master_key, "2026-03").transactions
+    carrier = next(tx for tx in listed if tx.label == "00160669")
+    set_transaction_type(session, USER, master_key, carrier.id, Type.EXPENSE, TypeScope.LABEL)
+    _ops(session, master_key, (CURRENT, "2026-03-20", "150.00", "CRDT", "00160669"))
+
+    types = {
+        (tx.label, tx.operation_date.day): tx.cashflow_type
+        for tx in list_month_transactions(session, USER, master_key, "2026-03").transactions
+    }
+    assert types == {("00160669", 10): Type.EXPENSE, ("00160669", 20): Type.EXPENSE, ("00160670", 11): Type.INCOME}
+    assert _questions(session, master_key) == {"00160670": (CREDIT_CHOICES, 1)}

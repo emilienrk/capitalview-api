@@ -24,6 +24,12 @@ def test_case_and_accents_make_no_other_signature():
     assert label_signature("Géant Casino") == label_signature("GEANT CASINO")
 
 
-def test_a_label_without_words_has_no_signature():
-    assert label_signature("03/08/25 4382956") is None
+def test_a_label_without_words_keys_on_its_whole_text():
+    assert label_signature("00160669") == "#00160669"
+    assert label_signature("H&L") == label_signature("h&l") == "#h l"
+    assert label_signature("00160669") != label_signature("00160670")
+
+
+def test_a_label_holding_neither_a_letter_nor_a_digit_has_no_signature():
+    assert label_signature(" - ") is None
     assert label_signature(None) is None

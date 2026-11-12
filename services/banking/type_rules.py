@@ -39,7 +39,9 @@ from sqlmodel import Session, select
 
 from dtos.banking import CashflowType, RuleMatch
 from models.banking import BankTypeRule
-from services.banking.labels import SIMILARITY_THRESHOLD, fold, label_signature, label_words, similarity
+from services.banking.labels import (
+    SIMILARITY_THRESHOLD, fold, label_signature, label_words, signature_words, similarity,
+)
 from services.encryption import decrypt_data, encrypt_data, hash_index
 
 
@@ -246,7 +248,7 @@ def save_rule(
     """
     signature = label_signature(label)
     if signature is None:
-        raise ValueError("A rule needs a label with words.")
+        raise ValueError("A rule needs a label.")
     user_bidx = hash_index(user_uuid, master_key)
     bidx = rule_bidx(account_id, is_credit, signature, master_key)
     side = (hash_index(account_id, master_key), is_credit, signature)
@@ -264,7 +266,7 @@ def save_rule(
         signature_enc=encrypt_data(signature, master_key),
         account_ref_enc=encrypt_data(account_id, master_key),
         credit_enc=encrypt_data(_flag(is_credit), master_key),
-        words_enc=encrypt_data(json.dumps(sorted(label_words(label))), master_key),
+        words_enc=encrypt_data(json.dumps(sorted(signature_words(label))), master_key),
         type_enc=encrypt_data(kind.value, master_key),
         created_at=datetime.now(timezone.utc),
     )

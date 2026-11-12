@@ -68,12 +68,12 @@ solde restait positif.
 devise) la reconnaît, et un import qui contient la même opération la **remplace** au lieu de la doubler. Les
 ajustements sont exclus de ce niveau 2.
 
-**L10. Une saisie à la main porte un libellé, avec au moins un mot** (deux lettres ou plus, sans chiffre, comme les
-lit `services/banking/labels.py`). Sans mot, une opération ne pose aucune question et ne porte aucune règle
-(docs/bank-sorting.md, R24) : elle compterait en silence comme le dit son sens. La modale propose les libellés déjà vus
-sur ce compte dans ce sens, les plus fréquents d'abord : en reprendre un tel quel range la saisie avec ses semblables.
-Pas de libellé par défaut : un même texte pour toutes les saisies les regrouperait, et une règle ou un Oui appris sur
-l'une rangerait les autres. Vérifié dans la modale seulement : l'API accepte encore une saisie sans libellé.
+**L10. Une saisie à la main porte un libellé**, avec au moins une lettre ou un chiffre : c'est lui qui donne son
+identité à l'opération (docs/bank-sorting.md, R24). Sans lui, elle ne poserait aucune question, ne porterait aucune
+règle et compterait en silence comme le dit son sens. La modale propose les libellés déjà vus sur ce compte dans ce
+sens, les plus fréquents d'abord : en reprendre un tel quel range la saisie avec ses semblables. Pas de libellé par
+défaut : un même texte pour toutes les saisies les regrouperait, et une règle ou un Oui appris sur l'une rangerait les
+autres. Vérifié dans la modale seulement : l'API accepte encore une saisie sans libellé.
 
 ## Limite connue
 
@@ -115,3 +115,5 @@ Aucun montant n'est journalisé.
 - **9 novembre 2026** : le libellé d'une saisie devient obligatoire, avec au moins un mot, et la modale propose ceux
   déjà vus sur le compte (L10). Sur le dump, aucune saisie à la main ; 17 opérations importées sans mot (« A.r.e.a. »,
   « H&L », « 00160669 », « Cgf17516mcdo1 ») restent sans question, limite R24.
+- **12 novembre 2026** : un libellé sans mot garde une identité, son texte entier (docs/bank-sorting.md, R24) : la
+  saisie à la main n'exige plus un mot, seulement une lettre ou un chiffre (L10).

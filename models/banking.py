@@ -236,7 +236,7 @@ class BankTransaction(SQLModel, table=True):
     # Blind index of the label's words (labels.label_signature): groups the
     # operations that read alike without the label ever leaving its cipher.
     # Re-derived on every row by the transfer-pattern rebuild; NULL for a label
-    # without words.
+    # holding neither a letter nor a digit.
     label_signature_bidx: str | None = Field(default=None, sa_column=Column(TEXT, index=True))
     # A CashflowType the user forced on this one operation, over any rule, and
     # when: the history of the user's answers lists it (NULL before it was kept).

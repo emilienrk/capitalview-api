@@ -152,9 +152,18 @@ les questions pesaient.*
 **R23. Les questions sont rangées par année, les plus récentes d'abord** ; dans l'année, celles qui font face à un
 dépôt en tête, puis par montant, puis les plus récentes (`flows.review_queue`).
 
-**R24. Une opération sans aucun mot dans son libellé** (chiffres seuls, libellé vide, dont une saisie à la main sans
-libellé) ne pose aucune question et ne peut porter de règle : elle compte par défaut, et se type à la main avec
-« celle-ci ». Limite connue, notée le 02/11.
+**R24. Une opération sans aucun mot dans son libellé** (« 00160669 », « H&L ») **garde une identité : son texte
+entier**, lettres et chiffres, casse et accents repliés, marqué d'un `#` qu'aucun mot ne porte
+(`labels.label_signature`). Elle pose ses questions, se groupe et porte une règle comme une autre, mais seulement avec
+les opérations du même texte exact, jamais avec un libellé proche (R10, R27) : une référence qui change à chaque fois
+fait un groupe d'une seule opération. Sans lettre ni chiffre (libellé vide), l'opération reste sans identité : elle ne
+pose aucune question, ne porte aucune règle, compte par défaut et se type à la main avec « celle-ci ».
+
+Aucune liste de mots n'entre dans l'identité (R1, R40). Limite connue : un libellé fait des seuls mots du format de sa
+banque (« CARTE 12/03/25 A.R.E.A. CB*0837 », lu « carte cb ») partage son identité avec les autres paiements de ce
+format, et « les prochaines aussi » sur l'un atteindrait les autres. *Mesuré sur le dump (12/11) : 7 opérations sans
+mot, dont 5 crédits « 00160669 » (301,50 €) qui posent désormais leur question ; « carte cb » couvre 25 opérations de
+8 marchands sur 2 comptes, « carte cb le » 3, « envoye paiement par » 1, aucune règle ne porte dessus.*
 
 ### Ce qui ne reçoit pas de question
 
@@ -525,6 +534,18 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
   ne les retrouvait pas : elle écrit de nouveaux identifiants. Lecture des opérations inchangée par construction,
   puisque R19 laissait déjà ces réponses sans effet ; non mesuré sur le dump.
 
+### 12 novembre 2026
+
+- Un libellé sans mot garde une identité, son texte entier marqué `#` (R24). Avant, il n'en avait aucune : ni
+  question, ni règle. Sur le dump, 7 opérations (« H&l » ×2, « 00160669 » ×5) ; les 5 crédits « 00160669 », des
+  remboursements de retraits, comptaient 301,50 € en revenu sans question. Mesuré avant et après : formes de paires
+  (65, 365 occurrences), jambes (364 répétées, 300 épargne, 50 remboursements, 62 proposées, 4 liées), types et totaux
+  par source, récurrents : rien ne bouge. « À trier » passe de 69 à 70 opérations, de 28 888,63 € à 29 190,13 € : une
+  question de plus, celle des 5 « 00160669 ». Les 2 « H&l » (22,80 €) restent sous le seuil.
+- Écarté : lire l'identité sans les mots de `label_groups.NOISE_WORDS`, pour séparer les marchands que « carte cb »
+  confond. Ce serait une liste de mots qui décide (R1, R40). Noté comme limite dans R24.
+- La saisie à la main accepte tout libellé qui porte une lettre ou un chiffre (docs/bank-ledger.md, L10).
+
 ### État des points
 
 | Point | État |
@@ -556,3 +577,4 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
 | Récurrent `stale` compté dans le Réel comme dans l'onglet (02/11) | fait |
 | Ajustement d'ouverture reculé par un import ou une saisie plus ancienne (02/11) | fait |
 | Réponses de dépôt supprimées avec leur compte d'investissement (09/11) | fait |
+| Libellé sans mot : identité `#` sur le texte entier, correspondance exacte (12/11) | fait |
