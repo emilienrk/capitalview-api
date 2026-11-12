@@ -137,6 +137,9 @@ class BankAccountLink(SQLModel, table=True):
     last_sync_attempt_at: date | None = Field(default=None, sa_column=Column(sa.Date))
     # Why that attempt failed, as shown to the user. NULL once a sync succeeds.
     last_sync_error_enc: str | None = Field(default=None, sa_column=Column(TEXT))
+    # What a sync over imported operations held back or shifted, as the JSON of
+    # dtos.bank.BankSyncNotice. NULL once dismissed.
+    sync_notice_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     # NULL = no gap found at the last reconciliation check.
     last_reconciliation_gap_enc: str | None = Field(default=None, sa_column=Column(TEXT))
     # The balance readings previous syncs anchored on, as a JSON list of

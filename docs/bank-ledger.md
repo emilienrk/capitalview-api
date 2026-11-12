@@ -1,7 +1,7 @@
 # Le solde d'un compte bancaire
 
 Référence du solde et de la courbe d'un compte bancaire (`services/bank_ledger.py`). Le code la suit, et chaque
-changement de comportement la met à jour. Les règles d'abord, numérotées L1 à L9 ; le journal daté en fin.
+changement de comportement la met à jour. Les règles d'abord, numérotées L1 à L11 ; le journal daté en fin.
 
 ## La règle
 
@@ -21,9 +21,9 @@ comme dans l'autre — n'est pas stockée non plus ; une ligne importée ne reti
 proches d'abord, sur tout ce que la banque renvoie. Seule une insertion est retenue : une ligne déjà stockée se corrige
 comme avant. Rien n'est supprimé, aucune ligne ne change d'identité ni de libellé, et les réponses accrochées aux lignes
 importées restent. Une ligne importée se reconnaît sans marqueur : sa référence synthétique (`csv:…`) est recalculée sur
-son propre contenu (`imported_rows`). Un compte sans ligne importée reçoit tout ce que la banque renvoie. Le résultat de
-la synchronisation le dit (`held_back`, et « N opérations de la banque non importées : la période jusqu'au JJ/MM/AAAA
-est déjà couverte par votre import. »). Le solde reste celui de la banque, la courbe est redessinée sur les opérations
+son propre contenu (`imported_rows`). Un compte sans ligne importée reçoit tout ce que la banque renvoie. Le compte le
+dit (`sync_notice`, voir L11) : « N opérations de la banque non importées : la période jusqu'au JJ/MM/AAAA est déjà
+couverte par votre import. ». Le solde reste celui de la banque, la courbe est redessinée sur les opérations
 stockées, importées puis synchronisées, et `history_served_from` garde ce que la banque a servi. Limite : les paires ne
 voient que ce que renvoie la synchronisation en cours ; une opération publiée en retard, à trois jours au plus du
 dernier import et du montant d'une ligne importée dont la jumelle a été retenue plus tôt, serait retenue à tort.
@@ -91,6 +91,23 @@ sens, les plus fréquents d'abord : en reprendre un tel quel range la saisie ave
 défaut : un même texte pour toutes les saisies les regrouperait, et une règle ou un Oui appris sur l'une rangerait les
 autres. Vérifié dans la modale seulement : l'API accepte encore une saisie sans libellé.
 
+**L11. La première synchronisation d'un compte rempli par import dit de combien elle a décalé la courbe.** La courbe
+d'un compte synchronisé se redessine en remontant depuis le solde de la banque. Sur des lignes importées, elle ne part de
+0 la veille de la première opération que si la somme des opérations stockées, importées puis synchronisées, égale ce
+solde ; sinon toute l'histoire est relevée ou abaissée de l'écart, sans marche au jour du rattachement : c'est voulu.
+Le passage d'amorçage le compare (`_import_notice`) et le compte le garde, en chiffres, jusqu'à ce que l'utilisateur le
+masque ou qu'une autre synchronisation ait quelque chose à dire (`sync_notice` : `held_back`, `held_until`,
+`operations_total`, `bank_balance`, `curve_shift`) ; le front écrit la phrase, pour que le mode discret masque les
+montants : « Vos opérations importées donnent X €, votre banque Y € : la courbe a été relevée (abaissée) de Z €. Votre
+import ne remonte sans doute pas à l'ouverture du compte, ou il lui manque des opérations. » Gardé sur le compte et non
+dans la seule réponse : l'amorçage tourne d'ordinaire en arrière-plan juste après le rattachement, et sa réponse
+n'atteint personne. Rien quand l'écart est nul, sur un compte sans ligne importée, ni aux synchronisations suivantes.
+Rien non plus quand la comparaison ne tient pas : sur un solde disponible (`estimated`), corrigé des seules opérations en
+attente que la banque partage, et sur un compte carte, sans courbe. Les deux côtés ne comptent que les opérations
+comptabilisées dans la devise du compte, comme la courbe. Limite : quand l'import remonte plus loin que la plus
+ancienne opération servie par la banque, la courbe n'est redessinée qu'à partir de celle-ci, et l'écart y fait une
+marche au lieu de décaler les jours d'avant.
+
 ## Limite connue
 
 **L9.** Un ajustement autre que celui d'ouverture garde son montant. Si des opérations plus anciennes que lui arrivent,
@@ -143,3 +160,8 @@ Aucun montant n'est journalisé.
   1 249 opérations retenues, dont les 42 à 0 €, pour un net de 5,68 € ; les 31 réponses sur les lignes importées
   restent. Le solde reste celui de la banque, et la courbe redessinée part de 0 la veille de la première opération et
   suit chaque jour la somme des opérations stockées.
+- **12 novembre 2026** : la première synchronisation d'un compte rempli par import compare la somme de ses opérations
+  au solde de la banque et dit de combien la courbe en est décalée ; le compte garde ce message, avec les opérations
+  retenues, jusqu'à ce que l'utilisateur le masque (L11). Sur le dump, « Compte secondaire » : écart nul (la courbe
+  part de 0,00 € la veille du 14/05/2022), donc aucune phrase sur la courbe ; seule reste celle des 1 249 opérations
+  retenues.

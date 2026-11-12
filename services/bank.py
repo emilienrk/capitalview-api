@@ -29,6 +29,7 @@ from dtos import BankAccountCreate, BankAccountUpdate, BankAccountResponse, Bank
 from dtos.bank import (
     INTEREST_BEARING_TYPES,
     BankHistoryEntry,
+    BankSyncNotice,
     LinkStatus,
     ReconciliationStatus,
     check_interest_terms,
@@ -82,6 +83,11 @@ class LinkMetadata:
             decrypt_data(link.last_sync_error_enc, master_key) if link.last_sync_error_enc else None
         )
         self.last_sync_attempt_at = link.last_sync_attempt_at
+        self.sync_notice = (
+            BankSyncNotice.model_validate_json(decrypt_data(link.sync_notice_enc, master_key))
+            if link.sync_notice_enc
+            else None
+        )
         # How far back the bank actually served, so the front states a fact
         # instead of offering a retry the bank would answer the same way.
         self.history_served_from = (
@@ -239,6 +245,7 @@ def _map_to_response(
         history_pending=link.history_pending if link else False,
         history_served_from=link.history_served_from if link else None,
         sync_error=link.sync_error if link else None,
+        sync_notice=link.sync_notice if link else None,
         last_sync_attempt_at=link.last_sync_attempt_at if link else None,
     )
 

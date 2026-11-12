@@ -128,6 +128,7 @@ from services.banking.linking import (
     CardAccountNotLinkableError,
     handle_callback,
     link_account,
+    dismiss_sync_notice,
     reseed_account_history,
     retry_account_sync,
     unlink_account,
@@ -507,6 +508,24 @@ def retry_account_sync_route(
             status_code=409, detail="La dernière synchronisation de ce compte n'a pas échoué."
         )
     return MessageResponse(message="La synchronisation va être relancée.")
+
+
+@router.delete(
+    "/accounts/{bank_account_uuid}/sync-notice",
+    response_model=MessageResponse,
+)
+def dismiss_sync_notice_route(
+    bank_account_uuid: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+):
+    """The user has read what the last sync said about the imported operations."""
+    if not dismiss_sync_notice(session, current_user.uuid, master_key, bank_account_uuid):
+        raise HTTPException(
+            status_code=404, detail="Ce compte n'est rattaché à aucun compte bancaire."
+        )
+    return MessageResponse(message="Message masqué.")
 
 
 @router.delete(

@@ -6,7 +6,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator
 
-from dtos.bank import ReconciliationStatus
+from dtos.bank import BankSyncNotice, ReconciliationStatus
 
 
 class BankConnectionUpdate(BaseModel):
@@ -173,6 +173,7 @@ class BankAccountSyncResult(BaseModel):
     # The bank's operations of the days an import already covers, left out
     # (docs/bank-ledger.md, L1).
     held_back: int = 0
+    notice: BankSyncNotice | None = None
     snapshots_written: int = 0
     reconciliation_gap: Decimal | None = None
     # None when no check could run yet (the seeding pass has no bank anchor to

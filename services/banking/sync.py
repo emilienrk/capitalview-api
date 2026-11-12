@@ -22,7 +22,7 @@ from typing import Any, NamedTuple
 from sqlmodel import Session, select
 
 from database import get_engine
-from dtos.bank import BankHistoryEntry, ReconciliationStatus
+from dtos.bank import BankHistoryEntry, BankSyncNotice, ReconciliationStatus
 from dtos.banking import BankAccountSyncResult, SyncStatus
 from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession, BankTransaction
@@ -54,6 +54,7 @@ from services.banking.transactions import (
     INVALIDATING_STATUSES,
     STATUS_BOOKED,
     canonical_amount,
+    first_operation_day,
     is_adjustment,
     NormalizedTransaction,
     normalize_transaction,
@@ -290,14 +291,8 @@ def sync_account_link(
     result.inserted, result.updated, result.skipped = store_transactions(
         session, master_key, account.uuid, raws, imported.holds if imported else None
     )
-    held_note = None
-    if imported is not None and imported.held:
+    if imported is not None:
         result.held_back = len(imported.held)
-        plural = "s" if result.held_back > 1 else ""
-        held_note = (
-            f"{result.held_back} opération{plural} de la banque non importée{plural} : la période jusqu'au "
-            f"{imported.until.strftime('%d/%m/%Y')} est déjà couverte par votre import."
-        )
     # Bounded by what the bank actually answered: a bank capped at ninety days
     # is silent about older rows, and silence is not withdrawal.
     result.removed = _drop_vanished_pending(
@@ -336,6 +331,10 @@ def sync_account_link(
         else Decimal("0")
     )
     accounting -= pending_net
+    notice = _import_notice(
+        session, account, master_key, imported, accounting, today, currency,
+        weighed=seeding and bool(parsed) and not estimated and not not_reconcilable,
+    )
 
     # 4. Reconciliation, four outcomes. Skipped on the seeding pass: its anchor
     # is the manually-entered balance, not a bank reading.
@@ -387,7 +386,13 @@ def sync_account_link(
             "Votre banque ne publie pas de solde comptable : la courbe est estimée "
             "à partir du solde disponible."
         )
-    result.detail = _joined(result.detail, held_note)
+    # Kept until dismissed: the seeding pass usually runs in the background
+    # right after linking, and its response reaches no one.
+    result.notice = notice
+    if notice is not None:
+        link.sync_notice_enc = encrypt_data(notice.model_dump_json(), master_key)
+    elif seeding:
+        link.sync_notice_enc = None
     link.last_reconciliation_gap_enc = (
         encrypt_data(str(gap), master_key) if gap is not None else None
     )
@@ -414,11 +419,10 @@ def sync_account_link(
     # account: walking back from its OTHR of 0 invented +27 887 € eighteen
     # months back on the real capture.
     if not_reconcilable:
-        result.detail = _joined(
+        result.detail = (
             "Courbe non écrite : votre banque ne publie pas de solde comptable pour ce "
             "compte carte, seulement un solde de type OTHR — il n'y a rien à quoi "
-            "rattacher une courbe.",
-            held_note,
+            "rattacher une courbe."
         )
         return result
 
@@ -676,8 +680,41 @@ def _twin_key(tx: NormalizedTransaction) -> tuple[str, str, str]:
     return canonical_amount(tx.amount), tx.credit_debit, tx.currency
 
 
-def _joined(*parts: str | None) -> str | None:
-    return " ".join(part for part in parts if part) or None
+def _import_notice(
+    session: Session,
+    account: BankAccount,
+    master_key: str,
+    imported: _ImportedPeriod | None,
+    accounting: Decimal,
+    today: date,
+    currency: str,
+    weighed: bool,
+) -> BankSyncNotice | None:
+    """What the user is told about an account holding imported rows
+    (docs/bank-ledger.md, L1 and L11): the operations held back, and on the
+    seeding pass how far the bank's balance stands from the stored operations
+    summed from 0 — the curve, walked back from that balance, is shifted by
+    exactly that much over its whole history.
+
+    `weighed` is false where the comparison would not be sound: an available
+    balance is only corrected for the pending rows the bank shares, and a card
+    account draws no curve.
+    """
+    if imported is None:
+        return None
+    notice = BankSyncNotice(
+        held_back=len(imported.held), held_until=imported.until if imported.held else None
+    )
+    if weighed:
+        first = first_operation_day(session, hash_index(account.uuid, master_key), master_key)
+        total = sum(booked_movements(session, account, master_key, first, today, currency).values(), Decimal("0"))
+        if total != accounting:
+            notice.operations_total = total
+            notice.bank_balance = accounting
+            notice.curve_shift = accounting - total
+    if not notice.held_back and notice.curve_shift is None:
+        return None
+    return notice
 
 
 def _tried_today(link: BankAccountLink, today: date) -> bool:

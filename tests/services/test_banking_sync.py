@@ -1696,10 +1696,7 @@ class TestImportedPeriod:
         ]
         assert before <= {row.uuid for row in session.exec(select(BankTransaction)).all()}
         assert (result.inserted, result.held_back) == (1, 3)
-        assert result.detail == (
-            "3 opérations de la banque non importées : la période jusqu'au "
-            f"{last.strftime('%d/%m/%Y')} est déjà couverte par votre import."
-        )
+        assert (result.notice.held_back, result.notice.held_until) == (3, last)
         session.refresh(account)
         assert decrypt_data(account.balance_enc, master_key) == "1000.00"
 
@@ -1775,8 +1772,118 @@ class TestImportedPeriod:
         (result,) = sync_user_accounts(session, USER, master_key)
 
         assert (result.inserted, result.updated, result.held_back) == (1, 1, 0)
-        assert result.detail is None
+        assert result.notice is None
         assert len(self._stored(session, master_key, account)) == 2
+
+
+class TestImportedCurveShift:
+    """The seeding pass walks the curve back from the bank's balance. Over
+    imported rows, it starts where the operations summed from 0 do only when
+    the two agree: otherwise the whole history is shifted, and the user is told
+    by how much (docs/bank-ledger.md, L11)."""
+
+    def _seed(self, session, master_key, monkeypatch, accounting, real_time="0.00", imported=True):
+        from dtos.imports import BankImportTransactionPreview
+        from services.imports.bank_csv import _raws, _with_references
+
+        day = TODAY - timedelta(days=20)
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting=accounting,
+            feed=[
+                _raw("1000", day - timedelta(days=30), direction="CRDT", ref="opening"),
+                _raw("40", day, ref="fnac"),
+                _raw("10", TODAY - timedelta(days=5), ref="after"),
+            ],
+            anchor_date=TODAY,
+            anchor_balance=Decimal("1000"),
+            last_synced_at=TODAY - timedelta(days=1),
+            real_time=real_time,
+        )
+        if imported:
+            rows = [
+                BankImportTransactionPreview(day=day - timedelta(days=30), amount=Decimal("1000"), direction="CRDT", label="SOLDE"),
+                BankImportTransactionPreview(day=day, amount=Decimal("40"), direction="DBIT", label="CARTE FNAC"),
+            ]
+            store_transactions(session, master_key, account.uuid, _raws(_with_references(rows), "EUR"))
+        _install(monkeypatch, client)
+        (result,) = sync_user_accounts(session, USER, master_key)
+        self.client = client
+        return account, result
+
+    def test_a_seeding_pass_over_imported_rows_says_how_far_it_shifted_the_curve(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        account, result = self._seed(session, master_key, monkeypatch, accounting="1150.00")
+
+        notice = result.notice
+        assert (notice.operations_total, notice.bank_balance, notice.curve_shift) == (
+            Decimal("950"), Decimal("1150.00"), Decimal("200.00")
+        )
+        assert _value_on(_history(session, account, master_key), TODAY - timedelta(days=50), master_key) == Decimal("1200.00")
+        (payload,) = get_user_bank_accounts(session, USER, master_key).accounts
+        assert payload.sync_notice == notice
+
+    def test_operations_that_meet_the_bank_balance_shift_nothing_and_say_nothing(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        account, result = self._seed(session, master_key, monkeypatch, accounting="950.00")
+
+        assert result.notice.curve_shift is None
+        assert result.notice.held_back == 2
+
+    def test_an_available_balance_is_never_weighed_against_the_operations(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """It is only corrected for the pending rows the bank shares: a figure
+        drawn from it could be wrong, so none is given."""
+        account, link, client = _one_account_setup(
+            session, master_key, accounting="0", feed=[], anchor_date=TODAY,
+            anchor_balance=Decimal("1000"), last_synced_at=TODAY - timedelta(days=1),
+        )
+        client.balances["uid-current"] = {
+            "balances": [{"balance_amount": {"currency": "EUR", "amount": "1150.00"}, "balance_type": "ITAV"}]
+        }
+        from dtos.imports import BankImportTransactionPreview
+        from services.imports.bank_csv import _raws, _with_references
+
+        rows = [BankImportTransactionPreview(day=TODAY - timedelta(days=30), amount=Decimal("1000"), direction="CRDT")]
+        store_transactions(session, master_key, account.uuid, _raws(_with_references(rows), "EUR"))
+        client.feeds["uid-current"] = [_raw("10", TODAY - timedelta(days=5), ref="after")]
+        _install(monkeypatch, client)
+
+        (result,) = sync_user_accounts(session, USER, master_key)
+
+        assert result.notice is None
+
+    def test_an_account_without_imported_rows_is_told_nothing(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        account, result = self._seed(session, master_key, monkeypatch, accounting="1150.00", imported=False)
+
+        assert result.notice is None
+
+    def test_a_later_sync_weighs_nothing_and_the_notice_stays_until_dismissed(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        from services.banking.linking import dismiss_sync_notice
+
+        account, first = self._seed(session, master_key, monkeypatch, accounting="1150.00")
+        link = session.exec(select(BankAccountLink)).one()
+        link.last_synced_at = link.last_sync_attempt_at = YESTERDAY
+        session.add(link)
+        session.commit()
+        self.client.feeds["uid-current"] = [_raw("10", TODAY - timedelta(days=5), ref="after")]
+
+        (later,) = sync_user_accounts(session, USER, master_key)
+        (payload,) = get_user_bank_accounts(session, USER, master_key).accounts
+        assert later.notice is None
+        assert payload.sync_notice == first.notice
+
+        assert dismiss_sync_notice(session, USER, master_key, account.uuid)
+        (payload,) = get_user_bank_accounts(session, USER, master_key).accounts
+        assert payload.sync_notice is None
 
 
 class TestFailedSyncSpendsTheDay:

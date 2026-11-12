@@ -592,6 +592,25 @@ def retry_account_sync(
     return True
 
 
+def dismiss_sync_notice(
+    session: Session, user_uuid: str, master_key: str, bank_account_uuid: str
+) -> bool:
+    """Forget what the last sync had to say about this account's imported
+    operations, once the user has read it. False when no link owns the account."""
+    link = session.exec(
+        select(BankAccountLink).where(
+            BankAccountLink.user_uuid_bidx == hash_index(user_uuid, master_key),
+            BankAccountLink.bank_account_uuid_bidx == hash_index(bank_account_uuid, master_key),
+        )
+    ).first()
+    if link is None:
+        return False
+    link.sync_notice_enc = None
+    session.add(link)
+    session.commit()
+    return True
+
+
 def account_is_linked(session: Session, master_key: str, bank_account_uuid: str) -> bool:
     """Whether a CapitalView account is attached to a real bank through Enable Banking."""
     return session.exec(
