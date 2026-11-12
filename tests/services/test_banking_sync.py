@@ -1633,6 +1633,152 @@ class TestHistoryServedFrom:
         assert summary.accounts[0].history_pending is False
 
 
+class TestImportedPeriod:
+    """An account filled by a statement import before it was linked: the days
+    the import covers stay the import's, and the bank only adds what comes
+    after them (docs/bank-ledger.md, L1)."""
+
+    LAST_IMPORTED = TODAY - timedelta(days=20)
+
+    def _imported_account(self, session, master_key, imported, feed):
+        from dtos.imports import BankImportTransactionPreview
+        from services.imports.bank_csv import _raws, _with_references
+
+        account, link, client = _one_account_setup(
+            session,
+            master_key,
+            accounting="1000.00",
+            feed=feed,
+            anchor_date=TODAY,
+            anchor_balance=Decimal("1000"),
+            last_synced_at=TODAY - timedelta(days=1),
+        )
+        rows = [
+            BankImportTransactionPreview(day=day, amount=Decimal(amount), direction="DBIT", label=label)
+            for day, amount, label in imported
+        ]
+        store_transactions(session, master_key, account.uuid, _raws(_with_references(rows), "EUR"))
+        return account, link, client
+
+    def _stored(self, session, master_key, account):
+        return sorted(
+            (decrypt_data(row.booking_date_enc, master_key), decrypt_data(row.amount_enc, master_key),
+             decrypt_data(row.remittance_enc, master_key))
+            for row in session.exec(
+                select(BankTransaction).where(BankTransaction.account_id_bidx == hash_index(account.uuid, master_key))
+            ).all()
+        )
+
+    def test_the_bank_leaves_the_days_an_import_covers_to_the_import(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        last = self.LAST_IMPORTED
+        account, link, client = self._imported_account(
+            session,
+            master_key,
+            imported=[(last - timedelta(days=30), "40", "CARTE FNAC"), (last, "12.50", "CARTE CAFE")],
+            feed=[
+                _raw("40", last - timedelta(days=30), ref="fnac"),
+                _raw("0", last - timedelta(days=10), ref="zero"),
+                _raw("12.50", last, ref="cafe"),
+                _raw("60", last + timedelta(days=5), ref="after"),
+            ],
+        )
+        before = {row.uuid for row in session.exec(select(BankTransaction)).all()}
+        _install(monkeypatch, client)
+
+        (result,) = sync_user_accounts(session, USER, master_key)
+
+        assert self._stored(session, master_key, account) == [
+            ((last - timedelta(days=30)).isoformat(), "40", "CARTE FNAC"),
+            (last.isoformat(), "12.5", "CARTE CAFE"),
+            ((last + timedelta(days=5)).isoformat(), "60", "PRLV TEST"),
+        ]
+        assert before <= {row.uuid for row in session.exec(select(BankTransaction)).all()}
+        assert (result.inserted, result.held_back) == (1, 3)
+        assert result.detail == (
+            "3 opérations de la banque non importées : la période jusqu'au "
+            f"{last.strftime('%d/%m/%Y')} est déjà couverte par votre import."
+        )
+        session.refresh(account)
+        assert decrypt_data(account.balance_enc, master_key) == "1000.00"
+
+    def test_an_operation_just_after_the_import_is_held_back_only_when_an_imported_row_is_its_twin(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """A statement and the bank date one operation up to three days apart:
+        the card payment the file put on its last day is the one the bank books
+        two days later, while another amount, or the same one four days on, is
+        new."""
+        last = self.LAST_IMPORTED
+        account, link, client = self._imported_account(
+            session,
+            master_key,
+            imported=[(last, "12.50", "CARTE CAFE")],
+            feed=[
+                _raw("12.50", last + timedelta(days=2), ref="twin"),
+                _raw("30", last + timedelta(days=2), ref="other-amount"),
+                _raw("12.50", last + timedelta(days=4), ref="too-far"),
+            ],
+        )
+        _install(monkeypatch, client)
+
+        (result,) = sync_user_accounts(session, USER, master_key)
+
+        assert [(day, amount) for day, amount, _ in self._stored(session, master_key, account)] == [
+            (last.isoformat(), "12.5"),
+            ((last + timedelta(days=2)).isoformat(), "30"),
+            ((last + timedelta(days=4)).isoformat(), "12.5"),
+        ]
+        assert result.held_back == 1
+
+    def test_an_imported_row_is_the_twin_of_one_bank_operation_only_the_closest(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """The same coffee every day: each imported day is its own bank day, so
+        the coffees after the import are all new."""
+        last = self.LAST_IMPORTED
+        account, link, client = self._imported_account(
+            session,
+            master_key,
+            imported=[(last - timedelta(days=1), "2.50", "CAFE"), (last, "2.50", "CAFE")],
+            feed=[_raw("2.50", last + timedelta(days=offset), ref=f"cafe-{offset}") for offset in (-1, 0, 1, 2)],
+        )
+        _install(monkeypatch, client)
+
+        (result,) = sync_user_accounts(session, USER, master_key)
+
+        assert (result.inserted, result.held_back) == (2, 2)
+
+    def test_an_account_with_no_imported_row_stores_its_whole_feed(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """A hand-typed entry is not an import: the bank's operation replaces it
+        (L8) and nothing is held back."""
+        from services.banking.transactions import ORIGIN_MANUAL, store_entry
+
+        account, link, client = self._imported_account(
+            session,
+            master_key,
+            imported=[],
+            feed=[
+                _raw("40", TODAY - timedelta(days=30), ref="old"),
+                _raw("12.50", TODAY - timedelta(days=3), ref="recent"),
+            ],
+        )
+        store_entry(
+            session, master_key, account.uuid, TODAY - timedelta(days=3), Decimal("-12.50"), "Café", "EUR", ORIGIN_MANUAL
+        )
+        session.commit()
+        _install(monkeypatch, client)
+
+        (result,) = sync_user_accounts(session, USER, master_key)
+
+        assert (result.inserted, result.updated, result.held_back) == (1, 1, 0)
+        assert result.detail is None
+        assert len(self._stored(session, master_key, account)) == 2
+
+
 class TestFailedSyncSpendsTheDay:
     """A failure used to leave the account due: the front syncs after every
     render, so each visit to the Banque page called the bank again for an answer

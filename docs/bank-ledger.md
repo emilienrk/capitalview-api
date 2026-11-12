@@ -9,8 +9,24 @@ changement de comportement la met à jour. Les règles d'abord, numérotées L1 
 
 | Compte | Source de vérité | Solde et courbe |
 | --- | --- | --- |
-| Synchronisé (Open Banking) | la banque | lus à chaque synchronisation (`services/banking/sync.py`) ; un import CSV ne remplit que les jours d'avant l'historique servi par la banque |
+| Synchronisé (Open Banking) | la banque | lus à chaque synchronisation (`services/banking/sync.py`) ; un import CSV ne remplit que les jours d'avant l'historique servi par la banque, et la banque ne remplit que les jours d'après le dernier import |
 | Non synchronisé | ses opérations | solde = somme de toutes ses opérations depuis 0 ; courbe = cumul jour par jour jusqu'à hier |
+
+**Qui couvre un jour le premier le garde.** Un import CSV sur un compte déjà synchronisé s'arrête à l'historique servi
+par la banque (`bank_coverage`). À l'inverse, un compte rempli par un import puis rattaché à sa banque garde ses lignes
+importées : la synchronisation ne stocke que les opérations de la banque datées après la dernière ligne importée du
+compte (`_ImportedPeriod`). Juste après ce jour, une opération de la banque qui a une jumelle importée — même montant,
+sens et devise, à trois jours au plus, l'écart mesuré entre la date d'un relevé et celle de la banque, dans un sens
+comme dans l'autre — n'est pas stockée non plus ; une ligne importée ne retient qu'une opération, les paires les plus
+proches d'abord, sur tout ce que la banque renvoie. Seule une insertion est retenue : une ligne déjà stockée se corrige
+comme avant. Rien n'est supprimé, aucune ligne ne change d'identité ni de libellé, et les réponses accrochées aux lignes
+importées restent. Une ligne importée se reconnaît sans marqueur : sa référence synthétique (`csv:…`) est recalculée sur
+son propre contenu (`imported_rows`). Un compte sans ligne importée reçoit tout ce que la banque renvoie. Le résultat de
+la synchronisation le dit (`held_back`, et « N opérations de la banque non importées : la période jusqu'au JJ/MM/AAAA
+est déjà couverte par votre import. »). Le solde reste celui de la banque, la courbe est redessinée sur les opérations
+stockées, importées puis synchronisées, et `history_served_from` garde ce que la banque a servi. Limite : les paires ne
+voient que ce que renvoie la synchronisation en cours ; une opération publiée en retard, à trois jours au plus du
+dernier import et du montant d'une ligne importée dont la jumelle a été retenue plus tôt, serait retenue à tort.
 
 **L2.** Pour un compte non synchronisé, `bank_accounts.balance_enc` et ses lignes `account_history` ne sont qu'un
 **cache** : `services/bank_ledger.py` (`rebuild_from_operations`) les réécrit en entier après chaque écriture
@@ -117,3 +133,13 @@ Aucun montant n'est journalisé.
   « H&L », « 00160669 », « Cgf17516mcdo1 ») restent sans question, limite R24.
 - **12 novembre 2026** : un libellé sans mot garde une identité, son texte entier (docs/bank-sorting.md, R24) : la
   saisie à la main n'exige plus un mot, seulement une lettre ou un chiffre (L10).
+- **12 novembre 2026** : la période qu'un import couvre reste à l'import ; la synchronisation ne stocke que les
+  opérations de la banque d'après sa dernière ligne (L1). Avant, la première synchronisation d'un compte rempli par
+  import y ajoutait tout l'historique de la banque : les lignes importées portent une référence synthétique, que ni le
+  niveau 1 ni le niveau 2 ne rapprochent. Rejoué sur le dump du 08/11, « Compte secondaire » : avant, 2 506 lignes —
+  1 207 importées (14/05/2022 → 29/05/2026) et 1 299 de la banque (14/05/2022 → 03/11/2026), 1 157 lignes importées
+  ayant une jumelle de la banque le même jour et 50 à trois jours au plus. Après, 1 257 lignes : les 1 207 importées
+  intactes et 50 de la banque, toutes celles d'après le 29/05/2026 ; 0 doublon le même jour ni à trois jours ;
+  1 249 opérations retenues, dont les 42 à 0 €, pour un net de 5,68 € ; les 31 réponses sur les lignes importées
+  restent. Le solde reste celui de la banque, et la courbe redessinée part de 0 la veille de la première opération et
+  suit chaque jour la somme des opérations stockées.

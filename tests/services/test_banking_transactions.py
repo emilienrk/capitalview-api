@@ -368,6 +368,23 @@ def test_pending_becoming_booked_with_a_new_reference_updates_the_row(
     assert row.period_bidx == hash_index("2026-08", master_key)
 
 
+def test_an_operation_held_back_still_corrects_the_row_it_matches(
+    session: Session, master_key: str, linked_accounts
+):
+    """Holding back only ever spares an insertion: a pending row of the held
+    days still books, and an operation new to the account is left out."""
+    pending = _raw(entry_reference="avis-1", status="PDNG", booking_date=None, transaction_date="2026-08-15")
+    store_transactions(session, master_key, CURRENT_ACCOUNT, [pending])
+
+    booked = _raw(entry_reference="booked-1", booking_date="2026-08-17", transaction_date="2026-08-15")
+    other = _raw(entry_reference="other-1", transaction_amount={"currency": "EUR", "amount": "3.00"})
+    result = store_transactions(session, master_key, CURRENT_ACCOUNT, [booked, other], lambda tx: True)
+
+    assert result == (0, 1, 0)
+    (row,) = _rows(session, master_key, CURRENT_ACCOUNT)
+    assert decrypt_data(row.status_enc, master_key) == "BOOK"
+
+
 def test_a_booked_row_is_never_claimed_by_another_date_of_a_later_transaction(
     session: Session, master_key: str, linked_accounts
 ):

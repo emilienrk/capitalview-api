@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, NamedTuple
@@ -51,7 +51,9 @@ from services.banking.linking import NotConfiguredError, is_card_account
 from services.banking.transactions import (
     CREDIT,
     FINAL_STATUSES,
+    INVALIDATING_STATUSES,
     STATUS_BOOKED,
+    canonical_amount,
     is_adjustment,
     NormalizedTransaction,
     normalize_transaction,
@@ -59,6 +61,7 @@ from services.banking.transactions import (
     store_transactions,
 )
 from services.encryption import decrypt_data, encrypt_data, hash_index
+from services.imports.bank_csv import imported_rows
 from services.jobs import wait_for_lock
 
 logger = logging.getLogger(__name__)
@@ -90,6 +93,10 @@ SETTLE_LAG = timedelta(days=2)
 # How far apart the two readings must be. Wide enough that one day's noise
 # cannot hide in it, narrow enough to date a gap to a single week.
 CHECK_SPAN = timedelta(days=7)
+
+# How far apart a statement and the bank's feed can date one same operation —
+# the day it was made, the day it booked — either way (docs/bank-ledger.md, L1).
+IMPORT_TWIN_TOLERANCE = timedelta(days=3)
 
 # How long balance readings are kept. Comfortably past CHECK_LAG, so a fortnight
 # without a sync still leaves something to check against.
@@ -279,8 +286,18 @@ def sync_account_link(
     )
 
     _drop_ledger_entries(session, account, master_key)
-    result.inserted, result.updated, result.skipped = store_transactions(session, master_key, account.uuid, raws
+    imported = _imported_period(session, account, master_key, parsed)
+    result.inserted, result.updated, result.skipped = store_transactions(
+        session, master_key, account.uuid, raws, imported.holds if imported else None
     )
+    held_note = None
+    if imported is not None and imported.held:
+        result.held_back = len(imported.held)
+        plural = "s" if result.held_back > 1 else ""
+        held_note = (
+            f"{result.held_back} opération{plural} de la banque non importée{plural} : la période jusqu'au "
+            f"{imported.until.strftime('%d/%m/%Y')} est déjà couverte par votre import."
+        )
     # Bounded by what the bank actually answered: a bank capped at ninety days
     # is silent about older rows, and silence is not withdrawal.
     result.removed = _drop_vanished_pending(
@@ -370,6 +387,7 @@ def sync_account_link(
             "Votre banque ne publie pas de solde comptable : la courbe est estimée "
             "à partir du solde disponible."
         )
+    result.detail = _joined(result.detail, held_note)
     link.last_reconciliation_gap_enc = (
         encrypt_data(str(gap), master_key) if gap is not None else None
     )
@@ -396,10 +414,11 @@ def sync_account_link(
     # account: walking back from its OTHR of 0 invented +27 887 € eighteen
     # months back on the real capture.
     if not_reconcilable:
-        result.detail = (
+        result.detail = _joined(
             "Courbe non écrite : votre banque ne publie pas de solde comptable pour ce "
             "compte carte, seulement un solde de type OTHR — il n'y a rien à quoi "
-            "rattacher une courbe."
+            "rattacher une courbe.",
+            held_note,
         )
         return result
 
@@ -570,6 +589,95 @@ def _drop_ledger_entries(session: Session, account: BankAccount, master_key: str
         if is_adjustment(row, master_key):
             session.delete(row)
     session.flush()
+
+
+class _ImportedPeriod:
+    """The days a statement import already covers on this account, up to its
+    last imported row. They stay the import's (docs/bank-ledger.md, L1): the
+    bank's operations of those days are held back, and so is one just after
+    them that is the twin of an imported row — same amount, direction and
+    currency, at most `IMPORT_TWIN_TOLERANCE` apart.
+
+    Twins are paired over the whole feed, the closest pairs first, so an
+    operation of the covered days takes its own twin before a later one can,
+    and an imported row holds back one operation at most.
+    """
+
+    def __init__(
+        self, until: date, imported: list[tuple[date, tuple[str, str, str]]], feed: list[NormalizedTransaction]
+    ):
+        self.until = until
+        self.held: list[NormalizedTransaction] = []
+        twins: dict[tuple[str, str, str], list[tuple[date, int]]] = defaultdict(list)
+        for index, (day, key) in enumerate(imported):
+            twins[key].append((day, index))
+
+        pairs = []
+        for position, tx in enumerate(feed):
+            day = tx.effective_date
+            if day is None or tx.status in INVALIDATING_STATUSES or day > until + IMPORT_TWIN_TOLERANCE:
+                continue
+            for twin_day, index in twins.get(_twin_key(tx), []):
+                if abs(day - twin_day) <= IMPORT_TWIN_TOLERANCE:
+                    pairs.append((abs(day - twin_day), day, twin_day, position, index))
+
+        paired: set[int] = set()
+        claimed: set[int] = set()
+        # Counted by (date, twin key) rather than by feed position: the store
+        # reads the feed again, and identical operations are interchangeable.
+        self._after: Counter[tuple] = Counter()
+        for _, day, _, position, index in sorted(pairs):
+            if position in paired or index in claimed:
+                continue
+            paired.add(position)
+            claimed.add(index)
+            if day > until:
+                self._after[(day, _twin_key(feed[position]))] += 1
+
+    def holds(self, tx: NormalizedTransaction) -> bool:
+        day = tx.effective_date
+        if day > self.until:
+            key = (day, _twin_key(tx))
+            if not self._after[key]:
+                return False
+            self._after[key] -= 1
+        self.held.append(tx)
+        return True
+
+
+def _imported_period(
+    session: Session, account: BankAccount, master_key: str, feed: list[NormalizedTransaction]
+) -> _ImportedPeriod | None:
+    """What an import covers on this account, or None when nothing was imported:
+    the feed is then stored whole, as it always was."""
+    rows = imported_rows(
+        session.exec(
+            select(BankTransaction).where(BankTransaction.account_id_bidx == hash_index(account.uuid, master_key))
+        ).all(),
+        master_key,
+    )
+    dated = [
+        (
+            row_date(row, master_key),
+            (
+                canonical_amount(Decimal(decrypt_data(row.amount_enc, master_key))),
+                decrypt_data(row.credit_debit_enc, master_key),
+                decrypt_data(row.currency_enc, master_key),
+            ),
+        )
+        for row in rows
+    ]
+    if not dated:
+        return None
+    return _ImportedPeriod(max(day for day, _ in dated), dated, feed)
+
+
+def _twin_key(tx: NormalizedTransaction) -> tuple[str, str, str]:
+    return canonical_amount(tx.amount), tx.credit_debit, tx.currency
+
+
+def _joined(*parts: str | None) -> str | None:
+    return " ".join(part for part in parts if part) or None
 
 
 def _tried_today(link: BankAccountLink, today: date) -> bool:

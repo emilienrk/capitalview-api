@@ -141,6 +141,39 @@ def _curve(session, master_key, account_id):
     }
 
 
+def test_an_imported_row_is_recognised_by_its_own_content_and_nothing_else(session, master_key):
+    """No marker is stored: the reference is recomputed from the row, twins by
+    their rank, while a hand-typed entry and a bank operation reading the same
+    stay what they are."""
+    from services.banking.transactions import store_transactions
+    from services.imports.bank_csv import imported_rows
+
+    parser = get_parser("generic_bank_transactions")
+    account_id = _account(session, master_key)
+    rows, _ = parse_bank_transactions(
+        "date,amount,label\n2024-01-15,-3.00,CAFE\n2024-01-15,-3.00,CAFE\n2024-01-31,1200.00,SALAIRE\n", {}
+    )
+    _confirm(session, master_key, account_id, rows, parser)
+    _open_with(session, master_key, account_id)
+    store_transactions(session, master_key, account_id, [{
+        "entry_reference": "bank-1",
+        "transaction_amount": {"currency": "EUR", "amount": "3.00"},
+        "credit_debit_indicator": "DBIT",
+        "status": "BOOK",
+        "booking_date": "2024-01-15",
+        "remittance_information": ["CAFE"],
+    }])
+
+    stored = session.exec(
+        select(BankTransaction).where(BankTransaction.account_id_bidx == hash_index(account_id, master_key))
+    ).all()
+    assert len(stored) == 5
+    assert sorted(
+        (decrypt_data(r.booking_date_enc, master_key), decrypt_data(r.amount_enc, master_key))
+        for r in imported_rows(stored, master_key)
+    ) == [("2024-01-15", "3"), ("2024-01-15", "3"), ("2024-01-31", "1200")]
+
+
 def test_movements_land_in_the_same_table_the_sync_fills(session, master_key):
     parser = get_parser("generic_bank_transactions")
     account_id = _account(session, master_key)

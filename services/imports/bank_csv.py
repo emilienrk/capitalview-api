@@ -21,6 +21,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlmodel import Session
 
@@ -36,7 +37,7 @@ from dtos.imports import (
 )
 from models.currency import BASE_CURRENCY
 from services.banking.transactions import CREDIT, DEBIT, STATUS_BOOKED, canonical_amount
-from services.encryption import hash_index
+from services.encryption import decrypt_data, hash_index
 from services.imports.base import ImportCategory, ImportParser, header_has
 from services.imports.dedup import bank_existing_transaction_refs
 from services.imports.generic_csv import (
@@ -46,6 +47,9 @@ from services.imports.generic_csv import (
     read_rows,
 )
 from services.imports.registry import register
+
+if TYPE_CHECKING:
+    from models.banking import BankTransaction
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +95,38 @@ def _with_references(
         seen[key] += 1
         out.append((row, reference))
     return out
+
+
+def imported_rows(rows: Iterable["BankTransaction"], master_key: str) -> list["BankTransaction"]:
+    """The stored rows a statement import wrote, told apart without any marker:
+    a row only keeps a blind index of its reference, so the reference is
+    recomputed from the row's own content and compared.
+
+    The rank counts the identical rows before it in the file, which were stored
+    with it: ranks are tried up to the number of stored rows reading alike.
+    """
+    alike: dict[tuple, list] = {}
+    for row in rows:
+        if not row.entry_ref_bidx or not row.booking_date_enc or row.origin_enc:
+            continue
+        if decrypt_data(row.status_enc, master_key) != STATUS_BOOKED:
+            continue
+        key = (
+            date.fromisoformat(decrypt_data(row.booking_date_enc, master_key)),
+            Decimal(decrypt_data(row.amount_enc, master_key)),
+            decrypt_data(row.credit_debit_enc, master_key),
+            decrypt_data(row.remittance_enc, master_key) if row.remittance_enc else "",
+        )
+        alike.setdefault(key, []).append(row)
+
+    found = []
+    for (day, amount, direction, label), members in alike.items():
+        references = {
+            hash_index(_synthetic_reference(day, amount, direction, label, rank), master_key)
+            for rank in range(len(members))
+        }
+        found.extend(row for row in members if row.entry_ref_bidx in references)
+    return found
 
 
 def parse_bank_transactions(
