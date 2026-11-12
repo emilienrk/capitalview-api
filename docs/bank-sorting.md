@@ -576,9 +576,6 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
 - Écarté : lire l'identité sans les mots de `label_groups.NOISE_WORDS`, pour séparer les marchands que « carte cb »
   confond. Ce serait une liste de mots qui décide (R1, R40). Noté comme limite dans R24.
 - La saisie à la main accepte tout libellé qui porte une lettre ou un chiffre (docs/bank-ledger.md, L10).
-
-### 13 novembre 2026
-
 - Séparer un libellé (R54), validé par Emilien en huit points : chaque opération demande seule, seule « Celle-ci »
   reste, aucune règle née d'une réponse ne l'atteint (la sienne est supprimée, annoncée avant), un Oui ne vaut plus pour
   le libellé, les paires ne bougent pas, la séparation est listée dans l'onglet « Règles ». Rangée dans sa propre table
@@ -591,7 +588,7 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
   entrées, 6 sorties, 31 paires ; 9 dépôts sans contrepartie) : rien ne bouge.
 - « carte cb » en sorties séparé, dans une transaction annulée : 16 opérations, toutes sur le compte principal,
   278,07 €, 14 textes de libellé différents ; aucune n'atteint le seuil ni ne fait face à un dépôt, aucune règle ne
-  portait dessus : aucune question ni aucun type ne bouge. Le 12/11, R24 en notait 25 sur 2 comptes : le
+  portait dessus : aucune question ni aucun type ne bouge. Plus tôt ce jour, R24 en notait 25 sur 2 comptes : le
   compte portait sur toutes les lignes stockées, dont 9 parmi les 273 lignes d'un compte qui n'est plus à
   l'utilisateur et qu'aucun lecteur ne lit. R24 corrigée : 16 opérations, un compte.
 - « Séparer » est aussi offert dans la fenêtre du type : « carte cb » ne pose aucune question, donc n'a pas de liste,
@@ -633,4 +630,4 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
 | Ajustement d'ouverture reculé par un import ou une saisie plus ancienne (02/11) | fait |
 | Réponses de dépôt supprimées avec leur compte d'investissement (09/11) | fait |
 | Libellé sans mot : identité `#` sur le texte entier, correspondance exacte (12/11) | fait |
-| Séparer un libellé : chaque opération demande seule, aucune règle née d'une réponse ne l'atteint (13/11) | fait |
+| Séparer un libellé : chaque opération demande seule, aucune règle née d'une réponse ne l'atteint (12/11) | fait |
