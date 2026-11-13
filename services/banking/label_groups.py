@@ -5,13 +5,16 @@ name a person can read.
 
 Display and grouping only: no type, no pairing and no total depends on it. A
 label this misses lands in a group of its own and shows a rougher name, never a
-wrong figure.
+wrong figure. `merchants` reuses `NOISE_WORDS`, and there it does weigh on a
+total (docs/bank-sorting.md, R41).
 
 The key knows no bank: it is the label's whole words once the words too common
 on that side of the user's accounts ("carte", "cb", "vir") are set aside — the
 words every label comparison reads (`labels.label_words`), so a salary whose
 reference changes every month stays one group. The name does read
 bank formats, since a card date or a card number is noise to a reader.
+
+Rules: docs/bank-sorting.md — R40.
 """
 
 from __future__ import annotations

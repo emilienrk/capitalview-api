@@ -13,6 +13,11 @@ grew from.
 
 Measured on 53 months of real operations: 3 088 debits, 758 merchants.
 Pure: labels in, groups out.
+
+The one fixed word list a type and a total depend on: a merchant decides
+which credits refund a series.
+
+Rules: docs/bank-sorting.md — R41.
 """
 
 from __future__ import annotations

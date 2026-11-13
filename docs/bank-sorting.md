@@ -66,7 +66,8 @@ INST <quelqu'un d'autre> » passait pour le « VIR INST <l'utilisateur> » ; plu
 
 **R11. Remboursement sur un même compte** : même montant, le crédit dans les 30 jours après le débit, avec un mot rare
 commun aux deux libellés. Exemple : −30 € Amazon, puis +30 € Amazon. Les mots trop fréquents sont calculés sur ton compte (plus de 5 % d'un côté, 3 fois au
-moins), sans dictionnaire. C'est l'unique endroit où un mot pèse, et il ne pèse que par sa rareté chez toi.
+moins), sans dictionnaire : ici, un mot ne pèse que par sa rareté chez toi. Ailleurs, une seule liste fixe de mots
+pèse sur un type : celle des marchands des récurrents (R41).
 
 **R12. Dépôt Bourse / Crypto / placement déjà validé** : même jour, même montant au centime ou un écart de frais (1 €
 ou 2 % au plus, chacun le seul candidat de l'autre ce jour-là), depuis le même compte bancaire, sous le même libellé,
@@ -293,15 +294,29 @@ comme échéance annulée). Une règle, non : l'opération reste dans son récur
 ### Ce qui ne décide jamais
 
 **R40. Le moyen de paiement** (« CARTE », « VIR », « PRLV »…) **n'est pas lu du tout**, ni affiché ni filtré : le
-libellé le dit déjà, rien ne se décidait dessus, et son dictionnaire dépendait de la banque. Les mots ignorés pour
-grouper les marchands (`label_groups.NOISE_WORDS`, `merchants.NOISE`) servent à l'affichage et au regroupement, pas à
-décider d'un type, d'une paire ou d'un total.
+libellé le dit déjà, rien ne se décidait dessus, et son dictionnaire dépendait de la banque. Deux listes fixes, écrites
+dans le code, servent à nommer et regrouper : les mots du format bancaire et les mots vides
+(`label_groups.NOISE_WORDS`), et les motifs des formats bancaires, date de carte, « CB*0837 », référence
+(`label_groups._NOISE`). Elles font les noms affichés (Explorer, récurrents, Réel, MCP), les groupes de l'Explorer et
+les contreparties du Réel, avec leur montant par ligne ; jamais un type, une paire, une question ou un total. Une seule
+exception : le marchand des récurrents les reprend (R41). Aucune n'entre dans l'identité d'un libellé (R24).
 
 ### Récurrents
 
-**R41. Détection sans dictionnaire**, par marchand, rythme et montant (`services/banking/recurrence.py`,
-`merchants.py`) : un prix qui change, un nom qui change, une pause restent le même récurrent. Les couches actuelles,
-mesurées sur des cas réels, sont gardées. Mesurer sur le dump avant de changer quoi que ce soit.
+**R41. Détection par marchand, rythme et montant** (`services/banking/recurrence.py`, `merchants.py`) : un prix qui
+change, un nom qui change, une pause restent le même récurrent. Le marchand d'une opération se lit sur les mots de son
+libellé moins une **liste fixe** (`merchants.NOISE`) : les mots de `label_groups.NOISE_WORDS` (R40), plus ceux du format
+long de Boursorama (« prelev », « sct »…), les formes juridiques, les entités HTML et quelques mots vides. Deux libellés
+sont le même marchand quand leurs mots, pesés par leur rareté chez l'utilisateur, se recouvrent ; un libellé sans autre
+mot prend son texte nettoyé des formats bancaires (`label_groups._NOISE`). Ce marchand décide quelles opérations
+forment une série, laquelle reprend après un renommage, et quels crédits en sont les remboursements : ceux du même
+marchand, ou d'un marchand dont le premier mot est celui d'un des siens (`recurring_series._refunding`). Une fois la
+série confirmée, ces crédits comptent en dépense remboursée (R37), dans « dont … qui reviennent » et dans les charges
+fixes : **c'est la seule liste fixe qui pèse sur un type et un total.** Elle n'entre ni dans une paire ni dans
+l'identité d'un libellé (R24), et elle est figée dans l'identité des décisions marquées à la main
+(`recurring.py`). Les couches actuelles, mesurées sur des cas réels, sont gardées. Mesurer sur le dump avant de
+changer quoi que ce soit, liste comprise. *Mesuré le 12/11 : retirée sans rien à la place, 332 opérations (19 944 €)
+changeraient de type ou de source.*
 
 **R42. Rien n'est compté seul** : toute série détectée est proposée dans l'onglet Récurrents, et ne compte qu'une fois
 confirmée ; ses remboursements liés aussi. Détecter large : une fausse proposition ne coûte qu'un « non », un récurrent
@@ -321,8 +336,9 @@ récurrent fait de ces seules opérations disparaît de l'onglet, même confirm�
 si le Oui est annulé). Non = elle reste dans son récurrent. Seul le Oui sort une opération des récurrents : ni une
 règle ni un type choisi à la main. *Mesuré sur le dump : aucun cas, rien ne bouge.*
 
-**R45. Aucun moyen de paiement** : carte, prélèvement ou virement, on ne les lit pas, et aucun mot n'est appris. La
-ressemblance des libellés (`merchants.py`) reste telle quelle : un abonnement garde la même forme de libellé. Une
+**R45. Aucun moyen de paiement** : carte, prélèvement ou virement, on ne les lit pas pour décider d'une série, et aucun
+mot n'est appris. La ressemblance des libellés (`merchants.py`) reste telle quelle, avec sa liste fixe (R41) : un
+abonnement garde la même forme de libellé. Une
 seule règle pour toutes les dépenses (`recurrence.offered`) :
 
 - un rythme régulier (mensuel, 4 semaines, bimestriel, trimestriel, semestriel, annuel), à 3 jours près, les deux
@@ -598,6 +614,26 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
   100 €, 204 € en tout, restent comptées en revenu sans question. « À trier » passe de 70 à 72 questions, de
   29 190,13 € à 28 986,13 €.
 
+### 13 novembre 2026
+
+- Les listes de mots écrites dans le code décrites telles qu'elles agissent (R11, R40, R41, R45). Avant, la doc disait
+  qu'aucune ne décidait : vrai pour les noms et les groupes, faux pour le marchand des récurrents, qui décide des
+  remboursements d'une série. Doc seule, aucun comportement changé.
+- Mesuré sur le dump (deux audits du 12/11, recomptés par les lecteurs, hors les 273 lignes d'un compte qui n'est plus
+  à l'utilisateur) :
+  - `_NOISE` retiré sans rien à la place : aucun chiffre, 3 576 lignes de l'Explorer renommées ;
+  - `NOISE_WORDS` retiré des groupes : aucun total, 20 lignes du Réel changent de montant par contrepartie ;
+  - `merchants.NOISE` retiré : 332 opérations (19 944 €) changent de type ou de source, dont 136 crédits (12 770 €)
+    qui deviennent des remboursements ; parts récurrentes annuelles négatives (2025 : −15 462 €) ; « À trier » de 72 à
+    51 questions.
+- Essayé sans aucun mot écrit en dur : les débuts et fins de libellés répétés sur les comptes de l'utilisateur (un mot
+  de tête suivi d'au moins 8 noms différents est du format bancaire), plus les mots fréquents calculés. Sur le dump,
+  zéro écart sur tous les chiffres, mais 774 lignes renommées, et un seuil sans marge : à 9, « sarl » n'est plus
+  reconnu et Olness se détache d'Arverne ; à 6, une échéance Pathé sort de sa série. Les noms et les marchands
+  dépendraient aussi de tout l'historique, un import pouvant renommer des opérations anciennes. Non retenu pour
+  l'instant : les listes restent, jugées par Emilien comme un sujet à rouvrir. Avant de rouvrir, mesurer la stabilité
+  en rejouant l'historique mois par mois.
+
 ### État des points
 
 | Point | État |
@@ -631,3 +667,4 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
 | Réponses de dépôt supprimées avec leur compte d'investissement (09/11) | fait |
 | Libellé sans mot : identité `#` sur le texte entier, correspondance exacte (12/11) | fait |
 | Séparer un libellé : chaque opération demande seule, aucune règle née d'une réponse ne l'atteint (12/11) | fait |
+| Listes de mots écrites telles qu'elles agissent ; essai sans dictionnaire mesuré, non retenu (13/11) | fait |
