@@ -108,7 +108,8 @@ comptabilisées dans la devise du compte, comme la courbe. Quand des lignes impo
 restent (`kept`, L1), la courbe n'est redessinée qu'à partir de `replaced_from` : seuls ces jours bougent, et l'écart
 fait une marche ce jour-là. Les phrases le disent alors : « N opérations importées remplacées par celles de votre banque
 à partir du JJ/MM/AAAA. Les K opérations d'avant restent celles de votre import : votre banque ne remonte pas plus
-loin. » (suivi des réponses à redonner quand il y en a), et « Vos opérations donnent X €, votre banque Y € : la courbe a
+loin. » (« … à partir du JJ/MM/AAAA : M réponses sont à redonner dans À trier. Les K opérations… » quand des réponses
+partent), et « Vos opérations donnent X €, votre banque Y € : la courbe a
 été relevée (abaissée) de Z € à partir du JJ/MM/AAAA. Avant cette date, elle reste celle de votre import, d'où une marche
 ce jour-là. »
 
