@@ -97,16 +97,20 @@ d'un compte synchronisé se redessine en remontant depuis le solde de la banque.
 solde ; sinon toute l'histoire est relevée ou abaissée de l'écart, sans marche au jour du rattachement : c'est voulu.
 Le passage d'amorçage le compare (`_import_notice`) et le compte le garde, en chiffres, avec ce que la banque a remplacé
 (L1), jusqu'à ce que l'utilisateur le masque ou qu'un autre passage d'amorçage le remplace (`sync_notice` : `replaced`,
-`replaced_from`, `answers_dropped`, `operations_total`, `bank_balance`, `curve_shift`) ; le front écrit les phrases, pour
+`replaced_from`, `answers_dropped`, `kept`, `operations_total`, `bank_balance`, `curve_shift`) ; le front écrit les phrases, pour
 que le mode discret masque les montants : « Vos opérations importées donnent X €, votre banque Y € : la courbe a été relevée (abaissée) de Z €. Votre
 import ne remonte sans doute pas à l'ouverture du compte, ou il lui manque des opérations. » Gardé sur le compte et non
 dans la seule réponse : l'amorçage tourne d'ordinaire en arrière-plan juste après le rattachement, et sa réponse
 n'atteint personne. Rien quand l'écart est nul, sur un compte sans ligne importée, ni aux synchronisations suivantes.
 Rien non plus quand la comparaison ne tient pas : sur un solde disponible (`estimated`), corrigé des seules opérations en
 attente que la banque partage, et sur un compte carte, sans courbe. Les deux côtés ne comptent que les opérations
-comptabilisées dans la devise du compte, comme la courbe. Limite : quand l'import remonte plus loin que la plus
-ancienne opération servie par la banque, la courbe n'est redessinée qu'à partir de celle-ci, et l'écart y fait une
-marche au lieu de décaler les jours d'avant.
+comptabilisées dans la devise du compte, comme la courbe. Quand des lignes importées plus anciennes que la banque
+restent (`kept`, L1), la courbe n'est redessinée qu'à partir de `replaced_from` : seuls ces jours bougent, et l'écart
+fait une marche ce jour-là. Les phrases le disent alors : « N opérations importées remplacées par celles de votre banque
+à partir du JJ/MM/AAAA. Les K opérations d'avant restent celles de votre import : votre banque ne remonte pas plus
+loin. » (suivi des réponses à redonner quand il y en a), et « Vos opérations donnent X €, votre banque Y € : la courbe a
+été relevée (abaissée) de Z € à partir du JJ/MM/AAAA. Avant cette date, elle reste celle de votre import, d'où une marche
+ce jour-là. »
 
 ## Limite connue
 
@@ -179,4 +183,6 @@ Aucun montant n'est journalisé.
   gardée. 30 réponses parties : 22 paires, 1 réponse de versement, 7 types forcés ; 5 décisions de récurrent cessent de
   nommer les lignes remplacées. Les 3 réponses sur les lignes de la banque restent. À trier passe de 69 questions (50 de
   flux, 19 paires) à 68 (39 de flux, dont 1 de versement, 29 paires). Le solde reste celui de la banque, et la somme des
-  opérations l'égale : aucune phrase sur la courbe.
+  opérations l'égale : aucune phrase sur la courbe. Le même jour, le message compte aussi les lignes importées plus
+  anciennes que la banque, qui restent (`kept`), et ses phrases disent alors que seuls les jours depuis le premier
+  servi par la banque ont bougé, avec une marche ce jour-là, au lieu de toute la courbe (L11). Sur le dump : 0 gardée.

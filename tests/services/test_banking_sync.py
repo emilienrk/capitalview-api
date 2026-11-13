@@ -1702,6 +1702,28 @@ class TestImportReplacedByTheBank:
         session.refresh(account)
         assert decrypt_data(account.balance_enc, master_key) == "1000.00"
 
+    def test_the_notice_counts_the_imported_rows_older_than_the_bank_reaches(
+        self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
+    ):
+        """Those days keep the import's curve, so the notice must not say the
+        whole history moved."""
+        oldest = TODAY - timedelta(days=60)
+        account, link, client = self._imported_account(
+            session,
+            master_key,
+            imported=[
+                (oldest - timedelta(days=40), "10", "Bien avant"),
+                (oldest - timedelta(days=1), "25", "Juste avant"),
+                (oldest, "40", "Paiement FNAC"),
+            ],
+            feed=[_raw("40", oldest, ref="fnac")],
+        )
+        _install(monkeypatch, client)
+
+        (result,) = sync_user_accounts(session, USER, master_key)
+
+        assert (result.notice.replaced, result.notice.kept) == (1, 2)
+
     def test_the_answers_about_a_replaced_row_go_with_it(
         self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
     ):

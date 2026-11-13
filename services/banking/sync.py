@@ -592,6 +592,7 @@ class _Replacement(NamedTuple):
     replaced: int
     since: date
     answers_dropped: int
+    kept: int
 
 
 def _replace_imported(
@@ -628,7 +629,7 @@ def _replace_imported(
     for row in gone:
         session.delete(row)
     session.flush()
-    return _Replacement(len(gone), since, answers)
+    return _Replacement(len(gone), since, answers, len(rows) - len(gone))
 
 
 def _import_notice(
@@ -656,6 +657,7 @@ def _import_notice(
         replaced=replacement.replaced,
         replaced_from=replacement.since if replacement.replaced else None,
         answers_dropped=replacement.answers_dropped,
+        kept=replacement.kept,
     )
     if weighed:
         first = first_operation_day(session, hash_index(account.uuid, master_key), master_key)

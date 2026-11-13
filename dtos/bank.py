@@ -56,6 +56,9 @@ class BankSyncNotice(BaseModel):
     replaced: int = 0
     replaced_from: date | None = None
     answers_dropped: int = 0
+    # The imported rows older than `replaced_from`, which stay: the curve only
+    # moves from that day, and the shift makes a step there.
+    kept: int = 0
     # Seeding pass only: the stored operations summed from 0, the bank's
     # balance, and the difference the curve was shifted by. Null when equal.
     operations_total: Decimal | None = None
