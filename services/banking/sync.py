@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, NamedTuple
@@ -47,13 +47,13 @@ from services.banking.health import (
     notify_user_expiring_consents,
     session_status_message,
 )
+from services.banking.contribution_decisions import forget_operations as forget_contributions
 from services.banking.linking import NotConfiguredError, is_card_account
+from services.banking.recurring_decisions import forget_operations as forget_recurring
 from services.banking.transactions import (
     CREDIT,
     FINAL_STATUSES,
-    INVALIDATING_STATUSES,
     STATUS_BOOKED,
-    canonical_amount,
     first_operation_day,
     is_adjustment,
     NormalizedTransaction,
@@ -61,6 +61,7 @@ from services.banking.transactions import (
     row_date,
     store_transactions,
 )
+from services.banking.transfer_decisions import forget_operations as forget_pairs
 from services.encryption import decrypt_data, encrypt_data, hash_index
 from services.imports.bank_csv import imported_rows
 from services.jobs import wait_for_lock
@@ -94,10 +95,6 @@ SETTLE_LAG = timedelta(days=2)
 # How far apart the two readings must be. Wide enough that one day's noise
 # cannot hide in it, narrow enough to date a gap to a single week.
 CHECK_SPAN = timedelta(days=7)
-
-# How far apart a statement and the bank's feed can date one same operation —
-# the day it was made, the day it booked — either way (docs/bank-ledger.md, L1).
-IMPORT_TWIN_TOLERANCE = timedelta(days=3)
 
 # How long balance readings are kept. Comfortably past CHECK_LAG, so a fortnight
 # without a sync still leaves something to check against.
@@ -287,12 +284,8 @@ def sync_account_link(
     )
 
     _drop_ledger_entries(session, account, master_key)
-    imported = _imported_period(session, account, master_key, parsed)
-    result.inserted, result.updated, result.skipped = store_transactions(
-        session, master_key, account.uuid, raws, imported.holds if imported else None
-    )
-    if imported is not None:
-        result.held_back = len(imported.held)
+    replacement = _replace_imported(session, account, master_key, parsed) if seeding and parsed else None
+    result.inserted, result.updated, result.skipped = store_transactions(session, master_key, account.uuid, raws)
     # Bounded by what the bank actually answered: a bank capped at ninety days
     # is silent about older rows, and silence is not withdrawal.
     result.removed = _drop_vanished_pending(
@@ -332,8 +325,8 @@ def sync_account_link(
     )
     accounting -= pending_net
     notice = _import_notice(
-        session, account, master_key, imported, accounting, today, currency,
-        weighed=seeding and bool(parsed) and not estimated and not not_reconcilable,
+        session, account, master_key, replacement, accounting, today, currency,
+        weighed=not estimated and not not_reconcilable,
     )
 
     # 4. Reconciliation, four outcomes. Skipped on the seeding pass: its anchor
@@ -595,115 +588,74 @@ def _drop_ledger_entries(session: Session, account: BankAccount, master_key: str
     session.flush()
 
 
-class _ImportedPeriod:
-    """The days a statement import already covers on this account, up to its
-    last imported row. They stay the import's (docs/bank-ledger.md, L1): the
-    bank's operations of those days are held back, and so is one just after
-    them that is the twin of an imported row — same amount, direction and
-    currency, at most `IMPORT_TWIN_TOLERANCE` apart.
-
-    Twins are paired over the whole feed, the closest pairs first, so an
-    operation of the covered days takes its own twin before a later one can,
-    and an imported row holds back one operation at most.
-    """
-
-    def __init__(
-        self, until: date, imported: list[tuple[date, tuple[str, str, str]]], feed: list[NormalizedTransaction]
-    ):
-        self.until = until
-        self.held: list[NormalizedTransaction] = []
-        twins: dict[tuple[str, str, str], list[tuple[date, int]]] = defaultdict(list)
-        for index, (day, key) in enumerate(imported):
-            twins[key].append((day, index))
-
-        pairs = []
-        for position, tx in enumerate(feed):
-            day = tx.effective_date
-            if day is None or tx.status in INVALIDATING_STATUSES or day > until + IMPORT_TWIN_TOLERANCE:
-                continue
-            for twin_day, index in twins.get(_twin_key(tx), []):
-                if abs(day - twin_day) <= IMPORT_TWIN_TOLERANCE:
-                    pairs.append((abs(day - twin_day), day, twin_day, position, index))
-
-        paired: set[int] = set()
-        claimed: set[int] = set()
-        # Counted by (date, twin key) rather than by feed position: the store
-        # reads the feed again, and identical operations are interchangeable.
-        self._after: Counter[tuple] = Counter()
-        for _, day, _, position, index in sorted(pairs):
-            if position in paired or index in claimed:
-                continue
-            paired.add(position)
-            claimed.add(index)
-            if day > until:
-                self._after[(day, _twin_key(feed[position]))] += 1
-
-    def holds(self, tx: NormalizedTransaction) -> bool:
-        day = tx.effective_date
-        if day > self.until:
-            key = (day, _twin_key(tx))
-            if not self._after[key]:
-                return False
-            self._after[key] -= 1
-        self.held.append(tx)
-        return True
+class _Replacement(NamedTuple):
+    replaced: int
+    since: date
+    answers_dropped: int
 
 
-def _imported_period(
+def _replace_imported(
     session: Session, account: BankAccount, master_key: str, feed: list[NormalizedTransaction]
-) -> _ImportedPeriod | None:
-    """What an import covers on this account, or None when nothing was imported:
-    the feed is then stored whole, as it always was."""
+) -> _Replacement | None:
+    """The bank replaces an import over the period it serves (docs/bank-ledger.md,
+    L1): on the seeding pass, the imported rows dated from the oldest operation
+    of the feed on go, with every answer given about them. Older ones stay — a
+    bank capped at ninety days must never cost history. None when the account
+    holds no imported row.
+
+    Replaced rather than kept: a statement and the feed word one operation
+    differently, so the two halves of one history would never share a rule, a
+    learned label or an answer.
+    """
     rows = imported_rows(
         session.exec(
             select(BankTransaction).where(BankTransaction.account_id_bidx == hash_index(account.uuid, master_key))
         ).all(),
         master_key,
     )
-    dated = [
-        (
-            row_date(row, master_key),
-            (
-                canonical_amount(Decimal(decrypt_data(row.amount_enc, master_key))),
-                decrypt_data(row.credit_debit_enc, master_key),
-                decrypt_data(row.currency_enc, master_key),
-            ),
-        )
-        for row in rows
-    ]
-    if not dated:
+    if not rows:
         return None
-    return _ImportedPeriod(max(day for day, _ in dated), dated, feed)
-
-
-def _twin_key(tx: NormalizedTransaction) -> tuple[str, str, str]:
-    return canonical_amount(tx.amount), tx.credit_debit, tx.currency
+    since = min(tx.effective_date for tx in feed if tx.effective_date)
+    gone = [row for row in rows if row_date(row, master_key) >= since]
+    refs = {hash_index(row.uuid, master_key) for row in gone}
+    user_bidx = account.user_uuid_bidx
+    answers = (
+        forget_pairs(session, user_bidx, refs)
+        + forget_contributions(session, user_bidx, refs)
+        + sum(1 for row in gone if row.type_override_enc)
+    )
+    forget_recurring(session, user_bidx, refs, master_key)
+    for row in gone:
+        session.delete(row)
+    session.flush()
+    return _Replacement(len(gone), since, answers)
 
 
 def _import_notice(
     session: Session,
     account: BankAccount,
     master_key: str,
-    imported: _ImportedPeriod | None,
+    replacement: _Replacement | None,
     accounting: Decimal,
     today: date,
     currency: str,
     weighed: bool,
 ) -> BankSyncNotice | None:
-    """What the user is told about an account holding imported rows
-    (docs/bank-ledger.md, L1 and L11): the operations held back, and on the
-    seeding pass how far the bank's balance stands from the stored operations
-    summed from 0 — the curve, walked back from that balance, is shifted by
-    exactly that much over its whole history.
+    """What the user is told after the seeding pass over imported rows
+    (docs/bank-ledger.md, L1 and L11): what the bank replaced, and how far its
+    balance stands from the stored operations summed from 0 — the curve, walked
+    back from that balance, is shifted by exactly that much over its history.
 
     `weighed` is false where the comparison would not be sound: an available
     balance is only corrected for the pending rows the bank shares, and a card
     account draws no curve.
     """
-    if imported is None:
+    if replacement is None:
         return None
     notice = BankSyncNotice(
-        held_back=len(imported.held), held_until=imported.until if imported.held else None
+        replaced=replacement.replaced,
+        replaced_from=replacement.since if replacement.replaced else None,
+        answers_dropped=replacement.answers_dropped,
     )
     if weighed:
         first = first_operation_day(session, hash_index(account.uuid, master_key), master_key)
@@ -712,7 +664,7 @@ def _import_notice(
             notice.operations_total = total
             notice.bank_balance = accounting
             notice.curve_shift = accounting - total
-    if not notice.held_back and notice.curve_shift is None:
+    if not notice.replaced and notice.curve_shift is None:
         return None
     return notice
 

@@ -9,24 +9,23 @@ changement de comportement la met à jour. Les règles d'abord, numérotées L1 
 
 | Compte | Source de vérité | Solde et courbe |
 | --- | --- | --- |
-| Synchronisé (Open Banking) | la banque | lus à chaque synchronisation (`services/banking/sync.py`) ; un import CSV ne remplit que les jours d'avant l'historique servi par la banque, et la banque ne remplit que les jours d'après le dernier import |
+| Synchronisé (Open Banking) | la banque | lus à chaque synchronisation (`services/banking/sync.py`) ; un import CSV ne remplit que les jours d'avant l'historique servi par la banque, et la banque remplace un import sur les jours qu'elle sert |
 | Non synchronisé | ses opérations | solde = somme de toutes ses opérations depuis 0 ; courbe = cumul jour par jour jusqu'à hier |
 
-**Qui couvre un jour le premier le garde.** Un import CSV sur un compte déjà synchronisé s'arrête à l'historique servi
-par la banque (`bank_coverage`). À l'inverse, un compte rempli par un import puis rattaché à sa banque garde ses lignes
-importées : la synchronisation ne stocke que les opérations de la banque datées après la dernière ligne importée du
-compte (`_ImportedPeriod`). Juste après ce jour, une opération de la banque qui a une jumelle importée — même montant,
-sens et devise, à trois jours au plus, l'écart mesuré entre la date d'un relevé et celle de la banque, dans un sens
-comme dans l'autre — n'est pas stockée non plus ; une ligne importée ne retient qu'une opération, les paires les plus
-proches d'abord, sur tout ce que la banque renvoie. Seule une insertion est retenue : une ligne déjà stockée se corrige
-comme avant. Rien n'est supprimé, aucune ligne ne change d'identité ni de libellé, et les réponses accrochées aux lignes
-importées restent. Une ligne importée se reconnaît sans marqueur : sa référence synthétique (`csv:…`) est recalculée sur
-son propre contenu (`imported_rows`). Un compte sans ligne importée reçoit tout ce que la banque renvoie. Le compte le
-dit (`sync_notice`, voir L11) : « N opérations de la banque non importées : la période jusqu'au JJ/MM/AAAA est déjà
-couverte par votre import. ». Le solde reste celui de la banque, la courbe est redessinée sur les opérations
-stockées, importées puis synchronisées, et `history_served_from` garde ce que la banque a servi. Limite : les paires ne
-voient que ce que renvoie la synchronisation en cours ; une opération publiée en retard, à trois jours au plus du
-dernier import et du montant d'une ligne importée dont la jumelle a été retenue plus tôt, serait retenue à tort.
+**La banque remplace l'import sur la période qu'elle sert.** Un import CSV sur un compte déjà synchronisé s'arrête à
+l'historique servi par la banque (`bank_coverage`). À l'inverse, quand un compte rempli par un import est rattaché à sa
+banque, le passage d'amorçage supprime les lignes importées datées du jour de la plus ancienne opération que la banque
+renvoie ou après, puis stocke les opérations de la banque comme sur tout compte (`_replace_imported`). Les lignes
+importées plus anciennes restent : une banque qui ne sert que quatre-vingt-dix jours ne coûte aucun historique. Seules
+les lignes importées partent ; une saisie à la main suit L8 et les ajustements L4. Ce qui était accroché à une ligne
+supprimée part avec elle, jamais orphelin : ses paires (l'une ou l'autre jambe), sa réponse de versement, son type forcé ;
+une décision de récurrent cesse de la nommer et garde l'identité qui lui fait retrouver sa série. Les synchronisations
+suivantes ne remplacent rien. Une ligne importée se reconnaît sans marqueur : sa référence synthétique (`csv:…`) est
+recalculée sur son propre contenu (`imported_rows`). Remplacer plutôt que garder : le relevé et la banque écrivent une
+même opération autrement, et les deux moitiés d'un historique ne partageraient jamais une règle, un libellé appris ni
+une réponse. Le compte le dit (`sync_notice`, voir L11) : « N opérations importées remplacées par celles de votre
+banque à partir du JJ/MM/AAAA : M réponses sont à redonner dans À trier. », sans la seconde moitié quand aucune réponse
+ne part. Le solde reste celui de la banque, et `history_served_from` garde ce qu'elle a servi.
 
 **L2.** Pour un compte non synchronisé, `bank_accounts.balance_enc` et ses lignes `account_history` ne sont qu'un
 **cache** : `services/bank_ledger.py` (`rebuild_from_operations`) les réécrit en entier après chaque écriture
@@ -91,14 +90,15 @@ sens, les plus fréquents d'abord : en reprendre un tel quel range la saisie ave
 défaut : un même texte pour toutes les saisies les regrouperait, et une règle ou un Oui appris sur l'une rangerait les
 autres. Vérifié dans la modale seulement : l'API accepte encore une saisie sans libellé.
 
-**L11. La première synchronisation d'un compte rempli par import dit de combien elle a décalé la courbe.** La courbe
+**L11. La première synchronisation d'un compte rempli par import dit ce qu'elle a remplacé et de combien elle a
+décalé la courbe.** La courbe
 d'un compte synchronisé se redessine en remontant depuis le solde de la banque. Sur des lignes importées, elle ne part de
 0 la veille de la première opération que si la somme des opérations stockées, importées puis synchronisées, égale ce
 solde ; sinon toute l'histoire est relevée ou abaissée de l'écart, sans marche au jour du rattachement : c'est voulu.
-Le passage d'amorçage le compare (`_import_notice`) et le compte le garde, en chiffres, jusqu'à ce que l'utilisateur le
-masque ou qu'une autre synchronisation ait quelque chose à dire (`sync_notice` : `held_back`, `held_until`,
-`operations_total`, `bank_balance`, `curve_shift`) ; le front écrit la phrase, pour que le mode discret masque les
-montants : « Vos opérations importées donnent X €, votre banque Y € : la courbe a été relevée (abaissée) de Z €. Votre
+Le passage d'amorçage le compare (`_import_notice`) et le compte le garde, en chiffres, avec ce que la banque a remplacé
+(L1), jusqu'à ce que l'utilisateur le masque ou qu'un autre passage d'amorçage le remplace (`sync_notice` : `replaced`,
+`replaced_from`, `answers_dropped`, `operations_total`, `bank_balance`, `curve_shift`) ; le front écrit les phrases, pour
+que le mode discret masque les montants : « Vos opérations importées donnent X €, votre banque Y € : la courbe a été relevée (abaissée) de Z €. Votre
 import ne remonte sans doute pas à l'ouverture du compte, ou il lui manque des opérations. » Gardé sur le compte et non
 dans la seule réponse : l'amorçage tourne d'ordinaire en arrière-plan juste après le rattachement, et sa réponse
 n'atteint personne. Rien quand l'écart est nul, sur un compte sans ligne importée, ni aux synchronisations suivantes.
@@ -165,3 +165,18 @@ Aucun montant n'est journalisé.
   retenues, jusqu'à ce que l'utilisateur le masque (L11). Sur le dump, « Compte secondaire » : écart nul (la courbe
   part de 0,00 € la veille du 14/05/2022), donc aucune phrase sur la courbe ; seule reste celle des 1 249 opérations
   retenues.
+- **13 novembre 2026** : la banque remplace l'import sur la période qu'elle sert, réponses comprises (L1) ; cette règle
+  remplace celle du 12 novembre, qui gardait l'import et retenait les opérations de la banque. Mesuré sur le dump du
+  08/11, « Compte secondaire » : des 1 157 paires relevé/banque du même jour, 107 seulement ont le même texte et 264
+  (23 %) la même signature de libellé. L'export CSV de Revolut est en français, le flux en anglais (« Recharge sur Apple
+  Pay via *2793 » / « Apple Pay Top-Up by *2793 », « Virement à : X » / « To X », « Sur la Pocket EUR coffre1 depuis
+  EUR » / « To EUR coffre1 ») : garder l'import aurait coupé l'historique en deux formats de libellé pour toujours, et
+  les règles, libellés appris et réponses de l'un n'auraient jamais atteint l'autre. Perdre une fois les réponses coûte
+  moins. Le message du compte dit désormais combien de lignes sont remplacées, depuis quand, et combien de réponses
+  sont à redonner (L11). Rejoué sur le dump, passage d'amorçage de « Compte secondaire » : avant, 2 506 lignes (1 207
+  importées, 1 299 de la banque) et 1 581 paires même jour, montant et sens entre les deux, 713 à trois jours au plus ;
+  après, les 1 299 de la banque seules, 0 doublon, les 1 207 lignes importées remplacées à partir du 14/05/2022, aucune
+  gardée. 30 réponses parties : 22 paires, 1 réponse de versement, 7 types forcés ; 5 décisions de récurrent cessent de
+  nommer les lignes remplacées. Les 3 réponses sur les lignes de la banque restent. À trier passe de 69 questions (50 de
+  flux, 19 paires) à 68 (39 de flux, dont 1 de versement, 29 paires). Le solde reste celui de la banque, et la somme des
+  opérations l'égale : aucune phrase sur la courbe.

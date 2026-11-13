@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -209,14 +209,9 @@ def store_transactions(
     master_key: str,
     bank_account_uuid: str,
     transactions: Iterable[dict[str, Any]],
-    held_back: Callable[[NormalizedTransaction], bool] | None = None,
 ) -> tuple[int, int, int]:
     """Store an account's transaction feed, deduplicated. Returns
-    (inserted, updated, skipped). The feed's order is never relied upon.
-
-    `held_back` is asked about an operation only when it would be inserted:
-    one it holds is left out, and corrections of stored rows still go through.
-    """
+    (inserted, updated, skipped). The feed's order is never relied upon."""
     account_bidx = hash_index(bank_account_uuid, master_key)
     matcher = _Matcher(_account_rows(session, account_bidx), master_key)
 
@@ -240,8 +235,6 @@ def store_transactions(
 
         if tx.status in INVALIDATING_STATUSES:
             skipped += 1
-            continue
-        if held_back is not None and held_back(tx):
             continue
 
         row = BankTransaction(account_id_bidx=account_bidx)

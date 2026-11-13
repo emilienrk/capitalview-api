@@ -1633,12 +1633,10 @@ class TestHistoryServedFrom:
         assert summary.accounts[0].history_pending is False
 
 
-class TestImportedPeriod:
-    """An account filled by a statement import before it was linked: the days
-    the import covers stay the import's, and the bank only adds what comes
-    after them (docs/bank-ledger.md, L1)."""
-
-    LAST_IMPORTED = TODAY - timedelta(days=20)
+class TestImportReplacedByTheBank:
+    """An account filled by a statement import before it was linked: on the
+    seeding pass, the bank's operations replace the imported rows over the
+    period the bank serves, answers included (docs/bank-ledger.md, L1)."""
 
     def _imported_account(self, session, master_key, imported, feed):
         from dtos.imports import BankImportTransactionPreview
@@ -1664,94 +1662,130 @@ class TestImportedPeriod:
         return sorted(
             (decrypt_data(row.booking_date_enc, master_key), decrypt_data(row.amount_enc, master_key),
              decrypt_data(row.remittance_enc, master_key))
-            for row in session.exec(
-                select(BankTransaction).where(BankTransaction.account_id_bidx == hash_index(account.uuid, master_key))
-            ).all()
+            for row in self._rows(session, master_key, account)
         )
 
-    def test_the_bank_leaves_the_days_an_import_covers_to_the_import(
+    def _rows(self, session, master_key, account):
+        return session.exec(
+            select(BankTransaction).where(BankTransaction.account_id_bidx == hash_index(account.uuid, master_key))
+        ).all()
+
+    def test_the_bank_replaces_the_imported_rows_over_the_period_it_serves(
         self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
     ):
-        last = self.LAST_IMPORTED
+        """The bank's oldest operation opens its period: an imported row older
+        than it stays, so a bank capped at ninety days costs no history."""
+        oldest = TODAY - timedelta(days=60)
         account, link, client = self._imported_account(
             session,
             master_key,
-            imported=[(last - timedelta(days=30), "40", "CARTE FNAC"), (last, "12.50", "CARTE CAFE")],
+            imported=[
+                (oldest - timedelta(days=1), "25", "Carte avant la banque"),
+                (oldest, "40", "Paiement FNAC"),
+                (oldest + timedelta(days=10), "12.50", "Recharge Apple Pay"),
+            ],
             feed=[
-                _raw("40", last - timedelta(days=30), ref="fnac"),
-                _raw("0", last - timedelta(days=10), ref="zero"),
-                _raw("12.50", last, ref="cafe"),
-                _raw("60", last + timedelta(days=5), ref="after"),
+                _raw("40", oldest, ref="fnac"),
+                _raw("12.50", oldest + timedelta(days=11), ref="topup"),
             ],
         )
-        before = {row.uuid for row in session.exec(select(BankTransaction)).all()}
         _install(monkeypatch, client)
 
         (result,) = sync_user_accounts(session, USER, master_key)
 
         assert self._stored(session, master_key, account) == [
-            ((last - timedelta(days=30)).isoformat(), "40", "CARTE FNAC"),
-            (last.isoformat(), "12.5", "CARTE CAFE"),
-            ((last + timedelta(days=5)).isoformat(), "60", "PRLV TEST"),
+            ((oldest - timedelta(days=1)).isoformat(), "25", "Carte avant la banque"),
+            (oldest.isoformat(), "40", "PRLV TEST"),
+            ((oldest + timedelta(days=11)).isoformat(), "12.5", "PRLV TEST"),
         ]
-        assert before <= {row.uuid for row in session.exec(select(BankTransaction)).all()}
-        assert (result.inserted, result.held_back) == (1, 3)
-        assert (result.notice.held_back, result.notice.held_until) == (3, last)
+        assert (result.notice.replaced, result.notice.replaced_from, result.notice.answers_dropped) == (2, oldest, 0)
         session.refresh(account)
         assert decrypt_data(account.balance_enc, master_key) == "1000.00"
 
-    def test_an_operation_just_after_the_import_is_held_back_only_when_an_imported_row_is_its_twin(
+    def test_the_answers_about_a_replaced_row_go_with_it(
         self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
     ):
-        """A statement and the bank date one operation up to three days apart:
-        the card payment the file put on its last day is the one the bank books
-        two days later, while another amount, or the same one four days on, is
-        new."""
-        last = self.LAST_IMPORTED
+        """A pair, a deposit answer and a forced type would otherwise point at an
+        operation that no longer exists; a recurring decision stops naming it
+        and keeps the identity it finds its series by. What was said about a
+        row the bank does not serve stays."""
+        from models.banking import BankContributionDecision, BankRecurringSeries, BankTransferDecision
+
+        oldest = TODAY - timedelta(days=60)
         account, link, client = self._imported_account(
             session,
             master_key,
-            imported=[(last, "12.50", "CARTE CAFE")],
-            feed=[
-                _raw("12.50", last + timedelta(days=2), ref="twin"),
-                _raw("30", last + timedelta(days=2), ref="other-amount"),
-                _raw("12.50", last + timedelta(days=4), ref="too-far"),
-            ],
+            imported=[(oldest - timedelta(days=1), "25", "Ancienne"), (oldest, "40", "Paiement FNAC")],
+            feed=[_raw("40", oldest, ref="fnac")],
         )
+        old, replaced = sorted(self._rows(session, master_key, account), key=lambda row: decrypt_data(row.booking_date_enc, master_key))
+        user_bidx, account_bidx = hash_index(USER, master_key), hash_index(account.uuid, master_key)
+        ref, old_ref = hash_index(replaced.uuid, master_key), hash_index(old.uuid, master_key)
+        now = datetime.now(timezone.utc)
+        tokens = encrypt_data("[]", master_key)
+        refused = encrypt_data("not_contribution", master_key)
+        session.add_all([
+            BankTransferDecision(
+                user_uuid_bidx=user_bidx, kind_enc=encrypt_data("not_transfer", master_key), debit_ref_bidx=ref,
+                credit_ref_bidx="elsewhere", debit_account_bidx=account_bidx, credit_account_bidx="other",
+                debit_tokens_enc=tokens, credit_tokens_enc=tokens, created_at=now,
+            ),
+            BankContributionDecision(
+                user_uuid_bidx=user_bidx, kind_enc=refused, transaction_ref_bidx=ref, account_bidx=account_bidx,
+                contribution_ref_bidx="deposit", created_at=now,
+            ),
+            BankContributionDecision(
+                user_uuid_bidx=user_bidx, kind_enc=refused, transaction_ref_bidx=old_ref, account_bidx=account_bidx,
+                contribution_ref_bidx="deposit", created_at=now,
+            ),
+            BankRecurringSeries(
+                user_uuid_bidx=user_bidx, status_enc=encrypt_data("confirmed", master_key),
+                anchors_enc=encrypt_data(json.dumps([old_ref, ref]), master_key),
+                identity_enc=encrypt_data(json.dumps({
+                    "words": ["fnac"], "accounts": [account.uuid], "cadence": "monthly", "amount": "40",
+                    "direction": "expense",
+                }), master_key),
+                created_at=now, updated_at=now,
+            ),
+        ])
+        replaced.type_override_enc = encrypt_data("EXPENSE", master_key)
+        session.add(replaced)
+        session.commit()
         _install(monkeypatch, client)
 
         (result,) = sync_user_accounts(session, USER, master_key)
 
-        assert [(day, amount) for day, amount, _ in self._stored(session, master_key, account)] == [
-            (last.isoformat(), "12.5"),
-            ((last + timedelta(days=2)).isoformat(), "30"),
-            ((last + timedelta(days=4)).isoformat(), "12.5"),
-        ]
-        assert result.held_back == 1
+        assert result.notice.answers_dropped == 3
+        assert session.exec(select(BankTransferDecision)).all() == []
+        assert [row.transaction_ref_bidx for row in session.exec(select(BankContributionDecision)).all()] == [old_ref]
+        (series,) = session.exec(select(BankRecurringSeries)).all()
+        assert json.loads(decrypt_data(series.anchors_enc, master_key)) == [old_ref]
 
-    def test_an_imported_row_is_the_twin_of_one_bank_operation_only_the_closest(
+    def test_only_the_seeding_pass_replaces_an_import(
         self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
     ):
-        """The same coffee every day: each imported day is its own bank day, so
-        the coffees after the import are all new."""
-        last = self.LAST_IMPORTED
+        """A later pass brings what the bank published since its anchor; the
+        imported rows of those days, if any, stay."""
+        day = TODAY - timedelta(days=3)
         account, link, client = self._imported_account(
-            session,
-            master_key,
-            imported=[(last - timedelta(days=1), "2.50", "CAFE"), (last, "2.50", "CAFE")],
-            feed=[_raw("2.50", last + timedelta(days=offset), ref=f"cafe-{offset}") for offset in (-1, 0, 1, 2)],
+            session, master_key, imported=[(day, "12.50", "Recharge Apple Pay")], feed=[_raw("12.50", day, ref="topup")]
         )
+        link.history_seeded = True
+        link.anchor_date = TODAY - timedelta(days=5)
+        session.add(link)
+        session.commit()
         _install(monkeypatch, client)
 
         (result,) = sync_user_accounts(session, USER, master_key)
 
-        assert (result.inserted, result.held_back) == (2, 2)
+        assert len(self._rows(session, master_key, account)) == 2
+        assert result.notice is None
 
     def test_an_account_with_no_imported_row_stores_its_whole_feed(
         self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert
     ):
         """A hand-typed entry is not an import: the bank's operation replaces it
-        (L8) and nothing is held back."""
+        as it always did (L8), and there is nothing to tell."""
         from services.banking.transactions import ORIGIN_MANUAL, store_entry
 
         account, link, client = self._imported_account(
@@ -1771,7 +1805,7 @@ class TestImportedPeriod:
 
         (result,) = sync_user_accounts(session, USER, master_key)
 
-        assert (result.inserted, result.updated, result.held_back) == (1, 1, 0)
+        assert (result.inserted, result.updated) == (1, 1)
         assert result.notice is None
         assert len(self._stored(session, master_key, account)) == 2
 
@@ -1831,7 +1865,7 @@ class TestImportedCurveShift:
         account, result = self._seed(session, master_key, monkeypatch, accounting="950.00")
 
         assert result.notice.curve_shift is None
-        assert result.notice.held_back == 2
+        assert result.notice.replaced == 2
 
     def test_an_available_balance_is_never_weighed_against_the_operations(
         self, session: Session, master_key: str, monkeypatch, sqlite_pg_insert

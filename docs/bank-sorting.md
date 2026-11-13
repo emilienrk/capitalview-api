@@ -464,7 +464,7 @@ le compte utilisateur aussi, et l'export du compte les contient.
 | Récurrents | « Hors du total » ; « Ce n'est pas récurrent » ; « alimenté hors de mes banques » (placements) |
 | Curseur | « Dépenses à vérifier à partir de <montant> » |
 | Libellé séparé | bouton « Séparer » dans la liste « Choisir parmi les N opérations de ce libellé » ; dans la fenêtre du type, « Ce libellé couvre des opérations sans rapport ? Séparer » ; fenêtre « Séparer ce libellé » ; « Libellé séparé : chaque opération pose sa question seule. » (Annuler) ; mention « Libellé séparé » ; « Regrouper » (onglet Règles) |
-| Carte du compte, après une synchronisation sur des opérations importées (docs/bank-ledger.md, L1 et L11) | encadré « N opérations de la banque non importées : la période jusqu'au JJ/MM/AAAA est déjà couverte par votre import. » ; « Vos opérations importées donnent X, votre banque Y : la courbe a été relevée (abaissée) de Z. Votre import ne remonte sans doute pas à l'ouverture du compte, ou il lui manque des opérations. » ; croix pour le masquer |
+| Carte du compte, après la première synchronisation d'un compte rempli par import (docs/bank-ledger.md, L1 et L11) | encadré « N opérations importées remplacées par celles de votre banque à partir du JJ/MM/AAAA : M réponses sont à redonner dans À trier. » (sans la seconde moitié quand aucune réponse ne part) ; « Vos opérations importées donnent X, votre banque Y : la courbe a été relevée (abaissée) de Z. Votre import ne remonte sans doute pas à l'ouverture du compte, ou il lui manque des opérations. » ; croix pour le masquer |
 
 ---
 

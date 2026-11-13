@@ -170,9 +170,6 @@ class BankAccountSyncResult(BaseModel):
     # never fatal — the reconciliation gap is what makes them visible.
     malformed: int = 0
     removed: int = 0
-    # The bank's operations of the days an import already covers, left out
-    # (docs/bank-ledger.md, L1).
-    held_back: int = 0
     notice: BankSyncNotice | None = None
     snapshots_written: int = 0
     reconciliation_gap: Decimal | None = None

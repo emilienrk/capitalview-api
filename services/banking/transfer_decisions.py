@@ -24,6 +24,7 @@ Rules: docs/bank-sorting.md — R7, R10, R35.
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -107,6 +108,24 @@ class Decisions:
 
     def __bool__(self) -> bool:
         return bool(self.bound or self.rejected)
+
+
+def forget_operations(session: Session, user_bidx: str, refs: Collection[str]) -> int:
+    """Delete, uncommitted, the pairs either of these operations was a leg of,
+    their blind indexes given, when the operations themselves go
+    (docs/bank-ledger.md, L1). Returns how many went."""
+    if not refs:
+        return 0
+    refs = list(refs)
+    return session.exec(
+        sa.delete(BankTransferDecision).where(
+            BankTransferDecision.user_uuid_bidx == user_bidx,
+            sa.or_(
+                BankTransferDecision.debit_ref_bidx.in_(refs),  # type: ignore[attr-defined]
+                BankTransferDecision.credit_ref_bidx.in_(refs),  # type: ignore[attr-defined]
+            ),
+        )
+    ).rowcount
 
 
 def load_decisions(session: Session, user_uuid: str, master_key: str) -> Decisions:

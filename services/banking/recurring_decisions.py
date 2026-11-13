@@ -17,6 +17,7 @@ Storage only: attaching decisions to series is the rebuild's
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -148,6 +149,27 @@ def forget_account(session: Session, user_bidx: str, account_uuid: str, master_k
         row.identity_enc = encrypt_data(json.dumps(kept.to_json()), master_key)
         row.updated_at = datetime.now(timezone.utc)
         session.add(row)
+
+
+def forget_operations(session: Session, user_bidx: str, refs: Collection[str], master_key: str) -> int:
+    """These operations are gone (docs/bank-ledger.md, L1): the decisions stop
+    naming them, and keep their identity to find their series again among the
+    operations that replace them. Uncommitted; returns how many decisions moved."""
+    refs = frozenset(refs)
+    moved = 0
+    for row in session.exec(select(BankRecurringSeries).where(BankRecurringSeries.user_uuid_bidx == user_bidx)).all():
+        anchors = frozenset(json.loads(decrypt_data(row.anchors_enc, master_key)))
+        includes = _decrypt_set(row.includes_enc, master_key)
+        excludes = _decrypt_set(row.excludes_enc, master_key)
+        if not (refs & (anchors | includes | excludes)):
+            continue
+        row.anchors_enc = encrypt_data(json.dumps(sorted(anchors - refs)), master_key)
+        row.includes_enc = _encrypt_set(includes - refs, master_key)
+        row.excludes_enc = _encrypt_set(excludes - refs, master_key)
+        row.updated_at = datetime.now(timezone.utc)
+        session.add(row)
+        moved += 1
+    return moved
 
 
 def export_decisions(session: Session, user_bidx: str, master_key: str) -> list[dict]:

@@ -51,9 +51,11 @@ class BankSyncNotice(BaseModel):
     """What a sync did to an account filled by an import (docs/bank-ledger.md,
     L1 and L11), as figures: the front writes the sentences, so privacy mode
     can mask the amounts."""
-    # The bank's operations left out, up to the last imported day.
-    held_back: int = 0
-    held_until: date | None = None
+    # The imported rows the bank's operations replaced, from the oldest one it
+    # served, and the answers given about them that went with them.
+    replaced: int = 0
+    replaced_from: date | None = None
+    answers_dropped: int = 0
     # Seeding pass only: the stored operations summed from 0, the bank's
     # balance, and the difference the curve was shifted by. Null when equal.
     operations_total: Decimal | None = None
@@ -180,8 +182,8 @@ class BankAccountResponse(BaseModel):
     # Why the last sync failed; null once one succeeds. Kept server-side so the
     # page can say it without calling the bank again.
     sync_error: str | None = None
-    # What a sync over imported operations held back or shifted; kept until the
-    # user dismisses it or another sync has something to say.
+    # What the seeding sync over imported operations replaced or shifted; kept
+    # until the user dismisses it or another seeding pass replaces it.
     sync_notice: BankSyncNotice | None = None
     # The day the bank was last called for this account, whatever the outcome.
     # The front reads it to know the daily sync is spent, failure included.

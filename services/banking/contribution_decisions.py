@@ -176,6 +176,20 @@ def forget_declared(session: Session, user_bidx: str, refs: Collection[str], mas
     )
 
 
+def forget_operations(session: Session, user_bidx: str, refs: Collection[str]) -> int:
+    """Delete, uncommitted, the answers about these operations, their blind
+    indexes given, when the operations themselves go (docs/bank-ledger.md, L1).
+    Returns how many went."""
+    if not refs:
+        return 0
+    return session.exec(
+        sa.delete(BankContributionDecision).where(
+            BankContributionDecision.user_uuid_bidx == user_bidx,
+            BankContributionDecision.transaction_ref_bidx.in_(list(refs)),  # type: ignore[attr-defined]
+        )
+    ).rowcount
+
+
 def forget_contribution_decision(session: Session, user_uuid: str, master_key: str, decision_id: str) -> bool:
     """Withdraw one decision; False when the user holds none under this id."""
     deleted = session.exec(
