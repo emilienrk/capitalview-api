@@ -9,8 +9,10 @@
 # - Countries: ISO 3166 alpha-2 codes.
 # - Sectors: one of technology, communication, health_care, financials,
 #   real_estate, consumer_discretionary, consumer_staples, industrials,
-#   materials, energy, utilities (GICS sectors; ICB industries map by name,
-#   Telecommunications -> communication).
+#   materials, energy, utilities — the 11 GICS sectors. Stick to GICS: ICB
+#   (STOXX, Nasdaq factsheets) puts Alphabet and Meta under technology.
+#   For an index whose provider publishes ICB only, a physical iShares ETF on
+#   the same index gives its GICS breakdown.
 # - Synthetic (swap) ETFs: take the weights of the INDEX they track, from the
 #   index provider's factsheet. Never the fund's holdings file: it lists the
 #   substitute basket, not the exposure.
@@ -30,8 +32,12 @@ as_of = 2026-09-30
 source = "https://www.justetf.com/fr/etf-profile.html?isin=FR0011550185"
 weights = { US = 0.9697, IE = 0.0123 }
 
-# Sectors to fill from the S&P 500 factsheet (GICS):
-# https://www.spglobal.com/spdji/en/indices/equity/sp-500/
+# Sectors: iShares Core S&P 500 (CSPX), a physical ETF on the same index, so
+# its holdings are the index's. Cash excluded.
+[FR0011550185.sectors]
+as_of = 2026-11-17
+source = "https://www.ishares.com/uk/individual/en/products/253743/ishares-sp-500-b-ucits-etf-acc-fund"
+weights = { technology = 0.3536, financials = 0.1267, health_care = 0.1058, consumer_discretionary = 0.0955, communication = 0.0883, industrials = 0.0826, consumer_staples = 0.0529, energy = 0.0363, utilities = 0.0215, real_estate = 0.0187, materials = 0.0174 }
 
 
 [FR0013412020]
@@ -68,8 +74,11 @@ as_of = 2026-09-28
 source = "https://www.justetf.com/fr/etf-profile.html?isin=FR0011871110"
 weights = { US = 0.9473, GB = 0.0165, NL = 0.0136 }
 
-# Sectors to fill from the Nasdaq-100 factsheet (ICB):
-# https://indexes.nasdaqomx.com/Index/Overview/NDX
+# Sectors: iShares Nasdaq 100 (CNDX), physical, same index. Cash excluded.
+[FR0011871110.sectors]
+as_of = 2026-11-17
+source = "https://www.ishares.com/uk/individual/en/products/253741/ishares-nasdaq-100-ucits-etf"
+weights = { technology = 0.5426, communication = 0.1465, consumer_discretionary = 0.1177, consumer_staples = 0.0745, health_care = 0.0504, industrials = 0.0372, utilities = 0.0124, materials = 0.0112, energy = 0.0046, financials = 0.0024 }
 
 
 [FR0011550193]
@@ -86,5 +95,8 @@ as_of = 2026-10-30
 source = "https://stoxx.com/index/sxxp/?factsheet=true"
 weights = { GB = 0.234, CH = 0.146, FR = 0.145, DE = 0.131, NL = 0.076, ES = 0.056, IT = 0.054, SE = 0.049, DK = 0.027, BE = 0.019 }
 
-# Sectors to fill from the STOXX Europe 600 factsheet (ICB industries, not
-# supersectors): https://stoxx.com/index/sxxp/?factsheet=true
+# Sectors: iShares STOXX Europe 600 (EXSA), physical, same index. Cash excluded.
+[FR0011550193.sectors]
+as_of = 2026-11-17
+source = "https://www.ishares.com/de/privatanleger/de/produkte/251931/ishares-stoxx-europe-600-ucits-etf-de-fund"
+weights = { financials = 0.2538, industrials = 0.1803, health_care = 0.1347, consumer_staples = 0.0856, technology = 0.0768, consumer_discretionary = 0.0643, energy = 0.0576, materials = 0.0542, utilities = 0.0496, communication = 0.0278, real_estate = 0.0102 }
