@@ -1,0 +1,90 @@
+# What each fund is exposed to, kept by hand.
+#
+# Synced into the `fund_exposures` table at startup: edit, commit, deploy.
+# Keyed by ISIN (the asset_key used everywhere else).
+#
+# Rules
+# - Weights are ratios (0.25 = 25 %). They may sum to less than 1: whatever is
+#   not listed is shown as « Autre », never spread over the listed ones.
+# - Countries: ISO 3166 alpha-2 codes.
+# - Sectors: one of technology, communication, health_care, financials,
+#   real_estate, consumer_discretionary, consumer_staples, industrials,
+#   materials, energy, utilities (GICS sectors; ICB industries map by name,
+#   Telecommunications -> communication).
+# - Synthetic (swap) ETFs: take the weights of the INDEX they track, from the
+#   index provider's factsheet. Never the fund's holdings file: it lists the
+#   substitute basket, not the exposure.
+# - Every block carries the date of its data and where it was read.
+
+[FR0011550185]
+name = "BNP Paribas Easy S&P 500 UCITS ETF EUR C (ESE)"
+index = "S&P 500"
+
+[FR0011550185.ter]
+value = 0.0014
+as_of = 2026-11-18
+source = "https://www.justetf.com/fr/etf-profile.html?isin=FR0011550185"
+
+[FR0011550185.countries]
+as_of = 2026-09-30
+source = "https://www.justetf.com/fr/etf-profile.html?isin=FR0011550185"
+weights = { US = 0.9697, IE = 0.0123 }
+
+# Sectors to fill from the S&P 500 factsheet (GICS):
+# https://www.spglobal.com/spdji/en/indices/equity/sp-500/
+
+
+[FR0013412020]
+name = "Amundi PEA Emergent (MSCI Emerging) ESG Transition UCITS ETF Acc (PAEEM)"
+index = "MSCI EM ex-Egypt ESG Broad CTB Select"
+
+[FR0013412020.ter]
+value = 0.0030
+as_of = 2026-11-18
+source = "https://www.justetf.com/fr/etf-profile.html?isin=FR0013412020"
+
+[FR0013412020.countries]
+as_of = 2026-10-30
+source = "https://www.msci.com/documents/10199/40665199-32c4-7416-cb04-cd7d445c2e2e"
+weights = { TW = 0.2894, CN = 0.2008, KR = 0.1970, IN = 0.1167, BR = 0.0391 }
+
+[FR0013412020.sectors]
+as_of = 2026-10-30
+source = "https://www.msci.com/documents/10199/40665199-32c4-7416-cb04-cd7d445c2e2e"
+weights = { technology = 0.4187, financials = 0.2083, consumer_discretionary = 0.0770, communication = 0.0611, industrials = 0.0599, materials = 0.0517, energy = 0.0336, consumer_staples = 0.0308, health_care = 0.0281, utilities = 0.0169, real_estate = 0.0140 }
+
+
+[FR0011871110]
+name = "Amundi PEA Nasdaq-100 UCITS ETF Acc (PUST)"
+index = "Nasdaq-100"
+
+[FR0011871110.ter]
+value = 0.0030
+as_of = 2026-11-18
+source = "https://www.justetf.com/fr/etf-profile.html?isin=FR0011871110"
+
+[FR0011871110.countries]
+as_of = 2026-09-28
+source = "https://www.justetf.com/fr/etf-profile.html?isin=FR0011871110"
+weights = { US = 0.9473, GB = 0.0165, NL = 0.0136 }
+
+# Sectors to fill from the Nasdaq-100 factsheet (ICB):
+# https://indexes.nasdaqomx.com/Index/Overview/NDX
+
+
+[FR0011550193]
+name = "BNP Paribas Easy Stoxx Europe 600 UCITS ETF EUR C (ETSZ)"
+index = "STOXX Europe 600"
+
+[FR0011550193.ter]
+value = 0.0019
+as_of = 2026-11-18
+source = "https://www.justetf.com/fr/etf-profile.html?isin=FR0011550193"
+
+[FR0011550193.countries]
+as_of = 2026-10-30
+source = "https://stoxx.com/index/sxxp/?factsheet=true"
+weights = { GB = 0.234, CH = 0.146, FR = 0.145, DE = 0.131, NL = 0.076, ES = 0.056, IT = 0.054, SE = 0.049, DK = 0.027, BE = 0.019 }
+
+# Sectors to fill from the STOXX Europe 600 factsheet (ICB industries, not
+# supersectors): https://stoxx.com/index/sxxp/?factsheet=true

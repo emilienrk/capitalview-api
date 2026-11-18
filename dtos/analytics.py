@@ -279,6 +279,47 @@ class ConcentrationResponse(BaseModel):
     verdict: str
 
 
+class ExposureShareOut(BaseModel):
+    label: str
+    """ISO 3166 alpha-2 code for a country, a key of services.fund_exposure.SECTORS for a sector."""
+    weight: Decimal
+    """Share of the whole portfolio."""
+
+
+class BreakdownOut(BaseModel):
+    weights: list[ExposureShareOut] = []
+    other: Decimal
+    """Covered lines, but the part their source leaves undetailed."""
+    unknown: Decimal
+    """Lines with no breakdown: never spread over the known ones."""
+    coverage: Decimal
+    as_of: date | None = None
+    """Oldest date among the sources used."""
+
+
+class FundFeesOut(BaseModel):
+    annual_eur: Decimal | None = None
+    """The funds' own yearly fees at today's values, over the lines whose fee is known."""
+    weighted_ter: Decimal | None = None
+    coverage: Decimal
+
+
+class ExposureLineOut(AssetLabelOut):
+    weight: Decimal
+    ter: Decimal | None = None
+    sectors_as_of: date | None = None
+    countries_as_of: date | None = None
+
+
+class ExposureResponse(BaseModel):
+    """Sectors and countries of the index each fund tracks, weighted by the portfolio."""
+
+    sectors: BreakdownOut
+    countries: BreakdownOut
+    fund_fees: FundFeesOut
+    lines: list[ExposureLineOut] = []
+
+
 class FeesResponse(BaseModel):
     total_fees: MetricOut
     fee_share: MetricOut
@@ -483,6 +524,7 @@ class InvestorAnalyticsResponse(CachedPayload):
     deposit_lag: DepositLagResponse | None = None
     market_conditioning: MarketConditioningResponse | None = None
     concentration: ConcentrationResponse | None = None
+    exposure: ExposureResponse | None = None
     risk: RiskResponse | None = None
     fees: FeesResponse | None = None
     exits: ExitsResponse | None = None

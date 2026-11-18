@@ -35,6 +35,7 @@ from services.analytics.concentration import (
 )
 from services.analytics.counterfactual import build_bridge
 from services.analytics.execution import MIN_ORDERS, SOLID_ORDERS, analyse_execution
+from services.analytics.exposure import analyse_exposure
 from services.analytics.fees import (
     MIN_ORDERS as FEES_MIN_ORDERS,
 )
@@ -96,6 +97,7 @@ from services.analytics.window import (
     resolve_window,
 )
 from services.encryption import decrypt_data
+from services.fund_exposure import load_profiles
 from services.settings import get_or_create_settings
 from services.stock_account import get_all_stock_accounts_history, get_user_stock_accounts
 from services.stock_transaction import get_account_transactions
@@ -249,6 +251,7 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
         "deposit_lag": None,
         "market_conditioning": None,
         "concentration": None,
+        "exposure": None,
         "fees": None,
         "exits": None,
         "plan": None,
@@ -294,6 +297,12 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
 
     holdings = holdings_from_transactions(transactions)
     concentration = analyse_concentration(holdings, price_end, sparse)
+    held_weights = concentration.weights if concentration else []
+    exposure = analyse_exposure(
+        held_weights,
+        _average_capital(holdings, price_end),
+        load_profiles(session, [key for key, _ in held_weights]),
+    )
     fees = analyse_fees(transactions, window)
     exits = analyse_exits(transactions, sparse, benchmark_quotes)
     turnover = analyse_turnover(transactions, window, _average_capital(holdings, price_end))
@@ -333,7 +342,8 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
         ),
         "market_conditioning": _conditioning_payload(conditioning),
         "concentration": _concentration_payload(concentration, labels),
-        "fees": _fees_payload(fees),
+        "exposure": _exposure_payload(exposure, labels),
+        "fees": _with_fund_fees(_fees_payload(fees), exposure),
         "exits": _exits_payload(exits),
         "plan": _plan_payload(plan_payload, plan_error, labels),
     }, True
@@ -1061,6 +1071,55 @@ def _concentration_verdict(concentration, effective, bets) -> str:
         f"{lines} lignes, {_fr(effective, 1)} positions effectives, {_fr(bets, 1)} pari(s) "
         f"indépendant(s).{correlation_note}"
     )
+
+
+def _breakdown_payload(breakdown) -> dict:
+    return {
+        "weights": [{"label": label, "weight": round(weight, 4)} for label, weight in breakdown.shares],
+        "other": round(breakdown.other, 4),
+        "unknown": round(breakdown.unknown, 4),
+        "coverage": round(breakdown.coverage, 4),
+        "as_of": breakdown.oldest_as_of,
+    }
+
+
+def _exposure_payload(exposure, labels) -> dict | None:
+    if exposure is None:
+        return None
+    return {
+        "sectors": _breakdown_payload(exposure.sectors),
+        "countries": _breakdown_payload(exposure.countries),
+        "fund_fees": {
+            "annual_eur": round(exposure.annual_fund_fees, 2) if exposure.annual_fund_fees is not None else None,
+            "weighted_ter": round(exposure.weighted_ter, 6) if exposure.weighted_ter is not None else None,
+            "coverage": round(exposure.fee_coverage, 4),
+        },
+        "lines": [
+            {
+                **label_of(labels, line.asset_key).as_dict(),
+                "weight": round(line.weight, 4),
+                "ter": line.ter,
+                "sectors_as_of": line.sectors_as_of,
+                "countries_as_of": line.countries_as_of,
+            }
+            for line in exposure.lines
+        ],
+    }
+
+
+def _with_fund_fees(fees_payload: dict | None, exposure) -> dict | None:
+    """Once the funds' own fees are known, the TER note states them instead of saying they cannot be."""
+    if fees_payload is None or exposure is None or exposure.annual_fund_fees is None:
+        return fees_payload
+    note = (
+        f"Les frais de gestion de vos fonds (TER) représentent {round(exposure.annual_fund_fees)} € "
+        f"par an au cours actuel, soit {_pct(exposure.weighted_ter, 2)} en moyenne pondérée. Ils sont "
+        "déjà dans le cours : ils ne s'ajoutent pas à votre performance, ils l'ont déjà réduite. "
+        "Sur un portefeuille buy-and-hold, ils pèsent structurellement plus lourd que vos frais d'ordre."
+    )
+    if exposure.fee_coverage < Decimal("1"):
+        note += f" Frais connus pour {_pct(exposure.fee_coverage, 0)} du portefeuille."
+    return {**fees_payload, "ter_note": note}
 
 
 def _fees_payload(fees) -> dict | None:

@@ -39,13 +39,14 @@ from models.placement import PlacementAccount, PlacementEntry
 from models.stock import StockAccount, StockTransaction
 from models.user import UserSettings
 from services.encryption import decrypt_data, encrypt_data, hash_index
+from services.fund_exposure import exposure_signature
 
 KIND_INVESTOR = "investor"
 KIND_YEARLY = "yearly"
 
 # Bumped whenever what is derived changes shape or meaning, so every stored
 # payload is rebuilt rather than served under a contract it no longer meets.
-_VERSION = "2"
+_VERSION = "3"
 
 
 def cache_days() -> int:
@@ -99,6 +100,8 @@ def source_digest(session: Session, user_uuid: str, master_key: str, kind: str) 
         # The ciphertext, not the plan: a fresh nonce on every save means a
         # rewrite always moves the digest, which errs on the side of rebuilding.
         parts.append(plan_blob)
+        # Shared reference data, not the user's: an edited fund moves every digest.
+        parts.append(exposure_signature(session))
     if kind == KIND_YEARLY:
         parts.append(
             _ledger_signature(session, user_bidx, master_key, CryptoAccount, CryptoTransaction)

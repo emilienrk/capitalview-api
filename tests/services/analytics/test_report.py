@@ -168,7 +168,7 @@ def _quotes(transactions, price="100"):
     return {BENCH: {d: Decimal(price) for d in span}}
 
 
-def _run_blocks(transactions, snapshots=None, window_end=None):
+def _run_blocks(transactions, snapshots=None, window_end=None, profiles=None):
     """Drive the report with the market layer stubbed but the blocks really running."""
     matrix = _quotes(transactions)
     snapshots = snapshots if snapshots is not None else _two_year_series()
@@ -190,6 +190,7 @@ def _run_blocks(transactions, snapshots=None, window_end=None):
         # No exchange calendar here: execution falls back to quoted days, which is
         # what the fixture provides.
         patch("services.analytics.report.resolve_trading_days", return_value={}),
+        patch("services.analytics.report.load_profiles", return_value=profiles or {}),
         patch("services.analytics.report.resolve_asset_labels", return_value={}),
     ):
         return build_investor_analytics(None, "user_1", "key")
@@ -392,6 +393,7 @@ def test_an_unusable_plan_is_reported_not_dropped(master_key):
         ),
         patch("services.analytics.report.fill_price_gaps", side_effect=lambda m, *_a, **_k: m),
         patch("services.analytics.report.resolve_trading_days", return_value={}),
+        patch("services.analytics.report.load_profiles", return_value={}),
         patch("services.analytics.report.resolve_asset_labels", return_value={}),
     ):
         report = build_investor_analytics(None, "user_1", master_key)
@@ -427,6 +429,7 @@ def test_a_valid_plan_is_decrypted_and_scored(master_key):
         patch("services.analytics.report.get_price_matrix", return_value=_quotes(transactions)),
         patch("services.analytics.report.fill_price_gaps", side_effect=lambda m, *_a, **_k: m),
         patch("services.analytics.report.resolve_trading_days", return_value={}),
+        patch("services.analytics.report.load_profiles", return_value={}),
         patch("services.analytics.report.resolve_asset_labels", return_value={}),
     ):
         report = build_investor_analytics(None, "user_1", master_key)
@@ -478,6 +481,7 @@ def test_a_plan_split_into_periods_is_scored_not_rejected(master_key):
         patch("services.analytics.report.get_price_matrix", return_value=_quotes(transactions)),
         patch("services.analytics.report.fill_price_gaps", side_effect=lambda m, *_a, **_k: m),
         patch("services.analytics.report.resolve_trading_days", return_value={}),
+        patch("services.analytics.report.load_profiles", return_value={}),
         patch("services.analytics.report.resolve_asset_labels", return_value={}),
     ):
         report = build_investor_analytics(None, "user_1", master_key)
@@ -617,3 +621,38 @@ def test_no_benchmark_sessions_leaves_the_risk_block_empty():
     report = _run(_two_year_series(), [_Tx("DEPOSIT", "EUR", 1000, START)])
 
     assert report["risk"] is None
+
+
+def test_the_exposure_block_weighs_the_held_line_by_its_fund():
+    from services.fund_exposure import FundProfile
+
+    profile = FundProfile(
+        countries={"US": Decimal("0.7")},
+        countries_as_of=date(2026, 10, 30),
+        ter=Decimal("0.002"),
+    )
+    report = _run_blocks(_monthly_buys(24), profiles={BENCH: profile})
+
+    exposure = report["exposure"]
+    assert exposure["countries"]["weights"] == [{"label": "US", "weight": Decimal("0.7")}]
+    assert exposure["countries"]["other"] == Decimal("0.3")
+    assert exposure["sectors"]["unknown"] == Decimal("1")
+    # 24 purchases of 10 units at 100 €, at 0.2 % a year.
+    assert exposure["fund_fees"]["annual_eur"] == Decimal("48.00")
+
+
+def test_a_known_fund_fee_turns_the_ter_note_into_a_figure():
+    from services.fund_exposure import FundProfile
+
+    report = _run_blocks(_monthly_buys(24), profiles={BENCH: FundProfile(ter=Decimal("0.002"))})
+
+    assert "48 € par an" in report["fees"]["ter_note"]
+    assert "pas traçables" not in report["fees"]["ter_note"]
+
+
+def test_without_any_fund_data_the_exposure_is_all_unknown():
+    report = _run_blocks(_monthly_buys(24))
+
+    assert report["exposure"]["countries"]["unknown"] == Decimal("1")
+    assert report["exposure"]["fund_fees"]["annual_eur"] is None
+    assert "pas traçables" in report["fees"]["ter_note"]

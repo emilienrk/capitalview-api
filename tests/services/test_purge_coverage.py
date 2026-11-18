@@ -20,6 +20,7 @@ from services import account_data
 NOT_USER_DATA = {
     "market_assets": "shared market catalogue",
     "market_price_history": "shared price cache",
+    "fund_exposures": "shared fund reference data, kept by hand in data/fund_exposure.toml",
     "rate_limit_hits": "opaque HMAC of ip and action, expires on its own",
     "job_runs": "kept on purpose: a job ran, and an opaque uuid says nothing personal",
 }
