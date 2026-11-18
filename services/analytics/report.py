@@ -1111,11 +1111,13 @@ def _with_fund_fees(fees_payload: dict | None, exposure) -> dict | None:
     """Once the funds' own fees are known, the TER note states them instead of saying they cannot be."""
     if fees_payload is None or exposure is None or exposure.annual_fund_fees is None:
         return fees_payload
+    # No euro amount here: notes are shown unmasked in privacy mode, and the
+    # fund fees tile already carries the figure, masked.
     note = (
-        f"Les frais de gestion de vos fonds (TER) représentent {round(exposure.annual_fund_fees)} € "
-        f"par an au cours actuel, soit {_pct(exposure.weighted_ter, 2)} en moyenne pondérée. Ils sont "
-        "déjà dans le cours : ils ne s'ajoutent pas à votre performance, ils l'ont déjà réduite. "
-        "Sur un portefeuille buy-and-hold, ils pèsent structurellement plus lourd que vos frais d'ordre."
+        f"Les frais de gestion de vos fonds (TER) font {_pct(exposure.weighted_ter, 2)} par an en "
+        "moyenne pondérée, chiffrés en euros dans « Frais de gestion des fonds ». Ils sont déjà dans "
+        "le cours : ils ne s'ajoutent pas à votre performance, ils l'ont déjà réduite. Sur un "
+        "portefeuille buy-and-hold, ils pèsent structurellement plus lourd que vos frais d'ordre."
     )
     if exposure.fee_coverage < Decimal("1"):
         note += f" Frais connus pour {_pct(exposure.fee_coverage, 0)} du portefeuille."

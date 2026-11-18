@@ -646,7 +646,9 @@ def test_a_known_fund_fee_turns_the_ter_note_into_a_figure():
 
     report = _run_blocks(_monthly_buys(24), profiles={BENCH: FundProfile(ter=Decimal("0.002"))})
 
-    assert "48 € par an" in report["fees"]["ter_note"]
+    assert "0,20 % par an" in report["fees"]["ter_note"]
+    # Notes are not masked in privacy mode: the euro figure stays on the tile.
+    assert "€" not in report["fees"]["ter_note"]
     assert "pas traçables" not in report["fees"]["ter_note"]
 
 
