@@ -43,7 +43,6 @@ from models.community import (
 )
 from models.crypto import CryptoAccount, CryptoTransaction
 from models.placement import PlacementAccount, PlacementEntry
-from models.note import Note
 from models.notification import Notification
 from models.stock import StockAccount, StockTransaction
 from models.user import (
@@ -205,7 +204,6 @@ def export_account_data(session: Session, user: User, master_key: str) -> dict:
     from services.crypto_account import get_user_crypto_accounts
     from services.crypto_transaction import get_account_transactions as get_crypto_transactions
     from services.placement import get_owned_account, get_user_placements, list_entries
-    from services.note import get_user_notes
     from services.settings import get_settings
     from services.stock_account import get_user_stock_accounts
     from services.stock_transaction import get_account_transactions as get_stock_transactions
@@ -302,7 +300,6 @@ def export_account_data(session: Session, user: User, master_key: str) -> dict:
         "placements": placements,
         "cashflows": get_all_user_cashflows(session, user.uuid, master_key),
         "assets": assets,
-        "notes": get_user_notes(session, user.uuid, master_key),
         "community": {
             "settings": get_community_settings(session, user.uuid),
             "picks": get_user_picks(session, user.uuid),
@@ -406,7 +403,6 @@ def purge_account(session: Session, user: User, master_key: str) -> dict[str, in
         CryptoAccount,
         PlacementAccount,
         Cashflow,
-        Note,
         Card,
         Asset,
         UserSettings,

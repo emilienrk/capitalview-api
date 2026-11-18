@@ -93,13 +93,6 @@ from .crypto import (
     CryptoPhotoExtractResponse,
 )
 
-# Note schemas
-from .note import (
-    NoteCreate,
-    NoteReorder,
-    NoteResponse,
-    NoteUpdate,
-)
 
 # Settings schemas
 from .settings import (
@@ -230,11 +223,6 @@ __all__ = [
     "BinanceImportConfirmResponse",
     "ExtractedCryptoTransaction",
     "CryptoPhotoExtractResponse",
-    # Note
-    "NoteCreate",
-    "NoteReorder",
-    "NoteResponse",
-    "NoteUpdate",
     # Settings
     "UserSettingsUpdate",
     "UserSettingsResponse",

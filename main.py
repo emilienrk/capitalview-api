@@ -35,7 +35,6 @@ from routes import (
     stocks_router,
     crypto_router,
     dashboard_router,
-    notes_router,
     settings_router,
     notifications_router,
     asset_router,
@@ -199,7 +198,6 @@ app.include_router(cashflow_router)
 app.include_router(stocks_router)
 app.include_router(crypto_router)
 app.include_router(dashboard_router)
-app.include_router(notes_router)
 app.include_router(settings_router)
 app.include_router(notifications_router)
 app.include_router(asset_router)
