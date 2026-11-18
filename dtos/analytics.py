@@ -311,9 +311,16 @@ class ExposureLineOut(AssetLabelOut):
     countries_as_of: date | None = None
 
 
+class BenchmarkExposureOut(AssetLabelOut):
+    sectors: BreakdownOut
+    countries: BreakdownOut
+
+
 class ExposureResponse(BaseModel):
     """Sectors and countries of the index each fund tracks, weighted by the portfolio."""
 
+    benchmark: BenchmarkExposureOut | None = None
+    """The benchmark's own breakdown; None when it is not described."""
     sectors: BreakdownOut
     countries: BreakdownOut
     fund_fees: FundFeesOut

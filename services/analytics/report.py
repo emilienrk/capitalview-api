@@ -35,7 +35,7 @@ from services.analytics.concentration import (
 )
 from services.analytics.counterfactual import build_bridge
 from services.analytics.execution import MIN_ORDERS, SOLID_ORDERS, analyse_execution
-from services.analytics.exposure import analyse_exposure
+from services.analytics.exposure import analyse_exposure, fund_breakdowns
 from services.analytics.fees import (
     MIN_ORDERS as FEES_MIN_ORDERS,
 )
@@ -298,11 +298,8 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
     holdings = holdings_from_transactions(transactions)
     concentration = analyse_concentration(holdings, price_end, sparse)
     held_weights = concentration.weights if concentration else []
-    exposure = analyse_exposure(
-        held_weights,
-        _average_capital(holdings, price_end),
-        load_profiles(session, [key for key, _ in held_weights]),
-    )
+    profiles = load_profiles(session, [*(key for key, _ in held_weights), benchmark_key])
+    exposure = analyse_exposure(held_weights, _average_capital(holdings, price_end), profiles)
     fees = analyse_fees(transactions, window)
     exits = analyse_exits(transactions, sparse, benchmark_quotes)
     turnover = analyse_turnover(transactions, window, _average_capital(holdings, price_end))
@@ -319,6 +316,7 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
         [
             *(key for key, _ in (concentration.weights if concentration else ())),
             *(concentration.dropped if concentration else ()),
+            benchmark_key,
             *(row.asset_key for row in (getattr(plan_payload, "drift", None) or ())),
             # A line bought only during an old period appears nowhere else, and
             # would otherwise show up in that period's table as a bare ISIN.
@@ -342,7 +340,7 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
         ),
         "market_conditioning": _conditioning_payload(conditioning),
         "concentration": _concentration_payload(concentration, labels),
-        "exposure": _exposure_payload(exposure, labels),
+        "exposure": _exposure_payload(exposure, labels, benchmark_key, profiles.get(benchmark_key)),
         "fees": _with_fund_fees(_fees_payload(fees), exposure),
         "exits": _exits_payload(exits),
         "plan": _plan_payload(plan_payload, plan_error, labels),
@@ -1083,10 +1081,21 @@ def _breakdown_payload(breakdown) -> dict:
     }
 
 
-def _exposure_payload(exposure, labels) -> dict | None:
+def _exposure_payload(exposure, labels, benchmark_key: str, benchmark_profile) -> dict | None:
     if exposure is None:
         return None
+    benchmark = None
+    if benchmark_profile is not None:
+        sectors, countries = fund_breakdowns(benchmark_key, benchmark_profile)
+        benchmark = {
+            **label_of(labels, benchmark_key).as_dict(),
+            "sectors": _breakdown_payload(sectors),
+            "countries": _breakdown_payload(countries),
+        }
     return {
+        # The benchmark's own breakdown, to set the portfolio against: absent
+        # when the benchmark is not described in data/fund_exposure.toml.
+        "benchmark": benchmark,
         "sectors": _breakdown_payload(exposure.sectors),
         "countries": _breakdown_payload(exposure.countries),
         "fund_fees": {

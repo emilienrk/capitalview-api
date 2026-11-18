@@ -78,6 +78,13 @@ def _breakdown(weights, profiles: dict[str, FundProfile], kind: str) -> Breakdow
     )
 
 
+def fund_breakdowns(asset_key: str, profile: FundProfile) -> tuple[Breakdown, Breakdown]:
+    """Sectors and countries of a single fund, as if it were the whole portfolio."""
+    weights = [(asset_key, _ONE)]
+    profiles = {asset_key: profile}
+    return _breakdown(weights, profiles, "sectors"), _breakdown(weights, profiles, "countries")
+
+
 def analyse_exposure(weights, portfolio_value: Decimal, profiles: dict[str, FundProfile]) -> Exposure | None:
     """`weights` as concentration.portfolio_weights returns them: value weights summing to one."""
     if not weights:

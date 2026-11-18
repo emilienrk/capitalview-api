@@ -100,3 +100,20 @@ weights = { GB = 0.234, CH = 0.146, FR = 0.145, DE = 0.131, NL = 0.076, ES = 0.0
 as_of = 2026-11-17
 source = "https://www.ishares.com/de/privatanleger/de/produkte/251931/ishares-stoxx-europe-600-ucits-etf-de-fund"
 weights = { financials = 0.2538, industrials = 0.1803, health_care = 0.1347, consumer_staples = 0.0856, technology = 0.0768, consumer_discretionary = 0.0643, energy = 0.0576, materials = 0.0542, utilities = 0.0496, communication = 0.0278, real_estate = 0.0102 }
+
+
+# The default benchmark (services/analytics/benchmark.py), described so the
+# analysis can set the portfolio against it. Physical ETF: holdings = index.
+[IE00B4L5Y983]
+name = "iShares Core MSCI World UCITS ETF USD (Acc) (IWDA)"
+index = "MSCI World"
+
+[IE00B4L5Y983.countries]
+as_of = 2026-11-17
+source = "https://www.ishares.com/uk/individual/en/products/251882/ishares-msci-world-ucits-etf-acc-fund"
+weights = { US = 0.7221, JP = 0.0557, GB = 0.0353, CA = 0.0341, CH = 0.0236, FR = 0.0233, DE = 0.0215, AU = 0.0154, NL = 0.0126 }
+
+[IE00B4L5Y983.sectors]
+as_of = 2026-11-17
+source = "https://www.ishares.com/uk/individual/en/products/251882/ishares-msci-world-ucits-etf-acc-fund"
+weights = { technology = 0.2781, financials = 0.1662, industrials = 0.1083, health_care = 0.1043, consumer_discretionary = 0.0914, communication = 0.0744, consumer_staples = 0.0562, energy = 0.0425, materials = 0.0315, utilities = 0.0254, real_estate = 0.0164 }

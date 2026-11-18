@@ -658,3 +658,23 @@ def test_without_any_fund_data_the_exposure_is_all_unknown():
     assert report["exposure"]["countries"]["unknown"] == Decimal("1")
     assert report["exposure"]["fund_fees"]["annual_eur"] is None
     assert "pas traçables" in report["fees"]["ter_note"]
+
+
+def test_a_described_benchmark_comes_with_its_own_breakdown():
+    from services.fund_exposure import FundProfile
+
+    profile = FundProfile(countries={"US": Decimal("0.72"), "JP": Decimal("0.06")}, countries_as_of=date(2026, 11, 17))
+    report = _run_blocks(_monthly_buys(24), profiles={BENCH: profile})
+
+    benchmark = report["exposure"]["benchmark"]
+    assert benchmark["asset_key"] == BENCH
+    assert benchmark["countries"]["weights"][0] == {"label": "US", "weight": Decimal("0.72")}
+    assert benchmark["countries"]["other"] == Decimal("0.22")
+    # Described for its countries only: its sectors are unknown, not empty.
+    assert benchmark["sectors"]["unknown"] == Decimal("1")
+
+
+def test_an_undescribed_benchmark_leaves_no_comparison():
+    report = _run_blocks(_monthly_buys(24))
+
+    assert report["exposure"]["benchmark"] is None
