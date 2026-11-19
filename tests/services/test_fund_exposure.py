@@ -58,12 +58,47 @@ def test_a_fund_reads_into_one_row_per_weight_and_one_for_its_fee():
         FUND.replace("as_of = 2026-10-30", 'as_of = "October"'),
         FUND.replace("value = 0.0020", "value = 0.20"),
         FUND + '\n[FR0000000001.sectors]\nas_of = 2026-10-30\nsource = "x"\nweights = { tech = 1.0 }\n',
+        FUND + '\n[FR0000000001.sector]\nas_of = 2026-10-30\nsource = "x"\nweights = { technology = 1.0 }\n',
+        FUND.replace("US = 0.70", "US = inf"),
+        FUND.replace("US = 0.70", "US = true"),
     ],
-    ids=["country-code", "over-one", "no-source", "no-date", "ter-as-percent", "unknown-sector"],
+    ids=[
+        "country-code",
+        "over-one",
+        "no-source",
+        "no-date",
+        "ter-as-percent",
+        "unknown-sector",
+        "misspelt-block",
+        "infinite",
+        "boolean",
+    ],
 )
 def test_a_malformed_fund_is_refused_rather_than_half_loaded(bad):
     with pytest.raises(ExposureFileError):
         parse_exposure_file(bad)
+
+
+def test_a_whole_ratio_written_as_an_integer_is_read_as_one():
+    rows = parse_exposure_file(
+        FUND.replace("value = 0.0020", "value = 0").replace("US = 0.70, JP = 0.05", "US = 1")
+    )
+
+    assert [(row.kind, row.label, row.weight) for row in rows] == [
+        ("ter", "", Decimal("0")),
+        ("country", "US", Decimal("1")),
+    ]
+
+
+def test_a_weight_finer_than_the_table_keeps_does_not_rewrite_its_row_at_every_restart(session):
+    rows = parse_exposure_file(FUND.replace("US = 0.70", "US = 0.70123456"))
+    sync_exposure_rows(session, rows)
+    signature = exposure_signature(session)
+
+    counters = sync_exposure_rows(session, rows)
+
+    assert counters == {"inserted": 0, "updated": 0, "deleted": 0}
+    assert exposure_signature(session) == signature
 
 
 def test_rounded_factsheet_weights_may_overshoot_one_by_a_hair():

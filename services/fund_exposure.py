@@ -15,7 +15,7 @@ import re
 import tomllib
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -51,6 +51,10 @@ DEFAULT_PATH = Path(__file__).resolve().parent.parent / "data" / "fund_exposure.
 _SUM_TOLERANCE = Decimal("0.005")
 _MAX_TER = Decimal("0.05")
 _COUNTRY = re.compile(r"^[A-Z]{2}$")
+_FUND_KEYS = {"name", "index", "ter", "countries", "sectors"}
+# The scale of fund_exposures.weight: a finer figure would come back rounded,
+# differ from the file at every restart, and rewrite its row each time.
+_SCALE = Decimal("0.000001")
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
 
@@ -88,17 +92,29 @@ def _dated(block: dict, where: str) -> tuple[date, str]:
     return as_of, source.strip()
 
 
+def _ratio(value) -> Decimal | None:
+    """A number of the file at the table's scale; TOML reads `1` or `0` as an integer."""
+    if isinstance(value, bool) or not isinstance(value, (Decimal, int)):
+        return None
+    try:
+        number = Decimal(value).quantize(_SCALE)
+    except InvalidOperation:
+        return None
+    return number if number.is_finite() else None
+
+
 def _weights(block: dict, kind: str, where: str) -> dict[str, Decimal]:
     raw = block.get("weights")
     if not isinstance(raw, dict) or not raw:
         raise ExposureFileError(f"{where}: `weights` must be a non-empty table")
     weights: dict[str, Decimal] = {}
-    for label, weight in raw.items():
+    for label, raw_weight in raw.items():
         if kind == KIND_COUNTRY and not _COUNTRY.match(label):
             raise ExposureFileError(f"{where}: `{label}` is not an ISO 3166 alpha-2 code")
         if kind == KIND_SECTOR and label not in SECTORS:
             raise ExposureFileError(f"{where}: unknown sector `{label}`")
-        if not isinstance(weight, Decimal) or not _ZERO < weight <= _ONE:
+        weight = _ratio(raw_weight)
+        if weight is None or not _ZERO < weight <= _ONE:
             raise ExposureFileError(f"{where}: `{label}` must be a ratio in ]0, 1]")
         weights[label] = weight
     if sum(weights.values()) > _ONE + _SUM_TOLERANCE:
@@ -118,12 +134,16 @@ def parse_exposure_file(text: str) -> list[ExposureRow]:
         if not isinstance(fund, dict):
             raise ExposureFileError(f"{isin}: expected a table")
         key = isin.strip().upper()
+        # A misspelt block (`[ISIN.sector]`) would otherwise drop out in silence.
+        unknown = sorted(set(fund) - _FUND_KEYS)
+        if unknown:
+            raise ExposureFileError(f"{key}: unknown key `{unknown[0]}`")
 
         ter = fund.get("ter")
         if ter is not None:
             as_of, source = _dated(ter, f"{key}.ter")
-            value = ter.get("value")
-            if not isinstance(value, Decimal) or not _ZERO <= value <= _MAX_TER:
+            value = _ratio(ter.get("value"))
+            if value is None or not _ZERO <= value <= _MAX_TER:
                 raise ExposureFileError(f"{key}.ter: `value` must be a ratio up to {_MAX_TER}")
             rows.append(ExposureRow(key, KIND_TER, "", value, as_of, source))
 
