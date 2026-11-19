@@ -46,7 +46,7 @@ KIND_YEARLY = "yearly"
 
 # Bumped whenever what is derived changes shape or meaning, so every stored
 # payload is rebuilt rather than served under a contract it no longer meets.
-_VERSION = "4"
+_VERSION = "5"
 
 
 def cache_days() -> int:

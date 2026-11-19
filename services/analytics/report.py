@@ -7,7 +7,7 @@ it several times per page load.
 
 import json
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlmodel import Session
 
@@ -1126,11 +1126,21 @@ def _with_fund_fees(fees_payload: dict | None, exposure) -> dict | None:
     note = (
         f"Les frais de gestion de vos fonds (TER) font {_pct(exposure.weighted_ter, 2)} par an en "
         "moyenne pondérée, chiffrés en euros dans « Frais de gestion des fonds ». Ils sont déjà dans "
-        "le cours : ils ne s'ajoutent pas à votre performance, ils l'ont déjà réduite. Sur un "
-        "portefeuille buy-and-hold, ils pèsent structurellement plus lourd que vos frais d'ordre."
+        "le cours : ils ne s'ajoutent pas à votre performance, ils l'ont déjà réduite."
     )
+    # Two yearly rates: the TER, and the order fees over the capital put to work.
+    # The gated one, so an order-fee figure the page withholds claims nothing.
+    order_bps = fees_payload["annual_bps"]["value"]
+    if order_bps is not None and exposure.weighted_ter > order_bps / Decimal("10000"):
+        note += (
+            " Sur un portefeuille buy-and-hold, ils pèsent structurellement plus lourd que vos "
+            "frais d'ordre."
+        )
     if exposure.fee_coverage < Decimal("1"):
-        note += f" Frais connus pour {_pct(exposure.fee_coverage, 0)} du portefeuille."
+        note += (
+            f" Calculés sur {_pct_compact(exposure.fee_coverage)} du portefeuille : les lignes "
+            "non décrites n'y entrent pas."
+        )
     return {**fees_payload, "ter_note": note}
 
 
@@ -1798,3 +1808,9 @@ def _fr(value, digits: int) -> str:
 
 def _pct(ratio, digits: int = 1) -> str:
     return f"{_fr(Decimal(ratio) * 100, digits)} %"
+
+
+def _pct_compact(ratio) -> str:
+    """One decimal at most, as the page prints a share: 87,8 %, 88 %."""
+    tenths = (Decimal(ratio) * 100).quantize(Decimal("0.1"), ROUND_HALF_UP)
+    return f"{_fr(tenths, 1).removesuffix(',0')} %"

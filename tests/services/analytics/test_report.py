@@ -652,6 +652,41 @@ def test_a_known_fund_fee_turns_the_ter_note_into_a_figure():
     assert "pas traçables" not in report["fees"]["ter_note"]
 
 
+@pytest.mark.parametrize(
+    ("order_fee", "outweighs"),
+    [("0.5", True), ("20", False), ("0", False)],
+    ids=["funds-cost-more", "orders-cost-more", "order-fees-not-measured"],
+)
+def test_the_ter_note_says_fund_fees_weigh_more_only_when_the_figures_say_so(order_fee, outweighs):
+    from services.fund_exposure import FundProfile
+
+    transactions = _monthly_buys(24)
+    for tx in transactions:
+        if isinstance(tx, _Buy):
+            tx.fees = Decimal(order_fee)
+    report = _run_blocks(transactions, profiles={BENCH: FundProfile(ter=Decimal("0.002"))})
+
+    # 0.5 € on each 1 000 € order is a few hundredths of a point a year, 20 € is
+    # well above the 0.20 % TER, and fees nobody keyed in measure nothing.
+    assert ("plus lourd que vos frais d'ordre" in report["fees"]["ter_note"]) is outweighs
+
+
+def test_the_ter_note_states_its_coverage_to_the_tenth_as_the_page_does():
+    from types import SimpleNamespace
+
+    from services.analytics.report import _with_fund_fees
+
+    def note(coverage: str) -> str:
+        exposure = SimpleNamespace(
+            annual_fund_fees=Decimal("30"), weighted_ter=Decimal("0.0025"), fee_coverage=Decimal(coverage)
+        )
+        return _with_fund_fees({"annual_bps": {"value": None}}, exposure)["ter_note"]
+
+    assert "Calculés sur 87,8 % du portefeuille : les lignes non décrites n'y entrent pas." in note("0.878")
+    assert "Calculés sur 88 % du portefeuille" in note("0.88")
+    assert "Calculés sur" not in note("1")
+
+
 def test_without_any_fund_data_the_exposure_is_all_unknown():
     report = _run_blocks(_monthly_buys(24))
 
