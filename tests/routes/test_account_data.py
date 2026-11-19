@@ -33,7 +33,6 @@ from models.community import (
 )
 from models.crypto import CryptoAccount, CryptoTransaction
 from models.placement import PlacementAccount, PlacementEntry
-from models.note import Note
 from models.notification import Notification
 from models.stock import StockAccount, StockTransaction
 from models.user import (
@@ -74,7 +73,6 @@ BIDX_MODELS = (
     CryptoAccount,
     PlacementAccount,
     Cashflow,
-    Note,
     Card,
     Asset,
     UserSettings,
@@ -180,13 +178,6 @@ def _seed_account(client: TestClient, headers: dict[str, str]) -> None:
         headers=headers,
     )
     assert cashflow.status_code == 201
-
-    note = client.post(
-        "/notes",
-        json={"name": "Ma stratégie", "description": "DCA mensuel"},
-        headers=headers,
-    )
-    assert note.status_code == 201
 
     placement = client.post(
         "/placements",
@@ -300,7 +291,6 @@ def test_export_contains_every_domain_the_user_filled_in(session):
     # one at today's date, so the one we posted is somewhere in the list.
     assert "2025-06-01" in [v["valued_at"] for v in data["assets"][0]["valuations"]]
     assert data["cashflows"][0]["name"] == "Salaire"
-    assert data["notes"][0]["name"] == "Ma stratégie"
     assert data["placements"][0]["name"] == "Linxea Spirit"
     assert data["placements"][0]["entries"][0]["amount"] == "1000"
     assert data["settings"]["theme"]
@@ -454,7 +444,7 @@ def test_deleting_one_account_spares_the_other(session):
     assert keeper["users"] == 1
     assert keeper["bank_accounts"] == 1
     assert keeper["stock_transactions"] >= 1
-    assert keeper["notes"] == 1
+    assert keeper["cashflows"] == 1
 
     assert session.get(User, victim_uuid) is None
 
