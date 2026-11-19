@@ -1085,7 +1085,8 @@ def _exposure_payload(exposure, labels, benchmark_key: str, benchmark_profile) -
     if exposure is None:
         return None
     benchmark = None
-    if benchmark_profile is not None:
+    # A fee alone does not describe what the benchmark is exposed to.
+    if benchmark_profile is not None and (benchmark_profile.sectors or benchmark_profile.countries):
         sectors, countries = fund_breakdowns(benchmark_key, benchmark_profile)
         benchmark = {
             **label_of(labels, benchmark_key).as_dict(),

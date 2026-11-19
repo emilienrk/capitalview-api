@@ -678,3 +678,11 @@ def test_an_undescribed_benchmark_leaves_no_comparison():
     report = _run_blocks(_monthly_buys(24))
 
     assert report["exposure"]["benchmark"] is None
+
+
+def test_a_benchmark_known_by_its_fee_alone_leaves_no_comparison():
+    from services.fund_exposure import FundProfile
+
+    report = _run_blocks(_monthly_buys(24), profiles={BENCH: FundProfile(ter=Decimal("0.002"))})
+
+    assert report["exposure"]["benchmark"] is None
