@@ -13,6 +13,10 @@
 #   (STOXX, Nasdaq factsheets) puts Alphabet and Meta under technology.
 #   For an index whose provider publishes ICB only, a physical iShares ETF on
 #   the same index gives its GICS breakdown.
+# - A breakdown read off a physical ETF leaves out the fund's cash, which the
+#   index does not hold: each weight is divided by the non-cash total, then
+#   rounded to 4 decimals so the block sums to 1. Otherwise that cash would
+#   show as « Autre ».
 # - Synthetic (swap) ETFs: take the weights of the INDEX they track, from the
 #   index provider's factsheet. Never the fund's holdings file: it lists the
 #   substitute basket, not the exposure.
@@ -33,11 +37,11 @@ source = "https://www.justetf.com/fr/etf-profile.html?isin=FR0011550185"
 weights = { US = 0.9697, IE = 0.0123 }
 
 # Sectors: iShares Core S&P 500 (CSPX), a physical ETF on the same index, so
-# its holdings are the index's. Cash excluded.
+# its holdings are the index's. Renormalised without its 0.08 % of cash.
 [FR0011550185.sectors]
 as_of = 2026-11-17
 source = "https://www.ishares.com/uk/individual/en/products/253743/ishares-sp-500-b-ucits-etf-acc-fund"
-weights = { technology = 0.3536, financials = 0.1267, health_care = 0.1058, consumer_discretionary = 0.0955, communication = 0.0883, industrials = 0.0826, consumer_staples = 0.0529, energy = 0.0363, utilities = 0.0215, real_estate = 0.0187, materials = 0.0174 }
+weights = { technology = 0.3538, financials = 0.1268, health_care = 0.1059, consumer_discretionary = 0.0956, communication = 0.0884, industrials = 0.0827, consumer_staples = 0.0529, energy = 0.0363, utilities = 0.0215, real_estate = 0.0187, materials = 0.0174 }
 
 
 [FR0013412020]
@@ -74,11 +78,12 @@ as_of = 2026-09-28
 source = "https://www.justetf.com/fr/etf-profile.html?isin=FR0011871110"
 weights = { US = 0.9473, GB = 0.0165, NL = 0.0136 }
 
-# Sectors: iShares Nasdaq 100 (CNDX), physical, same index. Cash excluded.
+# Sectors: iShares Nasdaq 100 (CNDX), physical, same index. Renormalised
+# without its 0.06 % of cash.
 [FR0011871110.sectors]
 as_of = 2026-11-17
 source = "https://www.ishares.com/uk/individual/en/products/253741/ishares-nasdaq-100-ucits-etf"
-weights = { technology = 0.5426, communication = 0.1465, consumer_discretionary = 0.1177, consumer_staples = 0.0745, health_care = 0.0504, industrials = 0.0372, utilities = 0.0124, materials = 0.0112, energy = 0.0046, financials = 0.0024 }
+weights = { technology = 0.5429, communication = 0.1466, consumer_discretionary = 0.1178, consumer_staples = 0.0745, health_care = 0.0504, industrials = 0.0372, utilities = 0.0124, materials = 0.0112, energy = 0.0046, financials = 0.0024 }
 
 
 [FR0011550193]
@@ -95,11 +100,12 @@ as_of = 2026-10-30
 source = "https://stoxx.com/index/sxxp/?factsheet=true"
 weights = { GB = 0.234, CH = 0.146, FR = 0.145, DE = 0.131, NL = 0.076, ES = 0.056, IT = 0.054, SE = 0.049, DK = 0.027, BE = 0.019 }
 
-# Sectors: iShares STOXX Europe 600 (EXSA), physical, same index. Cash excluded.
+# Sectors: iShares STOXX Europe 600 (EXSA), physical, same index. Renormalised
+# without its 0.50 % of cash.
 [FR0011550193.sectors]
 as_of = 2026-11-17
 source = "https://www.ishares.com/de/privatanleger/de/produkte/251931/ishares-stoxx-europe-600-ucits-etf-de-fund"
-weights = { financials = 0.2538, industrials = 0.1803, health_care = 0.1347, consumer_staples = 0.0856, technology = 0.0768, consumer_discretionary = 0.0643, energy = 0.0576, materials = 0.0542, utilities = 0.0496, communication = 0.0278, real_estate = 0.0102 }
+weights = { financials = 0.2551, industrials = 0.1812, health_care = 0.1354, consumer_staples = 0.0860, technology = 0.0772, consumer_discretionary = 0.0646, energy = 0.0579, materials = 0.0545, utilities = 0.0499, communication = 0.0279, real_estate = 0.0103 }
 
 
 # The default benchmark (services/analytics/benchmark.py), described so the
@@ -108,12 +114,15 @@ weights = { financials = 0.2538, industrials = 0.1803, health_care = 0.1347, con
 name = "iShares Core MSCI World UCITS ETF USD (Acc) (IWDA)"
 index = "MSCI World"
 
+# Countries: all 23, summed from the fund's holdings file (its equity lines,
+# without cash), since the product page lists only the first nine.
 [IE00B4L5Y983.countries]
-as_of = 2026-11-17
-source = "https://www.ishares.com/uk/individual/en/products/251882/ishares-msci-world-ucits-etf-acc-fund"
-weights = { US = 0.7221, JP = 0.0557, GB = 0.0353, CA = 0.0341, CH = 0.0236, FR = 0.0233, DE = 0.0215, AU = 0.0154, NL = 0.0126 }
+as_of = 2026-11-18
+source = "https://www.ishares.com/ch/individual/en/products/251882/ishares-msci-world-ucits-etf-acc-fund/1495092304805.ajax?fileType=csv&fileName=SWDA_holdings&dataType=fund"
+weights = { US = 0.7256, JP = 0.0570, GB = 0.0347, CA = 0.0337, CH = 0.0238, FR = 0.0233, DE = 0.0216, AU = 0.0157, NL = 0.0127, ES = 0.0095, SE = 0.0090, IT = 0.0078, HK = 0.0049, DK = 0.0042, SG = 0.0038, BE = 0.0030, FI = 0.0028, IL = 0.0026, NO = 0.0016, AT = 0.0009, IE = 0.0009, PT = 0.0005, NZ = 0.0004 }
 
+# Renormalised without the fund's 0.52 % of cash.
 [IE00B4L5Y983.sectors]
 as_of = 2026-11-17
 source = "https://www.ishares.com/uk/individual/en/products/251882/ishares-msci-world-ucits-etf-acc-fund"
-weights = { technology = 0.2781, financials = 0.1662, industrials = 0.1083, health_care = 0.1043, consumer_discretionary = 0.0914, communication = 0.0744, consumer_staples = 0.0562, energy = 0.0425, materials = 0.0315, utilities = 0.0254, real_estate = 0.0164 }
+weights = { technology = 0.2796, financials = 0.1671, industrials = 0.1089, health_care = 0.1048, consumer_discretionary = 0.0919, communication = 0.0748, consumer_staples = 0.0565, energy = 0.0427, materials = 0.0317, utilities = 0.0255, real_estate = 0.0165 }
