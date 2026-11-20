@@ -1,7 +1,7 @@
 """add fund exposures
 
 Revision ID: c4775602b950
-Revises: 3cf3a057d9ff
+Revises: 599a90c3a7e9
 Create Date: 2026-11-18 16:13:35.572633
 
 """
@@ -14,7 +14,7 @@ import sqlmodel
 
 # revision identifiers, used by Alembic.
 revision: str = 'c4775602b950'
-down_revision: Union[str, None] = '3cf3a057d9ff'
+down_revision: Union[str, None] = '599a90c3a7e9'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
