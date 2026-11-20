@@ -35,6 +35,7 @@ from .banking import (
 from .stock import StockAccount, StockTransaction
 from .crypto import CryptoAccount, CryptoTransaction
 from .market import MarketAsset, MarketPriceHistory, MarketPrice
+from .fund_exposure import FundExposure
 from .card import Card
 from .asset import Asset, AssetValuation
 from .placement import PlacementAccount, PlacementEntry
@@ -81,6 +82,7 @@ __all__ = [
     "CryptoTransaction",
     "MarketAsset",
     "MarketPriceHistory",
+    "FundExposure",
     "MarketPrice",
     "Card",
     "Asset",

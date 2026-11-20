@@ -87,6 +87,15 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info("startup: scheduler started (prices 23:30, bank consent 02:00, rate purge 03:00)")
 
+    from services.fund_exposure import sync_exposure_file
+
+    # A malformed file must not keep the API down: the run is recorded as
+    # failed and the table keeps what it had.
+    try:
+        single_run("sync_fund_exposure", sync_exposure_file)()
+    except Exception:
+        logger.exception("startup: fund exposure file not synced")
+
     if mcp_server is None:
         yield
     else:

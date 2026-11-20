@@ -7,7 +7,7 @@ it several times per page load.
 
 import json
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlmodel import Session
 
@@ -35,6 +35,7 @@ from services.analytics.concentration import (
 )
 from services.analytics.counterfactual import build_bridge
 from services.analytics.execution import MIN_ORDERS, SOLID_ORDERS, analyse_execution
+from services.analytics.exposure import analyse_exposure, fund_breakdowns
 from services.analytics.fees import (
     MIN_ORDERS as FEES_MIN_ORDERS,
 )
@@ -96,6 +97,7 @@ from services.analytics.window import (
     resolve_window,
 )
 from services.encryption import decrypt_data
+from services.fund_exposure import load_profiles
 from services.settings import get_or_create_settings
 from services.stock_account import get_all_stock_accounts_history, get_user_stock_accounts
 from services.stock_transaction import get_account_transactions
@@ -249,6 +251,7 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
         "deposit_lag": None,
         "market_conditioning": None,
         "concentration": None,
+        "exposure": None,
         "fees": None,
         "exits": None,
         "plan": None,
@@ -294,6 +297,9 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
 
     holdings = holdings_from_transactions(transactions)
     concentration = analyse_concentration(holdings, price_end, sparse)
+    held_weights = concentration.weights if concentration else []
+    profiles = load_profiles(session, [*(key for key, _ in held_weights), benchmark_key])
+    exposure = analyse_exposure(held_weights, _average_capital(holdings, price_end), profiles)
     fees = analyse_fees(transactions, window)
     exits = analyse_exits(transactions, sparse, benchmark_quotes)
     turnover = analyse_turnover(transactions, window, _average_capital(holdings, price_end))
@@ -310,6 +316,7 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
         [
             *(key for key, _ in (concentration.weights if concentration else ())),
             *(concentration.dropped if concentration else ()),
+            benchmark_key,
             *(row.asset_key for row in (getattr(plan_payload, "drift", None) or ())),
             # A line bought only during an old period appears nowhere else, and
             # would otherwise show up in that period's table as a bare ISIN.
@@ -333,7 +340,8 @@ def _replay_blocks(session: Session, transactions, benchmark_key: str, declared_
         ),
         "market_conditioning": _conditioning_payload(conditioning),
         "concentration": _concentration_payload(concentration, labels),
-        "fees": _fees_payload(fees),
+        "exposure": _exposure_payload(exposure, labels, benchmark_key, profiles.get(benchmark_key)),
+        "fees": _with_fund_fees(_fees_payload(fees), exposure),
         "exits": _exits_payload(exits),
         "plan": _plan_payload(plan_payload, plan_error, labels),
     }, True
@@ -1063,6 +1071,79 @@ def _concentration_verdict(concentration, effective, bets) -> str:
     )
 
 
+def _breakdown_payload(breakdown) -> dict:
+    return {
+        "weights": [{"label": label, "weight": round(weight, 4)} for label, weight in breakdown.shares],
+        "other": round(breakdown.other, 4),
+        "unknown": round(breakdown.unknown, 4),
+        "coverage": round(breakdown.coverage, 4),
+        "as_of": breakdown.oldest_as_of,
+    }
+
+
+def _exposure_payload(exposure, labels, benchmark_key: str, benchmark_profile) -> dict | None:
+    if exposure is None:
+        return None
+    benchmark = None
+    # A fee alone does not describe what the benchmark is exposed to.
+    if benchmark_profile is not None and (benchmark_profile.sectors or benchmark_profile.countries):
+        sectors, countries = fund_breakdowns(benchmark_key, benchmark_profile)
+        benchmark = {
+            **label_of(labels, benchmark_key).as_dict(),
+            "sectors": _breakdown_payload(sectors),
+            "countries": _breakdown_payload(countries),
+        }
+    return {
+        # The benchmark's own breakdown, to set the portfolio against: absent
+        # when the benchmark is not described in data/fund_exposure.toml.
+        "benchmark": benchmark,
+        "sectors": _breakdown_payload(exposure.sectors),
+        "countries": _breakdown_payload(exposure.countries),
+        "fund_fees": {
+            "annual_eur": round(exposure.annual_fund_fees, 2) if exposure.annual_fund_fees is not None else None,
+            "weighted_ter": round(exposure.weighted_ter, 6) if exposure.weighted_ter is not None else None,
+            "coverage": round(exposure.fee_coverage, 4),
+        },
+        "lines": [
+            {
+                **label_of(labels, line.asset_key).as_dict(),
+                "weight": round(line.weight, 4),
+                "ter": line.ter,
+                "sectors_as_of": line.sectors_as_of,
+                "countries_as_of": line.countries_as_of,
+            }
+            for line in exposure.lines
+        ],
+    }
+
+
+def _with_fund_fees(fees_payload: dict | None, exposure) -> dict | None:
+    """Once the funds' own fees are known, the TER note states them instead of saying they cannot be."""
+    if fees_payload is None or exposure is None or exposure.annual_fund_fees is None:
+        return fees_payload
+    # No euro amount here: notes are shown unmasked in privacy mode, and the
+    # fund fees tile already carries the figure, masked.
+    note = (
+        f"Les frais de gestion de vos fonds (TER) font {_pct(exposure.weighted_ter, 2)} par an en "
+        "moyenne pondérée, chiffrés en euros dans « Frais de gestion des fonds ». Ils sont déjà dans "
+        "le cours : ils ne s'ajoutent pas à votre performance, ils l'ont déjà réduite."
+    )
+    # Two yearly rates: the TER, and the order fees over the capital put to work.
+    # The gated one, so an order-fee figure the page withholds claims nothing.
+    order_bps = fees_payload["annual_bps"]["value"]
+    if order_bps is not None and exposure.weighted_ter > order_bps / Decimal("10000"):
+        note += (
+            " Sur un portefeuille buy-and-hold, ils pèsent structurellement plus lourd que vos "
+            "frais d'ordre."
+        )
+    if exposure.fee_coverage < Decimal("1"):
+        note += (
+            f" Calculés sur {_pct_compact(exposure.fee_coverage)} du portefeuille : les lignes "
+            "non décrites n'y entrent pas."
+        )
+    return {**fees_payload, "ter_note": note}
+
+
 def _fees_payload(fees) -> dict | None:
     if fees is None:
         return None
@@ -1727,3 +1808,9 @@ def _fr(value, digits: int) -> str:
 
 def _pct(ratio, digits: int = 1) -> str:
     return f"{_fr(Decimal(ratio) * 100, digits)} %"
+
+
+def _pct_compact(ratio) -> str:
+    """One decimal at most, as the page prints a share: 87,8 %, 88 %."""
+    tenths = (Decimal(ratio) * 100).quantize(Decimal("0.1"), ROUND_HALF_UP)
+    return f"{_fr(tenths, 1).removesuffix(',0')} %"

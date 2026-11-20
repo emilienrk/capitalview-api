@@ -155,3 +155,23 @@ def test_the_stored_row_is_ciphertext(session, master_key):
 
     row = session.get(InvestorAnalyticsCache, (hash_index(USER, master_key), KIND_INVESTOR))
     assert "verdict" not in row.content_enc and "IE00B4L5Y983" not in row.content_enc
+
+
+def test_an_edited_fund_moves_every_digest_and_rebuilds(session, master_key):
+    from services.fund_exposure import parse_exposure_file, sync_exposure_rows
+
+    _account(session, master_key)
+    build = _Counter()
+    cached_payload(session, USER, master_key, KIND_INVESTOR, InvestorAnalyticsResponse, build, now=NOW)
+    before = source_digest(session, USER, master_key, KIND_INVESTOR)
+
+    sync_exposure_rows(
+        session,
+        parse_exposure_file(
+            '[FR0000000001.ter]\nvalue = 0.002\nas_of = 2026-11-01\nsource = "https://example.com"\n'
+        ),
+    )
+
+    assert source_digest(session, USER, master_key, KIND_INVESTOR) != before
+    cached_payload(session, USER, master_key, KIND_INVESTOR, InvestorAnalyticsResponse, build, now=NOW)
+    assert build.calls == 2
