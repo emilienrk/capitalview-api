@@ -114,6 +114,24 @@ class _AccountSnapshot:
     placement: PlacementTimeline | None = None
 
 
+def _history_is_stale(
+    acc_snap: _AccountSnapshot,
+    first_date: date,
+    min_calc_version: int,
+) -> bool:
+    """Whether an account's stored history must be dropped and rebuilt.
+
+    Never for a bank account: the rebuild can only repeat today's balance on
+    every day, so it would flatten the curve the sync wrote (docs/bank-ledger.md, L12).
+    """
+    if acc_snap.account_type == AccountCategory.BANK:
+        return False
+    return (
+        first_date > acc_snap.account_created_at
+        or min_calc_version < _current_calc_version(acc_snap.account_type)
+    )
+
+
 def _parse_iso_date(value: str) -> date | None:
     """Parse an ISO-like string into a date. Return None when invalid."""
     try:
@@ -932,13 +950,11 @@ def run_lazy_catchup(user_uuid: str, master_key: str) -> None:
             #      (created_at-based drift), or
             #   2. The stored formula version is behind the current one for this
             #      account type (a valuation/P&L formula changed).
+            # Bank accounts are never invalidated: their stored curve comes from
+            # the sync and cannot be rebuilt here.
             if first_and_last is not None:
                 first_date, _, min_calc_version = first_and_last
-                stale = (
-                    first_date > acc_snap.account_created_at
-                    or min_calc_version < _current_calc_version(acc_snap.account_type)
-                )
-                if stale:
+                if _history_is_stale(acc_snap, first_date, min_calc_version):
                     session.exec(
                         sa.delete(AccountHistory).where(
                             AccountHistory.account_id_bidx == account_id_bidx,

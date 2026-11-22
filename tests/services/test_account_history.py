@@ -30,6 +30,7 @@ from services.account_history import (
     _current_calc_version,
     _generate_missing_snapshots,
     _get_snapshot_date_bounds,
+    _history_is_stale,
     _resolve_account_start_date,
     _interpolate_asset_value,
 )
@@ -1497,6 +1498,62 @@ def test_current_calc_version_other_types_are_zero():
 def test_current_calc_version_unknown_type_defaults_to_zero():
     """A type absent from the map is treated as legacy version 0, never stale."""
     assert _current_calc_version("SOMETHING_UNMAPPED") == 0
+
+
+def test_a_synced_account_keeps_its_curve_when_its_opening_date_moves_earlier():
+    """L12: the rebuild would repeat today's balance over the curve the sync wrote."""
+    account = _AccountSnapshot(
+        account_id="acc_bank",
+        account_type=AccountCategory.BANK,
+        account_created_at=date(2026, 1, 1),
+    )
+
+    assert _history_is_stale(account, date(2026, 1, 4), 0) is False
+
+
+def test_a_synced_account_keeps_its_curve_when_the_bank_formula_version_is_bumped(monkeypatch):
+    """L12: a version bump must not flatten every synced account either."""
+    monkeypatch.setitem(CURRENT_CALC_VERSION, AccountCategory.BANK, 1)
+    account = _AccountSnapshot(
+        account_id="acc_bank",
+        account_type=AccountCategory.BANK,
+        account_created_at=date(2026, 1, 1),
+    )
+
+    assert _history_is_stale(account, date(2026, 1, 1), 0) is False
+
+
+def test_a_stock_account_is_rebuilt_when_it_starts_before_its_first_snapshot():
+    account = _AccountSnapshot(
+        account_id="acc_stock",
+        account_type=AccountCategory.STOCK,
+        account_created_at=date(2026, 1, 1),
+    )
+    current = CURRENT_CALC_VERSION[AccountCategory.STOCK]
+
+    assert _history_is_stale(account, date(2026, 1, 4), current) is True
+
+
+def test_a_stock_account_is_rebuilt_when_its_formula_version_is_behind():
+    account = _AccountSnapshot(
+        account_id="acc_stock",
+        account_type=AccountCategory.STOCK,
+        account_created_at=date(2026, 1, 1),
+    )
+    current = CURRENT_CALC_VERSION[AccountCategory.STOCK]
+
+    assert _history_is_stale(account, date(2026, 1, 1), current - 1) is True
+
+
+def test_a_stock_account_keeps_its_history_when_start_and_version_are_current():
+    account = _AccountSnapshot(
+        account_id="acc_stock",
+        account_type=AccountCategory.STOCK,
+        account_created_at=date(2026, 1, 1),
+    )
+    current = CURRENT_CALC_VERSION[AccountCategory.STOCK]
+
+    assert _history_is_stale(account, date(2026, 1, 1), current) is False
 
 
 def test_get_snapshot_date_bounds_returns_min_calc_version(

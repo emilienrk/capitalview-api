@@ -1,7 +1,7 @@
 # Le solde d'un compte bancaire
 
 Référence du solde et de la courbe d'un compte bancaire (`services/bank_ledger.py`). Le code la suit, et chaque
-changement de comportement la met à jour. Les règles d'abord, numérotées L1 à L11 ; le journal daté en fin.
+changement de comportement la met à jour. Les règles d'abord, numérotées L1 à L12 ; le journal daté en fin.
 
 ## La règle
 
@@ -113,6 +113,14 @@ partent), et « Vos opérations donnent X €, votre banque Y € : la courbe a
 été relevée (abaissée) de Z € à partir du JJ/MM/AAAA. Avant cette date, elle reste celle de votre import, d'où une marche
 ce jour-là. »
 
+**L12. La courbe d'un compte synchronisé n'est jamais reconstruite à la connexion.** Le rattrapage de connexion
+(`run_lazy_catchup`) ne sait écrire, pour un compte bancaire, que le solde du jour répété sur chaque jour : il ne fait
+qu'ajouter les jours manquants après le dernier point stocké. Ni une date d'ouverture reculée avant le premier point
+(`update_bank_account` l'accepte sur un compte rattaché), ni une montée de `CURRENT_CALC_VERSION` ne lui font supprimer
+l'historique d'un compte bancaire (`_history_is_stale`) : seule la synchronisation redessine cette courbe (L1). Les
+jours entre la nouvelle date d'ouverture et le premier point restent sans valeur. Les autres types de compte gardent
+l'invalidation, parce que leur historique se recalcule depuis leurs transactions.
+
 ## Limite connue
 
 **L9.** Un ajustement autre que celui d'ouverture garde son montant. Si des opérations plus anciennes que lui arrivent,
@@ -187,3 +195,9 @@ Aucun montant n'est journalisé.
   opérations l'égale : aucune phrase sur la courbe. Le même jour, le message compte aussi les lignes importées plus
   anciennes que la banque, qui restent (`kept`), et ses phrases disent alors que seuls les jours depuis le premier
   servi par la banque ont bougé, avec une marche ce jour-là, au lieu de toute la courbe (L11). Sur le dump : 0 gardée.
+- **16 novembre 2026** : le rattrapage de connexion ne supprime plus l'historique d'un compte bancaire (L12). Avant,
+  reculer la date d'ouverture d'un compte synchronisé avant son premier point faisait supprimer toute sa courbe à la
+  connexion suivante, remplacée par le solde du jour répété ; la synchronisation d'après n'en redessinait que les
+  trente derniers jours environ (`CURVE_REDRAW`). Mesuré sur un cas construit, pas sur le dump : une courbe de cinq
+  jours à 100, 200, 300, 400 et 500 €, une date d'ouverture reculée de trois jours, un solde du jour de 1 000 € ;
+  avant, 9 jours tous à 1 000 € ; après, les cinq points sont gardés et seul le jour manquant est ajouté.
