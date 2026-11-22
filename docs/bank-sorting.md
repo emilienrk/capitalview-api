@@ -67,7 +67,9 @@ INST <quelqu'un d'autre> » passait pour le « VIR INST <l'utilisateur> » ; plu
 **R11. Remboursement sur un même compte** : même montant, le crédit dans les 30 jours après le débit, avec un mot rare
 commun aux deux libellés. Exemple : −30 € Amazon, puis +30 € Amazon. Les mots trop fréquents sont calculés sur ton compte (plus de 5 % d'un côté, 3 fois au
 moins), sans dictionnaire : ici, un mot ne pèse que par sa rareté chez toi. Ailleurs, une seule liste fixe de mots
-pèse sur un type : celle des marchands des récurrents (R41).
+pèse sur un type : celle des marchands des récurrents (R41). Sans mot rare, le crédit arrivé dans les 3 jours qui
+reprend **tous** les mots du libellé du débit l'annule aussi. Exemple : −2 000 € « VIR INST JEAN MARTIN », puis
++2 000 € « REJ VIR INST JEAN MARTIN », quand tes propres virements rendent chacun de ces mots trop fréquent.
 
 **R12. Dépôt Bourse / Crypto / placement déjà validé** : même jour, même montant au centime ou un écart de frais (1 €
 ou 2 % au plus, chacun le seul candidat de l'autre ce jour-là), depuis le même compte bancaire, sous le même libellé,
@@ -635,6 +637,17 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
   l'instant : les listes restent, jugées par Emilien comme un sujet à rouvrir. Avant de rouvrir, mesurer la stabilité
   en rejouant l'historique mois par mois.
 
+### 22 novembre 2026
+
+- Rejet de virement annulé sur le même compte (R11) : un crédit dans les 3 jours qui reprend tous les mots du débit
+  vaut le mot rare. Cas réel : deux « REJ VIR INST » (10 € et 2 000 €) que rien n'appariait, chacun de leurs mots
+  étant sur plus de 5 % des crédits du compte (« ROUKINE » 143/492), comptés en revenu. Automatique comme le reste de
+  R11 : sur un même compte, rien n'est proposé en question.
+- Mesuré sur le dump de prod du jour (4 601 opérations), même compte, même montant, libellé du crédit contenant tout
+  celui du débit : 15 couples à 3 jours (17 à 7, aucun de plus utile), dont 12 déjà appariés par R11 ou par une
+  décision. Nouvelles paires : les deux rejets (+2 010 € de revenus en moins) et 5 € envoyés puis rendus le même jour
+  par la même personne (0 € en net avant comme après). Aucun faux positif.
+
 ### État des points
 
 | Point | État |
@@ -669,3 +682,4 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
 | Libellé sans mot : identité `#` sur le texte entier, correspondance exacte (12/11) | fait |
 | Séparer un libellé : chaque opération demande seule, aucune règle née d'une réponse ne l'atteint (12/11) | fait |
 | Listes de mots écrites telles qu'elles agissent ; essai sans dictionnaire mesuré, non retenu (13/11) | fait |
+| Rejet de virement : crédit qui reprend tout le libellé du débit dans les 3 jours, même compte (22/11) | fait |

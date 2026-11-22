@@ -134,6 +134,32 @@ class TestRefunds:
         )
         assert _month(session, master_key, "2026-02").reversals_excluded == 0
 
+    @staticmethod
+    def _own_transfers_in() -> list[tuple[str, str, str, str, str]]:
+        """Credits from the user's other bank, enough to make each of their words common."""
+        return [
+            (CURRENT, f"2024-05-{day:02d}", f"{day}.50", "CRDT", "VIR INST JEAN MARTIN")
+            for day in range(1, 21)
+        ]
+
+    def test_a_rejected_transfer_repeating_its_whole_label_cancels_it(self, session: Session, master_key: str):
+        _ops(
+            session, master_key, *self._own_transfers_in(),
+            (CURRENT, "2024-06-03", "2000.00", "DBIT", "VIR INST JEAN MARTIN"),
+            (CURRENT, "2024-06-03", "2000.00", "CRDT", "REJ VIR INST JEAN MARTIN"),
+        )
+        month = _month(session, master_key, "2024-06")
+        assert month.inflow == month.outflow == 0
+        assert (month.reversals_excluded, month.reversals_amount) == (1, 2000)
+
+    def test_a_credit_repeating_the_label_after_three_days_is_no_rejection(self, session: Session, master_key: str):
+        _ops(
+            session, master_key, *self._own_transfers_in(),
+            (CURRENT, "2024-06-03", "2000.00", "DBIT", "VIR INST JEAN MARTIN"),
+            (CURRENT, "2024-06-07", "2000.00", "CRDT", "REJ VIR INST JEAN MARTIN"),
+        )
+        assert _month(session, master_key, "2024-06").reversals_excluded == 0
+
 
 class TestStoredPatterns:
     def test_they_are_built_once_and_reused_while_nothing_moves(self, session: Session, master_key: str):

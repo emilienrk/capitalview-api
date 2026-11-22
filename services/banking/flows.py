@@ -127,6 +127,8 @@ _TRANSFER_MAX_CALENDAR_DAYS = 10
 
 # A refund lands on the account that paid, within this many days of the payment.
 REFUND_MAX_DAYS = 30
+# A rejected transfer comes back within days, under the label it left with.
+REJECTION_MAX_DAYS = 3
 # A word on more than this share of one side of an account says nothing about
 # which operations belong together: "CARTE" on debits, "AVOIR" or "VIR" on credits.
 COMMON_WORD_SHARE = 0.05
@@ -404,8 +406,9 @@ def _internal_transfer_legs(
                     continue
                 if c.account_bidx == d.account_bidx:
                     gap = (c.day - d.day).days
-                    if pairing and 0 <= gap <= REFUND_MAX_DAYS and _share_a_telling_word(
-                        pairing.patterns, d, c, words_of(debit), words_of(credit)
+                    if pairing and 0 <= gap <= REFUND_MAX_DAYS and (
+                        _share_a_telling_word(pairing.patterns, d, c, words_of(debit), words_of(credit))
+                        or _repeats_the_whole_label(gap, words_of(debit), words_of(credit))
                     ):
                         refunds.append((gap, debit, credit, BankTransferStatus.REFUND))
                     continue
@@ -565,6 +568,13 @@ def _share_a_telling_word(
     telling_debit = debit_words - patterns.common(d.account_bidx, is_credit=True)
     telling_credit = credit_words - patterns.common(c.account_bidx, is_credit=False)
     return bool(telling_debit & telling_credit)
+
+
+def _repeats_the_whole_label(gap: int, debit_words: frozenset[str], credit_words: frozenset[str]) -> bool:
+    """Whether a credit within days carries every word of the payment's label:
+    a rejected transfer ("REJ VIR INST JEAN MARTIN") names only words the user's
+    own transfers make too common to tell anything."""
+    return gap <= REJECTION_MAX_DAYS and bool(debit_words) and debit_words <= credit_words
 
 
 def _user_accounts(session: Session, user_uuid: str, master_key: str) -> _Accounts:
