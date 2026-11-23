@@ -272,6 +272,16 @@ def delete_operation(session: Session, account: BankAccount, row: BankTransactio
             raise OperationNotDeletableError(
                 "Cette opération vient de la banque : la prochaine synchronisation la ramènerait."
             )
+    # What was bound to it goes with it, never orphaned (L1). Imported late:
+    # these modules read the ledger.
+    from services.banking.contribution_decisions import forget_operations as forget_contributions
+    from services.banking.recurring_decisions import forget_operations as forget_recurring
+    from services.banking.transfer_decisions import forget_operations as forget_pairs
+
+    refs = {hash_index(row.uuid, master_key)}
+    forget_pairs(session, account.user_uuid_bidx, refs)
+    forget_contributions(session, account.user_uuid_bidx, refs)
+    forget_recurring(session, account.user_uuid_bidx, refs, master_key)
     session.delete(row)
     session.commit()
     rebuild_from_operations(session, account, master_key)

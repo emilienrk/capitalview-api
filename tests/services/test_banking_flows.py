@@ -521,3 +521,40 @@ class TestMonthTransactions:
             session, USER, master_key, period="2026-03", account_id=empty.id,
         )
         assert result.transactions == []
+
+
+class TestCash:
+    """A cash account is filled by hand, never by a bank (docs/bank-ledger.md, L13)."""
+
+    def test_cash_withdrawn_is_spent_when_paid_out_not_when_withdrawn(
+        self, session: Session, master_key: str
+    ):
+        from dtos.bank import BankAccountCreate, BankEntryRequest
+        from dtos.banking import BankTransferDecisionKind, BankTransferStatus
+        from models.enums import BankAccountType
+        from services.bank import create_bank_account
+        from services.bank_ledger import add_entry
+        from services.banking.transfer_decisions import record_decision
+
+        _link(session, master_key, ACCOUNT_A)
+        _store(session, master_key, ACCOUNT_A, _raw("100.00", "DBIT", "2026-03-10", ref="atm"))
+        wallet = create_bank_account(
+            session, BankAccountCreate(name="Porte-monnaie", account_type=BankAccountType.CASH), USER, master_key,
+        )
+        row = session.get(BankAccount, wallet.id)
+        add_entry(session, row, BankEntryRequest(day=date(2026, 3, 10), amount=Decimal("100"), label="Retrait"), master_key)
+        add_entry(session, row, BankEntryRequest(day=date(2026, 3, 12), amount=Decimal("-30"), label="Marché"), master_key)
+
+        items = list_month_transactions(session, USER, master_key, period="2026-03").transactions
+        atm = next(i for i in items if i.account_id == ACCOUNT_A)
+        withdrawn = next(i for i in items if i.account_id == wallet.id and i.is_credit)
+        # Between two everyday accounts, a pair is only offered — never saving.
+        assert atm.transfer_account_id == wallet.id
+        assert atm.transfer_status not in (BankTransferStatus.SAVINGS, None)
+
+        record_decision(session, USER, master_key, atm.id, withdrawn.id, BankTransferDecisionKind.TRANSFER)
+
+        result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
+        assert result.internal_transfers_excluded == 1
+        assert result.outflow == Decimal("30.00")
+        assert result.inflow == Decimal("0")

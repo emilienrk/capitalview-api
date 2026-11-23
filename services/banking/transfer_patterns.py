@@ -66,7 +66,7 @@ from services.encryption import decrypt_data, encrypt_data, hash_index
 RECURRING_MIN_OCCURRENCES = 3
 
 # Bumped whenever what is derived changes, so every stored set is rebuilt.
-_VERSION = "40"
+_VERSION = "41"
 
 
 class FlowCarrier(NamedTuple):
@@ -285,7 +285,8 @@ def side_key(account: str, is_credit: bool) -> str:
 
 
 def source_digest(
-    session: Session, user_bidx: str, readable: list[str], savings: frozenset[str], master_key: str
+    session: Session, user_bidx: str, readable: list[str], savings: frozenset[str], master_key: str,
+    cash: frozenset[str] = frozenset(),
 ) -> str:
     """A fingerprint of everything the patterns are derived from.
 
@@ -294,7 +295,7 @@ def source_digest(
     timestamp; so do a decision, a type rule, which is replaced rather than
     updated, and a label separation, only ever added or deleted. The savings
     accounts are part of it as they are, not through a timestamp: an account's
-    type decides whole tiers. A recurring payment decision
+    type decides whole tiers — the cash accounts too, which never pair a debit. A recurring payment decision
     is updated in place, so its latest update time counts, not its creation.
 
     The investment accounts count too: a deposit declared on one of them types
@@ -340,7 +341,7 @@ def source_digest(
     ).first()
     raw = json.dumps(
         [
-            _VERSION, sorted(readable), sorted(savings),
+            _VERSION, sorted(readable), sorted(savings), sorted(cash),
             list(rows), list(decisions), list(contribution_decisions), list(rules), list(separations),
             list(recurring), investments, threshold,
         ],

@@ -1,6 +1,7 @@
 """Bank account routes."""
 
 from datetime import date
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,7 +16,6 @@ from dtos import (
     BankAccountResponse,
     BankSummaryResponse,
     BankBalanceResponse,
-    BankEntryRequest,
     BankEntryResponse,
     SavingsInterestResponse,
 )
@@ -32,7 +32,9 @@ from services.bank import (
     delete_bank_account_history,
     confirm_up_to_date,
 )
+from dtos.banking import BankEntryCreate, BankTransactionItem
 from dtos.transaction import AccountHistorySnapshotResponse
+from services.banking.transfer_decisions import TransactionNotFoundError
 from services.savings_interest import get_user_savings_interest
 
 router = APIRouter(prefix="/bank", tags=["Bank Accounts"])
@@ -198,21 +200,52 @@ def delete_account(
 @router.post("/accounts/{account_id}/entries", response_model=BankEntryResponse)
 def add_account_entry(
     account_id: str,
-    entry: BankEntryRequest,
+    entry: BankEntryCreate,
     current_user: Annotated[User, Depends(get_current_user)],
     master_key: Annotated[str, Depends(get_master_key)],
     session: Session = Depends(get_session),
 ):
-    """An operation typed by hand on an account no bank feeds (docs/bank-ledger.md)."""
+    """An operation typed by hand on an account no bank feeds (docs/bank-ledger.md),
+    filed as the user said (docs/bank-sorting.md, R56)."""
     from models import BankAccount as BankAccountModel
-    from services.bank_ledger import SyncedAccountError, add_entry
+    from models.banking import BankTransaction
+    from services.bank_ledger import SyncedAccountError, add_entry, delete_operation
+    from services.banking.flows import file_entry
+    from services.banking.transfer_decisions import DecisionError
 
     if not get_bank_account(session, account_id, current_user.uuid, master_key):
         raise HTTPException(status_code=404, detail="Account not found")
+    account = session.get(BankAccountModel, account_id)
     try:
-        return add_entry(session, session.get(BankAccountModel, account_id), entry, master_key)
+        created = add_entry(session, account, entry, master_key)
     except SyncedAccountError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    try:
+        file_entry(session, current_user.uuid, master_key, account_id, created.id, entry)
+    except (DecisionError, TransactionNotFoundError) as exc:
+        # All or nothing: an entry the user filed is not left unfiled.
+        delete_operation(session, account, session.get(BankTransaction, created.id), master_key)
+        raise HTTPException(status_code=400, detail=str(exc) or "Cette opération ne peut pas être appariée.")
+    return created
+
+
+@router.get("/accounts/{account_id}/counterparts", response_model=list[BankTransactionItem])
+def get_entry_counterparts(
+    account_id: str,
+    day: date,
+    amount: Decimal,
+    current_user: Annotated[User, Depends(get_current_user)],
+    master_key: Annotated[str, Depends(get_master_key)],
+    session: Session = Depends(get_session),
+    editing: str | None = None,
+):
+    """What an entry about to be typed here could pair with (docs/bank-sorting.md, R56);
+    `editing`, the entry it replaces."""
+    from services.banking.flows import list_entry_counterparts
+
+    if not get_bank_account(session, account_id, current_user.uuid, master_key):
+        raise HTTPException(status_code=404, detail="Account not found")
+    return list_entry_counterparts(session, current_user.uuid, master_key, account_id, day, amount, editing)
 
 
 @router.get("/accounts/{account_id}/balance", response_model=BankBalanceResponse)

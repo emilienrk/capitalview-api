@@ -1,7 +1,7 @@
 # Le solde d'un compte bancaire
 
 Référence du solde et de la courbe d'un compte bancaire (`services/bank_ledger.py`). Le code la suit, et chaque
-changement de comportement la met à jour. Les règles d'abord, numérotées L1 à L12 ; le journal daté en fin.
+changement de comportement la met à jour. Les règles d'abord, numérotées L1 à L13 ; le journal daté en fin.
 
 ## La règle
 
@@ -88,7 +88,10 @@ identité à l'opération (docs/bank-sorting.md, R24). Sans lui, elle ne poserai
 règle et compterait en silence comme le dit son sens. La modale propose les libellés déjà vus sur ce compte dans ce
 sens, les plus fréquents d'abord : en reprendre un tel quel range la saisie avec ses semblables. Pas de libellé par
 défaut : un même texte pour toutes les saisies les regrouperait, et une règle ou un Oui appris sur l'une rangerait les
-autres. Vérifié dans la modale seulement : l'API accepte encore une saisie sans libellé.
+autres. Vérifié dans la modale seulement : l'API accepte encore une saisie sans libellé. Sauf sur un compte Espèces
+(L13) : le libellé y est facultatif, et vide, la modale en met un par sens et par réponse (« Dépense en espèces »,
+« Retrait », « Entrée non comptée »…). Le regroupement qu'il éviterait n'y range rien : une sortie ne demande rien et
+une entrée est classée une à une, à la saisie (docs/bank-sorting.md, R55 et R56).
 
 **L11. La première synchronisation d'un compte rempli par import dit ce qu'elle a remplacé et de combien elle a
 décalé la courbe.** La courbe
@@ -120,6 +123,20 @@ qu'ajouter les jours manquants après le dernier point stocké. Ni une date d'ou
 l'historique d'un compte bancaire (`_history_is_stale`) : seule la synchronisation redessine cette courbe (L1). Les
 jours entre la nouvelle date d'ouverture et le premier point restent sans valeur. Les autres types de compte gardent
 l'invalidation, parce que leur historique se recalcule depuis leurs transactions.
+
+**L13. Un compte Espèces (`CASH`) n'est jamais synchronisé.** Billets et pièces : aucune banque ne le sert, et son
+rattachement est refusé (`CashAccountNotLinkableError`, 409) ; le rattachement ne le propose pas. Il suit tout le
+reste comme un compte non synchronisé : solde = somme de ses opérations saisies (L1 à L3). Il n'est pas un compte
+d'épargne : un retrait du compte courant et l'entrée en face sur les espèces forment une paire proposée (R15), un
+virement une fois validée, jamais de l'épargne ; la dépense compte quand l'argent sort du porte-monnaie. Rien n'est
+détecté au libellé, aucun « RETRAIT DAB ». Une sortie d'espèces ne pose jamais de question, et une entrée se classe
+ou se lie au retrait en face dès la saisie (docs/bank-sorting.md, R55 et R56). Pour ce qu'on oublie de noter, la
+modale propose un troisième type d'opération, « Comptage », à la place du lien « Calculer le
+montant depuis le solde de votre relevé » : un seul champ, le montant compté, et la modale dit l'opération qui en
+résulte. L'écart donne, comme un solde lu sur un relevé (L3), une opération réelle : une sortie, donc une dépense, ou
+une entrée en Non compté (de l'argent retrouvé dont on ne sait rien), libellée « Écart de comptage » par défaut. Le
+libellé y est facultatif (L10). Aucun compte Espèces n'est créé d'office, et on peut en tenir
+plusieurs, dans toute devise.
 
 ## Limite connue
 
@@ -201,3 +218,9 @@ Aucun montant n'est journalisé.
   trente derniers jours environ (`CURVE_REDRAW`). Mesuré sur un cas construit, pas sur le dump : une courbe de cinq
   jours à 100, 200, 300, 400 et 500 €, une date d'ouverture reculée de trois jours, un solde du jour de 1 000 € ;
   avant, 9 jours tous à 1 000 € ; après, les cinq points sont gardés et seul le jour manquant est ajouté.
+- **23 novembre 2026** : type de compte Espèces (`CASH`), jamais rattachable à une banque, avec un type d'opération
+  « Comptage » dans la modale (L13) ; son tri dans docs/bank-sorting.md, R55 et R56. Le même jour, supprimer une opération
+  emporte ses paires, sa réponse de versement et sa mention dans un récurrent, comme une ligne importée remplacée (L1) :
+  avant, ces décisions restaient en base, orphelines et sans effet. Avant, l'argent liquide n'était nulle part : un retrait comptait en dépense le
+  jour du retrait, et un liquide reçu (vente, remboursement) ne comptait jamais. Rien ne change pour les comptes
+  existants : le dump du 08/11 n'a aucun compte de ce type, et aucune règle de tri ne lit le nouveau type.

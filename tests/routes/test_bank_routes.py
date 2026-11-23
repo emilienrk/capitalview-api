@@ -150,3 +150,135 @@ def test_an_entry_in_the_future_is_refused(session, master_key):
         json={"day": "2999-01-01", "amount": "-50"},
     )
     assert r.status_code == 422
+
+
+def _wallet_and_withdrawal(client: TestClient, amount: str = "200") -> tuple[str, str, str]:
+    """A current account typed by hand, cash taken out of it, and a wallet."""
+    checking = client.post("/bank/accounts", json={"name": "Compte courant", "account_type": "CHECKING"}).json()["id"]
+    withdrawal = client.post(
+        f"/bank/accounts/{checking}/entries", json={"day": "2026-03-10", "amount": f"-{amount}", "label": "Retrait DAB"},
+    ).json()["id"]
+    wallet = client.post("/bank/accounts", json={"name": "Porte-monnaie", "account_type": "CASH"}).json()["id"]
+    return checking, withdrawal, wallet
+
+
+def _month(session, master_key):
+    from services.banking.flows import list_month_transactions
+
+    return {tx.label: tx for tx in list_month_transactions(session, "user_1", master_key, period="2026-03").transactions}
+
+
+def test_an_entry_shows_the_withdrawal_it_may_come_from(session, master_key):
+    """docs/bank-sorting.md, R56: the other direction, the very amount, on another account."""
+    client = TestClient(app)
+    _, withdrawal, wallet = _wallet_and_withdrawal(client)
+
+    found = client.get(f"/bank/accounts/{wallet}/counterparts", params={"day": "2026-03-11", "amount": "200"}).json()
+    assert [tx["id"] for tx in found] == [withdrawal]
+    assert client.get(f"/bank/accounts/{wallet}/counterparts", params={"day": "2026-03-11", "amount": "150"}).json() == []
+    assert client.get(f"/bank/accounts/{wallet}/counterparts", params={"day": "2026-03-11", "amount": "-200"}).json() == []
+
+
+def test_an_entry_filed_with_its_withdrawal_is_a_transfer_at_once(session, master_key):
+    client = TestClient(app)
+    _, withdrawal, wallet = _wallet_and_withdrawal(client)
+
+    r = client.post(
+        f"/bank/accounts/{wallet}/entries",
+        json={"day": "2026-03-10", "amount": "200", "label": "Retrait", "transfer_with": withdrawal},
+    )
+
+    assert r.status_code == 200
+    month = _month(session, master_key)
+    assert month["Retrait"].transfer_status == "confirmed"
+    assert month["Retrait DAB"].transfer_id == r.json()["id"]
+    # A withdrawal a pair already holds is offered no more, but to the entry it pairs with, typed again.
+    asked = {"day": "2026-03-10", "amount": "200"}
+    assert client.get(f"/bank/accounts/{wallet}/counterparts", params=asked).json() == []
+    again = client.get(f"/bank/accounts/{wallet}/counterparts", params={**asked, "editing": r.json()["id"]}).json()
+    assert [tx["id"] for tx in again] == [withdrawal]
+
+
+def test_a_deleted_entry_takes_its_pair_with_it(session, master_key):
+    """docs/bank-ledger.md, L1: what was bound to an operation goes with it, never orphaned."""
+    from models.banking import BankTransferDecision
+
+    client = TestClient(app)
+    _, withdrawal, wallet = _wallet_and_withdrawal(client)
+    entry = client.post(
+        f"/bank/accounts/{wallet}/entries",
+        json={"day": "2026-03-10", "amount": "200", "label": "Retrait", "transfer_with": withdrawal},
+    ).json()["id"]
+    assert len(session.exec(select(BankTransferDecision)).all()) == 1
+
+    assert client.delete(f"/bank/transactions/{entry}").status_code == 204
+
+    assert session.exec(select(BankTransferDecision)).all() == []
+
+
+def test_an_entry_given_a_type_pairs_with_nothing(session, master_key):
+    """Cash from an object sold: said so as it is typed, nothing is left to sort."""
+    client = TestClient(app)
+    _wallet_and_withdrawal(client)
+    _, _, wallet = _wallet_and_withdrawal(client, amount="50")
+
+    r = client.post(
+        f"/bank/accounts/{wallet}/entries",
+        json={"day": "2026-03-10", "amount": "50", "label": "Vente vélo", "type": "NEUTRAL"},
+    )
+
+    assert r.status_code == 200
+    sale = _month(session, master_key)["Vente vélo"]
+    assert (sale.cashflow_type, sale.type_source) == ("NEUTRAL", "override")
+    assert sale.transfer_id is None
+    assert sale.flow_question is None
+
+
+def test_an_entry_that_cannot_pair_is_not_kept(session, master_key):
+    client = TestClient(app)
+    checking, withdrawal, wallet = _wallet_and_withdrawal(client)
+
+    r = client.post(
+        f"/bank/accounts/{wallet}/entries",
+        json={"day": "2026-03-10", "amount": "150", "label": "Retrait", "transfer_with": withdrawal},
+    )
+
+    assert r.status_code == 400
+    assert Decimal(client.get(f"/bank/accounts/{wallet}").json()["balance"]) == 0
+    assert "Retrait" not in _month(session, master_key)
+
+
+def test_an_entry_is_either_typed_or_paired(session, master_key):
+    client = TestClient(app)
+    _, withdrawal, wallet = _wallet_and_withdrawal(client)
+    r = client.post(
+        f"/bank/accounts/{wallet}/entries",
+        json={"day": "2026-03-10", "amount": "200", "type": "INCOME", "transfer_with": withdrawal},
+    )
+    assert r.status_code == 422
+
+
+def test_money_paid_out_of_a_wallet_asks_nothing(session, master_key):
+    """docs/bank-sorting.md, R55: past the threshold, and facing a credit of its
+    amount on another account, it is spent, neither asked nor offered as a pair."""
+    client = TestClient(app)
+    checking = client.post("/bank/accounts", json={"name": "Compte courant", "account_type": "CHECKING"}).json()["id"]
+    client.post(f"/bank/accounts/{checking}/entries", json={"day": "2026-03-10", "amount": "900", "label": "Virement ami"})
+    wallet = client.post("/bank/accounts", json={"name": "Porte-monnaie", "account_type": "CASH"}).json()["id"]
+    client.post(f"/bank/accounts/{wallet}/entries", json={"day": "2026-03-01", "amount": "1000", "label": "Retrait"})
+    client.post(f"/bank/accounts/{wallet}/entries", json={"day": "2026-03-10", "amount": "-900", "label": "Dépenses en espèces"})
+    client.post(f"/bank/accounts/{wallet}/entries", json={"day": "2026-03-01", "amount": "700", "label": "Retrait"})
+    client.post(f"/bank/accounts/{wallet}/entries", json={"day": "2026-03-20", "amount": "-700", "label": "Scooter"})
+
+    month = _month(session, master_key)
+    assert month["Scooter"].flow_question is None
+    spent = month["Dépenses en espèces"]
+    assert (spent.cashflow_type, spent.type_source) == ("EXPENSE", "default")
+    assert spent.flow_question is None
+    assert spent.transfer_id is None
+    assert month["Virement ami"].transfer_id is None
+
+    from services.banking.flows import compute_real_flows
+
+    spending = compute_real_flows(session, "user_1", master_key, months=1, today=date(2026, 3, 31))
+    assert spending.outflow == Decimal("1600")

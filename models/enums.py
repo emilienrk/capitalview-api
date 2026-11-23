@@ -43,6 +43,8 @@ class BankAccountType(str, Enum):
     LDD = "LDD"
     PEL = "PEL"
     CEL = "CEL"
+    # Notes and coins: no bank feeds it, ever (docs/bank-ledger.md, L13).
+    CASH = "CASH"
 
 class InterestMethod(str, Enum):
     """How a savings account turns its balance into interest."""

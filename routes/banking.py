@@ -126,6 +126,7 @@ from services.banking.linking import (
     delete_bank_session,
     BankAccountNotLinkedError,
     CardAccountNotLinkableError,
+    CashAccountNotLinkableError,
     handle_callback,
     link_account,
     dismiss_sync_notice,
@@ -397,6 +398,11 @@ def link_session_account(
             status_code=409,
             detail="Un compte carte ne peut pas être rattaché : ses opérations sont déjà celles "
                    "du compte qu'il débite, et son solde n'est pas un solde de compte.",
+        )
+    except CashAccountNotLinkableError:
+        raise HTTPException(
+            status_code=409,
+            detail="Un compte Espèces ne se rattache à aucune banque : ses opérations se saisissent à la main.",
         )
     except TargetAccountAlreadyLinkedError:
         raise HTTPException(
