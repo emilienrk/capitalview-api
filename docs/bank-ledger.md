@@ -133,9 +133,13 @@ détecté au libellé, aucun « RETRAIT DAB ». Une sortie d'espèces ne pose ja
 ou se lie au retrait en face dès la saisie (docs/bank-sorting.md, R55 et R56). Pour ce qu'on oublie de noter, la
 modale propose un troisième type d'opération, « Comptage », à la place du lien « Calculer le
 montant depuis le solde de votre relevé » : un seul champ, le montant compté, et la modale dit l'opération qui en
-résulte. L'écart donne, comme un solde lu sur un relevé (L3), une opération réelle : une sortie, donc une dépense, ou
+résulte. C'est le type proposé à l'ouverture d'une nouvelle saisie sur un compte Espèces : un porte-monnaie se compte
+plus qu'il ne se tient ligne à ligne. L'écart donne, comme un solde lu sur un relevé (L3), une opération réelle : une sortie, donc une dépense, ou
 une entrée en Non compté (de l'argent retrouvé dont on ne sait rien), libellée « Écart de comptage » par défaut. Le
-libellé y est facultatif (L10). Aucun compte Espèces n'est créé d'office, et on peut en tenir
+libellé y est facultatif (L10). Un comptage juste suppose chaque retrait lié à son entrée d'espèces : sans ce lien, le
+retrait compte en dépense le jour du retrait, et l'argent une seconde fois quand un comptage le voit sortir. La modale
+le rappelle quand le comptage trouve plus que les opérations, et la fenêtre « Lier » du retrait crée l'entrée liée
+(docs/bank-sorting.md, R56). Aucun compte Espèces n'est créé d'office, et on peut en tenir
 plusieurs, dans toute devise.
 
 ## Limite connue
@@ -223,4 +227,7 @@ Aucun montant n'est journalisé.
   emporte ses paires, sa réponse de versement et sa mention dans un récurrent, comme une ligne importée remplacée (L1) :
   avant, ces décisions restaient en base, orphelines et sans effet. Avant, l'argent liquide n'était nulle part : un retrait comptait en dépense le
   jour du retrait, et un liquide reçu (vente, remboursement) ne comptait jamais. Rien ne change pour les comptes
-  existants : le dump du 08/11 n'a aucun compte de ce type, et aucune règle de tri ne lit le nouveau type.
+  existants : le dump du 08/11 n'a aucun compte de ce type, et seules R55 et R56 lisent le nouveau type.
+- **24 novembre 2026** : « Comptage » proposé par défaut sur un compte Espèces ; un comptage plus haut que les
+  opérations avertit d'un retrait oublié, et « Retiré en espèces » dans la fenêtre « Lier » crée l'entrée liée (L13 ;
+  docs/bank-sorting.md, R56). Sans ce lien, 100 € retirés puis comptés en deux fois donnaient 160 € de dépenses.

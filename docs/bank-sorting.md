@@ -472,6 +472,14 @@ porte-monnaie est donc classé dès la saisie : « À trier » n'en montre que c
 ne demande rien (R55) ; si une entrée lui fait face, la modale propose « Déposé sur un de mes comptes ? », à lier de
 même. La correction d'une saisie (supprimer puis ressaisir) reprend sa réponse ou sa paire.
 
+Le retrait se lie aussi depuis l'autre bout : la fenêtre « Lier » d'une sortie d'un autre compte, sans entrée d'espèces
+du même montant en face, propose « Retiré en espèces » (un bouton par compte Espèces de sa devise). L'entrée est ajoutée
+au compte Espèces, même jour, même montant, libellée « Retrait », et liée au retrait dans le même appel
+(`transfer_with`). C'est le geste qui rend juste un porte-monnaie tenu par comptage (docs/bank-ledger.md, L13) : un
+retrait laissé seul compte en dépense le jour du retrait, puis l'argent compte une seconde fois quand un comptage le
+voit sortir. La fenêtre est ouverte depuis n'importe quelle opération, pas seulement « À trier » : un retrait sous le
+seuil (R21) n'y est jamais posé. Rien n'est détecté au libellé : c'est l'utilisateur qui le dit.
+
 ---
 
 ## Textes d'interface
@@ -490,7 +498,8 @@ même. La correction d'une saisie (supprimer puis ressaisir) reprend sa réponse
 | À trier | « Sans contrepartie bancaire » ; « Historique de mes réponses » ; « Annuler » |
 | Récurrents | « Hors du total » ; « Ce n'est pas récurrent » ; « alimenté hors de mes banques » (placements) |
 | Curseur | « Dépenses à vérifier à partir de <montant> » |
-| Saisie sur un compte Espèces (R56) | entrée : champ « Ce que c'est » (« Retrait d'un de mes comptes », « Entrée », « Remboursement », « Reprise d'épargne », « Reprise d'investissement », « Non compté »), puis « Opération en face » (« <compte> · <jour> · <libellé> », « Aucune de celles-ci ») ou, sans rien en face, « Aucune sortie de ce montant à ces dates : l'entrée sera comptée en Non compté, et la paire vous sera proposée dans À trier dès que votre banque aura remonté le retrait. » ; sortie, si une entrée lui fait face : « Déposé sur un de mes comptes ? » (« Non, dépensé », « <compte> · <jour> · <libellé> ») ; type d'opération « Comptage », champ « Montant compté », ligne « Vos opérations donnent X : une dépense en espèces de Y sera ajoutée. » / « une entrée de Y sera ajoutée, en Non compté. » (docs/bank-ledger.md, L13) ; libellé facultatif, par défaut « Dépense en espèces », « Retrait », « Entrée non comptée », « Écart de comptage »… (L10) |
+| Saisie sur un compte Espèces (R56) | entrée : champ « Ce que c'est » (« Retrait d'un de mes comptes », « Entrée », « Remboursement », « Reprise d'épargne », « Reprise d'investissement », « Non compté »), puis « Opération en face » (« <compte> · <jour> · <libellé> », « Aucune de celles-ci ») ou, sans rien en face, « Aucune sortie de ce montant à ces dates : l'entrée sera comptée en Non compté, et la paire vous sera proposée dans À trier dès que votre banque aura remonté le retrait. » ; sortie, si une entrée lui fait face : « Déposé sur un de mes comptes ? » (« Non, dépensé », « <compte> · <jour> · <libellé> ») ; type d'opération « Comptage », champ « Montant compté », ligne « Vos opérations donnent X : une dépense en espèces de Y sera ajoutée. » / « une entrée de Y sera ajoutée, en Non compté. » et, dans ce second cas, « Un retrait oublié ? Liez-le d'abord depuis l'opération de votre compte (« Lier », puis « Retiré en espèces »), puis recomptez : sinon il comptera deux fois en dépense. » (docs/bank-ledger.md, L13) ; libellé facultatif, par défaut « Dépense en espèces », « Retrait », « Entrée non comptée », « Écart de comptage »… (L10) |
+| Fenêtre « Lier » d'une sortie, face à un compte Espèces (R56) | encadré « Retiré en espèces ? » ; « L'entrée en face est ajoutée à votre compte Espèces et liée à ce retrait : la dépense comptera quand l'argent sortira du porte-monnaie. » ; bouton « Retiré en espèces », ou « Sur <compte> » par compte Espèces quand il y en a plusieurs |
 | Libellé séparé | bouton « Séparer » dans la liste « Choisir parmi les N opérations de ce libellé » ; dans la fenêtre du type, « Ce libellé couvre des opérations sans rapport ? Séparer » ; fenêtre « Séparer ce libellé » ; « Libellé séparé : chaque opération pose sa question seule. » (Annuler) ; mention « Libellé séparé » ; « Regrouper » (onglet Règles) |
 | Carte du compte, après la première synchronisation d'un compte rempli par import (docs/bank-ledger.md, L1 et L11) | encadré « N opérations importées remplacées par celles de votre banque à partir du JJ/MM/AAAA : M réponses sont à redonner dans À trier. » (sans la seconde moitié quand aucune réponse ne part) ; s'il reste des lignes importées plus anciennes, « N opérations importées remplacées par celles de votre banque à partir du JJ/MM/AAAA. Les K opérations d'avant restent celles de votre import : votre banque ne remonte pas plus loin. », la partie des réponses à redonner reprise avant la seconde phrase s'il y en a ; « Vos opérations importées donnent X, votre banque Y : la courbe a été relevée (abaissée) de Z. Votre import ne remonte sans doute pas à l'ouverture du compte, ou il lui manque des opérations. », ou, s'il en reste, « Vos opérations donnent X, votre banque Y : la courbe a été relevée (abaissée) de Z à partir du JJ/MM/AAAA. Avant cette date, elle reste celle de votre import, d'où une marche ce jour-là. » ; croix pour le masquer |
 
@@ -685,6 +694,14 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
   un cas construit (compte courant tenu à la main, porte-monnaie de 1 000 €, sortie d'espèces de 900 € face à une
   entrée de 900 € sur le compte courant, sortie de 700 € sans rien en face) : avant, une paire proposée 900/900 et une
   question à 700 € ; après, ni paire ni question, 1 600 € de dépenses.
+
+### 24 novembre 2026
+
+- Un comptage plus haut que les opérations comptait la dépense deux fois (R56, docs/bank-ledger.md, L13). Mesuré sur
+  un cas construit : retrait de 100 € laissé seul, porte-monnaie compté à 60 € puis à 0 € ; 160 € de dépenses pour
+  100 € réellement dépensés. La fenêtre « Lier » d'une sortie propose maintenant « Retiré en espèces », qui crée
+  l'entrée en face et la lie ; le comptage avertit quand il trouve plus que prévu. Avec le retrait lié, le même cas
+  donne 100 €.
 
 ### État des points
 

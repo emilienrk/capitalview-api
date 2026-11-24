@@ -558,3 +558,37 @@ class TestCash:
         assert result.internal_transfers_excluded == 1
         assert result.outflow == Decimal("30.00")
         assert result.inflow == Decimal("0")
+
+    def test_a_counted_wallet_spends_a_bound_withdrawal_once(self, session: Session, master_key: str):
+        """Counted, not typed line by line: the withdrawal bound to its entry (R56),
+        what the counts take out is all that is spent (docs/bank-ledger.md, L13)."""
+        from dtos.bank import BankAccountCreate
+        from dtos.banking import BankEntryCreate
+        from models.enums import BankAccountType
+        from services.bank import create_bank_account
+        from services.bank_ledger import add_entry
+        from services.banking.flows import file_entry
+
+        _link(session, master_key, ACCOUNT_A)
+        _store(session, master_key, ACCOUNT_A, _raw("100.00", "DBIT", "2026-03-10", ref="atm"))
+        wallet = create_bank_account(
+            session, BankAccountCreate(name="Porte-monnaie", account_type=BankAccountType.CASH), USER, master_key,
+        )
+        row = session.get(BankAccount, wallet.id)
+        atm = next(
+            i for i in list_month_transactions(session, USER, master_key, period="2026-03").transactions
+            if i.account_id == ACCOUNT_A
+        )
+
+        def typed(entry: BankEntryCreate) -> None:
+            created = add_entry(session, row, entry, master_key)
+            file_entry(session, USER, master_key, wallet.id, created.id, entry)
+
+        # What "Retiré en espèces" sends, then two counts: 60 left, then nothing.
+        typed(BankEntryCreate(day=date(2026, 3, 10), amount=Decimal("100"), label="Retrait", transfer_with=atm.id))
+        typed(BankEntryCreate(day=date(2026, 3, 15), amount=Decimal("-40"), label="Écart de comptage"))
+        typed(BankEntryCreate(day=date(2026, 3, 25), amount=Decimal("-60"), label="Écart de comptage"))
+
+        result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
+        assert result.internal_transfers_excluded == 1
+        assert result.outflow == Decimal("100.00")
