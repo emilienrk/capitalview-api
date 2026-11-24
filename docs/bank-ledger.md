@@ -230,4 +230,6 @@ Aucun montant n'est journalisé.
   existants : le dump du 08/11 n'a aucun compte de ce type, et seules R55 et R56 lisent le nouveau type.
 - **24 novembre 2026** : « Comptage » proposé par défaut sur un compte Espèces ; un comptage plus haut que les
   opérations avertit d'un retrait oublié, et « Retiré en espèces » dans la fenêtre « Lier » crée l'entrée liée (L13 ;
-  docs/bank-sorting.md, R56). Sans ce lien, 100 € retirés puis comptés en deux fois donnaient 160 € de dépenses.
+  docs/bank-sorting.md, R56). Sans ce lien, 100 € retirés puis comptés en deux fois donnaient 160 € de dépenses. Le
+  dépôt en banque, de même : « Déposé depuis mes espèces » dans « Lier », et une sortie « pas encore arrivée sur mon
+  compte » attend sa paire en Non compté.

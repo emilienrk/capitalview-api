@@ -309,6 +309,13 @@ def _shift_period(period: str, months: int) -> str:
     return f"{index // 12:04d}-{index % 12 + 1:02d}"
 
 
+def _awaits_its_deposit(movement: _Movement, master_key: str) -> bool:
+    """A payment out of a wallet the user typed as Non compté: money deposited
+    on an account the bank has not reported yet (R56)."""
+    override = movement.row.type_override_enc
+    return override is not None and decrypt_data(override, master_key) == CashflowType.NEUTRAL.value
+
+
 def _internal_transfer_legs(
     movements: list[_Movement], pairing: _Pairing | None = None, deposited: Collection[str] = frozenset()
 ) -> dict[int, _TransferLeg]:
@@ -399,8 +406,12 @@ def _internal_transfer_legs(
         if (
             movement.day is not None and index not in paired and not movement.adjustment
             and movement.row.uuid not in deposited
-            # Only a pair the user bound takes money paid out of a wallet (R55).
-            and not (pairing and not movement.is_credit and movement.account_bidx in pairing.cash)
+            # Only a pair the user bound takes money paid out of a wallet (R55),
+            # or one offered to a payment out they said was deposited (R56).
+            and not (
+                pairing and not movement.is_credit and movement.account_bidx in pairing.cash
+                and not _awaits_its_deposit(movement, pairing.master_key)
+            )
         ):
             by_key[(movement.currency, movement.amount)][movement.is_credit].append(index)
 
