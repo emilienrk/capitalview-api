@@ -11,6 +11,7 @@ from decimal import Decimal
 import pytest
 from sqlmodel import Session
 
+from dtos.banking import BankTransferStatus, CashflowType
 from models.bank import BankAccount
 from models.banking import BankAccountLink, BankSession
 from services.banking.flows import (
@@ -521,3 +522,118 @@ class TestMonthTransactions:
             session, USER, master_key, period="2026-03", account_id=empty.id,
         )
         assert result.transactions == []
+
+
+class TestCash:
+    """A cash account is filled by hand, never by a bank (docs/bank-ledger.md, L13)."""
+
+    def test_cash_withdrawn_is_spent_when_paid_out_not_when_withdrawn(
+        self, session: Session, master_key: str
+    ):
+        from dtos.bank import BankAccountCreate, BankEntryRequest
+        from dtos.banking import BankTransferDecisionKind, BankTransferStatus
+        from models.enums import BankAccountType
+        from services.bank import create_bank_account
+        from services.bank_ledger import add_entry
+        from services.banking.transfer_decisions import record_decision
+
+        _link(session, master_key, ACCOUNT_A)
+        _store(session, master_key, ACCOUNT_A, _raw("100.00", "DBIT", "2026-03-10", ref="atm"))
+        wallet = create_bank_account(
+            session, BankAccountCreate(name="Porte-monnaie", account_type=BankAccountType.CASH), USER, master_key,
+        )
+        row = session.get(BankAccount, wallet.id)
+        add_entry(session, row, BankEntryRequest(day=date(2026, 3, 10), amount=Decimal("100"), label="Retrait"), master_key)
+        add_entry(session, row, BankEntryRequest(day=date(2026, 3, 12), amount=Decimal("-30"), label="Marché"), master_key)
+
+        items = list_month_transactions(session, USER, master_key, period="2026-03").transactions
+        atm = next(i for i in items if i.account_id == ACCOUNT_A)
+        withdrawn = next(i for i in items if i.account_id == wallet.id and i.is_credit)
+        # Between two everyday accounts, a pair is only offered — never saving.
+        assert atm.transfer_account_id == wallet.id
+        assert atm.transfer_status not in (BankTransferStatus.SAVINGS, None)
+
+        record_decision(session, USER, master_key, atm.id, withdrawn.id, BankTransferDecisionKind.TRANSFER)
+
+        result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
+        assert result.internal_transfers_excluded == 1
+        assert result.outflow == Decimal("30.00")
+        assert result.inflow == Decimal("0")
+
+    def test_a_counted_wallet_spends_a_bound_withdrawal_once(self, session: Session, master_key: str):
+        """Counted, not typed line by line: the withdrawal bound to its entry (R56),
+        what the counts take out is all that is spent (docs/bank-ledger.md, L13)."""
+        from dtos.bank import BankAccountCreate
+        from dtos.banking import BankEntryCreate
+        from models.enums import BankAccountType
+        from services.bank import create_bank_account
+        from services.bank_ledger import add_entry
+        from services.banking.flows import file_entry
+
+        _link(session, master_key, ACCOUNT_A)
+        _store(session, master_key, ACCOUNT_A, _raw("100.00", "DBIT", "2026-03-10", ref="atm"))
+        wallet = create_bank_account(
+            session, BankAccountCreate(name="Porte-monnaie", account_type=BankAccountType.CASH), USER, master_key,
+        )
+        row = session.get(BankAccount, wallet.id)
+        atm = next(
+            i for i in list_month_transactions(session, USER, master_key, period="2026-03").transactions
+            if i.account_id == ACCOUNT_A
+        )
+
+        def typed(entry: BankEntryCreate) -> None:
+            created = add_entry(session, row, entry, master_key)
+            file_entry(session, USER, master_key, wallet.id, created.id, entry)
+
+        # What "Retiré en espèces" sends, then two counts: 60 left, then nothing.
+        typed(BankEntryCreate(day=date(2026, 3, 10), amount=Decimal("100"), label="Retrait", transfer_with=atm.id))
+        typed(BankEntryCreate(day=date(2026, 3, 15), amount=Decimal("-40"), label="Écart de comptage"))
+        typed(BankEntryCreate(day=date(2026, 3, 25), amount=Decimal("-60"), label="Écart de comptage"))
+
+        result = compute_real_flows(session, USER, master_key, months=1, today=date(2026, 3, 31))
+        assert result.internal_transfers_excluded == 1
+        assert result.outflow == Decimal("100.00")
+
+    def _wallet_entry_then_bank(
+        self, session: Session, master_key: str, amount: str, direction: str, typed: CashflowType | None,
+    ):
+        """An entry typed on a wallet before its other leg reaches the bank."""
+        from dtos.bank import BankAccountCreate
+        from dtos.banking import BankEntryCreate
+        from models.enums import BankAccountType
+        from services.bank import create_bank_account
+        from services.bank_ledger import add_entry
+        from services.banking.flows import file_entry
+
+        _link(session, master_key, ACCOUNT_A)
+        wallet = create_bank_account(
+            session, BankAccountCreate(name="Porte-monnaie", account_type=BankAccountType.CASH), USER, master_key,
+        )
+        signed = Decimal(amount) if direction == "DBIT" else -Decimal(amount)
+        entry = BankEntryCreate(day=date(2026, 3, 10), amount=signed, label="Peu importe", type=typed)
+        created = add_entry(session, session.get(BankAccount, wallet.id), entry, master_key)
+        file_entry(session, USER, master_key, wallet.id, created.id, entry)
+        _store(session, master_key, ACCOUNT_A, _raw(amount, direction, "2026-03-11", ref="bank"))
+        return next(
+            i for i in list_month_transactions(session, USER, master_key, period="2026-03").transactions
+            if i.account_id == ACCOUNT_A
+        )
+
+    def test_an_entry_awaiting_its_withdrawal_is_offered_the_pair_once_it_lands(
+        self, session: Session, master_key: str
+    ):
+        bank = self._wallet_entry_then_bank(session, master_key, "100.00", "DBIT", CashflowType.NEUTRAL)
+        assert bank.transfer_status is BankTransferStatus.SUGGESTED
+
+    def test_a_deposit_awaiting_the_bank_is_offered_the_pair_once_it_lands(self, session: Session, master_key: str):
+        bank = self._wallet_entry_then_bank(session, master_key, "100.00", "CRDT", CashflowType.NEUTRAL)
+        assert bank.transfer_status is BankTransferStatus.SUGGESTED
+        from services.banking.flows import review_queue
+
+        # Asked once, on either leg of the pair.
+        asked = [q.transaction for q in review_queue(session, USER, master_key).questions]
+        assert [(tx.id, tx.transfer_id) for tx in asked] == [(bank.transfer_id, bank.id)]
+
+    def test_money_spent_from_a_wallet_is_still_never_offered_a_pair(self, session: Session, master_key: str):
+        bank = self._wallet_entry_then_bank(session, master_key, "100.00", "CRDT", None)
+        assert bank.transfer_status is None

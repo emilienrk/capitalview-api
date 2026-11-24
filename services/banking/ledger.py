@@ -35,6 +35,7 @@ from models.banking import BankAccountLink
 from services.banking import transfer_patterns as stored_patterns
 from services.banking.cashflow_types import counted_leg, signed_amount
 from services.banking.flows import (
+    _cash_accounts,
     _covered_until,
     _filed,
     _filing,
@@ -62,6 +63,7 @@ def ledger_etag(session: Session, user_uuid: str, master_key: str) -> str:
     user_bidx = hash_index(user_uuid, master_key)
     digest = stored_patterns.source_digest(
         session, user_bidx, accounts.readable, _regulated_savings(accounts, master_key), master_key,
+        _cash_accounts(accounts, master_key),
     )
     links = sorted(
         (link.bank_account_uuid_bidx, str(link.last_synced_at))

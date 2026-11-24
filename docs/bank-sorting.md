@@ -3,7 +3,7 @@
 Comment chaque opération d'un compte bancaire est comptée : virement entre comptes, dépense, épargne, investissement,
 ou non compté. Ce document est la référence : le code la suit, et chaque changement de comportement le met à jour.
 
-Il se lit en trois parties. **Les règles**, numérotées R1 à R54, stables, chacune avec le module qui la porte : c'est
+Il se lit en trois parties. **Les règles**, numérotées R1 à R56, stables, chacune avec le module qui la porte : c'est
 ce qu'une session de développement doit connaître avant de toucher `services/banking`. **Les textes d'interface**,
 tels qu'ils s'affichent. **Le journal**, daté : chaque décision, chaque mesure sur le dump de développement, chaque
 commit, dans l'ordre. Rien de l'ancienne version n'a été retiré : ce qui n'est plus une règle est dans le journal.
@@ -447,6 +447,44 @@ L'onglet « Règles » liste chaque séparation avec son libellé, son compte, s
 sépare comme un autre ; un libellé sans identité, non. Supprimer un compte bancaire supprime ses séparations ; supprimer
 le compte utilisateur aussi, et l'export du compte les contient.
 
+### Espèces
+
+Un compte Espèces (`CASH`) se tient à la main et n'est jamais synchronisé (docs/bank-ledger.md, L13).
+
+**R55. Une sortie d'espèces est une dépense, sans question.** Ce qui sort d'un porte-monnaie est dépensé : jamais de
+question, ni au-dessus du seuil (R21) ni face à un dépôt (R16), et jamais proposée en paire (R11, R15), même face à une
+entrée du même montant sur un autre compte (`Resolution.silent`, et les sorties d'un compte Espèces hors des candidats
+de `_internal_transfer_legs`). Une paire que l'utilisateur lie (R7, « Lier », ou un dépôt choisi à la saisie, R56) la
+prend toujours, et une règle ou un type donné à la main la classe comme ailleurs. Seule exception : une sortie typée
+Non compté (un dépôt que la banque n'a pas encore remonté, R56) est proposée en paire comme tout débit
+(`_awaits_its_deposit`). Ce qui entre dans un porte-monnaie se
+lit comme tout crédit : paire proposée avec un retrait (R15), question « revenu ou remboursement ? » (R22).
+
+**R56. Une opération d'espèces se classe à la saisie.** La modale de saisie d'un compte Espèces demande ce qu'est une
+entrée, au choix : « Retrait d'un de mes comptes », ou une des réponses d'une entrée (R22 : Entrée, Remboursement,
+Reprise d'épargne, Reprise d'investissement, Non compté). Les opérations en face sont celles d'un autre compte, de
+sens opposé, du même montant et de la même devise, à 2 jours ouvrés au plus de la date saisie (R15), hors celles
+qu'une paire sûre tient déjà (`list_entry_counterparts`, `GET /bank/accounts/{id}/counterparts`) ; rien n'est
+présélectionné (R7). L'opération choisie et l'entrée sont liées en une paire confirmée, dans le même appel ; si la
+paire est refusée, l'entrée n'est pas gardée. Une réponse type l'entrée « celle-ci » (R27) et dit « Pas ensemble » aux
+opérations en face, qui ne sont plus proposées. Sans opération en face, ou « Aucune de celles-ci », l'entrée est
+gardée sans paire et typée Non compté, ce que la modale annonce : elle ne pose pas la question d'une entrée (R22), et
+la paire sera proposée dans « À trier » quand la banque aura remonté le retrait (R15). Tout ce qui entre ou sort d'un
+porte-monnaie est donc classé dès la saisie : « À trier » n'en montre que cette paire, une fois. Une sortie
+ne pose pas de question (R55), mais la modale demande toujours « Déposé sur un de mes comptes ? », « Non, dépensé »
+par défaut : les entrées qui lui font face, à lier de même, ou « Oui, pas encore arrivé sur mon compte ». Cette
+dernière réponse la type Non compté, ce qui la rend à la proposition de paire : celle-ci arrive dans « À trier »
+quand la banque remonte le dépôt, et d'ici là la sortie ne compte nulle part (un dépôt n'est pas une dépense). La correction d'une saisie (supprimer puis ressaisir) reprend sa réponse ou sa paire.
+
+Le retrait se lie aussi depuis l'autre bout : la fenêtre « Lier » d'une sortie d'un autre compte, sans entrée d'espèces
+du même montant en face, propose « Retiré en espèces » (un bouton par compte Espèces de sa devise). L'entrée est ajoutée
+au compte Espèces, même jour, même montant, libellée « Retrait », et liée au retrait dans le même appel
+(`transfer_with`). De même, celle d'une entrée propose « Déposé depuis mes espèces » : une sortie libellée « Dépôt »,
+liée au dépôt, ni dépense ni entrée. C'est le geste qui rend juste un porte-monnaie tenu par comptage (docs/bank-ledger.md, L13) : un
+retrait laissé seul compte en dépense le jour du retrait, puis l'argent compte une seconde fois quand un comptage le
+voit sortir. La fenêtre est ouverte depuis n'importe quelle opération, pas seulement « À trier » : un retrait sous le
+seuil (R21) n'y est jamais posé. Rien n'est détecté au libellé : c'est l'utilisateur qui le dit.
+
 ---
 
 ## Textes d'interface
@@ -465,6 +503,8 @@ le compte utilisateur aussi, et l'export du compte les contient.
 | À trier | « Sans contrepartie bancaire » ; « Historique de mes réponses » ; « Annuler » |
 | Récurrents | « Hors du total » ; « Ce n'est pas récurrent » ; « alimenté hors de mes banques » (placements) |
 | Curseur | « Dépenses à vérifier à partir de <montant> » |
+| Saisie sur un compte Espèces (R56) | entrée : champ « Ce que c'est » (« Retrait d'un de mes comptes », « Entrée », « Remboursement », « Reprise d'épargne », « Reprise d'investissement », « Non compté »), puis « Opération en face » (« <compte> · <jour> · <libellé> », « Aucune de celles-ci ») ou, sans rien en face, « Aucune sortie de ce montant à ces dates : l'entrée sera comptée en Non compté, et la paire vous sera proposée dans À trier dès que votre banque aura remonté le retrait. » ; sortie : « Déposé sur un de mes comptes ? » (« Non, dépensé », « <compte> · <jour> · <libellé> », « Oui, pas encore arrivé sur mon compte » et alors « La sortie ne comptera nulle part en attendant : la paire vous sera proposée dans À trier dès que votre banque aura remonté le dépôt. ») ; type d'opération « Comptage », champ « Montant compté », ligne « Vos opérations donnent X : une dépense en espèces de Y sera ajoutée. » / « une entrée de Y sera ajoutée, en Non compté. » et, dans ce second cas, « Un retrait oublié ? Liez-le d'abord depuis l'opération de votre compte (« Lier », puis « Retiré en espèces »), puis recomptez : sinon il comptera deux fois en dépense. » (docs/bank-ledger.md, L13) ; libellé facultatif, par défaut « Dépense en espèces », « Dépôt », « Retrait », « Entrée non comptée », « Écart de comptage »… (L10) |
+| Fenêtre « Lier », face à un compte Espèces (R56) | sur une sortie, encadré « Retiré en espèces ? » ; « L'entrée en face est ajoutée à votre compte Espèces et liée à ce retrait : la dépense comptera quand l'argent sortira du porte-monnaie. » ; bouton « Retiré en espèces », ou « Sur <compte> » par compte Espèces quand il y en a plusieurs. Sur une entrée, « Déposé depuis mes espèces ? » ; « La sortie en face est ajoutée à votre compte Espèces et liée à ce dépôt : ni dépense ni entrée. » ; bouton « Déposé depuis mes espèces », ou « Depuis <compte> » |
 | Libellé séparé | bouton « Séparer » dans la liste « Choisir parmi les N opérations de ce libellé » ; dans la fenêtre du type, « Ce libellé couvre des opérations sans rapport ? Séparer » ; fenêtre « Séparer ce libellé » ; « Libellé séparé : chaque opération pose sa question seule. » (Annuler) ; mention « Libellé séparé » ; « Regrouper » (onglet Règles) |
 | Carte du compte, après la première synchronisation d'un compte rempli par import (docs/bank-ledger.md, L1 et L11) | encadré « N opérations importées remplacées par celles de votre banque à partir du JJ/MM/AAAA : M réponses sont à redonner dans À trier. » (sans la seconde moitié quand aucune réponse ne part) ; s'il reste des lignes importées plus anciennes, « N opérations importées remplacées par celles de votre banque à partir du JJ/MM/AAAA. Les K opérations d'avant restent celles de votre import : votre banque ne remonte pas plus loin. », la partie des réponses à redonner reprise avant la seconde phrase s'il y en a ; « Vos opérations importées donnent X, votre banque Y : la courbe a été relevée (abaissée) de Z. Votre import ne remonte sans doute pas à l'ouverture du compte, ou il lui manque des opérations. », ou, s'il en reste, « Vos opérations donnent X, votre banque Y : la courbe a été relevée (abaissée) de Z à partir du JJ/MM/AAAA. Avant cette date, elle reste celle de votre import, d'où une marche ce jour-là. » ; croix pour le masquer |
 
@@ -647,6 +687,34 @@ Les décisions et mesures, dans l'ordre. Une règle citée (R…) est celle d'au
   celui du débit : 15 couples à 3 jours (17 à 7, aucun de plus utile), dont 12 déjà appariés par R11 ou par une
   décision. Nouvelles paires : les deux rejets (+2 010 € de revenus en moins) et 5 € envoyés puis rendus le même jour
   par la même personne (0 € en net avant comme après). Aucun faux positif.
+
+### 23 novembre 2026
+
+- Compte Espèces (docs/bank-ledger.md, L13). Une sortie d'espèces ne pose jamais de question et n'est jamais proposée
+  en paire (R55) : un porte-monnaie n'a que des dépenses, et un retrait de 20 € face à un remboursement de 20 € sur le
+  compte courant n'aurait été qu'une fausse paire. Une entrée d'espèces se classe à la saisie, ou se lie au retrait en
+  face (R56), au lieu de passer par « À trier ». `_VERSION` passe à 41 et les comptes Espèces entrent dans
+  `source_digest` (R52).
+- Mesuré : le dump du 08/11 n'a aucun compte Espèces, donc paires, types, questions et totaux restent les mêmes. Sur
+  un cas construit (compte courant tenu à la main, porte-monnaie de 1 000 €, sortie d'espèces de 900 € face à une
+  entrée de 900 € sur le compte courant, sortie de 700 € sans rien en face) : avant, une paire proposée 900/900 et une
+  question à 700 € ; après, ni paire ni question, 1 600 € de dépenses.
+
+### 24 novembre 2026
+
+- Un comptage plus haut que les opérations comptait la dépense deux fois (R56, docs/bank-ledger.md, L13). Mesuré sur
+  un cas construit : retrait de 100 € laissé seul, porte-monnaie compté à 60 € puis à 0 € ; 160 € de dépenses pour
+  100 € réellement dépensés. La fenêtre « Lier » d'une sortie propose maintenant « Retiré en espèces », qui crée
+  l'entrée en face et la lie ; le comptage avertit quand il trouve plus que prévu. Avec le retrait lié, le même cas
+  donne 100 €.
+- Le dépôt d'espèces en banque, symétrique (R55, R56). Une sortie d'espèces saisie avant que la banque ait remonté le
+  dépôt n'avait rien à lier, et un comptage la voyait partir en dépense, le dépôt comptant en face comme une entrée.
+  La modale propose « Oui, pas encore arrivé sur mon compte », qui la type Non compté et la rend à la proposition de
+  paire ; la fenêtre « Lier » d'une entrée propose « Déposé depuis mes espèces ». Une sortie d'espèces sans ce type
+  n'est toujours jamais proposée en paire. Vérifié sur un cas construit : sortie de 100 € typée ainsi, puis 100 €
+  crédités le lendemain sur le compte courant, paire proposée une fois dans « À trier » ; la même sortie sans type,
+  aucune paire. Au passage, vérifié qu'une entrée en attente de son retrait (R56) reçoit bien sa paire quand le
+  retrait arrive. `_VERSION` passe à 42. Le dump du 08/11 n'a aucun compte Espèces : rien ne change.
 
 ### État des points
 

@@ -33,6 +33,7 @@ from dtos.banking import (
     BankSessionSummary,
 )
 from models.bank import BankAccount
+from models.enums import BankAccountType
 from models.banking import (
     BankAccountLink,
     BankAuthorization,
@@ -102,6 +103,10 @@ class CardAccountNotLinkableError(LinkingError):
     debit-immédiat card, so walking a curve back from it invents money the
     account never held (+27 887 € eighteen months back, measured).
     """
+
+
+class CashAccountNotLinkableError(LinkingError):
+    """A cash account holds notes and coins: no bank feeds it (docs/bank-ledger.md, L13)."""
 
 
 class TargetAccountNotFoundError(LinkingError):
@@ -790,6 +795,8 @@ def link_account(
     target_account = session.get(BankAccount, bank_account_uuid)
     if target_account is None or target_account.user_uuid_bidx != user_bidx:
         raise TargetAccountNotFoundError()
+    if decrypt_data(target_account.account_type_enc, master_key) == BankAccountType.CASH:
+        raise CashAccountNotLinkableError()
 
     discovered = next(
         (

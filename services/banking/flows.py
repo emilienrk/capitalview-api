@@ -28,7 +28,7 @@ import json
 import logging
 from collections import defaultdict
 from collections.abc import Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import NamedTuple
@@ -36,6 +36,7 @@ from typing import NamedTuple
 from sqlmodel import Session, select
 
 from dtos.banking import (
+    BankEntryCreate,
     BankContributionMatch,
     BankFlowCurrencyTotal,
     BankFlowMonth,
@@ -99,6 +100,7 @@ from services.banking.transfer_decisions import (
     TransactionNotFoundError,
     Verdict,
     load_decisions,
+    record_decision,
 )
 from services.banking.transfer_patterns import FlowCarrier, TransferPatterns
 from services.banking.type_rules import (
@@ -147,6 +149,10 @@ REGULATED_SAVINGS = frozenset({
 # Every account holding money set aside, regulated or not: a transfer with one
 # of these on exactly one side is saving, not spending.
 SAVINGS_ACCOUNTS = REGULATED_SAVINGS | {BankAccountType.SAVINGS}
+
+# Notes and coins: what leaves one is spent, never offered as a pair nor asked
+# about (R55). What enters one is read like any credit.
+CASH_ACCOUNTS = frozenset({BankAccountType.CASH})
 
 # The pairs kept out of the totals. A suggested pair is only offered: until the
 # user settles it, both legs count — measured, most pairs seen once were a third
@@ -245,6 +251,7 @@ class _Pairing(NamedTuple):
     decisions: Decisions
     patterns: TransferPatterns
     savings: frozenset[str]
+    cash: frozenset[str] = frozenset()
 
 
 class _Filing(NamedTuple):
@@ -266,6 +273,7 @@ class _Filing(NamedTuple):
     threshold: Decimal = DEFAULT_QUESTION_THRESHOLD
     # Every deposit and withdrawal the user declared, faced or not.
     declared: Contributions = Contributions()
+    cash: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -299,6 +307,13 @@ def _shift_period(period: str, months: int) -> str:
     year, month = (int(part) for part in period.split("-"))
     index = year * 12 + (month - 1) + months
     return f"{index // 12:04d}-{index % 12 + 1:02d}"
+
+
+def _awaits_its_deposit(movement: _Movement, master_key: str) -> bool:
+    """A payment out of a wallet the user typed as Non compté: money deposited
+    on an account the bank has not reported yet (R56)."""
+    override = movement.row.type_override_enc
+    return override is not None and decrypt_data(override, master_key) == CashflowType.NEUTRAL.value
 
 
 def _internal_transfer_legs(
@@ -391,6 +406,12 @@ def _internal_transfer_legs(
         if (
             movement.day is not None and index not in paired and not movement.adjustment
             and movement.row.uuid not in deposited
+            # Only a pair the user bound takes money paid out of a wallet (R55),
+            # or one offered to a payment out they said was deposited (R56).
+            and not (
+                pairing and not movement.is_credit and movement.account_bidx in pairing.cash
+                and not _awaits_its_deposit(movement, pairing.master_key)
+            )
         ):
             by_key[(movement.currency, movement.amount)][movement.is_credit].append(index)
 
@@ -671,6 +692,7 @@ def _pairing(session: Session, user_uuid: str, master_key: str, accounts: _Accou
         decisions=load_decisions(session, user_uuid, master_key),
         patterns=transfer_patterns(session, user_uuid, master_key, accounts),
         savings=_regulated_savings(accounts, master_key),
+        cash=_cash_accounts(accounts, master_key),
     )
 
 
@@ -680,6 +702,10 @@ def _regulated_savings(accounts: _Accounts, master_key: str) -> frozenset[str]:
 
 def _savings_accounts(accounts: _Accounts, master_key: str) -> frozenset[str]:
     return _accounts_of_types(accounts, SAVINGS_ACCOUNTS, master_key)
+
+
+def _cash_accounts(accounts: _Accounts, master_key: str) -> frozenset[str]:
+    return _accounts_of_types(accounts, CASH_ACCOUNTS, master_key)
 
 
 def _accounts_of_types(accounts: _Accounts, types: frozenset[BankAccountType], master_key: str) -> frozenset[str]:
@@ -718,6 +744,7 @@ def _filing(
         validated=patterns.contribution_shapes,
         threshold=question_threshold(session, user_uuid, master_key),
         declared=declared,
+        cash=_cash_accounts(accounts, master_key),
     )
 
 
@@ -862,7 +889,8 @@ def transfer_patterns(
     accounts = accounts or _user_accounts(session, user_uuid, master_key)
     user_bidx = hash_index(user_uuid, master_key)
     savings = _regulated_savings(accounts, master_key)
-    source = stored_patterns.source_digest(session, user_bidx, accounts.readable, savings, master_key)
+    cash = _cash_accounts(accounts, master_key)
+    source = stored_patterns.source_digest(session, user_bidx, accounts.readable, savings, master_key, cash)
     if not rebuild:
         stored = stored_patterns.read_patterns(session, user_bidx, source, master_key)
         if stored is not None:
@@ -886,7 +914,7 @@ def transfer_patterns(
             backfilled = True
     if backfilled:
         session.commit()
-        source = stored_patterns.source_digest(session, user_bidx, accounts.readable, savings, master_key)
+        source = stored_patterns.source_digest(session, user_bidx, accounts.readable, savings, master_key, cash)
 
     patterns = TransferPatterns()
     patterns.deposited = _deposited(
@@ -943,6 +971,7 @@ def transfer_patterns(
         decisions=load_decisions(session, user_uuid, master_key),
         patterns=patterns,
         savings=savings,
+        cash=cash,
     )
     transfer_legs = _internal_transfer_legs(movements, pairing)
     questions: dict[str, int] = defaultdict(int)
@@ -1271,7 +1300,7 @@ def _filed(
         filing.patterns.label_common(movement.account_bidx, movement.is_credit),
     )
     match = filing.contributions.get(index)
-    return resolve_type(
+    resolution = resolve_type(
         movement.is_credit,
         leg.status if leg else None,
         savings_legs,
@@ -1290,6 +1319,9 @@ def _filed(
         recurring=filing.patterns.held_by_recurring(movement.row.uuid),
         adjustment=movement.adjustment,
     )
+    if not movement.is_credit and movement.account_bidx in filing.cash:
+        return replace(resolution, silent=True)
+    return resolution
 
 
 def _savings_legs(movement: _Movement, other: _Movement, filing: _Filing) -> int:
@@ -1320,7 +1352,7 @@ def _asks_flow(
     a type given by hand, but an investment: the deposit was often imported
     after, and a no keeps that type.
     """
-    if not movement.is_final or leg is not None or label_signature(label) is None:
+    if resolution.silent or not movement.is_final or leg is not None or label_signature(label) is None:
         return False
     if resolution.source in (TypeSource.RULE, TypeSource.RECURRING):
         return facing is not None and facing.exact
@@ -1696,6 +1728,81 @@ def list_transfer_counterparts(
         movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs),
     )
     return [item(i) for _, i in matches]
+
+
+def list_entry_counterparts(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    account_id: str,
+    day: date,
+    amount: Decimal,
+    editing: str | None = None,
+) -> list[BankTransactionItem]:
+    """The movements an entry about to be typed on `account_id` could pair with,
+    nearest first: on another account, in the other direction, of the very
+    amount and currency, within the pairing's tolerance (R15). One a trusted
+    pair already holds is left out (R56), unless it holds it with `editing`,
+    the entry being typed again."""
+    accounts = _user_accounts(session, user_uuid, master_key)
+    bidx = hash_index(account_id, master_key)
+    account = accounts.by_bidx.get(bidx)
+    if account is None:
+        raise UnknownAccountError(account_id)
+    currency = decrypt_data(account.currency_enc, master_key) if account.currency_enc else BASE_CURRENCY
+    is_credit = amount > 0
+    if not amount or not any(other != bidx for other in accounts.readable):
+        return []
+
+    periods = sorted({f"{d:%Y-%m}" for d in (day - timedelta(days=_TRANSFER_MAX_CALENDAR_DAYS), day,
+                                               day + timedelta(days=_TRANSFER_MAX_CALENDAR_DAYS))})
+    pairing = _pairing(session, user_uuid, master_key, accounts)
+    # Every account, the entry's own included: a pair is only known with both legs.
+    movements, transfer_legs = _paired_movements(session, master_key, accounts.readable, periods, pairing)
+    matches = sorted(
+        (banking_days_between(day, m.day), abs((m.day - day).days), i)
+        for i, m in enumerate(movements)
+        if m.day is not None
+        and m.account_bidx != bidx
+        and not m.adjustment
+        and m.is_credit != is_credit
+        and m.amount == abs(amount)
+        and m.currency == currency
+        and abs((m.day - day).days) <= _TRANSFER_MAX_CALENDAR_DAYS
+        and banking_days_between(day, m.day) <= TRANSFER_TOLERANCE_BANKING_DAYS
+        and (
+            i not in transfer_legs or transfer_legs[i].status is BankTransferStatus.SUGGESTED
+            or movements[transfer_legs[i].other].row.uuid == editing
+        )
+    )
+    item = _item_builder(
+        movements, transfer_legs, accounts, _filing(session, user_uuid, master_key, accounts, pairing.patterns, movements, transfer_legs),
+    )
+    return [item(i) for *_, i in matches]
+
+
+def file_entry(
+    session: Session,
+    user_uuid: str,
+    master_key: str,
+    account_id: str,
+    entry_id: str,
+    entry: BankEntryCreate,
+) -> None:
+    """File an entry just typed, as the user said (R56): bound to the movement it
+    pairs with, or given its type. A type says it pairs with nothing, so the
+    movements it could have paired with are told apart from it too: a pair the
+    user already answered is not offered again. Raises `DecisionError`."""
+    if entry.transfer_with is not None:
+        record_decision(
+            session, user_uuid, master_key, entry_id, entry.transfer_with, BankTransferDecisionKind.TRANSFER,
+        )
+        return
+    if entry.type is None:
+        return
+    for other in list_entry_counterparts(session, user_uuid, master_key, account_id, entry.day, entry.amount):
+        record_decision(session, user_uuid, master_key, entry_id, other.id, BankTransferDecisionKind.NOT_TRANSFER)
+    set_transaction_type(session, user_uuid, master_key, entry_id, entry.type, TypeScope.OPERATION, [])
 
 
 def list_flow_group(

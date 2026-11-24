@@ -4,9 +4,9 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from dtos.bank import BankSyncNotice, ReconciliationStatus
+from dtos.bank import BankEntryRequest, BankSyncNotice, ReconciliationStatus
 
 
 class BankConnectionUpdate(BaseModel):
@@ -1285,3 +1285,16 @@ class RealCashflowCurrent(BaseModel):
     # The income still expected this month, apart: it moves no spending.
     upcoming_income: list[RealCashflowUpcoming] = []
     upcoming_income_amount: Decimal = Decimal("0")
+
+
+class BankEntryCreate(BankEntryRequest):
+    """An entry filed as it is typed (docs/bank-sorting.md, R56): what it is, or
+    the movement on another account it pairs with — one or the other."""
+    type: CashflowType | None = None
+    transfer_with: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def _one_filing(self) -> "BankEntryCreate":
+        if self.type is not None and self.transfer_with is not None:
+            raise ValueError("Une opération est soit classée, soit appariée.")
+        return self

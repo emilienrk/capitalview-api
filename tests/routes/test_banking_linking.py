@@ -763,6 +763,29 @@ def test_a_refused_link_schedules_no_sync(session, master_key, monkeypatch, seed
     assert seeding_calls == []
 
 
+def test_a_cash_account_is_never_attached_to_a_bank(session, master_key, monkeypatch, seeding_calls):
+    from dtos.bank import BankAccountCreate
+    from models.enums import BankAccountType
+    from services.bank import create_bank_account
+
+    client = TestClient(app)
+    _configure_credentials(client)
+    wallet = create_bank_account(
+        session, BankAccountCreate(name="Porte-monnaie", account_type=BankAccountType.CASH), USER_UUID, master_key,
+    )
+    bank_session_uuid = _create_bank_session(session, master_key, accounts=[COURANT_ACCOUNT])
+    _forbid_client(monkeypatch)
+
+    r = client.post(
+        f"/banking/sessions/{bank_session_uuid}/link",
+        json={"identification_hash": "hash-1", "bank_account_uuid": wallet.id},
+    )
+
+    assert r.status_code == 409
+    assert session.exec(select(BankAccountLink)).first() is None
+    assert seeding_calls == []
+
+
 def test_link_new_account_bootstraps_anchor_from_capitalview_balance(session, master_key, monkeypatch):
     client = TestClient(app)
     _configure_credentials(client)

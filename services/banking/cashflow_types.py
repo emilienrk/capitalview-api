@@ -40,6 +40,9 @@ class Resolution:
     type: CashflowType
     source: TypeSource
     rule_id: str | None = None
+    # Asks nothing whatever its type: money paid out of a wallet is spent
+    # (docs/bank-sorting.md, R55).
+    silent: bool = False
 
 
 def resolve_type(
